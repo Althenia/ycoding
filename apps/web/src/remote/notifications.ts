@@ -1,4 +1,5 @@
-import { noticeSequence, type RemoteNoticePresentation } from "@ycoding-ai/remote"
+import { noticeSequence } from "@ycoding-ai/remote"
+import type { NoticePresentationView } from "./wire-views"
 import { alertCopy, type AlertNotice } from "./alert"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
@@ -52,7 +53,14 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
   }
 }
 
-export type DesktopAlert = { readonly title: string; readonly body: string; readonly tag: string; readonly sessionID?: string; readonly notice?: AlertNotice; readonly renotify?: true }
+export type DesktopAlert = {
+  readonly title: string
+  readonly body: string
+  readonly tag: string
+  readonly sessionID?: string
+  readonly notice?: AlertNotice
+  readonly renotify?: true
+}
 
 export type DesktopNotifier = {
   readonly show: (alert: DesktopAlert) => void
@@ -60,7 +68,10 @@ export type DesktopNotifier = {
 }
 
 export type DesktopRegistration = {
-  readonly showNotification: (title: string, options?: NotificationOptions & { readonly renotify?: boolean }) => Promise<void>
+  readonly showNotification: (
+    title: string,
+    options?: NotificationOptions & { readonly renotify?: boolean },
+  ) => Promise<void>
   readonly getNotifications: () => Promise<readonly { readonly tag: string; close: () => void }[]>
 }
 
@@ -70,24 +81,37 @@ export type DesktopRegistration = {
  * It never requests permission: the settings page asks explicitly, and an ungranted
  * browser or a page without a registered worker stays silent.
  */
-export function createDesktopNotifier(registration: () => Promise<DesktopRegistration | undefined> = workerRegistration): DesktopNotifier {
+export function createDesktopNotifier(
+  registration: () => Promise<DesktopRegistration | undefined> = workerRegistration,
+): DesktopNotifier {
   const raised = new Set<string>()
   return {
     show: (alert) => {
       if (typeof Notification === "undefined" || Notification.permission !== "granted") return
       raised.add(alert.tag)
-      void registration().then((worker) => worker?.showNotification(alert.title, {
-        body: alert.body, tag: alert.tag, ...(alert.renotify ? { renotify: true } : {}), icon: "/icons/icon-256.png", badge: "/icons/icon-256.png",
-        ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID, ...alert.notice } }),
-      })).catch(() => undefined)
+      void registration()
+        .then((worker) =>
+          worker?.showNotification(alert.title, {
+            body: alert.body,
+            tag: alert.tag,
+            ...(alert.renotify ? { renotify: true } : {}),
+            icon: "/icons/icon-256.png",
+            badge: "/icons/icon-256.png",
+            ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID, ...alert.notice } }),
+          }),
+        )
+        .catch(() => undefined)
     },
     dispose: (retainMachineOffline = false) => {
       const tags = new Set([...raised].filter((tag) => !retainMachineOffline || !/-offline-\d+$/.test(tag)))
       for (const tag of tags) raised.delete(tag)
       if (tags.size === 0) return
-      void registration().then((worker) => worker?.getNotifications()).then((open) => {
-        for (const notification of open ?? []) if (tags.has(notification.tag)) notification.close()
-      }).catch(() => undefined)
+      void registration()
+        .then((worker) => worker?.getNotifications())
+        .then((open) => {
+          for (const notification of open ?? []) if (tags.has(notification.tag)) notification.close()
+        })
+        .catch(() => undefined)
     },
   }
 }
@@ -107,10 +131,13 @@ export type NotificationDeliveryOptions = {
 }
 
 export type NotificationDelivery = {
-  readonly deliver: (category: NotificationCategory, context?: { readonly sessionID?: string; readonly sessionTitle?: string }) => void
+  readonly deliver: (
+    category: NotificationCategory,
+    context?: { readonly sessionID?: string; readonly sessionTitle?: string },
+  ) => void
   readonly receive: (notice: SyncedNotice, deviceID: string) => void
   readonly offline: (deviceID: string, at: number) => void
-  readonly present: (items: readonly RemoteNoticePresentation[], deviceID: string) => void
+  readonly present: (items: readonly NoticePresentationView[], deviceID: string) => void
   readonly replaceSynced: (notices: readonly SyncedNotice[]) => void
   readonly appendSynced: (notices: readonly SyncedNotice[]) => void
   readonly entries: () => readonly RemoteNotificationView[]
@@ -131,12 +158,31 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   let hidden = new Set<string>()
   let nextID = 0
 
-  const alert = (category: NotificationCategory, sessionID?: string, tag = sessionID === undefined ? `ycoding-remote-${category}` : `ycoding-${sessionID}-${category}`) => {
+  const alert = (
+    category: NotificationCategory,
+    sessionID?: string,
+    tag = sessionID === undefined ? `ycoding-remote-${category}` : `ycoding-${sessionID}-${category}`,
+  ) => {
     if (!preferences()[category].desktop) return
     desktop.show({ ...NOTIFICATION_TEXT[category], tag, ...(sessionID === undefined ? {} : { sessionID }) })
   }
-  const view = (notice: { readonly id: string; readonly category: NotificationCategory; readonly at: number; readonly sessionID?: string; readonly sessionTitle?: string }, synced: boolean, live: boolean): RemoteNotificationView => ({
-    id: notice.id, category: notice.category, ...NOTIFICATION_TEXT[notice.category], at: notice.at, synced, live,
+  const view = (
+    notice: {
+      readonly id: string
+      readonly category: NotificationCategory
+      readonly at: number
+      readonly sessionID?: string
+      readonly sessionTitle?: string
+    },
+    synced: boolean,
+    live: boolean,
+  ): RemoteNotificationView => ({
+    id: notice.id,
+    category: notice.category,
+    ...NOTIFICATION_TEXT[notice.category],
+    at: notice.at,
+    synced,
+    live,
     ...(notice.sessionID === undefined ? {} : { sessionID: notice.sessionID }),
     ...(notice.sessionTitle === undefined ? {} : { sessionTitle: notice.sessionTitle }),
   })
@@ -148,7 +194,9 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   const bounded = (next: readonly RemoteNotificationView[]) => {
     const ordered = [...next].sort(newestFirst)
     const local = ordered.filter((entry) => !entry.synced).slice(0, LOCAL_LIMIT)
-    const synced = [...ordered.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden].sort((left, right) => sequence(right) - sequence(left))
+    const synced = [...ordered.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden].sort(
+      (left, right) => sequence(right) - sequence(left),
+    )
     const kept = new Set(synced.slice(0, NOTICE_WINDOW))
     hidden = new Set([...hidden].filter((id) => kept.has(id)))
     entries = [...local, ...ordered.filter((entry) => entry.synced && kept.has(entry.id))].sort(newestFirst)
@@ -164,8 +212,13 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
 
   return {
     deliver: (category, context) => {
-      if (context?.sessionID !== undefined && entries.some((entry) => entry.synced && entry.sessionID === context.sessionID && entry.category === category)) return
-      if (listed(category)) bounded([...entries, view({ id: `notice_${++nextID}`, category, at: now(), ...context }, false, true)])
+      if (
+        context?.sessionID !== undefined &&
+        entries.some((entry) => entry.synced && entry.sessionID === context.sessionID && entry.category === category)
+      )
+        return
+      if (listed(category))
+        bounded([...entries, view({ id: `notice_${++nextID}`, category, at: now(), ...context }, false, true)])
     },
     offline: (deviceID, at) => {
       const id = `offline_${deviceID}_${at}`
@@ -176,14 +229,21 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
       for (const item of items) {
         if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
         else if (preferences()[item.notice.category].desktop)
-          desktop.show({ ...alertCopy(item.notice.category, item.detail), tag: `ycoding-${deviceID}-${item.notice.id}`,
-            sessionID: item.notice.sessionID, notice: { deviceID, noticeID: item.notice.id }, ...(item.detail?.repeat ? { renotify: true } : {}) })
+          desktop.show({
+            ...alertCopy(item.notice.category, item.detail),
+            tag: `ycoding-${deviceID}-${item.notice.id}`,
+            sessionID: item.notice.sessionID,
+            notice: { deviceID, noticeID: item.notice.id },
+            ...(item.detail?.repeat ? { renotify: true } : {}),
+          })
       }
     },
     receive: (notice, deviceID) => {
       if (known(notice.id)) return
       const entry = admit(notice, true)
-      const local = entries.filter((item) => item.synced || item.sessionID !== notice.sessionID || item.category !== notice.category)
+      const local = entries.filter(
+        (item) => item.synced || item.sessionID !== notice.sessionID || item.category !== notice.category,
+      )
       bounded(entry === undefined ? local : [...local, entry])
     },
     replaceSynced: (notices) => {
@@ -199,11 +259,16 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
     entries: () => entries,
     syncedLoaded: () => entries.filter((entry) => entry.synced).length + hidden.size,
     syncedHidden: () => hidden.size,
-    oldestSynced: () => [...entries.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden]
-      .reduce<string | undefined>((oldest, id) => (oldest === undefined || sequence(id) < sequence(oldest) ? id : oldest), undefined),
+    oldestSynced: () =>
+      [...entries.filter((entry) => entry.synced).map((entry) => entry.id), ...hidden].reduce<string | undefined>(
+        (oldest, id) => (oldest === undefined || sequence(id) < sequence(oldest) ? id : oldest),
+        undefined,
+      ),
     setSessionTitle: (sessionID, title) => {
       if (!entries.some((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined)) return false
-      entries = entries.map((entry) => entry.sessionID === sessionID && entry.sessionTitle === undefined ? { ...entry, sessionTitle: title } : entry)
+      entries = entries.map((entry) =>
+        entry.sessionID === sessionID && entry.sessionTitle === undefined ? { ...entry, sessionTitle: title } : entry,
+      )
       return true
     },
     remove: (ids) => {

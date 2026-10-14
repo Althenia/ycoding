@@ -43,17 +43,23 @@ afterAll(async () => {
 })
 
 describe("remote route transitions with a slow relay", () => {
-  for (const route of [usage, settings]) test(`opening ${route.href} paints its frame at once and never blanks the panel`, async () => {
-    const page = await requireBrowser().openPage()
-    try {
-      await openConversation(page, 400)
-      const frames = await follow(page, route)
-      const blank = frames.filter((frame) => frame.text === 0)
-      expect(blank, `no frame leaves the active panel empty: ${JSON.stringify(frames.slice(0, 6))}`).toEqual([])
-      expect(frames.findIndex((frame) => frame.frame), "the page frame or its skeleton paints within two frames").toBeLessThanOrEqual(1)
-      expect(frames.at(-1)?.content, "the content arrives with the data").toBe(true)
-    } finally { await page.close() }
-  }, 60_000)
+  for (const route of [usage, settings])
+    test(`opening ${route.href} paints its frame at once and never blanks the panel`, async () => {
+      const page = await requireBrowser().openPage()
+      try {
+        await openConversation(page, 400)
+        const frames = await follow(page, route)
+        const blank = frames.filter((frame) => frame.text === 0)
+        expect(blank, `no frame leaves the active panel empty: ${JSON.stringify(frames.slice(0, 6))}`).toEqual([])
+        expect(
+          frames.findIndex((frame) => frame.frame),
+          "the page frame or its skeleton paints within two frames",
+        ).toBeLessThanOrEqual(1)
+        expect(frames.at(-1)?.content, "the content arrives with the data").toBe(true)
+      } finally {
+        await page.close()
+      }
+    }, 60_000)
 
   test("returning to Usage within the stale window shows cached content on the first frame without a usage read", async () => {
     const page = await requireBrowser().openPage()
@@ -64,9 +70,13 @@ describe("remote route transitions with a slow relay", () => {
       await drain(page)
       const frames = await follow(page, usage)
       await Bun.sleep(900)
-      expect(frames[0]?.content, `cached usage paints on the first frame: ${JSON.stringify(frames.slice(0, 3))}`).toBe(true)
+      expect(frames[0]?.content, `cached usage paints on the first frame: ${JSON.stringify(frames.slice(0, 3))}`).toBe(
+        true,
+      )
       expect((await drain(page)).filter((entry) => entry.operation.startsWith("usage."))).toEqual([])
-    } finally { await page.close() }
+    } finally {
+      await page.close()
+    }
   }, 60_000)
 
   test("hovering the Usage link preloads its reads so the click paints content on the first frame", async () => {
@@ -80,14 +90,25 @@ describe("remote route transitions with a slow relay", () => {
       })()`)
       const hoveredAt = await page.evaluate<number>("performance.now()")
       await page.mouse("mouseMoved", link.x, link.y)
-      await until(page, `window.requestLog.filter((entry) => entry.operation === "usage.report").length === 3 && window.requestLog.some((entry) => entry.operation === "usage.providers")`)
+      await until(
+        page,
+        `window.requestLog.filter((entry) => entry.operation === "usage.report").length === 3 && window.requestLog.some((entry) => entry.operation === "providerUsage.list")`,
+      )
       const preloaded = await drain(page)
-      expect(Math.max(...preloaded.map((entry) => entry.at)) - hoveredAt, "the hover, not the idle warm-up, issued the reads").toBeLessThan(1_000)
+      expect(
+        Math.max(...preloaded.map((entry) => entry.at)) - hoveredAt,
+        "the hover, not the idle warm-up, issued the reads",
+      ).toBeLessThan(1_000)
       const frames = await follow(page, usage)
-      expect(frames[0]?.content, `preloaded usage paints on the first frame: ${JSON.stringify(frames.slice(0, 3))}`).toBe(true)
+      expect(
+        frames[0]?.content,
+        `preloaded usage paints on the first frame: ${JSON.stringify(frames.slice(0, 3))}`,
+      ).toBe(true)
       await Bun.sleep(600)
       expect((await drain(page)).filter((entry) => entry.operation.startsWith("usage."))).toEqual([])
-    } finally { await page.close() }
+    } finally {
+      await page.close()
+    }
   }, 60_000)
 
   test("a cold load shows a loading placeholder, never the New-session composer, until the session list resolves", async () => {
@@ -105,35 +126,74 @@ describe("remote route transitions with a slow relay", () => {
       await until(page, `document.querySelector(".transcript-message")`)
       const seen = await page.evaluate<{ readonly composer?: number; readonly listed?: number }>("window.coldLoad")
       expect(seen.listed, "the workspace session list resolved").toBeNumber()
-      expect(seen.composer ?? Infinity, "the New-session composer never painted before the session list resolved").toBeGreaterThanOrEqual(seen.listed ?? 0)
-    } finally { await page.close() }
+      expect(
+        seen.composer ?? Infinity,
+        "the New-session composer never painted before the session list resolved",
+      ).toBeGreaterThanOrEqual(seen.listed ?? 0)
+    } finally {
+      await page.close()
+    }
   }, 60_000)
 
   test("a cold load reads each resource once and the route tour reuses warmed reads", async () => {
     const page = await requireBrowser().openPage()
     try {
-      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&latency=50`)
-      await until(page, `document.querySelector(".transcript-message") && window.requestLog.some((entry) => entry.operation === "usage.summary")`)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&latency=50&telemetryConsent=undecided`)
+      await until(
+        page,
+        `document.querySelector(".transcript-message") && window.requestLog.some((entry) => entry.operation === "usage.get")`,
+      )
       await Bun.sleep(1_000)
       const cold = await drain(page)
       const keys = cold.map((entry) => `${entry.operation} ${JSON.stringify(entry.input ?? null)}`)
-      expect(keys.filter((key, index) => keys.indexOf(key) !== index), "no read repeats with the same input").toEqual([])
-      expect(cold.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.") || operation === "machine.keepAwake.get").sort(),
-        "the idle warm-up read Usage and keep-awake once").toEqual(["machine.keepAwake.get", "usage.providers", "usage.report", "usage.report", "usage.report", "usage.summary"])
+      expect(
+        keys.filter((key, index) => keys.indexOf(key) !== index),
+        "no read repeats with the same input",
+      ).toEqual([])
+      expect(
+        cold
+          .map((entry) => entry.operation)
+          .filter(
+            (operation) =>
+              operation.startsWith("usage.") || operation === "providerUsage.list" || operation === "keepAwake.get",
+          )
+          .sort(),
+        "the idle warm-up read Usage and keep-awake once",
+      ).toEqual(["keepAwake.get", "providerUsage.list", "usage.get", "usage.report", "usage.report", "usage.report"])
       const tour = []
-      for (const route of [usage, settings, { href: "/remote/session?session_id=ses_fixture&device_id=dev_studio", frame: `${panel}?.querySelector(".transcript-message")`, content: `${panel}?.querySelector(".transcript-message")` }, usage]) {
+      for (const route of [
+        usage,
+        settings,
+        {
+          href: "/remote/session?session_id=ses_fixture&device_id=dev_studio",
+          frame: `${panel}?.querySelector(".transcript-message")`,
+          content: `${panel}?.querySelector(".transcript-message")`,
+        },
+        usage,
+      ]) {
         await follow(page, route)
         await Bun.sleep(700)
-        tour.push(...await drain(page))
+        tour.push(...(await drain(page)))
       }
-      expect(tour.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.") || operation === "workspace.list"),
-        "warmed Usage and workspace reads are not read again during the tour").toEqual([])
-      expect(tour.map((entry) => entry.operation).filter((operation) => operation === "machine.keepAwake.get"),
-        "opening Settings re-reads keep-awake once because the machine can change it outside the browser").toEqual(["machine.keepAwake.get"])
+      expect(
+        tour
+          .map((entry) => entry.operation)
+          .filter((operation) => operation.startsWith("usage.") || operation === "workspace.list"),
+        "warmed Usage and workspace reads are not read again during the tour",
+      ).toEqual([])
+      expect(
+        tour.map((entry) => entry.operation).filter((operation) => operation === "keepAwake.get"),
+        "opening Settings re-reads keep-awake once because the machine can change it outside the browser",
+      ).toEqual(["keepAwake.get"])
       // 20 reads open the workspace and Session, 7 warm Usage, keep-awake and workspaces, and the tour adds one keep-awake re-read
       // plus the two per-Session list reads Conversation refreshes: well inside the relay's 117-per-window budget.
-      expect(cold.length + tour.length, `requests: ${JSON.stringify([...cold, ...tour].map((entry) => entry.operation))}`).toBeLessThanOrEqual(30)
-    } finally { await page.close() }
+      expect(
+        cold.length + tour.length,
+        `requests: ${JSON.stringify([...cold, ...tour].map((entry) => entry.operation))}`,
+      ).toBeLessThanOrEqual(30)
+    } finally {
+      await page.close()
+    }
   }, 60_000)
 })
 
@@ -172,7 +232,10 @@ async function until(page: Page, expression: string) {
 }
 
 async function ready() {
-  return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then((response) => response.ok, () => false)
+  return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then(
+    (response) => response.ok,
+    () => false,
+  )
 }
 
 function requireBrowser() {

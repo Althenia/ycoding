@@ -4,14 +4,34 @@ import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayHandlerOutcome } from "./relay-double"
 
-const waiting = { sessionID: "ses_child", parentID: "ses_a", description: "Scoped child", agent: "builder", background: true, state: "waiting", revision: 1, question: { id: "qst_1", text: "Which scope?", time: 2 }, time: { created: 1, updated: 2 } }
+const waiting = {
+  sessionID: "ses_child",
+  parentID: "ses_a",
+  description: "Scoped child",
+  agent: "builder",
+  model: { providerID: "openai", id: "gpt-5" },
+  background: true,
+  state: "waiting",
+  revision: 1,
+  question: { id: "qst_1", text: "Which scope?", time: 2 },
+  time: { created: 1, updated: 2 },
+}
 
 test("Team and Conversation cannot concurrently send two answers for the same owned child question", async () => {
   const held = Promise.withResolvers<RelayHandlerOutcome>()
-  const relay = await startRelayDouble({ handler: (request) => request.operation === "session.subagent.list"
-    ? { ok: true, value: { data: [waiting], summary: { total: 1, active: 1 }, cursor: {} } }
-    : request.operation === "session.subagent.answer" ? held.promise : "default" })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }), batchMs: 1 })
+  const relay = await startRelayDouble({
+    handler: (request) =>
+      request.operation === "session.subagent.list"
+        ? { ok: true, value: { data: [waiting], summary: { total: 1, active: 1, running: 0, waiting: 1 }, cursor: {} } }
+        : request.operation === "session.subagent.answer"
+          ? held.promise
+          : "default",
+  })
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: relay.httpURL }),
+    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    batchMs: 1,
+  })
   try {
     await store.load()
     await waitFor(() => store.state().sessions.length > 0)
@@ -25,9 +45,16 @@ test("Team and Conversation cannot concurrently send two answers for the same ow
     held.resolve({ ok: true, value: { data: { ...waiting, question: undefined, state: "running", revision: 2 } } })
     expect(await first).toMatchObject({ status: "ok" })
     expect(store.state().team?.tasks[0]?.question).toBeUndefined()
-    expect(await duplicate).toMatchObject({ status: "failed", message: "An answer to this subagent question is already being sent." })
+    expect(await duplicate).toMatchObject({
+      status: "failed",
+      message: "An answer to this subagent question is already being sent.",
+    })
     expect(relay.requests.filter((request) => request.operation === "session.subagent.answer")).toHaveLength(1)
     expect(await store.answerSubagent("ses_child", "qst_1", "After settlement")).toMatchObject({ status: "failed" })
     expect(relay.requests.filter((request) => request.operation === "session.subagent.answer")).toHaveLength(1)
-  } finally { held.resolve("default"); store.dispose(); await relay.stop() }
+  } finally {
+    held.resolve("default")
+    store.dispose()
+    await relay.stop()
+  }
 })

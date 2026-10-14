@@ -1,5 +1,33 @@
-import { RemoteLimits, isRemoteLatencySample, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
-import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
+import {
+  noticeSequence,
+  type CreateEnrollmentResponse,
+  type RemoteDeviceInfo,
+  type RemoteNotice,
+} from "@ycoding-ai/remote"
+import {
+  WebLimits,
+  validLatencySample,
+  telemetryOperation,
+  type FamilyActivityView,
+  type TelemetryConsentView,
+  type TelemetryConsentStateView,
+  readNoticePageView,
+  type LatencySampleView,
+  type NoticeFrame,
+  type NoticePageView,
+  type OperationName,
+  type WorkspaceView,
+} from "./wire-views"
+import {
+  catalogKey,
+  readCatalog,
+  readFileFind,
+  type AgentAttachmentInput,
+  type CatalogTarget,
+  type CatalogView,
+  type FileAttachmentInput,
+  type FileFindResult,
+} from "./catalog"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
   createNotificationDelivery,
@@ -34,7 +62,6 @@ import {
   streamedPartText,
   readGuardrailRequests,
   readPermissionRequests,
-  readProjectedMessage,
   readFormRequests,
   readSessionInfoList,
   readSnapshot,
@@ -55,19 +82,18 @@ import {
 } from "./projection"
 import type { ModelRefView } from "./projection"
 import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
-import type {
-  RemoteRequestOutcome,
-  RemoteTransport,
-  RemoteTransportHandlers,
-  RemoteTransportStatus,
-} from "./transport"
+import type { RemoteRequestOutcome, RemoteTransport, RemoteTransportHandlers, RemoteTransportStatus } from "./transport"
 import { createLatencyDiagnostics } from "./latency"
 import type { RemoteConnectionState } from "./view-model"
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
 import { describeOutcome } from "./outcome"
 import { createRemoteQueryClient, readWorkspaces, remoteKeys, type QueryScope, type RemoteLink } from "./queries"
-export type TodoView = { readonly content: string; readonly status: "pending" | "in_progress" | "completed" | "cancelled"; readonly priority: "high" | "medium" | "low" }
+export type TodoView = {
+  readonly content: string
+  readonly status: "pending" | "in_progress" | "completed" | "cancelled"
+  readonly priority: "high" | "medium" | "low"
+}
 
 function readTodos(value: unknown): readonly TodoView[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -76,19 +102,32 @@ function readTodos(value: unknown): readonly TodoView[] | undefined {
     const content = Reflect.get(item, "content")
     const status = Reflect.get(item, "status")
     const priority = Reflect.get(item, "priority")
-    if (typeof content !== "string" || !["pending", "in_progress", "completed", "cancelled"].includes(status) ||
-      !["high", "medium", "low"].includes(priority)) return undefined
+    if (
+      typeof content !== "string" ||
+      !["pending", "in_progress", "completed", "cancelled"].includes(status) ||
+      !["high", "medium", "low"].includes(priority)
+    )
+      return undefined
     return { content, status, priority } as TodoView
   })
-  return todos.every((item) => item !== undefined) ? todos as readonly TodoView[] : undefined
+  return todos.every((item) => item !== undefined) ? (todos as readonly TodoView[]) : undefined
 }
 
 function reuseTodos(previous: readonly TodoView[] | undefined, next: readonly TodoView[]): readonly TodoView[] {
   const items = next.map((todo, index) => {
     const old = previous?.[index]
-    return old !== undefined && old.content === todo.content && old.status === todo.status && old.priority === todo.priority ? old : todo
+    return old !== undefined &&
+      old.content === todo.content &&
+      old.status === todo.status &&
+      old.priority === todo.priority
+      ? old
+      : todo
   })
-  return previous !== undefined && previous.length === items.length && items.every((todo, index) => todo === previous[index]) ? previous : items
+  return previous !== undefined &&
+    previous.length === items.length &&
+    items.every((todo, index) => todo === previous[index])
+    ? previous
+    : items
 }
 
 function eventTodos(event: unknown, sessionID: string): readonly TodoView[] | undefined {
@@ -150,7 +189,14 @@ type TeamView = {
   readonly next?: string
   readonly pageLoading: boolean
   readonly refreshing?: boolean
-  readonly shells: readonly { readonly id: string; readonly ownerID: string; readonly command: string; readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"; readonly startedAt: number; readonly completedAt?: number }[]
+  readonly shells: readonly {
+    readonly id: string
+    readonly ownerID: string
+    readonly command: string
+    readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+    readonly startedAt: number
+    readonly completedAt?: number
+  }[]
   readonly shellTruncated?: boolean
   readonly shellStatus: "loading" | "ready" | "unsupported" | "error"
   readonly sideChats: readonly { readonly id: string; readonly title: string; readonly updatedAt: number }[]
@@ -160,34 +206,75 @@ type TeamView = {
 }
 
 function emptyTeam(rootID: string, status: TeamView["status"]): TeamView {
-  return { rootID, status, tasks: [], pageLoading: false, shells: [], shellStatus: "loading", sideChats: [], sideChatStatus: "loading", sideChatLoading: false }
+  return {
+    rootID,
+    status,
+    tasks: [],
+    pageLoading: false,
+    shells: [],
+    shellStatus: "loading",
+    sideChats: [],
+    sideChatStatus: "loading",
+    sideChatLoading: false,
+  }
 }
 
 export type PendingMutation = {
   readonly id: string
-  readonly kind: "prompt" | "command" | "compact" | "skill" | "model" | "agent" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal" | "prediction" | "promptGenerate"
+  readonly kind:
+    | "prompt"
+    | "command"
+    | "compact"
+    | "skill"
+    | "model"
+    | "agent"
+    | "interrupt"
+    | "permission"
+    | "guardrail"
+    | "form"
+    | "autonomy"
+    | "goal"
+    | "prediction"
+    | "promptGenerate"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly phase?: "preparing" | "admitting"
   readonly detail?: string
   readonly sessionID: string
-  readonly operation: RemoteOperation
+  readonly operation: OperationName
   readonly input: Readonly<Record<string, unknown>>
   readonly created?: number
 }
 
-export type MutationToast = { readonly id: string; readonly label: string; readonly state: "failed" | "unknown"; readonly detail?: string; readonly sessionID: string }
+export type MutationToast = {
+  readonly id: string
+  readonly label: string
+  readonly state: "failed" | "unknown"
+  readonly detail?: string
+  readonly sessionID: string
+}
 
 type SessionCreation = {
   readonly id: string
   readonly deviceID: string
-  readonly workspace: RemoteWorkspaceInfo
+  readonly workspace: WorkspaceView
   readonly status: "creating" | "unknown" | "failed"
   readonly message?: string
   readonly agent?: string
   readonly model?: ModelRefView
-  readonly prompt?: { readonly text: string; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[] }
-    | { readonly command: string; readonly arguments?: string; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[] }
+  readonly prompt?:
+    | {
+        readonly text: string
+        readonly files?: readonly FileAttachmentInput[]
+        readonly agents?: readonly AgentAttachmentInput[]
+        readonly skills?: readonly string[]
+      }
+    | {
+        readonly command: string
+        readonly arguments?: string
+        readonly files?: readonly FileAttachmentInput[]
+        readonly agents?: readonly AgentAttachmentInput[]
+      }
 }
 
 export type RemoteStoreState = {
@@ -199,9 +286,14 @@ export type RemoteStoreState = {
   readonly sessions: readonly SessionInfoView[]
   readonly carouselSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
   readonly carouselStatus?: "idle" | "loading" | "ready" | "error"
-  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string>; readonly failed: ReadonlySet<string> }
+  readonly sessionStatus?: {
+    readonly running: ReadonlySet<string>
+    readonly attention: ReadonlySet<string>
+    readonly outstanding: ReadonlySet<string>
+    readonly failed: ReadonlySet<string>
+  }
   readonly catalogs: Readonly<Record<string, CatalogView>>
-  readonly sessionGroups: readonly RemoteWorkspaceInfo[]
+  readonly sessionGroups: readonly WorkspaceView[]
   readonly selectedWorkspaceID?: string
   readonly sessionQuery: string
   readonly sessionFilter: "all" | "running" | "idle"
@@ -211,27 +303,45 @@ export type RemoteStoreState = {
   readonly sessionHasNext: boolean
   readonly sessionHasPrevious: boolean
   readonly selectedSessionInfo?: SessionInfoView
-  readonly confirmedModelSwitches?: Readonly<Record<string, { readonly revision: number; readonly model: ModelRefView }>>
+  readonly confirmedModelSwitches?: Readonly<
+    Record<string, { readonly revision: number; readonly model: ModelRefView }>
+  >
   readonly drafts: Readonly<Record<string, string>>
   /** Exact draft text that must be admitted with delivery queue. Cleared when that draft is replaced or sent. */
   readonly queuedPromptDrafts?: Readonly<Record<string, string>>
   /** Bumped when a generated prompt fills a draft so the composer can place the caret at the end. */
   readonly promptDraftFocus?: { readonly sessionID: string; readonly revision: number }
   /** Latest dismissed prediction source per composer scope. A request clears one Session so its next event can show. */
-  readonly dismissedPredictions: readonly { readonly sessionID: string; readonly scope: string; readonly source: string }[]
+  readonly dismissedPredictions: readonly {
+    readonly sessionID: string
+    readonly scope: string
+    readonly source: string
+  }[]
   /** Bumps whenever the device connection is replaced or ended; read resources are keyed by device and generation. */
   readonly generation: number
   readonly sessionCreation?: SessionCreation
   readonly activeSessionID?: string
   readonly view?: SessionView
-  readonly history?: { readonly status: "idle" | "loading" | "error" | "stale"; readonly before?: string; readonly error?: string }
+  readonly history?: {
+    readonly status: "idle" | "loading" | "error" | "stale"
+    readonly before?: string
+    readonly error?: string
+  }
   readonly todos?: readonly TodoView[]
   readonly team?: TeamView
-  readonly familyActivity?: { readonly rootID: string; readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
+  readonly familyActivity?: {
+    readonly rootID: string
+    readonly status: "loading" | "ready" | "unsupported" | "error"
+    readonly members: readonly FamilyActivityView[]
+  }
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
   readonly latencySync: "idle" | "saving" | "saved" | "waiting" | "unsupported" | "unknown" | "failed"
-  readonly telemetryConsent: { readonly status: "loading" | "undecided" | "enabled" | "disabled" | "unsupported" | "failed"; readonly consent?: RemoteTelemetryConsent; readonly error?: string }
+  readonly telemetryConsent: {
+    readonly status: "loading" | "undecided" | "enabled" | "disabled" | "unsupported" | "failed"
+    readonly consent?: TelemetryConsentView
+    readonly error?: string
+  }
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
   readonly mutationToasts?: readonly MutationToast[]
@@ -254,7 +364,6 @@ export type NoticeSyncState = {
 
 export type RemoteStoreOptions = {
   readonly http: RemoteHttp
-  readonly fetch?: (input: string, init?: RequestInit) => Promise<Response>
   readonly createTransport: (deviceID: string, handlers: RemoteTransportHandlers) => RemoteTransport
   readonly schedule?: (callback: () => void, ms: number) => () => void
   readonly now?: () => number
@@ -281,11 +390,23 @@ export type RemoteStore = {
   readonly state: () => RemoteStoreState
   readonly subscribe: (listener: () => void) => () => void
   readonly readStoredLatency: (before?: string) => Promise<
-    | { readonly status: "ok"; readonly data: readonly { readonly receivedAt: number; readonly sample: RemoteLatencySample }[]; readonly next?: string }
+    | {
+        readonly status: "ok"
+        readonly data: readonly { readonly receivedAt: number; readonly sample: LatencySampleView }[]
+        readonly next?: string
+      }
     | { readonly status: "unavailable" | "unsupported" | "unknown" | "failed" }
   >
-  readonly readTelemetryConsent: () => Promise<{ readonly status: "ok"; readonly state: RemoteTelemetryConsentState } | { readonly status: "unsupported" | "failed" | "unavailable" }>
-  readonly setTelemetryConsent: (enabled: boolean) => Promise<{ readonly status: "ok"; readonly consent: RemoteTelemetryConsent } | { readonly status: "failed" | "unknown" | "unavailable" }>
+  readonly readTelemetryConsent: () => Promise<
+    | { readonly status: "ok"; readonly state: TelemetryConsentStateView }
+    | { readonly status: "unsupported" | "failed" | "unavailable" }
+  >
+  readonly setTelemetryConsent: (
+    enabled: boolean,
+  ) => Promise<
+    | { readonly status: "ok"; readonly consent: TelemetryConsentView }
+    | { readonly status: "failed" | "unknown" | "unavailable" }
+  >
   readonly signInURL: (provider: SignInProvider, redirectAfter?: string) => string
   readonly load: () => Promise<void>
   readonly logout: () => Promise<void>
@@ -300,12 +421,30 @@ export type RemoteStore = {
   readonly loadTeamControls: () => Promise<void>
   readonly loadSelectedSubagentEconomics: () => Promise<void>
   readonly loadMoreSideChats: () => Promise<void>
-  readonly cancelSubagent: (childID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
-  readonly answerSubagent: (childID: string, questionID: string, text: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
-  readonly pinSubagent: (childID: string, pinned: boolean) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
-  readonly killTeamShell: (shellID: string) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
-  readonly teamShellOutput: (ownerID: string, shellID: string, cursor?: number) => Promise<{ readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
-  readonly createSideChat: () => Promise<{ readonly status: "ok"; readonly sessionID: string } | { readonly status: "failed" | "unknown"; readonly message: string }>
+  readonly cancelSubagent: (
+    childID: string,
+  ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly answerSubagent: (
+    childID: string,
+    questionID: string,
+    text: string,
+  ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly pinSubagent: (
+    childID: string,
+    pinned: boolean,
+  ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly killTeamShell: (
+    shellID: string,
+  ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly teamShellOutput: (
+    ownerID: string,
+    shellID: string,
+    cursor?: number,
+  ) => Promise<{ readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
+  readonly createSideChat: () => Promise<
+    | { readonly status: "ok"; readonly sessionID: string }
+    | { readonly status: "failed" | "unknown"; readonly message: string }
+  >
   readonly selectWorkspace: (workspaceID: string) => void
   readonly searchSessions: (query: string, filter?: "all" | "running" | "idle") => void
   readonly nextSessionsPage: () => Promise<void>
@@ -313,16 +452,43 @@ export type RemoteStore = {
   readonly setDraft: (sessionID: string, text: string) => void
   readonly loadCatalog: (target: CatalogTarget, options?: { readonly refresh?: boolean }) => Promise<void>
   readonly findFiles: (target: CatalogTarget, query: string, limit?: number) => Promise<FileFindResult>
-  readonly createSession: (input: { readonly workspaceID: string; readonly agent?: string; readonly model?: ModelRefView; readonly prompt?: SessionCreation["prompt"] }) => Promise<string | undefined>
+  readonly createSession: (input: {
+    readonly workspaceID: string
+    readonly agent?: string
+    readonly model?: ModelRefView
+    readonly prompt?: SessionCreation["prompt"]
+  }) => Promise<string | undefined>
   readonly retrySessionCreation: () => Promise<string | undefined>
   readonly dismissSessionCreation: () => void
   readonly reloadMessages: () => Promise<void>
   readonly loadOlderMessages: () => Promise<void>
-  readonly loadOversizedMessage: (messageID: string) => Promise<void>
-  readonly loadImageSource: (input: { readonly deviceID: string; readonly sessionID: string; readonly digest: string; readonly mime: string }) => Promise<string>
+  readonly loadImageSource: (input: {
+    readonly deviceID: string
+    readonly sessionID: string
+    readonly digest: string
+    readonly mime: string
+  }) => Promise<{ readonly source: string; readonly release: () => void }>
   readonly loadShellOutputPage: (shellID: string) => Promise<void>
-  readonly sendPrompt: (input: { readonly text: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly skills?: readonly string[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
-  readonly runCommand: (input: { readonly command: string; readonly arguments?: string; readonly delivery: "steer" | "queue"; readonly files?: readonly FileAttachmentInput[]; readonly agents?: readonly AgentAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => Promise<boolean>
+  readonly sendPrompt: (input: {
+    readonly text: string
+    readonly delivery: "steer" | "queue"
+    readonly files?: readonly FileAttachmentInput[]
+    readonly agents?: readonly AgentAttachmentInput[]
+    readonly skills?: readonly string[]
+    readonly agent?: string
+    readonly model?: ModelRefView
+    readonly forceModelSwitch?: boolean
+  }) => Promise<boolean>
+  readonly runCommand: (input: {
+    readonly command: string
+    readonly arguments?: string
+    readonly delivery: "steer" | "queue"
+    readonly files?: readonly FileAttachmentInput[]
+    readonly agents?: readonly AgentAttachmentInput[]
+    readonly agent?: string
+    readonly model?: ModelRefView
+    readonly forceModelSwitch?: boolean
+  }) => Promise<boolean>
   readonly activateSkill: (skill: string) => Promise<boolean>
   readonly compactSession: () => Promise<boolean>
   readonly cancelUpload: () => void
@@ -337,11 +503,24 @@ export type RemoteStore = {
   readonly reloadNotifications: () => Promise<void>
   readonly interrupt: () => Promise<void>
   readonly dismissPrediction: (sessionID: string, scope: string, source: string) => void
-  readonly requestPrediction: (input: { readonly memory: readonly ("repository" | "knowledge")[]; readonly hint?: string }) => Promise<boolean>
-  readonly requestPromptGenerate: (input: { readonly mode: "start" | "steer" | "queue" | "goal"; readonly intent: string; readonly memory: readonly ("repository" | "knowledge")[]; readonly workspaceID?: string; readonly agent?: string; readonly model?: ModelRefView }) => Promise<boolean>
+  readonly requestPrediction: (input: {
+    readonly memory: readonly ("repository" | "knowledge")[]
+    readonly hint?: string
+  }) => Promise<boolean>
+  readonly requestPromptGenerate: (input: {
+    readonly mode: "start" | "steer" | "queue" | "goal"
+    readonly intent: string
+    readonly memory: readonly ("repository" | "knowledge")[]
+    readonly workspaceID?: string
+    readonly agent?: string
+    readonly model?: ModelRefView
+  }) => Promise<boolean>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
-  readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
+  readonly replyForm: (
+    formID: string,
+    answer: Readonly<Record<string, string | number | boolean | readonly string[]>>,
+  ) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
   readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<boolean>
   readonly setGoal: (text: string) => Promise<boolean>
@@ -386,11 +565,12 @@ function isEphemeralEvent(payload: unknown): boolean {
 }
 
 export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
-  const fetchContent = options.fetch ?? fetch
-  const schedule = options.schedule ?? ((callback, ms) => {
-    const handle = setTimeout(callback, ms)
-    return () => clearTimeout(handle)
-  })
+  const schedule =
+    options.schedule ??
+    ((callback, ms) => {
+      const handle = setTimeout(callback, ms)
+      return () => clearTimeout(handle)
+    })
   const now = options.now ?? (() => Date.now())
   const monotonicNow = options.monotonicNow ?? (() => performance.now())
   const latency = createLatencyDiagnostics(now)
@@ -435,17 +615,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     unhandledEvents: 0,
   })
   let transport: RemoteTransport | undefined
-  const pendingLatency: RemoteLatencySample[] = []
+  const pendingLatency: LatencySampleView[] = []
   let cancelLatencyUpload: (() => void) | undefined
   let latencyUpload: { readonly owner: RemoteTransport; readonly deviceID: string } | undefined
   let latencyUnsupported = false
   let olderMessageIDs = new Set<string>()
-  const oversizedReads = new Map<string, AbortController>()
-  const imageSources = new Map<string, { readonly mime: string; readonly controller: AbortController; readonly promise: Promise<string>; readonly size?: number }>()
+  const imageSources = new Map<
+    string,
+    {
+      readonly mime: string
+      readonly controller: AbortController
+      readonly promise: Promise<Blob>
+      readonly size?: number
+    }
+  >()
+  const imageURLs = new Set<string>()
   let imageScope: { readonly deviceID: string; readonly sessionID: string } | undefined
   const clearImageSources = () => {
     imageSources.forEach((entry) => entry.controller.abort())
     imageSources.clear()
+    imageURLs.forEach((source) => URL.revokeObjectURL(source))
+    imageURLs.clear()
     imageScope = undefined
   }
   let activeUpload: AbortController | undefined
@@ -459,18 +649,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let teamShellRead = 0
   let activityWatching = false
   let activityWatchToken = 0
-  let teamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number } | undefined
-  let pendingTeamRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number; readonly refresh: boolean } | undefined
+  let teamRead:
+    | { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly watchToken: number }
+    | undefined
+  let pendingTeamRead:
+    | {
+        readonly owner: RemoteTransport
+        readonly token: number
+        readonly rootID: string
+        readonly watchToken: number
+        readonly refresh: boolean
+      }
+    | undefined
   let cancelFamilyRefresh: (() => void) | undefined
   let familyReading = false
-  let selectedEconomicsRead: { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly childID: string } | undefined
+  let selectedEconomicsRead:
+    | { readonly owner: RemoteTransport; readonly token: number; readonly rootID: string; readonly childID: string }
+    | undefined
   /**
    * Generation of the backend Session-list context. A list read may publish only
    * while it still describes the generation it was issued for, and every
    * connection change or Session invalidation starts a new generation.
    */
   let sessionsToken = 0
-  let sessionPages: { readonly rows: readonly SessionInfoView[]; readonly previous?: string; readonly next?: string }[] = []
+  let sessionPages: {
+    readonly rows: readonly SessionInfoView[]
+    readonly previous?: string
+    readonly next?: string
+  }[] = []
   let openRootInfo: SessionInfoView | undefined
   let loadingPageToken: number | undefined
   let statusReadOwner: RemoteTransport | undefined
@@ -507,7 +713,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let subscribedSessionID: string | undefined
   let sealed: { readonly sessionID: string; readonly parts: Set<string>; readonly covered: Set<string> } | undefined
   let hydration: HydrationWindow | undefined
-  let pendingRead: { readonly sessionID: string; readonly token: number; readonly promoted: Set<string>; readonly retained: Set<string> } | undefined
+  let pendingRead:
+    | {
+        readonly sessionID: string
+        readonly token: number
+        readonly promoted: Set<string>
+        readonly retained: Set<string>
+      }
+    | undefined
   let resyncRead: Promise<void> | undefined
   let resyncTarget: { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number } | undefined
   let resyncAgain = false
@@ -521,9 +734,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let lastCapturedRead = -Infinity
   let capturedUnsupported = false
   let todoRead: { readonly sessionID: string; live?: readonly TodoView[] } | undefined
-  let compactionRead: { readonly token: number; readonly live: { readonly event: unknown; readonly at: number }[] } | undefined
+  let compactionRead:
+    | { readonly token: number; readonly live: { readonly event: unknown; readonly at: number }[] }
+    | undefined
   let compactionAttemptedToken: number | undefined
-  const requestReads = new Set<{ readonly sessionID: string; readonly live: { readonly event: unknown; readonly at: number }[] }>()
+  const requestReads = new Set<{
+    readonly sessionID: string
+    readonly live: { readonly event: unknown; readonly at: number }[]
+  }>()
   let cancelBatch: (() => void) | undefined
   let queued: { readonly sessionID: string; readonly event: unknown }[] = []
   let lastStatusKind: RemoteTransportStatus["kind"] = "idle"
@@ -532,7 +750,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const subscriptions = new Set<{ readonly unsubscribe: () => void }>()
 
   const setState = (patch: Partial<RemoteStoreState>) => {
-    if (Object.hasOwn(patch, "view") && (patch.view === undefined || patch.view?.id !== container.state.view?.id)) sealed = undefined
+    if (Object.hasOwn(patch, "view") && (patch.view === undefined || patch.view?.id !== container.state.view?.id))
+      sealed = undefined
     container.setState((previous) => ({ ...previous, ...patch }))
   }
 
@@ -547,8 +766,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const scheduleLatencyUpload = () => {
     const owner = transport
-    if (owner === undefined || container.state.transport.kind !== "open" || container.state.telemetryConsent.status !== "enabled" || pendingLatency.length === 0 ||
-      cancelLatencyUpload !== undefined || latencyUpload !== undefined || latencyUnsupported) return
+    if (
+      owner === undefined ||
+      container.state.transport.kind !== "open" ||
+      container.state.telemetryConsent.status !== "enabled" ||
+      pendingLatency.length === 0 ||
+      cancelLatencyUpload !== undefined ||
+      latencyUpload !== undefined ||
+      latencyUnsupported
+    )
+      return
     cancelLatencyUpload = schedule(() => {
       cancelLatencyUpload = undefined
       void flushLatency(owner)
@@ -556,14 +783,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const flushLatency = async (owner: RemoteTransport) => {
-    if (transport !== owner || container.state.transport.kind !== "open" || container.state.telemetryConsent.status !== "enabled" || latencyUpload !== undefined || pendingLatency.length === 0) return
+    if (
+      transport !== owner ||
+      container.state.transport.kind !== "open" ||
+      container.state.telemetryConsent.status !== "enabled" ||
+      latencyUpload !== undefined ||
+      pendingLatency.length === 0
+    )
+      return
     const deviceID = container.state.activeDeviceID
     if (deviceID === undefined) return
     const flight = { owner, deviceID }
     latencyUpload = flight
-    const samples = pendingLatency.splice(0, RemoteLimits.maxLatencyBatch)
+    const samples = pendingLatency.splice(0, WebLimits.maxLatencyBatch)
     setState({ latencySync: "saving" })
-    const outcome = await owner.request("machine.latency.append", { input: { samples } })
+    const outcome = await owner.request("telemetry.append", { input: { samples } })
     if (latencyUpload !== flight) return
     latencyUpload = undefined
     if (transport !== owner || container.state.activeDeviceID !== deviceID) return
@@ -592,7 +826,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       scheduleLatencyUpload()
       return
     }
-    const accepted = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "accepted") : undefined
+    const accepted =
+      typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "accepted") : undefined
     setState({ latencySync: accepted === samples.length ? "saved" : "failed" })
     if (accepted !== samples.length) latencyUnsupported = true
     scheduleLatencyUpload()
@@ -606,7 +841,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (latencyUpload === undefined) setState({ latencySync: "idle" })
       return
     }
-    if (container.state.activeDeviceID === undefined || !isRemoteLatencySample(sample)) return
+    if (container.state.activeDeviceID === undefined || !validLatencySample(sample)) return
     pendingLatency.push(sample)
     if (pendingLatency.length > 60) pendingLatency.shift()
     scheduleLatencyUpload()
@@ -621,14 +856,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const currentScope = (): QueryScope | undefined =>
-    container.state.activeDeviceID === undefined ? undefined : { deviceID: container.state.activeDeviceID, generation: container.state.generation }
+    container.state.activeDeviceID === undefined
+      ? undefined
+      : { deviceID: container.state.activeDeviceID, generation: container.state.generation }
 
-  const inScope = (scope: QueryScope) => container.state.activeDeviceID === scope.deviceID && container.state.generation === scope.generation
+  const inScope = (scope: QueryScope) =>
+    container.state.activeDeviceID === scope.deviceID && container.state.generation === scope.generation
 
   const link: RemoteLink = {
     request: async (scope, operation, request) => {
       const owner = transport
-      if (!inScope(scope) || owner === undefined || container.state.transport.kind !== "open" || container.state.connection.kind === "offline")
+      if (
+        !inScope(scope) ||
+        owner === undefined ||
+        container.state.transport.kind !== "open" ||
+        container.state.connection.kind === "offline"
+      )
         return { status: "unavailable", reason: "not-connected" }
       return owner.request(operation, request)
     },
@@ -637,7 +880,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (!inScope(scope)) return Promise.resolve(false)
       if (recoveries !== since) return Promise.resolve(true)
       return new Promise((resolve) => {
-        const waiter = { scope, settle: (recovered: boolean) => { recoveryWaiters.delete(waiter); resolve(recovered) } }
+        const waiter = {
+          scope,
+          settle: (recovered: boolean) => {
+            recoveryWaiters.delete(waiter)
+            resolve(recovered)
+          },
+        }
         recoveryWaiters.add(waiter)
       })
     },
@@ -656,11 +905,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   /** Publishes the patch with the next generation, then discards the read resources of the connection it ends. */
   const endScope = (patch: Partial<RemoteStoreState>) => {
     const ended = currentScope()
-    sends.forEach((progress) => { if (progress.deviceID === ended?.deviceID && progress.files?.some((file) => file.uri.startsWith("data:"))) progress.uploadsReady = false })
-    const mutations = (patch.mutations ?? container.state.mutations).filter((mutation) => !sends.has(mutation.id) || sends.get(mutation.id)?.deviceID === patch.activeDeviceID)
-    setState({ ...patch, generation: container.state.generation + 1,
-      mutations: [...mutations, ...[...sends.values()].filter((progress) => progress.deviceID === patch.activeDeviceID && !mutations.some((mutation) => mutation.id === progress.mutation.id)).map((progress) => progress.mutation)],
-      mutationToasts: (patch.mutationToasts ?? container.state.mutationToasts)?.filter((toast) => !sends.has(toast.id) || sends.get(toast.id)?.deviceID === patch.activeDeviceID) })
+    sends.forEach((progress) => {
+      if (progress.deviceID === ended?.deviceID && progress.files?.some((file) => file.uri.startsWith("data:")))
+        progress.uploadsReady = false
+    })
+    const mutations = (patch.mutations ?? container.state.mutations).filter(
+      (mutation) => !sends.has(mutation.id) || sends.get(mutation.id)?.deviceID === patch.activeDeviceID,
+    )
+    setState({
+      ...patch,
+      generation: container.state.generation + 1,
+      mutations: [
+        ...mutations,
+        ...[...sends.values()]
+          .filter(
+            (progress) =>
+              progress.deviceID === patch.activeDeviceID &&
+              !mutations.some((mutation) => mutation.id === progress.mutation.id),
+          )
+          .map((progress) => progress.mutation),
+      ],
+      mutationToasts: (patch.mutationToasts ?? container.state.mutationToasts)?.filter(
+        (toast) => !sends.has(toast.id) || sends.get(toast.id)?.deviceID === patch.activeDeviceID,
+      ),
+    })
     endQueries(ended)
   }
 
@@ -676,7 +944,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     noticeFault = false
     if (!retainMachineOffline) notificationTitles.clear()
     activeNoticeTitleReads.clear()
-    setState({ notifications: delivery.entries(), noticeSync: { ...container.state.noticeSync, status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined } })
+    setState({
+      notifications: delivery.entries(),
+      noticeSync: {
+        ...container.state.noticeSync,
+        status: "idle",
+        total: 0,
+        loaded: 0,
+        hidden: 0,
+        loadingMore: false,
+        message: undefined,
+      },
+    })
   }
 
   const notifySession = (category: NotificationCategory, sessionID: string) => {
@@ -692,39 +971,62 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const resolveNoticeTitles = () => {
     const owner = transport
-    const unresolved = [...new Set(delivery.entries().flatMap((entry) =>
-      entry.sessionID === undefined || entry.sessionTitle !== undefined ? [] : [entry.sessionID]))]
+    const unresolved = [
+      ...new Set(
+        delivery
+          .entries()
+          .flatMap((entry) =>
+            entry.sessionID === undefined || entry.sessionTitle !== undefined ? [] : [entry.sessionID],
+          ),
+      ),
+    ]
     const resident = unresolved.filter((sessionID) => {
       const title = titleOf(sessionID).sessionTitle
       return title !== undefined && delivery.setSessionTitle(sessionID, title)
     })
     if (resident.length > 0) setState({ notifications: delivery.entries() })
     if (owner === undefined || !isCurrentConnection(owner)) return
-    for (const sessionID of unresolved.filter((id) => !resident.includes(id) && !notificationTitles.has(id)).slice(0, Math.max(0, noticeTitleReads - activeNoticeTitleReads.size))) {
+    for (const sessionID of unresolved
+      .filter((id) => !resident.includes(id) && !notificationTitles.has(id))
+      .slice(0, Math.max(0, noticeTitleReads - activeNoticeTitleReads.size))) {
       notificationTitles.set(sessionID, undefined)
       activeNoticeTitleReads.add(sessionID)
-      void owner.request("session.get", { sessionID, timeoutMs: 5_000 }).then((outcome) => {
-        if (!isCurrentConnection(owner)) return
-        activeNoticeTitleReads.delete(sessionID)
-        if (outcome.status !== "ok") { resolveNoticeTitles(); return }
-        const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-        const resolved = readSessionInfo(data)
-        if (resolved?.id === sessionID) {
-          notificationTitles.set(sessionID, resolved.title)
-          if (delivery.setSessionTitle(sessionID, resolved.title)) setState({ notifications: delivery.entries() })
-        }
-        resolveNoticeTitles()
-      }, () => {
-        if (!isCurrentConnection(owner)) return
-        activeNoticeTitleReads.delete(sessionID)
-        resolveNoticeTitles()
-      })
+      void owner.request("session.get", { sessionID, timeoutMs: 5_000 }).then(
+        (outcome) => {
+          if (!isCurrentConnection(owner)) return
+          activeNoticeTitleReads.delete(sessionID)
+          if (outcome.status !== "ok") {
+            resolveNoticeTitles()
+            return
+          }
+          const data =
+            typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+          const resolved = readSessionInfo(data)
+          if (resolved?.id === sessionID) {
+            notificationTitles.set(sessionID, resolved.title)
+            if (delivery.setSessionTitle(sessionID, resolved.title)) setState({ notifications: delivery.entries() })
+          }
+          resolveNoticeTitles()
+        },
+        () => {
+          if (!isCurrentConnection(owner)) return
+          activeNoticeTitleReads.delete(sessionID)
+          resolveNoticeTitles()
+        },
+      )
     }
   }
 
   const publishNotices = (patch: Partial<NoticeSyncState> = {}) => {
-    setState({ notifications: delivery.entries(),
-      noticeSync: { ...container.state.noticeSync, loaded: delivery.syncedLoaded(), hidden: delivery.syncedHidden(), ...patch } })
+    setState({
+      notifications: delivery.entries(),
+      noticeSync: {
+        ...container.state.noticeSync,
+        loaded: delivery.syncedLoaded(),
+        hidden: delivery.syncedHidden(),
+        ...patch,
+      },
+    })
   }
 
   const failNoticeSync = (message: string) => {
@@ -732,18 +1034,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ notice: message })
   }
 
-  const withTitle = (notice: RemoteNotice) => ({ id: notice.id, category: notice.category, at: notice.createdAt, sessionID: notice.sessionID, ...titleOf(notice.sessionID) })
+  const withTitle = (notice: RemoteNotice) => ({
+    id: notice.id,
+    category: notice.category,
+    at: notice.createdAt,
+    sessionID: notice.sessionID,
+    ...titleOf(notice.sessionID),
+  })
 
-  const readNoticePage = (outcome: RemoteRequestOutcome): { readonly page: RemoteNoticePage } | { readonly message: string } | { readonly lost: true } => {
-    if (outcome.status === "unknown" || (outcome.status === "unavailable" && outcome.reason === "not-connected")) return { lost: true }
+  const readNoticePage = (
+    outcome: RemoteRequestOutcome,
+  ): { readonly page: NoticePageView } | { readonly message: string } | { readonly lost: true } => {
+    if (outcome.status === "unknown" || (outcome.status === "unavailable" && outcome.reason === "not-connected"))
+      return { lost: true }
     if (outcome.status !== "ok") return { message: describeOutcome(outcome, "Notifications") }
-    const parsed = parseNoticePage(outcome.value)
+    const parsed = readNoticePageView(outcome.value)
     return parsed.ok ? { page: parsed.value } : { message: noticeUnreadableMessage }
   }
 
-  const noticeStatus = () => noticeFault ? "error" : "ready"
+  const noticeStatus = () => (noticeFault ? "error" : "ready")
 
-  const applyNotices = (owner: RemoteTransport, frame: RemoteNoticeFrame, ownerDeviceID: string) => {
+  const applyNotices = (owner: RemoteTransport, frame: NoticeFrame, ownerDeviceID: string) => {
     if (frame.type === "notice.present" && ownerDeviceID === container.state.activeDeviceID) {
       delivery.present(frame.items, ownerDeviceID)
       return
@@ -765,7 +1076,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (frame.type === "notice.cleared") {
       delivery.clearSynced()
       noticeFault = false
-      publishNotices({ total: 0, status: container.state.noticeSync.status === "loading" ? "loading" : "ready", message: undefined })
+      publishNotices({
+        total: 0,
+        status: container.state.noticeSync.status === "loading" ? "loading" : "ready",
+        message: undefined,
+      })
       return
     }
     const deviceID = container.state.activeDeviceID
@@ -791,14 +1106,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     noticeFault = read.page.unavailable
     delivery.replaceSynced(read.page.notices.map(withTitle))
     if (noticeFault) setState({ notice: noticeUnavailableMessage })
-    publishNotices({ total: read.page.total, status: noticeStatus(), message: noticeFault ? noticeUnavailableMessage : undefined })
+    publishNotices({
+      total: read.page.total,
+      status: noticeStatus(),
+      message: noticeFault ? noticeUnavailableMessage : undefined,
+    })
     resolveNoticeTitles()
   }
 
   const loadMoreNotices = async () => {
     const owner = transport
     const before = delivery.oldestSynced()
-    if (owner === undefined || before === undefined || container.state.noticeSync.loadingMore || container.state.noticeSync.status === "loading") return
+    if (
+      owner === undefined ||
+      before === undefined ||
+      container.state.noticeSync.loadingMore ||
+      container.state.noticeSync.status === "loading"
+    )
+      return
     publishNotices({ loadingMore: true })
     const outcome = await owner.request("notice.list", { input: { before } })
     if (!isCurrentConnection(owner)) return
@@ -817,15 +1142,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     noticeFault = read.page.unavailable || noticeFault
     delivery.appendSynced(read.page.notices.map(withTitle))
-    publishNotices({ total: read.page.total, loadingMore: false, status: noticeStatus(), message: noticeFault ? noticeUnavailableMessage : undefined })
+    publishNotices({
+      total: read.page.total,
+      loadingMore: false,
+      status: noticeStatus(),
+      message: noticeFault ? noticeUnavailableMessage : undefined,
+    })
     resolveNoticeTitles()
   }
 
-  const readNotices = async (operation: "notice.read" | "notice.readAll", input?: { readonly ids: readonly string[] }) => {
+  const readNotices = async (
+    operation: "notice.read" | "notice.readAll",
+    input?: { readonly ids: readonly string[] },
+  ) => {
     const owner = transport
     if (owner === undefined) return
     const outcome = await owner.request(operation, input === undefined ? {} : { input })
-    if (outcome.status !== "ok" && isCurrentConnection(owner)) setState({ notice: describeOutcome(outcome, "Notifications") })
+    if (outcome.status !== "ok" && isCurrentConnection(owner))
+      setState({ notice: describeOutcome(outcome, "Notifications") })
   }
 
   const reportMachineOffline = () => {
@@ -838,16 +1172,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * refcounts them, so releasing a session a socket never registered would stop a
    * stream another remote client still wants.
    */
+  const ownedSubscriptions = new WeakMap<RemoteTransport, Map<string, string>>()
+  const registerSubscription = (owner: RemoteTransport, sessionID: string, outcome: RemoteRequestOutcome) => {
+    if (outcome.status !== "ok") return
+    const id =
+      typeof outcome.value === "object" && outcome.value !== null
+        ? Reflect.get(outcome.value, "subscription_id")
+        : undefined
+    if (typeof id !== "string" || !id) throw new Error("Invalid subscription identity")
+    const subscriptions = ownedSubscriptions.get(owner) ?? new Map<string, string>()
+    subscriptions.set(sessionID, id)
+    ownedSubscriptions.set(owner, subscriptions)
+  }
   const releaseSubscription = (owner: RemoteTransport, sessionID: string) => {
     if (subscribedSessionID === sessionID) subscribedSessionID = undefined
-    void owner.request("session.unsubscribe", { sessionID })
+    const id = ownedSubscriptions.get(owner)?.get(sessionID)
+    if (!id) return
+    ownedSubscriptions.get(owner)?.delete(sessionID)
+    void owner.request("event.unsubscribe", { sessionID, input: { subscription_id: id } })
   }
 
   const recordCovered = (before: SessionView, after: SessionView) => {
     const retained = new Set(after.messages.map((message) => message.id))
     const removed = before.messages.filter((message) => message.kind === "assistant" && !retained.has(message.id))
     if (removed.length === 0) return
-    const current = sealed?.sessionID === before.id ? sealed : { sessionID: before.id, parts: new Set<string>(), covered: new Set<string>() }
+    const current =
+      sealed?.sessionID === before.id
+        ? sealed
+        : { sessionID: before.id, parts: new Set<string>(), covered: new Set<string>() }
     for (const message of removed) {
       current.covered.add(message.id)
       for (const key of sealedPartKeys([message])) current.parts.delete(key)
@@ -868,157 +1220,239 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     let refreshShells = false
     let gap = false
     const activity = new Map<string, { readonly at: number; readonly ended: boolean }>()
-    const oversizedIDs = new Set<string>()
     batch(() => {
-    for (const item of items) {
-      if (!view || item.sessionID !== view.id) continue
-      const sequence = readEventSequence(item.event)
-      const aggregate = readAggregateID(item.event)
-      if (aggregate !== undefined && aggregate !== view.id) continue
-      const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
-      const opened = openedPartKey(item.event)
-      if (opened !== undefined) currentSeal?.parts.delete(opened)
-      const key = ephemeralPartKey(item.event)
-      if (key !== undefined && isEphemeralEvent(item.event) &&
-        (currentSeal?.parts.has(key) || currentSeal?.covered.has(ephemeralAssistantID(item.event) ?? ""))) continue
-      if (sequence.seq !== undefined && view.watermark !== undefined) {
-        // Duplicates below the watermark are dropped. The sequence is durable and
-        // per aggregate, so a gap means a lost event and forces a re-read.
-        if (sequence.seq <= view.watermark) continue
-        if (sequence.seq > view.watermark + 1) gap = true
-      }
-      const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
-      if (type === "session.remote.oversized") {
-        const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
-        const candidate = data && typeof data === "object" && Reflect.get(data, "sessionID") === view.id ? Reflect.get(data, "messageID") : undefined
-        const messageID = typeof candidate === "string" && /^msg_[A-Za-z0-9_-]+$/.test(candidate) && candidate.length <= 128 ? candidate : undefined
-        if (messageID === undefined) gap = true
-        if (messageID !== undefined) {
-          const previous = view.messages.find((message) => message.id === messageID)
-          const marker: RemoteMessageView = { kind: "oversized", id: messageID, projected: previous?.kind === "oversized" ? previous.projected : previous !== undefined && (previous.kind !== "user" || previous.state !== "pending"), state: "loading" }
-          view = { ...view, messages: view.messages.some((message) => message.id === messageID)
-            ? view.messages.map((message) => message.id === messageID ? marker : message)
-            : [...view.messages, marker] }
-          oversizedIDs.add(messageID)
+      for (const item of items) {
+        if (!view || item.sessionID !== view.id) continue
+        const sequence = readEventSequence(item.event)
+        const aggregate = readAggregateID(item.event)
+        if (aggregate !== undefined && aggregate !== view.id) continue
+        const currentSeal = sealed?.sessionID === view.id ? sealed : undefined
+        const opened = openedPartKey(item.event)
+        if (opened !== undefined) currentSeal?.parts.delete(opened)
+        const key = ephemeralPartKey(item.event)
+        if (
+          key !== undefined &&
+          isEphemeralEvent(item.event) &&
+          (currentSeal?.parts.has(key) || currentSeal?.covered.has(ephemeralAssistantID(item.event) ?? ""))
+        )
+          continue
+        if (sequence.seq !== undefined && view.watermark !== undefined) {
+          // Duplicates below the watermark are dropped. The sequence is durable and
+          // per aggregate, so a gap means a lost event and forces a re-read.
+          if (sequence.seq <= view.watermark) continue
+          if (sequence.seq > view.watermark + 1) gap = true
         }
-        if (sequence.seq !== undefined) view = { ...view, watermark: sequence.seq }
-        continue
-      }
-      if (type === "session.input.promoted") {
-        const data = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
-        const inputID = data && typeof data === "object" ? Reflect.get(data, "inputID") : undefined
-        if (typeof inputID === "string" && pendingRead?.sessionID === item.sessionID) pendingRead.promoted.add(inputID)
-        if (typeof inputID === "string" && view.messages.some((message) => message.kind === "oversized" && message.id === inputID)) {
-          view = { ...view, messages: view.messages.map((message) => message.kind === "oversized" && message.id === inputID ? { ...message, projected: true, state: "loading" } : message) }
-          oversizedIDs.add(inputID)
+        const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
+        if (type === "session.input.promoted") {
+          const data =
+            typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
+          const inputID = data && typeof data === "object" ? Reflect.get(data, "inputID") : undefined
+          if (typeof inputID === "string" && pendingRead?.sessionID === item.sessionID)
+            pendingRead.promoted.add(inputID)
+        }
+        if (
+          teamWatching &&
+          hydration === undefined &&
+          container.state.activeSessionID === item.sessionID &&
+          subscribedSessionID === item.sessionID &&
+          container.state.team?.rootID === item.sessionID
+        ) {
+          const cue = readTeamCue(item.event)
+          if (cue !== undefined && !teamCues.some((entry) => entry.id === cue.id)) {
+            teamCues = [...teamCues, cue].slice(-8)
+            refreshTeam = true
+          }
+        }
+        // Alerts follow the events that reach the projection: a dropped duplicate
+        // raises nothing, and the snapshot paths below never call this loop.
+        const category = notificationCategory(item.event)
+        if (category !== undefined) notifySession(category, item.sessionID)
+        const at = now()
+        const next = applySessionEvent(view, item.event, at)
+        const ended =
+          type === "session.execution.succeeded" ||
+          type === "session.execution.failed" ||
+          type === "session.execution.interrupted"
+        const eventData =
+          typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
+        if (type === "session.input.admitted" || type === "session.input.promoted") {
+          const inputID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "inputID") : undefined
+          if (
+            type === "session.input.admitted" &&
+            typeof inputID === "string" &&
+            pendingRead?.sessionID === item.sessionID
+          )
+            pendingRead.retained.add(inputID)
+          if (typeof inputID === "string" && confirmSend(inputID))
+            setState({
+              mutations: container.state.mutations.filter((mutation) => mutation.id !== inputID),
+              mutationToasts: container.state.mutationToasts?.filter((toast) => toast.id !== inputID),
+            })
+        }
+        const structured = eventData && typeof eventData === "object" ? Reflect.get(eventData, "structured") : undefined
+        const metadata = eventData && typeof eventData === "object" ? Reflect.get(eventData, "metadata") : undefined
+        if (
+          ended ||
+          (type === "session.tool.success" &&
+            structured &&
+            typeof structured === "object" &&
+            typeof Reflect.get(structured, "shellID") === "string") ||
+          (type === "session.synthetic" &&
+            metadata &&
+            typeof metadata === "object" &&
+            Reflect.get(metadata, "source") === "shell")
+        )
+          refreshShells = true
+        if (next.activeAt !== undefined && (next.activeAt !== view.activeAt || ended))
+          activity.set(item.sessionID, { at: next.activeAt, ended })
+        if (
+          typeof item.event === "object" &&
+          item.event !== null &&
+          Reflect.get(item.event, "type") === "session.compaction.ended"
+        )
+          recordCovered(view, next)
+        if (type === "session.compaction.ended" || type === "session.compaction.failed") {
+          const jobID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "jobID") : undefined
+          const failure = eventData && typeof eventData === "object" ? Reflect.get(eventData, "error") : undefined
+          const failureMessage = failure && typeof failure === "object" ? Reflect.get(failure, "message") : undefined
+          if (typeof jobID === "string" && compactionWaiters.has(jobID))
+            settleCompaction(
+              jobID,
+              type === "session.compaction.ended" ? "completed" : "failed",
+              typeof failureMessage === "string" ? failureMessage : undefined,
+            )
+        }
+        unhandled += next.unhandledEvents - view.unhandledEvents
+        view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
+        if (
+          compactionRead?.token === selectionToken &&
+          typeof type === "string" &&
+          type.startsWith("session.compaction.") &&
+          (type === "session.compaction.admitted" ||
+            type === "session.compaction.started" ||
+            type === "session.compaction.ended" ||
+            type === "session.compaction.failed")
+        )
+          compactionRead.live.push({ event: item.event, at })
+        const eventTodoList = eventTodos(item.event, item.sessionID)
+        if (eventTodoList !== undefined) {
+          todos = reuseTodos(todos, eventTodoList)
+          if (todoRead?.sessionID === item.sessionID) todoRead.live = todos
+        }
+        if (
+          type === "permission.asked" ||
+          type === "permission.replied" ||
+          type === "guardrail.asked" ||
+          type === "guardrail.replied" ||
+          type === "form.created" ||
+          type === "form.replied" ||
+          type === "form.cancelled"
+        ) {
+          for (const read of requestReads) {
+            if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })
+          }
+        }
+        if (hydration !== undefined && hydration.sessionID === item.sessionID && key !== undefined) {
+          hydration.events.push(item.event)
+          hydration.replayed.add(key)
         }
       }
-      if (teamWatching && hydration === undefined && container.state.activeSessionID === item.sessionID && subscribedSessionID === item.sessionID &&
-        container.state.team?.rootID === item.sessionID) {
+      let listed: Partial<RemoteStoreState> = {}
+      if (activity.size > 0) {
+        const update = <T extends SessionInfoView>(row: T): T => {
+          const terminal = activity.get(row.id)
+          return terminal === undefined
+            ? row
+            : {
+                ...row,
+                activeAt: terminal.at,
+                ...(container.state.sessionStatus === undefined
+                  ? terminal.ended
+                    ? { running: false }
+                    : {}
+                  : { running: container.state.sessionStatus.running.has(row.id) }),
+              }
+        }
+        sessionPages = sessionPages.map((page) => ({ ...page, rows: page.rows.map(update) }))
+        if (openRootInfo) openRootInfo = update(openRootInfo)
+        listed = {
+          sessions: withOpenRoot(sortSessions(sessionPages.flatMap((page) => page.rows))),
+          carouselSessions: sortSessions(container.state.carouselSessions?.map(update) ?? []),
+        }
+      }
+      container.setState((previous) => ({
+        ...previous,
+        ...listed,
+        todos,
+        view:
+          view && container.state.sessionStatus?.running.has(view.id)
+            ? reconcileSessionStatus(
+                view,
+                container.state.sessionStatus,
+                container.state.selectedSessionInfo?.id === view.id
+                  ? container.state.selectedSessionInfo.parentID
+                  : undefined,
+              )
+            : view,
+        selectedSessionInfo:
+          view !== undefined && container.state.selectedSessionInfo?.id === view.id
+            ? {
+                ...container.state.selectedSessionInfo,
+                agent: view.agent ?? container.state.selectedSessionInfo.agent,
+                model: view.model ?? container.state.selectedSessionInfo.model,
+                modelLabel:
+                  modelLabel(view.model ?? container.state.selectedSessionInfo.model) ??
+                  container.state.selectedSessionInfo.modelLabel,
+              }
+            : container.state.selectedSessionInfo,
+        unhandledEvents: unhandled,
+        notifications: delivery.entries(),
+        teamCues,
+      }))
+    })
+    if (
+      items.some((item) => {
+        if (item.sessionID !== container.state.activeSessionID || typeof item.event !== "object" || item.event === null)
+          return false
+        const type = Reflect.get(item.event, "type")
+        if (type === "session.step.ended" || type === "session.compaction.ended") return true
         const cue = readTeamCue(item.event)
-        if (cue !== undefined && !teamCues.some((entry) => entry.id === cue.id)) {
-          teamCues = [...teamCues, cue].slice(-8)
-          refreshTeam = true
-        }
-      }
-      // Alerts follow the events that reach the projection: a dropped duplicate
-      // raises nothing, and the snapshot paths below never call this loop.
-      const category = notificationCategory(item.event)
-      if (category !== undefined) notifySession(category, item.sessionID)
-      const at = now()
-      const next = applySessionEvent(view, item.event, at)
-      const ended = type === "session.execution.succeeded" || type === "session.execution.failed" || type === "session.execution.interrupted"
-      const eventData = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "data") : undefined
-      if (type === "session.input.admitted" || type === "session.input.promoted") {
-        const inputID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "inputID") : undefined
-        if (type === "session.input.admitted" && typeof inputID === "string" && pendingRead?.sessionID === item.sessionID) pendingRead.retained.add(inputID)
-        if (typeof inputID === "string" && confirmSend(inputID))
-          setState({ mutations: container.state.mutations.filter((mutation) => mutation.id !== inputID),
-            mutationToasts: container.state.mutationToasts?.filter((toast) => toast.id !== inputID) })
-      }
-      const structured = eventData && typeof eventData === "object" ? Reflect.get(eventData, "structured") : undefined
-      const metadata = eventData && typeof eventData === "object" ? Reflect.get(eventData, "metadata") : undefined
-      if (ended || type === "session.tool.success" && structured && typeof structured === "object" && typeof Reflect.get(structured, "shellID") === "string" ||
-        type === "session.synthetic" && metadata && typeof metadata === "object" && Reflect.get(metadata, "source") === "shell") refreshShells = true
-      if (next.activeAt !== undefined && (next.activeAt !== view.activeAt || ended))
-        activity.set(item.sessionID, { at: next.activeAt, ended })
-      if (typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.ended") recordCovered(view, next)
-      if (type === "session.compaction.ended" || type === "session.compaction.failed") {
-        const jobID = eventData && typeof eventData === "object" ? Reflect.get(eventData, "jobID") : undefined
-        const failure = eventData && typeof eventData === "object" ? Reflect.get(eventData, "error") : undefined
-        const failureMessage = failure && typeof failure === "object" ? Reflect.get(failure, "message") : undefined
-        if (typeof jobID === "string" && compactionWaiters.has(jobID))
-          settleCompaction(jobID, type === "session.compaction.ended" ? "completed" : "failed", typeof failureMessage === "string" ? failureMessage : undefined)
-      }
-      unhandled += next.unhandledEvents - view.unhandledEvents
-      view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
-      if (compactionRead?.token === selectionToken && typeof type === "string" && type.startsWith("session.compaction.") &&
-        (type === "session.compaction.admitted" || type === "session.compaction.started" || type === "session.compaction.ended" || type === "session.compaction.failed"))
-        compactionRead.live.push({ event: item.event, at })
-      const eventTodoList = eventTodos(item.event, item.sessionID)
-      if (eventTodoList !== undefined) {
-        todos = reuseTodos(todos, eventTodoList)
-        if (todoRead?.sessionID === item.sessionID) todoRead.live = todos
-      }
-      if (type === "permission.asked" || type === "permission.replied" ||
-        type === "guardrail.asked" || type === "guardrail.replied" ||
-        type === "form.created" || type === "form.replied" || type === "form.cancelled") {
-        for (const read of requestReads) {
-          if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })
-        }
-      }
-      if (hydration !== undefined && hydration.sessionID === item.sessionID && key !== undefined) {
-        hydration.events.push(item.event)
-        hydration.replayed.add(key)
-      }
-    }
-    let listed: Partial<RemoteStoreState> = {}
-    if (activity.size > 0) {
-      const update = <T extends SessionInfoView>(row: T): T => {
-        const terminal = activity.get(row.id)
-        return terminal === undefined ? row : { ...row, activeAt: terminal.at,
-          ...(container.state.sessionStatus === undefined ? terminal.ended ? { running: false } : {} : { running: container.state.sessionStatus.running.has(row.id) }) }
-      }
-      sessionPages = sessionPages.map((page) => ({ ...page, rows: page.rows.map(update) }))
-      if (openRootInfo) openRootInfo = update(openRootInfo)
-      listed = { sessions: withOpenRoot(sortSessions(sessionPages.flatMap((page) => page.rows))),
-        carouselSessions: sortSessions(container.state.carouselSessions?.map(update) ?? []) }
-    }
-    container.setState((previous) => ({
-      ...previous,
-      ...listed,
-      todos,
-      view: view && container.state.sessionStatus?.running.has(view.id) ? reconcileSessionStatus(view, container.state.sessionStatus,
-        container.state.selectedSessionInfo?.id === view.id ? container.state.selectedSessionInfo.parentID : undefined) : view,
-      selectedSessionInfo: view !== undefined && container.state.selectedSessionInfo?.id === view.id
-        ? { ...container.state.selectedSessionInfo, agent: view.agent ?? container.state.selectedSessionInfo.agent,
-          model: view.model ?? container.state.selectedSessionInfo.model, modelLabel: modelLabel(view.model ?? container.state.selectedSessionInfo.model) ?? container.state.selectedSessionInfo.modelLabel }
-        : container.state.selectedSessionInfo,
-      unhandledEvents: unhandled,
-      notifications: delivery.entries(),
-      teamCues,
-    }))
-    })
-    if (items.some((item) => {
-      if (item.sessionID !== container.state.activeSessionID || typeof item.event !== "object" || item.event === null) return false
-      const type = Reflect.get(item.event, "type")
-      if (type === "session.step.ended" || type === "session.compaction.ended") return true
-      const cue = readTeamCue(item.event)
-      return cue?.kind === "reported" && cue.outcome === "completed"
-    })) scheduleCapturedRefresh()
-    if (items.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
-      container.state.activeSessionID !== undefined) void loadCompactionHistory(container.state.activeSessionID, selectionToken)
+        return cue?.kind === "reported" && cue.outcome === "completed"
+      })
+    )
+      scheduleCapturedRefresh()
+    if (
+      items.some(
+        (item) =>
+          typeof item.event === "object" &&
+          item.event !== null &&
+          Reflect.get(item.event, "type") === "session.compaction.started",
+      ) &&
+      container.state.activeSessionID !== undefined
+    )
+      void loadCompactionHistory(container.state.activeSessionID, selectionToken)
     if (gap) void resyncSelected()
-    if (transport !== undefined && container.state.activeSessionID !== undefined && items.some((item) => item.sessionID === container.state.activeSessionID && isGoalSteerAdmission(item.event)) &&
-      goalRequests(container.state.activeSessionID).some((mutation) => mutation.state !== "failed")) void refreshAutonomy(transport, container.state.activeSessionID, selectionToken)
-    oversizedIDs.forEach((id) => {
-      oversizedReads.get(id)?.abort()
-      oversizedReads.delete(id)
-      void loadOversizedMessage(id)
-    })
-    if (refreshTeam && container.state.team?.status !== "unsupported" && container.state.team !== undefined && transport !== undefined)
+    if (
+      transport !== undefined &&
+      container.state.activeSessionID !== undefined &&
+      items.some((item) => item.sessionID === container.state.activeSessionID && isGoalSteerAdmission(item.event)) &&
+      goalRequests(container.state.activeSessionID).some((mutation) => mutation.state !== "failed")
+    )
+      void refreshAutonomy(transport, container.state.activeSessionID, selectionToken)
+    if (
+      refreshTeam &&
+      container.state.team?.status !== "unsupported" &&
+      container.state.team !== undefined &&
+      transport !== undefined
+    )
       void loadTeam(transport, selectionToken, container.state.team.rootID, undefined, true)
-    if (refreshShells && teamWatching && container.state.team?.shellStatus !== "unsupported" && container.state.team !== undefined && transport !== undefined)
+    if (
+      refreshShells &&
+      teamWatching &&
+      container.state.team?.shellStatus !== "unsupported" &&
+      container.state.team !== undefined &&
+      transport !== undefined
+    )
       void loadTeamShells(transport, selectionToken, container.state.team.rootID)
   }
 
@@ -1030,48 +1464,122 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const loadFamilyActivity = async (owner: RemoteTransport, rootID: string) => {
     cancelFamilyRefresh?.()
     cancelFamilyRefresh = undefined
-    if (!activityWatching || !teamWatching || familyReading || !isCurrentConnection(owner) || container.state.transport.kind !== "open" || container.state.team?.rootID !== rootID ||
-      container.state.team.status !== "ready" || container.state.familyActivity?.status === "unsupported" || (typeof document !== "undefined" && document.hidden)) return
+    if (
+      !activityWatching ||
+      !teamWatching ||
+      familyReading ||
+      !isCurrentConnection(owner) ||
+      container.state.transport.kind !== "open" ||
+      container.state.team?.rootID !== rootID ||
+      container.state.team.status !== "ready" ||
+      container.state.familyActivity?.status === "unsupported" ||
+      (typeof document !== "undefined" && document.hidden)
+    )
+      return
     const watchToken = activityWatchToken
-    const sessionIDs = container.state.team.tasks.filter((task) => task.parentID === rootID)
+    const sessionIDs = container.state.team.tasks
+      .filter((task) => task.parentID === rootID)
       .toSorted((a, b) => a.sessionID.localeCompare(b.sessionID))
-      .toSorted((a, b) => Number(b.sessionID === container.state.activeSessionID) - Number(a.sessionID === container.state.activeSessionID))
-      .slice(0, RemoteLimits.maxFamilyMembers - 1).map((task) => task.sessionID)
+      .toSorted(
+        (a, b) =>
+          Number(b.sessionID === container.state.activeSessionID) -
+          Number(a.sessionID === container.state.activeSessionID),
+      )
+      .slice(0, WebLimits.maxFamilyMembers - 1)
+      .map((task) => task.sessionID)
     familyReading = true
-    const outcome = await owner.request("session.family.activity", { sessionID: rootID, input: { sessionIDs }, timeoutMs: 5_000 })
+    const outcome = await owner.request("session.family.activity", {
+      sessionID: rootID,
+      input: { sessionIDs },
+      timeoutMs: 5_000,
+    })
     familyReading = false
-    if (!activityWatching || watchToken !== activityWatchToken || !isCurrentConnection(owner) || container.state.transport.kind !== "open" || container.state.team?.rootID !== rootID ||
-      (typeof document !== "undefined" && document.hidden)) {
-      if (activityWatching && container.state.team?.status === "ready" && container.state.transport.kind === "open" && transport !== undefined &&
-        (typeof document === "undefined" || !document.hidden)) void loadFamilyActivity(transport, container.state.team.rootID)
+    if (
+      !activityWatching ||
+      watchToken !== activityWatchToken ||
+      !isCurrentConnection(owner) ||
+      container.state.transport.kind !== "open" ||
+      container.state.team?.rootID !== rootID ||
+      (typeof document !== "undefined" && document.hidden)
+    ) {
+      if (
+        activityWatching &&
+        container.state.team?.status === "ready" &&
+        container.state.transport.kind === "open" &&
+        transport !== undefined &&
+        (typeof document === "undefined" || !document.hidden)
+      )
+        void loadFamilyActivity(transport, container.state.team.rootID)
       return
     }
     if (outcome.status !== "ok") {
       const unsupported = outcome.status === "failed" && outcome.error.code === "unknown_operation"
-      setState({ familyActivity: { rootID, status: unsupported ? "unsupported" : "error",
-        members: unsupported ? [] : container.state.familyActivity?.rootID === rootID ? container.state.familyActivity.members : [] } })
-      if (!unsupported) cancelFamilyRefresh = schedule(() => { void loadFamilyActivity(owner, rootID) }, 3_000)
+      setState({
+        familyActivity: {
+          rootID,
+          status: unsupported ? "unsupported" : "error",
+          members: unsupported
+            ? []
+            : container.state.familyActivity?.rootID === rootID
+              ? container.state.familyActivity.members
+              : [],
+        },
+      })
+      if (!unsupported)
+        cancelFamilyRefresh = schedule(() => {
+          void loadFamilyActivity(owner, rootID)
+        }, 3_000)
       return
     }
-    const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+    const data =
+      typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
     const expected = [rootID, ...sessionIDs]
-    const valid = Array.isArray(data) && data.length === expected.length && data.every((member, index) => {
-      if (typeof member !== "object" || member === null || Reflect.get(member, "sessionID") !== expected[index] || typeof Reflect.get(member, "executing") !== "boolean") return false
-      const activity = Reflect.get(member, "activity")
-      const text = typeof activity === "object" && activity !== null ? Reflect.get(activity, "text") : undefined
-      return activity === undefined || typeof activity === "object" && activity !== null &&
-        ["tool", "thinking", "replying"].includes(Reflect.get(activity, "kind")) &&
-        ["research", "qa", "meeting", "developer", "hold"].includes(Reflect.get(activity, "room")) &&
-        typeof text === "string" && Array.from(text).length <= 80
+    const valid =
+      Array.isArray(data) &&
+      data.length === expected.length &&
+      data.every((member, index) => {
+        if (
+          typeof member !== "object" ||
+          member === null ||
+          Reflect.get(member, "sessionID") !== expected[index] ||
+          typeof Reflect.get(member, "executing") !== "boolean"
+        )
+          return false
+        const activity = Reflect.get(member, "activity")
+        const text = typeof activity === "object" && activity !== null ? Reflect.get(activity, "text") : undefined
+        return (
+          activity === undefined ||
+          (typeof activity === "object" &&
+            activity !== null &&
+            ["tool", "thinking", "replying"].includes(Reflect.get(activity, "kind")) &&
+            ["research", "qa", "meeting", "developer", "hold"].includes(Reflect.get(activity, "room")) &&
+            typeof text === "string" &&
+            Array.from(text).length <= 80)
+        )
+      })
+    setState({
+      familyActivity: {
+        rootID,
+        status: valid ? "ready" : "error",
+        members: valid ? (data as readonly FamilyActivityView[]) : [],
+      },
     })
-    setState({ familyActivity: { rootID, status: valid ? "ready" : "error", members: valid ? data as readonly RemoteFamilyActivity[] : [] } })
-    if (activityWatching) cancelFamilyRefresh = schedule(() => { void loadFamilyActivity(owner, rootID) }, 3_000)
+    if (activityWatching)
+      cancelFamilyRefresh = schedule(() => {
+        void loadFamilyActivity(owner, rootID)
+      }, 3_000)
   }
 
   const officeVisibility = () => {
     cancelFamilyRefresh?.()
     cancelFamilyRefresh = undefined
-    if (activityWatching && typeof document !== "undefined" && !document.hidden && transport !== undefined && container.state.team?.status === "ready")
+    if (
+      activityWatching &&
+      typeof document !== "undefined" &&
+      !document.hidden &&
+      transport !== undefined &&
+      container.state.team?.status === "ready"
+    )
       void loadFamilyActivity(transport, container.state.team.rootID)
   }
 
@@ -1079,21 +1587,52 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (!teamWatching) return
     const watchToken = teamWatchToken
     if (teamRead !== undefined) {
-      if (cursor === undefined && (refresh || teamRead.owner !== owner || teamRead.token !== token ||
-        teamRead.rootID !== rootID || teamRead.watchToken !== watchToken)) pendingTeamRead = { owner, token, rootID, watchToken, refresh }
+      if (
+        cursor === undefined &&
+        (refresh ||
+          teamRead.owner !== owner ||
+          teamRead.token !== token ||
+          teamRead.rootID !== rootID ||
+          teamRead.watchToken !== watchToken)
+      )
+        pendingTeamRead = { owner, token, rootID, watchToken, refresh }
       return
     }
-    if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID || container.state.transport.kind !== "open") return
+    if (
+      token !== selectionToken ||
+      !isCurrentConnection(owner) ||
+      container.state.team?.rootID !== rootID ||
+      container.state.transport.kind !== "open"
+    )
+      return
     const read = { owner, token, rootID, watchToken }
     teamRead = read
-    setState({ team: { ...container.state.team, rootID, status: cursor === undefined && !(refresh && container.state.team.status === "ready") ? "loading" : container.state.team.status,
-      pageLoading: cursor !== undefined, refreshing: refresh && cursor === undefined } })
-    const outcome = await owner.request("session.subagent.list", { sessionID: rootID,
-      ...(cursor === undefined ? {} : { input: { cursor } }) })
+    setState({
+      team: {
+        ...container.state.team,
+        rootID,
+        status:
+          cursor === undefined && !(refresh && container.state.team.status === "ready")
+            ? "loading"
+            : container.state.team.status,
+        pageLoading: cursor !== undefined,
+        refreshing: refresh && cursor === undefined,
+      },
+    })
+    const outcome = await owner.request("session.subagent.list", {
+      sessionID: rootID,
+      ...(cursor === undefined ? {} : { input: { cursor } }),
+    })
     if (teamRead === read) teamRead = undefined
     const currentTeam = container.state.team
-    if (teamWatching && watchToken === teamWatchToken && token === selectionToken && isCurrentConnection(owner) &&
-      currentTeam?.rootID === rootID && container.state.transport.kind === "open") {
+    if (
+      teamWatching &&
+      watchToken === teamWatchToken &&
+      token === selectionToken &&
+      isCurrentConnection(owner) &&
+      currentTeam?.rootID === rootID &&
+      container.state.transport.kind === "open"
+    ) {
       if (refresh && currentTeam.status === "ready" && outcome.status !== "ok") {
         setState({ team: { ...currentTeam, pageLoading: false, refreshing: false } })
       } else if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
@@ -1101,7 +1640,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       } else if (outcome.status !== "ok") {
         setState({ team: { ...currentTeam, status: "error", pageLoading: false, refreshing: false } })
       } else {
-        const value = outcome.value
+        const value =
+          typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
         const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
         const summary = typeof value === "object" && value !== null ? Reflect.get(value, "summary") : undefined
         const cursors = typeof value === "object" && value !== null ? Reflect.get(value, "cursor") : undefined
@@ -1115,78 +1655,193 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           const next = Reflect.get(cursors, "next")
           const total = typeof summary === "object" && summary !== null ? Reflect.get(summary, "total") : undefined
           const active = typeof summary === "object" && summary !== null ? Reflect.get(summary, "active") : undefined
-          const tasks = cursor === undefined ? rows : [...currentTeam.tasks.filter((item) => !rows.some((row) => row.sessionID === item.sessionID)), ...rows]
-          setState({ team: { ...currentTeam, rootID, status: "ready", tasks: tasks.map((item) => ({ ...item,
-            ...retainedEconomics(currentTeam.tasks.find((old) => old.sessionID === item.sessionID)) })),
-            ...(typeof total === "number" && Number.isInteger(total) && total >= 0 ? { total } : {}),
-            ...(typeof active === "number" && Number.isInteger(active) && active >= 0 ? { activeTotal: active } : {}),
-            ...(typeof next === "string" && next.length > 0 ? { next } : {}), pageLoading: false, refreshing: false } })
-          if (activityWatching && container.state.familyActivity?.status !== "unsupported") void loadFamilyActivity(owner, rootID)
-          if (currentTeam.shellStatus === "loading" || refresh && currentTeam.shellStatus !== "unsupported") void loadTeamShells(owner, token, rootID)
+          const tasks =
+            cursor === undefined
+              ? rows
+              : [...currentTeam.tasks.filter((item) => !rows.some((row) => row.sessionID === item.sessionID)), ...rows]
+          setState({
+            team: {
+              ...currentTeam,
+              rootID,
+              status: "ready",
+              tasks: tasks.map((item) => ({
+                ...item,
+                ...retainedEconomics(currentTeam.tasks.find((old) => old.sessionID === item.sessionID)),
+              })),
+              ...(typeof total === "number" && Number.isInteger(total) && total >= 0 ? { total } : {}),
+              ...(typeof active === "number" && Number.isInteger(active) && active >= 0 ? { activeTotal: active } : {}),
+              ...(typeof next === "string" && next.length > 0 ? { next } : {}),
+              pageLoading: false,
+              refreshing: false,
+            },
+          })
+          if (activityWatching && container.state.familyActivity?.status !== "unsupported")
+            void loadFamilyActivity(owner, rootID)
+          if (currentTeam.shellStatus === "loading" || (refresh && currentTeam.shellStatus !== "unsupported"))
+            void loadTeamShells(owner, token, rootID)
         }
       }
     }
     const pending = pendingTeamRead
     pendingTeamRead = undefined
-    if (teamWatching && pending !== undefined && teamRead === undefined && pending.watchToken === teamWatchToken && pending.token === selectionToken &&
-      isCurrentConnection(pending.owner) && container.state.transport.kind === "open" && container.state.team?.rootID === pending.rootID && container.state.team.status !== "unsupported")
+    if (
+      teamWatching &&
+      pending !== undefined &&
+      teamRead === undefined &&
+      pending.watchToken === teamWatchToken &&
+      pending.token === selectionToken &&
+      isCurrentConnection(pending.owner) &&
+      container.state.transport.kind === "open" &&
+      container.state.team?.rootID === pending.rootID &&
+      container.state.team.status !== "unsupported"
+    )
       void loadTeam(pending.owner, pending.token, pending.rootID, undefined, pending.refresh)
   }
 
   let economicsReads = 0
-  const loadTeamEconomics = async (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[]) => {
+  const loadTeamEconomics = async (
+    owner: RemoteTransport,
+    token: number,
+    rootID: string,
+    sessionIDs: readonly string[],
+  ) => {
     economicsReads += 1
     if (container.state.team?.rootID === rootID) setState({ team: { ...container.state.team, economicsLoading: true } })
     try {
       await readTeamEconomicsRows(owner, token, rootID, sessionIDs)
     } finally {
       economicsReads -= 1
-      if (economicsReads === 0 && container.state.team?.economicsLoading === true) setState({ team: { ...container.state.team, economicsLoading: false } })
+      if (economicsReads === 0 && container.state.team?.economicsLoading === true)
+        setState({ team: { ...container.state.team, economicsLoading: false } })
     }
   }
 
-  const readTeamEconomicsRows = async (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[]) => {
-    const outcome = await owner.request("session.team.economics", { sessionID: rootID, input: { sessionIDs }, timeoutMs: 5_000 })
-    if (!teamWatching || token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return
+  const readTeamEconomicsRows = async (
+    owner: RemoteTransport,
+    token: number,
+    rootID: string,
+    sessionIDs: readonly string[],
+  ) => {
+    const outcome = await owner.request("session.team.economics", {
+      sessionID: rootID,
+      input: { sessionIDs },
+      timeoutMs: 5_000,
+    })
+    if (
+      !teamWatching ||
+      token !== selectionToken ||
+      !isCurrentConnection(owner) ||
+      container.state.team?.rootID !== rootID
+    )
+      return
     if (outcome.status !== "ok") {
-      if (outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "unknown_operation") setState({ team: { ...container.state.team, economicsUnsupported: true } })
+      if (outcome.status === "unknown" || (outcome.status === "failed" && outcome.error.code === "unknown_operation"))
+        setState({ team: { ...container.state.team, economicsUnsupported: true } })
       return
     }
-    const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+    const data =
+      typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
     if (!Array.isArray(data)) return
-    const rows = new Map(data.flatMap((item: unknown) => {
-      const economy = readTeamEconomics(item)
-      return economy && sessionIDs.includes(economy.sessionID) ? [[economy.sessionID, economy] as const] : []
-    }))
-    setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((task) => ({ ...task, ...rows.get(task.sessionID) })) } })
+    const rows = new Map(
+      data.flatMap((item: unknown) => {
+        const economy = readTeamEconomics(item)
+        return economy && sessionIDs.includes(economy.sessionID) ? [[economy.sessionID, economy] as const] : []
+      }),
+    )
+    setState({
+      team: {
+        ...container.state.team,
+        tasks: container.state.team.tasks.map((task) => ({ ...task, ...rows.get(task.sessionID) })),
+      },
+    })
   }
 
   const loadTeamShells = async (owner: RemoteTransport, token: number, rootID: string) => {
     const revision = ++teamShellRead
     const outcome = await owner.request("session.team.shell.list", { sessionID: rootID, timeoutMs: 5_000 })
-    if (!teamWatching || revision !== teamShellRead || token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return
-      const data = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
-      const truncated = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null && Reflect.get(outcome.value, "truncated") === true
-    setState({ team: { ...container.state.team, shells: Array.isArray(data) ? data.flatMap((item: unknown) => {
-      const shell = readTeamShell(item)
-      return shell ? [shell] : []
-    }) : container.state.team.shells, shellTruncated: truncated, shellStatus: outcome.status === "failed" && outcome.error.code === "unknown_operation" || outcome.status === "unknown" ? "unsupported" : Array.isArray(data) ? "ready" : "error" } })
+    if (
+      !teamWatching ||
+      revision !== teamShellRead ||
+      token !== selectionToken ||
+      !isCurrentConnection(owner) ||
+      container.state.team?.rootID !== rootID
+    )
+      return
+    const data =
+      outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null
+        ? Reflect.get(outcome.value, "data")
+        : undefined
+    const truncated =
+      outcome.status === "ok" &&
+      typeof outcome.value === "object" &&
+      outcome.value !== null &&
+      Reflect.get(outcome.value, "truncated") === true
+    setState({
+      team: {
+        ...container.state.team,
+        shells: Array.isArray(data)
+          ? data.flatMap((item: unknown) => {
+              const shell = readTeamShell(item)
+              return shell ? [shell] : []
+            })
+          : container.state.team.shells,
+        shellTruncated: truncated,
+        shellStatus:
+          (outcome.status === "failed" && outcome.error.code === "unknown_operation") || outcome.status === "unknown"
+            ? "unsupported"
+            : Array.isArray(data)
+              ? "ready"
+              : "error",
+      },
+    })
   }
 
   const loadSideChats = async (owner: RemoteTransport, token: number, rootID: string, cursor?: string) => {
-    const outcome = await owner.request("session.side-chat.list", { sessionID: rootID, ...(cursor === undefined ? {} : { input: { cursor } }), timeoutMs: 5_000 })
-    if (!teamWatching || token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return
-    const value = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? outcome.value : undefined
+    const outcome = await owner.request("session.side-chat.list", {
+      sessionID: rootID,
+      ...(cursor === undefined ? {} : { input: { cursor } }),
+      timeoutMs: 5_000,
+    })
+    if (
+      !teamWatching ||
+      token !== selectionToken ||
+      !isCurrentConnection(owner) ||
+      container.state.team?.rootID !== rootID
+    )
+      return
+    const value =
+      outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? outcome.value : undefined
     const data = value === undefined ? undefined : Reflect.get(value, "data")
     const page = value === undefined ? undefined : Reflect.get(value, "cursor")
     const next = typeof page === "object" && page !== null ? Reflect.get(page, "next") : undefined
-    const chats = Array.isArray(data) ? data.flatMap((item: unknown) => {
-      const chat = readTeamSideChat(item)
-      return chat ? [chat] : []
-    }) : undefined
-    setState({ team: { ...container.state.team, sideChatStatus: outcome.status === "failed" && outcome.error.code === "unknown_operation" || outcome.status === "unknown" ? "unsupported" : chats === undefined ? "error" : "ready",
-      sideChats: chats === undefined ? container.state.team.sideChats : cursor === undefined ? chats : [...container.state.team.sideChats.filter((old) => !chats.some((item) => item.id === old.id)), ...chats],
-      sideChatLoading: false, sideChatNext: typeof next === "string" && next.length > 0 ? next : undefined } })
+    const chats = Array.isArray(data)
+      ? data.flatMap((item: unknown) => {
+          const chat = readTeamSideChat(item)
+          return chat ? [chat] : []
+        })
+      : undefined
+    setState({
+      team: {
+        ...container.state.team,
+        sideChatStatus:
+          (outcome.status === "failed" && outcome.error.code === "unknown_operation") || outcome.status === "unknown"
+            ? "unsupported"
+            : chats === undefined
+              ? "error"
+              : "ready",
+        sideChats:
+          chats === undefined
+            ? container.state.team.sideChats
+            : cursor === undefined
+              ? chats
+              : [
+                  ...container.state.team.sideChats.filter((old) => !chats.some((item) => item.id === old.id)),
+                  ...chats,
+                ],
+        sideChatLoading: false,
+        sideChatNext: typeof next === "string" && next.length > 0 ? next : undefined,
+      },
+    })
   }
 
   /**
@@ -1220,33 +1875,76 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ upload: undefined, uploadError: reason })
   }
 
-  const prepareUploads = async (sessionID: string, files: readonly FileAttachmentInput[] | undefined, token: number) => {
+  const prepareUploads = async (
+    sessionID: string,
+    files: readonly FileAttachmentInput[] | undefined,
+    token: number,
+  ) => {
     if (!files?.some((file) => file.uri.startsWith("data:"))) return files
     const owner = transport
     if (!owner || container.state.transport.kind !== "open" || activeUpload) {
-      setState({ uploadError: activeUpload ? "Wait for the current attachment upload to finish." : "Connect to the machine before uploading attachments." })
+      setState({
+        uploadError: activeUpload
+          ? "Wait for the current attachment upload to finish."
+          : "Connect to the machine before uploading attachments.",
+      })
       return undefined
     }
     const controller = new AbortController()
     activeUpload = controller
-    setState({ upload: { sessionID, name: files.find((file) => file.uri.startsWith("data:"))?.name ?? "Attachment", percent: 0 }, uploadError: undefined })
+    setState({
+      upload: { sessionID, name: files.find((file) => file.uri.startsWith("data:"))?.name ?? "Attachment", percent: 0 },
+      uploadError: undefined,
+    })
     try {
-      const uploaded = await uploadAttachments({ sessionID, files, request: owner.request, signal: controller.signal,
-        onProgress: (name, percent) => { if (activeUpload === controller) setState({ upload: { sessionID, name, percent } }) } })
-      if (controller.signal.aborted || !isCurrentConnection(owner) || token !== selectionToken || container.state.activeSessionID !== sessionID)
+      const uploaded = await uploadAttachments({
+        sessionID,
+        files,
+        request: owner.request,
+        signal: controller.signal,
+        onProgress: (name, percent) => {
+          if (activeUpload === controller) setState({ upload: { sessionID, name, percent } })
+        },
+      })
+      if (
+        controller.signal.aborted ||
+        !isCurrentConnection(owner) ||
+        token !== selectionToken ||
+        container.state.activeSessionID !== sessionID
+      )
         throw new Error("Attachment upload lost its selected Session or connection. Files were not sent.")
       return uploaded
     } catch (cause) {
-      if (activeUpload === controller) setState({ uploadError: cause instanceof Error ? cause.message : "Attachment upload failed. Files were not sent." })
+      if (activeUpload === controller)
+        setState({
+          uploadError: cause instanceof Error ? cause.message : "Attachment upload failed. Files were not sent.",
+        })
       return undefined
     } finally {
-      if (activeUpload === controller) { activeUpload = undefined; setState({ upload: undefined }) }
+      if (activeUpload === controller) {
+        activeUpload = undefined
+        setState({ upload: undefined })
+      }
     }
   }
 
-  const requestFits = (operation: "session.prompt" | "session.command", sessionID: string, input: Readonly<Record<string, unknown>>, files: readonly FileAttachmentInput[] | undefined) => {
+  const requestFits = (
+    operation: "session.prompt" | "session.command",
+    sessionID: string,
+    input: Readonly<Record<string, unknown>>,
+    files: readonly FileAttachmentInput[] | undefined,
+  ) => {
     try {
-      assertRemoteRequestSize(operation, sessionID, { ...input, ...(files === undefined ? {} : { files: files.map((file) => file.uri.startsWith("data:") ? { ...file, uri: `ycoding-upload://${"x".repeat(36)}` } : file) }) })
+      assertRemoteRequestSize(operation, sessionID, {
+        ...input,
+        ...(files === undefined
+          ? {}
+          : {
+              files: files.map((file) =>
+                file.uri.startsWith("data:") ? { ...file, uri: `ycoding-upload://${"x".repeat(36)}` } : file,
+              ),
+            }),
+      })
       return true
     } catch (cause) {
       setState({ uploadError: cause instanceof Error ? cause.message : "The remote message is too large to send." })
@@ -1285,13 +1983,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const rejected = status.kind === "closed" && (status.code === 4401 || status.code === 4403)
     lastStatusKind = status.kind
-    if (status.kind === "closed") subscribedSessionID = undefined
+    if (status.kind === "closed") {
+      subscribedSessionID = undefined
+      ownedSubscriptions.delete(owner)
+    }
     if (status.kind === "closed") {
       cancelFamilyRefresh?.()
       cancelFamilyRefresh = undefined
-      setState({ teamCues: [], familyActivity: container.state.familyActivity === undefined ? undefined : { ...container.state.familyActivity, status: "loading" },
-        ...(container.state.team === undefined ? {} : { team: { ...container.state.team, status: "loading", pageLoading: false, refreshing: false,
-          shellStatus: "loading", sideChatStatus: "loading", sideChatLoading: false, economicsUnsupported: false } }) })
+      setState({
+        teamCues: [],
+        familyActivity:
+          container.state.familyActivity === undefined
+            ? undefined
+            : { ...container.state.familyActivity, status: "loading" },
+        ...(container.state.team === undefined
+          ? {}
+          : {
+              team: {
+                ...container.state.team,
+                status: "loading",
+                pageLoading: false,
+                refreshing: false,
+                shellStatus: "loading",
+                sideChatStatus: "loading",
+                sideChatLoading: false,
+                economicsUnsupported: false,
+              },
+            }),
+      })
     }
     if (rejected && status.kind === "closed") {
       clearPendingLatency()
@@ -1307,9 +2026,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // remains valid. Tear down only that device, then let the authoritative account
       // answer decide whether the browser is truly signed out.
       sessionsToken += 1
-    endScope({
+      endScope({
         transport: status,
-        connection: deviceConnection(container.state.devices.filter((device) => device.status === "active" && device.online).length),
+        connection: deviceConnection(
+          container.state.devices.filter((device) => device.status === "active" && device.online).length,
+        ),
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
@@ -1320,13 +2041,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionHasNext: false,
         sessionHasPrevious: false,
         selectedSessionInfo: undefined,
-        team: undefined, familyActivity: undefined,
+        team: undefined,
+        familyActivity: undefined,
         teamCues: [],
         drafts: {},
         queuedPromptDrafts: {},
         promptDraftFocus: undefined,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
+        mutations: container.state.mutations.filter(
+          (mutation) => mutation.kind !== "goal" || typeof mutation.input.goal !== "string",
+        ),
+        mutationToasts: (container.state.mutationToasts ?? []).filter(
+          (toast) =>
+            !container.state.mutations.some(
+              (mutation) =>
+                mutation.kind === "goal" && typeof mutation.input.goal === "string" && mutation.id === toast.id,
+            ),
+        ),
         sessionCreation: undefined,
         activeSessionID: undefined,
         view: undefined,
@@ -1336,12 +2066,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       void api.load()
       return
     }
-    setState({ transport: status, connection: connectionFor(status, container.state.activeDeviceID), notifications: delivery.entries(),
-      ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}) })
+    setState({
+      transport: status,
+      connection: connectionFor(status, container.state.activeDeviceID),
+      notifications: delivery.entries(),
+      ...(status.kind === "closed" ? { lastRelayDrop: { code: status.code, reason: status.reason } } : {}),
+    })
     if (reopened) latencyUnsupported = false
-    if (opened) queueMicrotask(() => { if (isCurrentConnection(owner) && container.state.transport.kind === "open") void api.readTelemetryConsent() })
+    if (opened)
+      queueMicrotask(() => {
+        if (isCurrentConnection(owner) && container.state.transport.kind === "open") void api.readTelemetryConsent()
+      })
     if (status.kind === "open") scheduleLatencyUpload()
     if (opened) void loadNotices(owner)
+    if (opened) {
+      setState({ sessionListStatus: "loading" })
+      void refreshSessionGroups(owner)
+    }
     if (status.kind === "open" && container.state.activeSessionID !== undefined) void readSessionStatus(owner)
     if (reopened) {
       signalRecovery()
@@ -1351,7 +2092,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const request = async (
     mutation: PendingMutation,
-    options: { readonly sessionID?: string; readonly operation?: RemoteOperation; readonly input?: Readonly<Record<string, unknown>>; readonly retain?: boolean } = {},
+    options: {
+      readonly sessionID?: string
+      readonly operation?: OperationName
+      readonly input?: Readonly<Record<string, unknown>>
+      readonly retain?: boolean
+    } = {},
   ): Promise<RemoteRequestOutcome> => {
     const active = transport
     if (!active) {
@@ -1362,23 +2108,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (progress !== undefined) progress.mutation = mutation
     setState({ mutations: [...container.state.mutations.filter((entry) => entry.id !== mutation.id), mutation] })
     const jobID = mutation.kind === "compact" && typeof mutation.input.id === "string" ? mutation.input.id : undefined
-    const jobSettled = jobID === undefined ? undefined : new Promise<RemoteRequestOutcome>((resolve) => compactionWaiters.set(jobID, resolve))
-    const answered = active.request(options.operation ?? mutation.operation, { sessionID: options.sessionID, input: options.input ?? mutation.input,
-      ...((mutation.operation === "session.goal.set" || mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string")
-        ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : mutation.operation === "session.compact"
-          ? { timeoutMs: RemoteLimits.compactionTimeoutMs } : {}) })
+    const jobSettled =
+      jobID === undefined
+        ? undefined
+        : new Promise<RemoteRequestOutcome>((resolve) => compactionWaiters.set(jobID, resolve))
+    const answered = active.request(options.operation ?? mutation.operation, {
+      sessionID: options.sessionID,
+      input: options.input ?? mutation.input,
+      ...(mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string"
+        ? { timeoutMs: WebLimits.goalSetTimeoutMs }
+        : mutation.operation === "session.compact"
+          ? { timeoutMs: WebLimits.compactionTimeoutMs }
+          : {}),
+    })
     const outcome = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
     if (outcome.status === "ok") {
       if (jobID !== undefined) compactionWaiters.delete(jobID)
-      setState({ ...(options.retain ? {} : { mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id) }),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id) })
+      setState({
+        ...(options.retain ? {} : { mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id) }),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id),
+      })
       if (!options.retain) sends.delete(mutation.id)
       return outcome
     }
     if (jobID !== undefined && jobSettled !== undefined && compactionWaiters.has(jobID)) {
       const job = compactionJob(mutation)
       if (job?.status === "completed") return settleCompaction(jobID, "completed")
-      if (job?.status === "failed") return settleCompaction(jobID, "failed", `Compaction failed: ${job.failureCode ?? "unknown failure"}`)
+      if (job?.status === "failed")
+        return settleCompaction(jobID, "failed", `Compaction failed: ${job.failureCode ?? "unknown failure"}`)
       if (job !== undefined) return jobSettled
       compactionWaiters.delete(jobID)
     }
@@ -1407,23 +2164,41 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const compactionJob = (mutation: PendingMutation) => {
     if (container.state.activeSessionID !== mutation.sessionID) return undefined
-    const job = container.state.view?.messages.find((message) => message.kind === "compaction" && message.jobID === mutation.input.id)
+    const job = container.state.view?.messages.find(
+      (message) => message.kind === "compaction" && message.jobID === mutation.input.id,
+    )
     return job?.kind === "compaction" ? job : undefined
   }
 
-  const settleCompaction = (jobID: string, status: "completed" | "failed" | "unknown", detail?: string): RemoteRequestOutcome => {
-    const mutation = container.state.mutations.find((entry) => entry.kind === "compact" && entry.input.id === jobID && entry.state === "sending")
+  const settleCompaction = (
+    jobID: string,
+    status: "completed" | "failed" | "unknown",
+    detail?: string,
+  ): RemoteRequestOutcome => {
+    const mutation = container.state.mutations.find(
+      (entry) => entry.kind === "compact" && entry.input.id === jobID && entry.state === "sending",
+    )
     const waiter = compactionWaiters.get(jobID)
     compactionWaiters.delete(jobID)
-    const message = detail ?? (status === "failed" ? "Compaction failed" : "The connection closed before the compaction settled")
-    const outcome: RemoteRequestOutcome = status === "completed" ? { status: "ok", value: undefined }
-      : status === "failed" ? { status: "failed", error: { code: "internal_error", message } }
-      : { status: "unknown", error: { code: "outcome_unknown", message } }
+    const message =
+      detail ?? (status === "failed" ? "Compaction failed" : "The connection closed before the compaction settled")
+    const outcome: RemoteRequestOutcome =
+      status === "completed"
+        ? { status: "ok", value: undefined }
+        : status === "failed"
+          ? { status: "failed", error: { code: "internal_error", message } }
+          : { status: "unknown", error: { code: "outcome_unknown", message } }
     if (mutation !== undefined && status === "completed")
-      setState({ mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id) })
+      setState({
+        mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== mutation.id),
+      })
     if (mutation !== undefined && status !== "completed")
-      finishMutation(mutation.id, status, status === "failed" ? message : `Outcome unknown: ${message}. Retry only if you want to send it again.`)
+      finishMutation(
+        mutation.id,
+        status,
+        status === "failed" ? message : `Outcome unknown: ${message}. Retry only if you want to send it again.`,
+      )
     waiter?.(outcome)
     return outcome
   }
@@ -1435,16 +2210,36 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (progress !== undefined) progress.mutation = { ...mutation, state: mutationState, detail }
     if (progress !== undefined && progress.deviceID !== container.state.activeDeviceID) return
     setState({
-      mutations: container.state.mutations.map((entry) => (entry.id === id ? { ...entry, state: mutationState, detail } : entry)),
-      mutationToasts: [...(container.state.mutationToasts ?? []).filter((entry) => entry.id !== id), { id, label: mutation.label, state: mutationState === "unknown" ? "unknown" as const : "failed" as const, detail, sessionID: mutation.sessionID }].slice(-3),
+      mutations: container.state.mutations.map((entry) =>
+        entry.id === id ? { ...entry, state: mutationState, detail } : entry,
+      ),
+      mutationToasts: [
+        ...(container.state.mutationToasts ?? []).filter((entry) => entry.id !== id),
+        {
+          id,
+          label: mutation.label,
+          state: mutationState === "unknown" ? ("unknown" as const) : ("failed" as const),
+          detail,
+          sessionID: mutation.sessionID,
+        },
+      ].slice(-3),
     })
   }
 
-  const reconcileSessionStatus = (view: SessionView, status: NonNullable<RemoteStoreState["sessionStatus"]>, parentID?: string): SessionView => {
-    if (parentID !== undefined && !container.state.sessions.some((row) => row.id === parentID) &&
-      !container.state.carouselSessions?.some((row) => row.id === parentID)) return view
+  const reconcileSessionStatus = (
+    view: SessionView,
+    status: NonNullable<RemoteStoreState["sessionStatus"]>,
+    parentID?: string,
+  ): SessionView => {
+    if (
+      parentID !== undefined &&
+      !container.state.sessions.some((row) => row.id === parentID) &&
+      !container.state.carouselSessions?.some((row) => row.id === parentID)
+    )
+      return view
     if (view.status === "failed" || view.status === "interrupted") return view
-    if (parentID === undefined && status.running.has(view.id)) return view.status === "running" ? view : { ...view, status: "running" }
+    if (parentID === undefined && status.running.has(view.id))
+      return view.status === "running" ? view : { ...view, status: "running" }
     if (status.running.has(parentID ?? view.id)) return view
     if (view.status !== "running" && view.executionStarted === undefined) return view
     return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined }
@@ -1455,16 +2250,41 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * snapshot below the projection's durable watermark, is refused so the visible
    * transcript is never erased or rewound.
    */
-  const applySnapshot = (sessionID: string, payload: unknown, base: SessionView | undefined, streamed: ReadonlyMap<string, string>): { readonly view: SessionView; readonly sealedKeys: readonly string[]; readonly before?: string; readonly coveredAssistantIDs: readonly string[]; readonly parentID?: string } | "invalid" | "stale" => {
-    const snapshot = readSnapshot(payload)
+  const applySnapshot = (
+    sessionID: string,
+    payload: unknown,
+    base: SessionView | undefined,
+    streamed: ReadonlyMap<string, string>,
+  ):
+    | {
+        readonly view: SessionView
+        readonly sealedKeys: readonly string[]
+        readonly before?: string
+        readonly coveredAssistantIDs: readonly string[]
+        readonly parentID?: string
+      }
+    | "invalid"
+    | "stale" => {
+    const snapshot = readSnapshot(
+      typeof payload === "object" && payload !== null ? Reflect.get(payload, "data") : undefined,
+    )
     if (snapshot === undefined || snapshot.watermark === undefined) return "invalid"
     if (base?.watermark !== undefined && snapshot.watermark !== undefined && snapshot.watermark < base.watermark) {
       return "stale"
     }
-    const combined = base === undefined ? snapshot.messages : [
-      ...base.messages.filter((message) => (olderMessageIDs.has(message.id) || message.kind === "oversized" && message.state === "pending" || message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true) && !snapshot.messages.some((fresh) => fresh.id === message.id)),
-      ...snapshot.messages,
-    ]
+    const combined =
+      base === undefined
+        ? snapshot.messages
+        : [
+            ...base.messages.filter(
+              (message) =>
+                (olderMessageIDs.has(message.id) ||
+                  (message.kind === "user" && message.state === "pending") ||
+                  (message.kind === "synthetic" && message.pending === true)) &&
+                !snapshot.messages.some((fresh) => fresh.id === message.id),
+            ),
+            ...snapshot.messages,
+          ]
     const projected: SessionView = {
       ...(base ?? createSessionView(sessionID)),
       id: sessionID,
@@ -1479,19 +2299,56 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...(snapshot.sourceEpoch === undefined ? {} : { sourceEpoch: snapshot.sourceEpoch }),
     }
     const unsynced = container.state.mutations.flatMap((mutation): RemoteMessageView[] => {
-      if (mutation.kind !== "prompt" && mutation.kind !== "command" || mutation.sessionID !== sessionID || projected.messages.some((message) => message.id === mutation.id)) return []
+      if (
+        (mutation.kind !== "prompt" && mutation.kind !== "command") ||
+        mutation.sessionID !== sessionID ||
+        projected.messages.some((message) => message.id === mutation.id)
+      )
+        return []
       const text = mutationText(mutation)
       if (typeof text !== "string") return []
-      return [{ kind: "user", id: mutation.id, text,
-        delivery: mutation.input.delivery === "queue" ? "queue" : "steer", state: "pending", created: mutation.created ?? now() }]
+      return [
+        {
+          kind: "user",
+          id: mutation.id,
+          text,
+          delivery: mutation.input.delivery === "queue" ? "queue" : "steer",
+          state: "pending",
+          created: mutation.created ?? now(),
+        },
+      ]
     })
-    const resident = unsynced.length === 0 ? projected : { ...projected, messages: visibleTranscript([...projected.messages, ...unsynced]) }
-    const view = container.state.sessionStatus === undefined ? resident : reconcileSessionStatus(resident, container.state.sessionStatus,
-      snapshot.parentID ?? (container.state.selectedSessionInfo?.id === sessionID ? container.state.selectedSessionInfo.parentID : undefined))
-    return { view: { ...view, messages: carryStreamedText(view.messages, streamed) }, sealedKeys: sealedPartKeys(view.messages), before: snapshot.before, coveredAssistantIDs: [...new Set([
-      ...snapshot.coveredAssistantIDs,
-      ...combined.flatMap((message) => message.kind === "assistant" && !view.messages.some((retained) => retained.id === message.id) ? [message.id] : []),
-    ])], parentID: snapshot.parentID }
+    const resident =
+      unsynced.length === 0
+        ? projected
+        : { ...projected, messages: visibleTranscript([...projected.messages, ...unsynced]) }
+    const view =
+      container.state.sessionStatus === undefined
+        ? resident
+        : reconcileSessionStatus(
+            resident,
+            container.state.sessionStatus,
+            snapshot.parentID ??
+              (container.state.selectedSessionInfo?.id === sessionID
+                ? container.state.selectedSessionInfo.parentID
+                : undefined),
+          )
+    return {
+      view: { ...view, messages: carryStreamedText(view.messages, streamed) },
+      sealedKeys: sealedPartKeys(view.messages),
+      before: snapshot.before,
+      coveredAssistantIDs: [
+        ...new Set([
+          ...snapshot.coveredAssistantIDs,
+          ...combined.flatMap((message) =>
+            message.kind === "assistant" && !view.messages.some((retained) => retained.id === message.id)
+              ? [message.id]
+              : [],
+          ),
+        ]),
+      ],
+      parentID: snapshot.parentID,
+    }
   }
 
   const applyEvent = (view: SessionView, event: unknown, replaying: boolean): SessionView => {
@@ -1501,10 +2358,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const opened = openedPartKey(event)
     if (opened !== undefined) currentSeal?.parts.delete(opened)
     const key = ephemeralPartKey(event)
-    if (key !== undefined && isEphemeralEvent(event) &&
-      (currentSeal?.covered.has(ephemeralAssistantID(event) ?? "") || (!replaying && currentSeal?.parts.has(key)))) return view
+    if (
+      key !== undefined &&
+      isEphemeralEvent(event) &&
+      (currentSeal?.covered.has(ephemeralAssistantID(event) ?? "") || (!replaying && currentSeal?.parts.has(key)))
+    )
+      return view
     const next = applySessionEvent(view, event, now())
-    if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.compaction.ended") recordCovered(view, next)
+    if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.compaction.ended")
+      recordCovered(view, next)
     return next
   }
 
@@ -1513,37 +2375,103 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     todoRead = read
     try {
       const outcome = await owner.request("session.todo.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || todoRead !== read) return
-      const loaded = outcome?.status === "ok" ? readTodos(typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined) : undefined
-      setState({ todos: read.live ?? (loaded === undefined ? container.state.todos : reuseTodos(container.state.todos, loaded)) })
-    } finally { if (todoRead === read) todoRead = undefined }
+      if (
+        token !== selectionToken ||
+        !isCurrentConnection(owner) ||
+        container.state.activeSessionID !== sessionID ||
+        todoRead !== read
+      )
+        return
+      const loaded =
+        outcome?.status === "ok"
+          ? readTodos(
+              typeof outcome.value === "object" && outcome.value !== null
+                ? Reflect.get(outcome.value, "data")
+                : undefined,
+            )
+          : undefined
+      setState({
+        todos: read.live ?? (loaded === undefined ? container.state.todos : reuseTodos(container.state.todos, loaded)),
+      })
+    } finally {
+      if (todoRead === read) todoRead = undefined
+    }
   }
 
   const loadPendingInputs = async (owner: RemoteTransport, sessionID: string, token: number) => {
-    const read = { sessionID, token, promoted: new Set<string>(), retained: new Set(container.state.mutations
-      .filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command"))
-      .map((mutation) => mutation.id)) }
+    const read = {
+      sessionID,
+      token,
+      promoted: new Set<string>(),
+      retained: new Set(
+        container.state.mutations
+          .filter(
+            (mutation) =>
+              mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command"),
+          )
+          .map((mutation) => mutation.id),
+      ),
+    }
     pendingRead = read
     try {
       const outcome = await owner.request("session.pending.list", { sessionID })
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || pendingRead !== read || !container.state.view) return
+      if (
+        token !== selectionToken ||
+        !isCurrentConnection(owner) ||
+        container.state.activeSessionID !== sessionID ||
+        pendingRead !== read ||
+        !container.state.view
+      )
+        return
       if (outcome.status === "failed") {
-        setState({ notice: outcome.error.code === "unknown_operation"
-          ? "Update the connected device to restore pending prompts."
-          : describeOutcome(outcome, "Pending prompts") })
+        setState({
+          notice:
+            outcome.error.code === "unknown_operation"
+              ? "Update the connected device to restore pending prompts."
+              : describeOutcome(outcome, "Pending prompts"),
+        })
         return
       }
       const pending = outcome.status === "ok" ? readPendingInputs(outcome.value, sessionID) : undefined
       if (pending === undefined) return
-      const retained = new Set([...read.retained, ...container.state.mutations.filter((mutation) => mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command")).map((mutation) => mutation.id)])
-      const confirmed = new Set([...pending.map((entry) => entry.id),
-        ...container.state.view.messages.flatMap((message) => message.kind === "user" && message.state !== "pending" || message.kind === "synthetic" && !message.pending ? [message.id] : [])])
-      const resolved = container.state.mutations.filter((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.sessionID === sessionID && confirmed.has(mutation.id) &&
-        (!sends.has(mutation.id) || confirmSend(mutation.id)))
-      setState({ view: reconcilePendingInputs(container.state.view, pending.filter((entry) => !read.promoted.has(entry.id)), retained),
+      const retained = new Set([
+        ...read.retained,
+        ...container.state.mutations
+          .filter(
+            (mutation) =>
+              mutation.sessionID === sessionID && (mutation.kind === "prompt" || mutation.kind === "command"),
+          )
+          .map((mutation) => mutation.id),
+      ])
+      const confirmed = new Set([
+        ...pending.map((entry) => entry.id),
+        ...container.state.view.messages.flatMap((message) =>
+          (message.kind === "user" && message.state !== "pending") || (message.kind === "synthetic" && !message.pending)
+            ? [message.id]
+            : [],
+        ),
+      ])
+      const resolved = container.state.mutations.filter(
+        (mutation) =>
+          (mutation.kind === "prompt" || mutation.kind === "command") &&
+          mutation.sessionID === sessionID &&
+          confirmed.has(mutation.id) &&
+          (!sends.has(mutation.id) || confirmSend(mutation.id)),
+      )
+      setState({
+        view: reconcilePendingInputs(
+          container.state.view,
+          pending.filter((entry) => !read.promoted.has(entry.id)),
+          retained,
+        ),
         mutations: container.state.mutations.filter((mutation) => !resolved.includes(mutation)),
-        mutationToasts: container.state.mutationToasts?.filter((toast) => !resolved.some((mutation) => mutation.id === toast.id)) })
-    } finally { if (pendingRead === read) pendingRead = undefined }
+        mutationToasts: container.state.mutationToasts?.filter(
+          (toast) => !resolved.some((mutation) => mutation.id === toast.id),
+        ),
+      })
+    } finally {
+      if (pendingRead === read) pendingRead = undefined
+    }
   }
 
   const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
@@ -1563,17 +2491,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const view = container.state.view
       if (!view) return
       const requests = [
-        ...(permissions.status === "ok" ? readPermissionRequests(permissions.value, now()) : view.requests.filter((request) => request.kind === "permission")),
-        ...(guardrails.status === "ok" ? readGuardrailRequests(guardrails.value, now()) : view.requests.filter((request) => request.kind === "guardrail")),
-        ...(forms.status === "ok" ? readFormRequests(forms.value, now()).filter((request) => request.form.sessionID === sessionID) : view.requests.filter((request) => request.kind === "form")),
+        ...(permissions.status === "ok"
+          ? readPermissionRequests(permissions.value, now())
+          : view.requests.filter((request) => request.kind === "permission")),
+        ...(guardrails.status === "ok"
+          ? readGuardrailRequests(guardrails.value, now())
+          : view.requests.filter((request) => request.kind === "guardrail")),
+        ...(forms.status === "ok"
+          ? readFormRequests(
+              typeof forms.value === "object" && forms.value !== null ? Reflect.get(forms.value, "data") : undefined,
+              now(),
+            ).filter((request) => request.form.sessionID === sessionID)
+          : view.requests.filter((request) => request.kind === "form")),
       ]
-      const withRequests = replaceRequests(view, requestsDuringRead.live.reduce<readonly PendingRequestView[]>(
-        (current, item) => applySessionEvent({ ...view, requests: current }, item.event, item.at).requests,
-        requests,
-      ))
-      const failure = [autonomy, permissions, guardrails, forms].find(
-        (outcome) => outcome.status !== "ok",
+      const withRequests = replaceRequests(
+        view,
+        requestsDuringRead.live.reduce<readonly PendingRequestView[]>(
+          (current, item) => applySessionEvent({ ...view, requests: current }, item.event, item.at).requests,
+          requests,
+        ),
       )
+      const failure = [autonomy, permissions, guardrails, forms].find((outcome) => outcome.status !== "ok")
       setState({
         view:
           autonomy.status === "ok"
@@ -1599,12 +2537,26 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const seen = new Set<string>()
     let cursor: string | undefined
     for (;;) {
-      const outcome = await owner.request("session.capturedChanges.list", { sessionID, ...(cursor === undefined ? {} : { input: { cursor } }) })
-      if (capturedRead !== read || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
+      const outcome = await owner.request("session.capturedChanges.list", {
+        sessionID,
+        ...(cursor === undefined ? {} : { input: { cursor } }),
+      })
+      if (
+        capturedRead !== read ||
+        token !== selectionToken ||
+        !isCurrentConnection(owner) ||
+        container.state.activeSessionID !== sessionID
+      )
+        return
       if (outcome.status === "failed" && outcome.error.code === "unknown_operation") capturedUnsupported = true
       const page = outcome.status === "ok" ? readCapturedChangesPage(outcome.value) : undefined
       if (page === undefined) {
-        setState({ view: container.state.view?.id === sessionID ? { ...container.state.view, capturedChanges: undefined } : container.state.view })
+        setState({
+          view:
+            container.state.view?.id === sessionID
+              ? { ...container.state.view, capturedChanges: undefined }
+              : container.state.view,
+        })
         if (capturedRead === read) capturedRead = undefined
         return
       }
@@ -1619,14 +2571,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const scheduleCapturedRefresh = () => {
-    if (capturedUnsupported || cancelCapturedRefresh || transport === undefined || container.state.activeSessionID === undefined) return
+    if (
+      capturedUnsupported ||
+      cancelCapturedRefresh ||
+      transport === undefined ||
+      container.state.activeSessionID === undefined
+    )
+      return
     const owner = transport
     const sessionID = container.state.activeSessionID
     const token = selectionToken
-    cancelCapturedRefresh = schedule(() => {
-      cancelCapturedRefresh = undefined
-      if (isCurrentConnection(owner) && token === selectionToken && container.state.activeSessionID === sessionID) void loadCapturedChanges(owner, sessionID, token)
-    }, Math.max(0, 10_000 - (now() - lastCapturedRead)))
+    cancelCapturedRefresh = schedule(
+      () => {
+        cancelCapturedRefresh = undefined
+        if (isCurrentConnection(owner) && token === selectionToken && container.state.activeSessionID === sessionID)
+          void loadCapturedChanges(owner, sessionID, token)
+      },
+      Math.max(0, 10_000 - (now() - lastCapturedRead)),
+    )
   }
 
   /**
@@ -1649,15 +2611,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: withShellOutputFetch(view, shellID, { state: "error", message: notConnectedPage }) })
       return
     }
-    const outcome = await active.request("session.shell.output", {
+    const outcome = await active.request("shell.output", {
       sessionID,
-      input: { shellID, cursor: from, limit: shellOutputPageLimit },
+      input: { id: shellID, cursor: from, limit: shellOutputPageLimit },
     })
     if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
     const current = container.state.view
     if (current === undefined) return
     if (outcome.status !== "ok") {
-      setState({ view: withShellOutputFetch(current, shellID, { state: "error", message: singlePageFailure(outcome) }) })
+      setState({
+        view: withShellOutputFetch(current, shellID, { state: "error", message: singlePageFailure(outcome) }),
+      })
       return
     }
     const page = readShellOutputPage(outcome.value)
@@ -1681,33 +2645,55 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const readSnapshotPayload = async (sessionID: string, before?: string): Promise<RemoteRequestOutcome | undefined> => {
     const active = transport
     if (!active) return undefined
-    return active.request("session.snapshot", { sessionID, input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) } })
+    return active.request("session.snapshot", {
+      sessionID,
+      input: { limit: historyPageSize, ...(before === undefined ? {} : { before }) },
+    })
   }
 
   const loadCompactionHistory = async (sessionID: string, token: number) => {
     const owner = transport
-    if (!owner || token !== selectionToken || container.state.activeSessionID !== sessionID || compactionAttemptedToken === token ||
-      !container.state.view?.messages.some((message) => message.kind === "compaction" && message.jobID && message.status !== "pending")) return
+    if (
+      !owner ||
+      token !== selectionToken ||
+      container.state.activeSessionID !== sessionID ||
+      compactionAttemptedToken === token ||
+      !container.state.view?.messages.some(
+        (message) => message.kind === "compaction" && message.jobID && message.status !== "pending",
+      )
+    )
+      return
     compactionAttemptedToken = token
     const read = { token, live: [] as { readonly event: unknown; readonly at: number }[] }
     compactionRead = read
     try {
-      const outcome = await owner.request("session.compaction.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
-      if (token !== selectionToken || compactionRead !== read || container.state.activeSessionID !== sessionID || outcome?.status !== "ok" || container.state.view === undefined) return
-      const loaded = readCompactionHistory(outcome.value)
+      const outcome = await owner
+        .request("session.compaction.list", { sessionID, timeoutMs: 5_000 })
+        .catch(() => undefined)
+      if (
+        token !== selectionToken ||
+        compactionRead !== read ||
+        container.state.activeSessionID !== sessionID ||
+        outcome?.status !== "ok" ||
+        container.state.view === undefined
+      )
+        return
+      const loaded = readCompactionHistory(
+        typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined,
+      )
       if (loaded === undefined) return
-      const current = read.live.reduce<SessionView>((view, item) => applySessionEvent(view, item.event, item.at),
-        { ...createSessionView(sessionID), compactionHistory: loaded })
+      const current = read.live.reduce<SessionView>((view, item) => applySessionEvent(view, item.event, item.at), {
+        ...createSessionView(sessionID),
+        compactionHistory: loaded,
+      })
       setState({ view: { ...container.state.view, compactionHistory: current.compactionHistory } })
-    } finally { if (compactionRead === read) compactionRead = undefined }
+    } finally {
+      if (compactionRead === read) compactionRead = undefined
+    }
   }
 
   const historyFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>) =>
-    outcome.status === "failed" && (outcome.error.code === "invalid_message" || outcome.error.code === "unknown_operation")
-      ? "Update the connected device to read windowed Session history."
-      : outcome.status === "failed" && outcome.error.code === "message_too_large"
-        ? `This history page contains a message too large to load. ${outcome.error.message}`
-        : describeOutcome(outcome, "Session history")
+    describeOutcome(outcome, "Session history")
 
   const loadOlderMessages = async () => {
     const sessionID = container.state.activeSessionID
@@ -1721,12 +2707,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const token = selectionToken
     setState({ history: { status: "loading", before } })
     const outcome = await readSnapshotPayload(sessionID, before)
-    if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || container.state.history?.before !== before) return
+    if (
+      token !== selectionToken ||
+      !isCurrentConnection(owner) ||
+      container.state.activeSessionID !== sessionID ||
+      container.state.history?.before !== before
+    )
+      return
     if (outcome === undefined || outcome.status !== "ok") {
-      setState({ history: { status: "error", before, error: outcome === undefined ? notConnectedPage : historyFailure(outcome) } })
+      setState({
+        history: { status: "error", before, error: outcome === undefined ? notConnectedPage : historyFailure(outcome) },
+      })
       return
     }
-    const page = readSnapshot(outcome.value)
+    const page = readSnapshot(
+      typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined,
+    )
     if (page === undefined || page.watermark === undefined) {
       setState({ history: { status: "error", before, error: "The older history page was not readable." } })
       return
@@ -1735,52 +2731,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (view === undefined) return
     olderMessageIDs = new Set([...olderMessageIDs, ...page.messages.map((message) => message.id)])
     const existing = new Set(page.messages.map((message) => message.id))
-    const messages = visibleTranscript([...page.messages, ...view.messages.filter((message) => !existing.has(message.id))])
-    setState({ view: { ...view, messages },
-      history: { status: "idle", ...(hasCompactionCheckpoint(messages) || page.before === undefined ? {} : { before: page.before }) } })
+    const messages = visibleTranscript([
+      ...page.messages,
+      ...view.messages.filter((message) => !existing.has(message.id)),
+    ])
+    setState({
+      view: { ...view, messages },
+      history: {
+        status: "idle",
+        ...(hasCompactionCheckpoint(messages) || page.before === undefined ? {} : { before: page.before }),
+      },
+    })
     void loadCompactionHistory(sessionID, token)
-  }
-
-  const loadOversizedMessage = async (messageID: string) => {
-    const sessionID = container.state.activeSessionID
-    const deviceID = container.state.activeDeviceID
-    const owner = transport
-    const token = selectionToken
-    if (!sessionID || !deviceID || !owner || oversizedReads.has(messageID) ||
-      !container.state.view?.messages.some((message) => message.kind === "oversized" && message.id === messageID)) return
-    const controller = new AbortController()
-    oversizedReads.set(messageID, controller)
-    setState({ view: { ...container.state.view, messages: container.state.view.messages.map((message) => message.kind === "oversized" && message.id === messageID ? { ...message, state: "loading" } : message) } })
-    try {
-      const response = await fetchContent(`/api/remote/devices/${encodeURIComponent(deviceID)}/sessions/${encodeURIComponent(sessionID)}/messages/${encodeURIComponent(messageID)}`,
-        { credentials: "same-origin", signal: controller.signal })
-      if (response.status === 404 && token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID && container.state.view) {
-        const current = container.state.view.messages.find((entry) => entry.id === messageID)
-        if (current?.kind === "oversized" && !current.projected) {
-          setState({ view: { ...container.state.view, messages: container.state.view.messages.map((entry) => entry.id === messageID && entry.kind === "oversized" ? { ...entry, state: "pending" } : entry) } })
-          return
-        }
-      }
-      if (response.status === 503) {
-        const payload: unknown = await response.json().catch(() => undefined)
-        const error = payload && typeof payload === "object" ? Reflect.get(payload, "error") : undefined
-        if (error && typeof error === "object" && Reflect.get(error, "code") === "unknown_operation" &&
-          token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID)
-          setState({ notice: "Update the connected device to read full Session content." })
-      }
-      if (!response.ok) throw new Error("Projected message unavailable")
-      const message = readProjectedMessage(await response.json())
-      if (message === undefined || message.id !== messageID) throw new Error("Invalid projected message")
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || controller.signal.aborted || !container.state.view) return
-      setState({ view: { ...container.state.view, messages: container.state.view.messages.some((entry) => entry.id === messageID)
-        ? container.state.view.messages.map((entry) => entry.id === messageID ? message : entry)
-        : [...container.state.view.messages, message] } })
-    } catch {
-      if (token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID && !controller.signal.aborted && container.state.view)
-        setState({ view: { ...container.state.view, messages: container.state.view.messages.map((entry) => entry.kind === "oversized" && entry.id === messageID ? { ...entry, state: "error" } : entry) } })
-    } finally {
-      if (oversizedReads.get(messageID) === controller) oversizedReads.delete(messageID)
-    }
   }
 
   const reloadSnapshot = async (
@@ -1791,7 +2753,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const transcriptStarted = monotonicNow()
     const transcriptDeviceID = container.state.activeDeviceID
     const transcriptGeneration = container.state.generation
-    const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
+    const owned: HydrationWindow = {
+      sessionID,
+      events: [],
+      replayed: new Set(),
+      streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []),
+    }
     hydration = owned
     try {
       const outcome = await readSnapshotPayload(sessionID)
@@ -1814,22 +2781,38 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       let view = applied.view
       for (const event of owned.events) view = applyEvent(view, event, true)
       owned.replayed.forEach((key) => sealed?.parts.delete(key))
-      setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) } })
-      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (container.state.activeSessionID === sessionID && container.state.activeDeviceID === transcriptDeviceID && container.state.generation === transcriptGeneration)
-          latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
-      }))
+      setState({
+        view,
+        history: {
+          status: "idle",
+          ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }),
+        },
+      })
+      if (typeof requestAnimationFrame === "function")
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (
+              container.state.activeSessionID === sessionID &&
+              container.state.activeDeviceID === transcriptDeviceID &&
+              container.state.generation === transcriptGeneration
+            )
+              latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
+          }),
+        )
       void loadCompactionHistory(sessionID, token)
-      view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
-      if (teamWatching && owner !== undefined && container.state.team !== undefined) void loadTeam(owner, token, container.state.team.rootID, undefined, true)
+      if (teamWatching && owner !== undefined && container.state.team !== undefined)
+        void loadTeam(owner, token, container.state.team.rootID, undefined, true)
       return "applied"
     } finally {
       if (hydration === owned) hydration = undefined
     }
   }
 
-  const listFailure = (outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): Pick<RemoteStoreState, "connection"> => {
+  const listFailure = (
+    outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>,
+    label: string,
+  ): Pick<RemoteStoreState, "connection"> => {
     if (outcome.status === "failed" && outcome.error.code === "agent_unavailable") {
       reportMachineOffline()
       return { connection: { kind: "offline", deviceName: deviceName(container.state.activeDeviceID ?? "device") } }
@@ -1844,31 +2827,63 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       : {}
   }
 
-  const sortSessions = <T extends SessionInfoView>(rows: readonly T[]) => [...new Map(rows.map((row) => [row.id, row])).values()].sort((left, right) => {
-    if (!!left.running !== !!right.running) return left.running ? -1 : 1
-    const activity = (right.activeAt ?? right.updatedAt) - (left.activeAt ?? left.updatedAt)
-    return activity || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
-  })
+  const sortSessions = <T extends SessionInfoView>(rows: readonly T[]) =>
+    [...new Map(rows.map((row) => [row.id, row])).values()].sort((left, right) => {
+      if (!!left.running !== !!right.running) return left.running ? -1 : 1
+      const activity = (right.activeAt ?? right.updatedAt) - (left.activeAt ?? left.updatedAt)
+      return activity || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+    })
 
   const withOpenRoot = (rows: readonly SessionInfoView[]) => {
     if (container.state.sessionQuery.trim() !== "" || container.state.sessionFilter !== "all") return rows
     const root = openRootInfo
     const workspace = container.state.sessionGroups.find((group) => group.id === container.state.selectedWorkspaceID)
-    if (!root || !workspace || root.archived || root.projectID !== workspace.projectID || root.directory !== workspace.directory || root.workspaceID !== workspace.workspaceID || rows.some((row) => row.id === root.id)) return rows
-    return sortSessions([{ ...root, ...(container.state.sessionStatus ? rowStatus(container.state.sessionStatus, root.id) : {}) }, ...rows])
+    if (
+      !root ||
+      !workspace ||
+      root.archived ||
+      root.projectID !== workspace.projectID ||
+      root.directory !== workspace.directory ||
+      root.workspaceID !== workspace.workspaceID ||
+      rows.some((row) => row.id === root.id)
+    )
+      return rows
+    return sortSessions([
+      { ...root, ...(container.state.sessionStatus ? rowStatus(container.state.sessionStatus, root.id) : {}) },
+      ...rows,
+    ])
   }
 
   const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string) => ({
-    running: status.running.has(id), attention: status.attention.has(id) && !status.failed.has(id), failed: status.failed.has(id),
+    running: status.running.has(id),
+    attention: status.attention.has(id) && !status.failed.has(id),
+    failed: status.failed.has(id),
   })
 
   const publishSessionStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>) => {
-    const rows = sessionPages.map((page) => ({ ...page, rows: page.rows.map((row) => ({ ...row, ...rowStatus(status, row.id) })) }))
+    const rows = sessionPages.map((page) => ({
+      ...page,
+      rows: page.rows.map((row) => ({ ...row, ...rowStatus(status, row.id) })),
+    }))
     sessionPages = rows
-    setState({ sessionStatus: status, sessions: withOpenRoot(sortSessions(rows.flatMap((page) => page.rows))),
-      ...(container.state.view === undefined ? {} : { view: reconcileSessionStatus(container.state.view, status,
-        container.state.selectedSessionInfo?.id === container.state.view.id ? container.state.selectedSessionInfo.parentID : undefined) }),
-      carouselSessions: sortSessions(container.state.carouselSessions?.map((row) => ({ ...row, running: status.running.has(row.id) })) ?? []) })
+    setState({
+      sessionStatus: status,
+      sessions: withOpenRoot(sortSessions(rows.flatMap((page) => page.rows))),
+      ...(container.state.view === undefined
+        ? {}
+        : {
+            view: reconcileSessionStatus(
+              container.state.view,
+              status,
+              container.state.selectedSessionInfo?.id === container.state.view.id
+                ? container.state.selectedSessionInfo.parentID
+                : undefined,
+            ),
+          }),
+      carouselSessions: sortSessions(
+        container.state.carouselSessions?.map((row) => ({ ...row, running: status.running.has(row.id) })) ?? [],
+      ),
+    })
   }
 
   const readSessionStatus = async (owner: RemoteTransport) => {
@@ -1899,25 +2914,52 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void reloadStatusFirstPage(owner)
   }
 
-  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => {
+  const applyStatusFrame = (
+    owner: RemoteTransport,
+    frame: {
+      readonly running: readonly string[]
+      readonly attention: readonly string[]
+      readonly outstanding?: readonly string[]
+      readonly failed?: readonly string[]
+    },
+  ) => {
     if (!isCurrentConnection(owner)) return
     signalRecovery()
     statusFrameRevision += 1
-    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []), failed: new Set(frame.failed ?? []) }
+    const status = {
+      running: new Set(frame.running),
+      attention: new Set(frame.attention),
+      outstanding: new Set(frame.outstanding ?? []),
+      failed: new Set(frame.failed ?? []),
+    }
     const previous = container.state.sessionStatus
-    const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
+    const runningChanged =
+      previous === undefined ||
+      previous.running.size !== status.running.size ||
       [...status.running].some((id) => !previous.running.has(id))
-    const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
-      previous.outstanding.size !== status.outstanding.size || [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
-      [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
+    const changed =
+      previous === undefined ||
+      previous.running.size !== status.running.size ||
+      previous.attention.size !== status.attention.size ||
+      previous.outstanding.size !== status.outstanding.size ||
+      [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
+      [...status.running].some((id) => !previous.running.has(id)) ||
+      [...status.attention].some((id) => !previous.attention.has(id))
     statusBaseline = true
     publishSessionStatus(status)
     if (runningChanged) {
       carouselRevision += 1
       carouselRefreshPending = true
-      if (teamWatching && container.state.team !== undefined && container.state.team.shellStatus !== "unsupported") void loadTeamShells(owner, selectionToken, container.state.team.rootID)
+      if (teamWatching && container.state.team !== undefined && container.state.team.shellStatus !== "unsupported")
+        void loadTeamShells(owner, selectionToken, container.state.team.rootID)
     }
-    if (changed && [...status.running, ...status.attention, ...status.outstanding].some((id) => !container.state.sessions.some((row) => row.id === id))) statusReloadLocal = true
+    if (
+      changed &&
+      [...status.running, ...status.attention, ...status.outstanding].some(
+        (id) => !container.state.sessions.some((row) => row.id === id),
+      )
+    )
+      statusReloadLocal = true
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
   }
 
@@ -1926,23 +2968,43 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (container.state.selectedWorkspaceID === undefined && !carouselRefreshPending) return
     if (statusReloading) return
     const now = monotonicNow()
-    const loadLocal = statusReloadLocal && container.state.selectedWorkspaceID !== undefined && loadingPageToken !== sessionsToken && now - lastStatusReload >= 5_000
+    const loadLocal =
+      statusReloadLocal &&
+      container.state.selectedWorkspaceID !== undefined &&
+      loadingPageToken !== sessionsToken &&
+      now - lastStatusReload >= 5_000
     const waitingForStatus = statusReadOwner === owner && statusReadPending && !statusBaseline
     if (waitingForStatus && !statusReloadLocal) return
     const loadCarousel = carouselRefreshPending && !waitingForStatus && now - lastCarouselReload >= 5_000
     if (!loadLocal && !loadCarousel) {
-      const localDelay = statusReloadLocal ? loadingPageToken === sessionsToken ? 50 : Math.max(1, Math.ceil(5_000 - (now - lastStatusReload))) : Infinity
-      const carouselDelay = carouselRefreshPending && !waitingForStatus ? Math.max(1, Math.ceil(5_000 - (now - lastCarouselReload))) : Infinity
+      const localDelay = statusReloadLocal
+        ? loadingPageToken === sessionsToken
+          ? 50
+          : Math.max(1, Math.ceil(5_000 - (now - lastStatusReload)))
+        : Infinity
+      const carouselDelay =
+        carouselRefreshPending && !waitingForStatus
+          ? Math.max(1, Math.ceil(5_000 - (now - lastCarouselReload)))
+          : Infinity
       cancelStatusReload?.()
-      cancelStatusReload = schedule(() => {
-        cancelStatusReload = undefined
-        if (isCurrentConnection(owner)) void reloadStatusFirstPage(owner)
-      }, Math.min(localDelay, carouselDelay))
+      cancelStatusReload = schedule(
+        () => {
+          cancelStatusReload = undefined
+          if (isCurrentConnection(owner)) void reloadStatusFirstPage(owner)
+        },
+        Math.min(localDelay, carouselDelay),
+      )
       return
     }
     statusReloading = true
-    if (loadLocal) { statusReloadLocal = false; lastStatusReload = now }
-    if (loadCarousel) { carouselRefreshPending = false; lastCarouselReload = now }
+    if (loadLocal) {
+      statusReloadLocal = false
+      lastStatusReload = now
+    }
+    if (loadCarousel) {
+      carouselRefreshPending = false
+      lastCarouselReload = now
+    }
     try {
       await Promise.all([
         ...(loadLocal ? [loadSessions(sessionsToken)] : []),
@@ -1955,28 +3017,61 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const loadCarouselSessions = async (owner: RemoteTransport, revision: number) => {
-    if (container.state.carouselSessions?.length === 0 && container.state.carouselStatus !== "loading" && container.state.carouselStatus !== "ready") setState({ carouselStatus: "loading" })
-    const rows = (value: unknown, running: boolean) => readSessionInfoList(value).flatMap((entry) => {
-      const session = readSessionInfo(entry)
-      return session !== undefined && session.parentID === undefined ? [{ ...session, running }] : []
+    if (
+      container.state.carouselSessions?.length === 0 &&
+      container.state.carouselStatus !== "loading" &&
+      container.state.carouselStatus !== "ready"
+    )
+      setState({ carouselStatus: "loading" })
+    const rows = (value: unknown, running: boolean) =>
+      readSessionInfoList(typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined).flatMap(
+        (entry) => {
+          const session = readSessionInfo(entry)
+          return session !== undefined && session.parentID === undefined ? [{ ...session, running }] : []
+        },
+      )
+    const withWorkspaceNames = (sessions: readonly (SessionInfoView & { readonly running: boolean })[]) =>
+      sessions.map((row) => ({
+        ...row,
+        workspaceName:
+          container.state.sessionGroups.find(
+            (group) =>
+              group.projectID === row.projectID &&
+              group.directory === row.directory &&
+              group.workspaceID === row.workspaceID,
+          )?.name ??
+          row.directory?.split("/").filter(Boolean).at(-1) ??
+          row.projectID ??
+          "Workspace",
+      }))
+    const current = await owner.request("session.list", {
+      input: { limit: carouselLimit, order: "active", status: "running", parentID: null },
     })
-    const withWorkspaceNames = (sessions: readonly (SessionInfoView & { readonly running: boolean })[]) => sessions.map((row) => ({ ...row,
-      workspaceName: container.state.sessionGroups.find((group) => group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name
-        ?? row.directory?.split("/").filter(Boolean).at(-1) ?? row.projectID ?? "Workspace" }))
-    const current = await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "running", parentID: null } })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (current.status !== "ok") {
       setState({ notice: describeOutcome(current, "Running Sessions"), carouselStatus: "error" })
       return
     }
     const running = sortSessions(rows(current.value, true)).slice(0, carouselLimit)
-    const recent = running.length === carouselLimit ? undefined : await owner.request("session.list", { input: { limit: carouselLimit, order: "active", status: "idle", parentID: null } })
+    const recent =
+      running.length === carouselLimit
+        ? undefined
+        : await owner.request("session.list", {
+            input: { limit: carouselLimit, order: "active", status: "idle", parentID: null },
+          })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
     if (recent !== undefined && recent.status !== "ok") {
-      setState({ notice: describeOutcome(recent, "Recent Sessions"), carouselSessions: withWorkspaceNames(running), carouselStatus: "error" })
+      setState({
+        notice: describeOutcome(recent, "Recent Sessions"),
+        carouselSessions: withWorkspaceNames(running),
+        carouselStatus: "error",
+      })
       return
     }
-    const combined = sortSessions([...running, ...(recent === undefined ? [] : rows(recent.value, false))]).slice(0, carouselLimit)
+    const combined = sortSessions([...running, ...(recent === undefined ? [] : rows(recent.value, false))]).slice(
+      0,
+      carouselLimit,
+    )
     setState({ carouselSessions: withWorkspaceNames(combined), carouselStatus: "ready" })
   }
 
@@ -1985,8 +3080,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const workspace = container.state.selectedWorkspaceID
     if (!active || workspace === undefined || loadingPageToken === token) return
     loadingPageToken = token
-    setState({ sessionPageLoading: cursor !== undefined, ...(cursor === undefined ? { sessionListStatus: "loading" as const } : {}) })
-    const listed = await active.request("session.list", { input: {
+    setState({
+      sessionPageLoading: cursor !== undefined,
+      ...(cursor === undefined ? { sessionListStatus: "loading" as const } : {}),
+    })
+    const listed = await active.request("session.list", {
+      input: {
         workspace,
         limit: sessionPageSize,
         order: "active",
@@ -1995,33 +3094,51 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         ...(container.state.sessionQuery.trim() === "" ? {} : { search: container.state.sessionQuery.trim() }),
         ...(container.state.sessionFilter === "all" ? {} : { status: container.state.sessionFilter }),
         ...(cursor === undefined ? {} : { cursor }),
-      } })
+      },
+    })
     if (loadingPageToken === token) loadingPageToken = undefined
-    if (token !== sessionsToken || !isCurrentConnection(active) || workspace !== container.state.selectedWorkspaceID) return
+    if (token !== sessionsToken || !isCurrentConnection(active) || workspace !== container.state.selectedWorkspaceID)
+      return
     if (listed.status !== "ok") {
       setState({ ...listFailure(listed, "Session list"), sessionListStatus: "error", sessionPageLoading: false })
       return
     }
-    const rows = readSessionInfoList(listed.value).flatMap((entry) => {
+    const rows = readSessionInfoList(
+      typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined,
+    ).flatMap((entry) => {
       const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
-      const info = readSessionInfo(entry,
-        container.state.sessionStatus === undefined || typeof id !== "string" ? {} : rowStatus(container.state.sessionStatus, id))
+      const info = readSessionInfo(
+        entry,
+        container.state.sessionStatus === undefined || typeof id !== "string"
+          ? {}
+          : rowStatus(container.state.sessionStatus, id),
+      )
       return info ? [info] : []
     })
-    const value = typeof listed.value === "object" && listed.value !== null ? listed.value : undefined
+    const value =
+      typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined
     const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
     const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
     const previous = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "previous") : undefined
     if (cursor !== undefined && (direction === "next" ? next === cursor : previous === cursor)) {
-      setState({ sessionListStatus: "error", sessionPageLoading: false,
-        connection: { kind: "error", message: "The device repeated a Session list cursor." } })
+      setState({
+        sessionListStatus: "error",
+        sessionPageLoading: false,
+        connection: { kind: "error", message: "The device repeated a Session list cursor." },
+      })
       return
     }
-    const page = { rows, ...(typeof next === "string" && next.length > 0 ? { next } : {}),
-      ...(typeof previous === "string" && previous.length > 0 ? { previous } : {}) }
-    sessionPages = cursor === undefined ? [page] : direction === "next"
-      ? [...sessionPages, page].slice(-retainedSessionPages)
-      : [page, ...sessionPages].slice(0, retainedSessionPages)
+    const page = {
+      rows,
+      ...(typeof next === "string" && next.length > 0 ? { next } : {}),
+      ...(typeof previous === "string" && previous.length > 0 ? { previous } : {}),
+    }
+    sessionPages =
+      cursor === undefined
+        ? [page]
+        : direction === "next"
+          ? [...sessionPages, page].slice(-retainedSessionPages)
+          : [page, ...sessionPages].slice(0, retainedSessionPages)
     const sessions = withOpenRoot(sortSessions(sessionPages.flatMap((item) => item.rows))).map((item) => {
       const previous = container.state.sessions.find((row) => row.id === item.id)
       return previous !== undefined && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
@@ -2030,7 +3147,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...recoveredConnection(active),
       sessions,
       advertised: sessions.map((session) => session.id),
-      selectedSessionInfo: sessions.find((session) => session.id === container.state.activeSessionID) ?? container.state.selectedSessionInfo,
+      selectedSessionInfo:
+        sessions.find((session) => session.id === container.state.activeSessionID) ??
+        container.state.selectedSessionInfo,
       sessionListStatus: "ready",
       sessionRowsStale: false,
       sessionPageLoading: false,
@@ -2051,18 +3170,36 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const groups = readWorkspaces(outcome.value)
     if (groups === undefined) {
-      setState({ sessionListStatus: "error", connection: { kind: "error", message: "The device returned unreadable Session workspaces." } })
+      setState({
+        sessionListStatus: "error",
+        connection: { kind: "error", message: "The device returned unreadable Session workspaces." },
+      })
       return
     }
     const selectedWorkspaceID = groups.some((group) => group.id === container.state.selectedWorkspaceID)
-      ? container.state.selectedWorkspaceID : groups[0]?.id
+      ? container.state.selectedWorkspaceID
+      : groups[0]?.id
     const sameWorkspace = selectedWorkspaceID === container.state.selectedWorkspaceID
     if (!sameWorkspace) sessionPages = []
-    setState({ ...recoveredConnection(owner), sessionGroups: groups, selectedWorkspaceID,
-      carouselSessions: container.state.carouselSessions?.map((row) => ({ ...row, workspaceName: groups.find((group) =>
-        group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name ?? row.workspaceName })),
-      ...(sameWorkspace ? {} : { sessions: [], advertised: [], sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false }),
-      sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading" })
+    setState({
+      ...recoveredConnection(owner),
+      sessionGroups: groups,
+      selectedWorkspaceID,
+      carouselSessions: container.state.carouselSessions?.map((row) => ({
+        ...row,
+        workspaceName:
+          groups.find(
+            (group) =>
+              group.projectID === row.projectID &&
+              group.directory === row.directory &&
+              group.workspaceID === row.workspaceID,
+          )?.name ?? row.workspaceName,
+      })),
+      ...(sameWorkspace
+        ? {}
+        : { sessions: [], advertised: [], sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false }),
+      sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading",
+    })
     if (selectedWorkspaceID !== undefined) await loadSessions(token)
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
   }
@@ -2087,8 +3224,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     capturedRead = undefined
     lastCapturedRead = -Infinity
     if (container.state.activeSessionID !== sessionID) clearImageSources()
-    oversizedReads.forEach((controller) => controller.abort())
-    oversizedReads.clear()
     if (activeUpload) cancelUpload("Attachment upload was cancelled by Session selection. Files were not sent.")
     const active = transport
     // One selection owns the view; a superseded selection never writes state again.
@@ -2100,23 +3235,59 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelSearch = undefined
       sessionsToken += 1
       sessionPages = []
-      setState({ sessionQuery: "", sessionFilter: "all", sessions: [], advertised: [], sessionListStatus: "loading", sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false })
+      setState({
+        sessionQuery: "",
+        sessionFilter: "all",
+        sessions: [],
+        advertised: [],
+        sessionListStatus: "loading",
+        sessionRowsStale: false,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+      })
     }
     selectionReadyToken = undefined
     selectionFailedToken = undefined
     const previousRootID = container.state.team?.rootID
-    const known = verified ?? container.state.sessions.find((session) => session.id === sessionID) ?? container.state.carouselSessions?.find((session) => session.id === sessionID) ??
+    const known =
+      verified ??
+      container.state.sessions.find((session) => session.id === sessionID) ??
+      container.state.carouselSessions?.find((session) => session.id === sessionID) ??
       (container.state.selectedSessionInfo?.id === sessionID ? container.state.selectedSessionInfo : undefined)
-    const rootHint = container.state.team?.tasks.find((task) => task.sessionID === sessionID)?.parentID ?? (sessionID === previousRootID ? previousRootID : undefined)
-    const info = known ?? { id: sessionID, title: sessionID, updatedAt: 0, archived: false, ...(rootHint === undefined ? {} : { parentID: rootHint }) }
+    const rootHint =
+      container.state.team?.tasks.find((task) => task.sessionID === sessionID)?.parentID ??
+      (sessionID === previousRootID ? previousRootID : undefined)
+    const info = known ?? {
+      id: sessionID,
+      title: sessionID,
+      updatedAt: 0,
+      archived: false,
+      ...(rootHint === undefined ? {} : { parentID: rootHint }),
+    }
     const rootID = info.parentID ?? sessionID
-    if (openRootInfo?.id !== rootID) openRootInfo = (rootID === sessionID ? known : container.state.sessions.find((item) => item.id === rootID) ?? container.state.carouselSessions?.find((item) => item.id === rootID))
+    if (openRootInfo?.id !== rootID)
+      openRootInfo =
+        rootID === sessionID
+          ? known
+          : (container.state.sessions.find((item) => item.id === rootID) ??
+            container.state.carouselSessions?.find((item) => item.id === rootID))
     const sameFamily = previousRootID === rootID && container.state.team !== undefined
-    const retainedTeam = teamWatching ? sameFamily ? container.state.team : emptyTeam(rootID, "loading") : undefined
-    setState({ activeSessionID: sessionID, selectedSessionInfo: info,
-      view: createSessionView(sessionID), team: retainedTeam,
-      familyActivity: activityWatching ? sameFamily ? container.state.familyActivity : { rootID, status: "loading", members: [] } : undefined,
-      teamCues: sameFamily ? container.state.teamCues : [], todos: undefined, history: undefined, notice: undefined })
+    const retainedTeam = teamWatching ? (sameFamily ? container.state.team : emptyTeam(rootID, "loading")) : undefined
+    setState({
+      activeSessionID: sessionID,
+      selectedSessionInfo: info,
+      view: createSessionView(sessionID),
+      team: retainedTeam,
+      familyActivity: activityWatching
+        ? sameFamily
+          ? container.state.familyActivity
+          : { rootID, status: "loading", members: [] }
+        : undefined,
+      teamCues: sameFamily ? container.state.teamCues : [],
+      todos: undefined,
+      history: undefined,
+      notice: undefined,
+    })
     if (!active) {
       selectionFailedToken = token
       if (teamWatching) setState({ team: emptyTeam(rootID, "error") })
@@ -2125,7 +3296,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (known === undefined) {
       const lookedUp = await active.request("session.get", { sessionID, timeoutMs: 5_000 })
       if (token !== selectionToken || !isCurrentConnection(active)) return
-      const value = lookedUp.status === "ok" && typeof lookedUp.value === "object" && lookedUp.value !== null ? Reflect.get(lookedUp.value, "data") : undefined
+      const value =
+        lookedUp.status === "ok" && typeof lookedUp.value === "object" && lookedUp.value !== null
+          ? Reflect.get(lookedUp.value, "data")
+          : undefined
       const resolved = readSessionInfo(value)
       if (resolved?.id === sessionID) {
         setState({ selectedSessionInfo: resolved })
@@ -2137,23 +3311,45 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (selectedRootID !== sessionID && openRootInfo?.id !== selectedRootID) {
       const parent = await active.request("session.get", { sessionID: selectedRootID, timeoutMs: 5_000 })
       if (token !== selectionToken || !isCurrentConnection(active)) return
-      const value = parent.status === "ok" && typeof parent.value === "object" && parent.value !== null ? Reflect.get(parent.value, "data") : undefined
+      const value =
+        parent.status === "ok" && typeof parent.value === "object" && parent.value !== null
+          ? Reflect.get(parent.value, "data")
+          : undefined
       const resolved = readSessionInfo(value)
       if (resolved?.id === selectedRootID && resolved.parentID === undefined) openRootInfo = resolved
     }
     const rootInfo = openRootInfo?.id === selectedRootID ? openRootInfo : selectedInfo
-    const group = container.state.sessionGroups.find((candidate) => candidate.projectID === rootInfo?.projectID && candidate.directory === rootInfo.directory && candidate.workspaceID === rootInfo.workspaceID)
+    const group =
+      rootInfo === undefined
+        ? undefined
+        : container.state.sessionGroups.find(
+            (candidate) =>
+              candidate.projectID === rootInfo.projectID &&
+              candidate.directory === rootInfo.directory &&
+              candidate.workspaceID === rootInfo.workspaceID,
+          )
     const workspaceChanged = group !== undefined && group.id !== container.state.selectedWorkspaceID
-    const refreshList = resetSessionList || container.state.sessionListStatus === "loading" && sessionPages.length === 0 && loadingPageToken === undefined
-    if (workspaceChanged || refreshList && container.state.selectedWorkspaceID !== undefined) {
+    const refreshList =
+      resetSessionList ||
+      (container.state.sessionListStatus === "loading" && sessionPages.length === 0 && loadingPageToken === undefined)
+    if (workspaceChanged || (refreshList && container.state.selectedWorkspaceID !== undefined)) {
       if (workspaceChanged && !resetSessionList) sessionsToken += 1
       sessionPages = []
-      setState({ ...(workspaceChanged ? { selectedWorkspaceID: group.id } : {}), sessions: [], advertised: [], sessionListStatus: "loading", sessionHasNext: false, sessionHasPrevious: false })
+      setState({
+        ...(workspaceChanged ? { selectedWorkspaceID: group.id } : {}),
+        sessions: [],
+        advertised: [],
+        sessionListStatus: "loading",
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+      })
       void loadSessions(sessionsToken)
     }
     // Subscribe before the snapshot so events during the read are queued and then
     // reconciled against the snapshot watermark instead of being lost.
-    const subscribed = await active.request("session.subscribe", { sessionID })
+    if (subscribedSessionID === sessionID) releaseSubscription(active, sessionID)
+    const subscribed = await active.request("event.subscribe", { sessionID })
+    registerSubscription(active, sessionID, subscribed)
     if (subscribed.status !== "ok") {
       // The selection left the previous session behind, so its stream ends even when
       // this one is not available.
@@ -2162,10 +3358,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
       selectionFailedToken = token
-      setState({ notice: "This session is not available from the connected device.",
-        ...(teamWatching ? { team: sameFamily && container.state.team?.rootID === rootID
-          ? { ...container.state.team, status: "error", pageLoading: false, refreshing: false }
-          : emptyTeam(rootID, "error") } : {}) })
+      setState({
+        notice: "This session is not available from the connected device.",
+        ...(teamWatching
+          ? {
+              team:
+                sameFamily && container.state.team?.rootID === rootID
+                  ? { ...container.state.team, status: "error", pageLoading: false, refreshing: false }
+                  : emptyTeam(rootID, "error"),
+            }
+          : {}),
+      })
       return
     }
     if (token !== selectionToken || container.state.activeSessionID !== sessionID) {
@@ -2176,14 +3379,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const previous = subscribedSessionID
     subscribedSessionID = sessionID
     if (previous !== undefined && previous !== sessionID) releaseSubscription(active, previous)
-    const owned: HydrationWindow = { sessionID, events: [], replayed: new Set(), streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []) }
+    const owned: HydrationWindow = {
+      sessionID,
+      events: [],
+      replayed: new Set(),
+      streamed: streamedPartText(container.state.view?.id === sessionID ? container.state.view.messages : []),
+    }
     hydration = owned
     const continueWithoutHistory = async (notice?: string) => {
       if (hydration === owned) hydration = undefined
       selectionReadyToken = token
-      setState({ ...(notice === undefined ? { history: { status: "stale" } as const } : { notice }),
-        ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}) })
-      if (teamWatching && (!sameFamily || container.state.team?.status !== "ready")) void loadTeam(active, token, rootID)
+      setState({
+        ...(notice === undefined ? { history: { status: "stale" } as const } : { notice }),
+        ...(teamWatching && !sameFamily ? { team: emptyTeam(rootID, "loading") } : {}),
+      })
+      if (teamWatching && (!sameFamily || container.state.team?.status !== "ready"))
+        void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
       await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
@@ -2208,17 +3419,35 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       selectionReadyToken = token
       const teamRootID = applied.parentID ?? container.state.selectedSessionInfo?.parentID ?? sessionID
       const retained = sameFamily && teamRootID === container.state.team?.rootID
-      setState({ view, history: { status: "idle", ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }) }, team: teamWatching ? retained ? container.state.team : emptyTeam(teamRootID, "loading") : undefined,
-        familyActivity: activityWatching ? retained ? container.state.familyActivity : { rootID: teamRootID, status: "loading", members: [] } : undefined,
+      setState({
+        view,
+        history: {
+          status: "idle",
+          ...(hasCompactionCheckpoint(view.messages) || applied.before === undefined ? {} : { before: applied.before }),
+        },
+        team: teamWatching ? (retained ? container.state.team : emptyTeam(teamRootID, "loading")) : undefined,
+        familyActivity: activityWatching
+          ? retained
+            ? container.state.familyActivity
+            : { rootID: teamRootID, status: "loading", members: [] }
+          : undefined,
         teamCues: retained ? container.state.teamCues : [],
-        selectedSessionInfo: container.state.selectedSessionInfo?.id === sessionID
-        ? { ...container.state.selectedSessionInfo, title: view.title ?? container.state.selectedSessionInfo.title, agent: view.agent ?? container.state.selectedSessionInfo.agent,
-            model: view.model ?? container.state.selectedSessionInfo.model, modelLabel: modelLabel(view.model) ?? container.state.selectedSessionInfo.modelLabel,
-            ...(applied.parentID === undefined ? {} : { parentID: applied.parentID }) }
-        : container.state.selectedSessionInfo })
+        selectedSessionInfo:
+          container.state.selectedSessionInfo?.id === sessionID
+            ? {
+                ...container.state.selectedSessionInfo,
+                title: view.title ?? container.state.selectedSessionInfo.title,
+                agent: view.agent ?? container.state.selectedSessionInfo.agent,
+                model: view.model ?? container.state.selectedSessionInfo.model,
+                modelLabel: modelLabel(view.model) ?? container.state.selectedSessionInfo.modelLabel,
+                ...(applied.parentID === undefined ? {} : { parentID: applied.parentID }),
+              }
+            : container.state.selectedSessionInfo,
+      })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
-      if (teamWatching && (!retained || container.state.team?.status !== "ready")) void loadTeam(active, token, teamRootID)
+      if (teamWatching && (!retained || container.state.team?.status !== "ready"))
+        void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
     } finally {
       if (hydration === owned) hydration = undefined
@@ -2230,7 +3459,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const owner = transport
     const sessionID = container.state.activeSessionID
     const token = selectionToken
-    if (!owner || !sessionID || subscribedSessionID !== sessionID || selectionReadyToken !== token) return Promise.resolve()
+    if (!owner || !sessionID || subscribedSessionID !== sessionID || selectionReadyToken !== token)
+      return Promise.resolve()
     if (resyncRead) {
       if (resyncTarget?.owner === owner && resyncTarget.sessionID === sessionID && resyncTarget.token === token) {
         resyncAgain = true
@@ -2242,13 +3472,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       do {
         resyncAgain = false
         await reloadSnapshot(sessionID, token)
-        if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
+        if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID)
+          return
         await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
       } while (resyncAgain && token === selectionToken && isCurrentConnection(owner))
     })()
     resyncRead = run
     resyncTarget = { owner, sessionID, token }
-    void run.then(() => { if (resyncRead === run) { resyncRead = undefined; resyncTarget = undefined } }, () => { if (resyncRead === run) { resyncRead = undefined; resyncTarget = undefined } })
+    void run.then(
+      () => {
+        if (resyncRead === run) {
+          resyncRead = undefined
+          resyncTarget = undefined
+        }
+      },
+      () => {
+        if (resyncRead === run) {
+          resyncRead = undefined
+          resyncTarget = undefined
+        }
+      },
+    )
     return run
   }
 
@@ -2258,8 +3502,19 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const createSession = async (attempt: SessionCreation, reconcile: boolean) => {
     const active = transport
-    if (active === undefined || container.state.transport.kind !== "open" || container.state.connection.kind === "offline" || container.state.activeDeviceID !== attempt.deviceID) {
-      setState({ sessionCreation: { ...attempt, status: attempt.status === "unknown" ? "unknown" : "failed", message: "Connect to the same machine before creating this session." } })
+    if (
+      active === undefined ||
+      container.state.transport.kind !== "open" ||
+      container.state.connection.kind === "offline" ||
+      container.state.activeDeviceID !== attempt.deviceID
+    ) {
+      setState({
+        sessionCreation: {
+          ...attempt,
+          status: attempt.status === "unknown" ? "unknown" : "failed",
+          message: "Connect to the same machine before creating this session.",
+        },
+      })
       return undefined
     }
     setState({ sessionCreation: { ...attempt, status: "creating", message: undefined } })
@@ -2268,26 +3523,55 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
       const session = readSessionInfo(data)
       const parentID = typeof data === "object" && data !== null ? Reflect.get(data, "parentID") : undefined
-      if (!session || session.id !== attempt.id || session.directory !== attempt.workspace.directory || session.projectID !== attempt.workspace.projectID || parentID !== undefined) {
-        setState({ sessionCreation: { ...attempt, status: "unknown", message: "The returned session does not match this workspace. Check Sessions before retrying." } })
+      if (
+        !session ||
+        session.id !== attempt.id ||
+        session.directory !== attempt.workspace.directory ||
+        session.projectID !== attempt.workspace.projectID ||
+        parentID !== undefined
+      ) {
+        setState({
+          sessionCreation: {
+            ...attempt,
+            status: "unknown",
+            message: "The returned session does not match this workspace. Check Sessions before retrying.",
+          },
+        })
         return undefined
       }
       openRootInfo = session
-      if (!container.state.sessionGroups.some((group) => group.id === attempt.workspace.id)) setState({ sessionGroups: [...container.state.sessionGroups, attempt.workspace] })
+      if (!container.state.sessionGroups.some((group) => group.id === attempt.workspace.id))
+        setState({ sessionGroups: [...container.state.sessionGroups, attempt.workspace] })
       if (container.state.selectedWorkspaceID !== attempt.workspace.id) {
         sessionsToken += 1
         sessionPages = []
-        setState({ selectedWorkspaceID: attempt.workspace.id, sessions: [session], advertised: [session.id], sessionListStatus: "ready", sessionHasNext: false, sessionHasPrevious: false,
-          selectedSessionInfo: session })
+        setState({
+          selectedWorkspaceID: attempt.workspace.id,
+          sessions: [session],
+          advertised: [session.id],
+          sessionListStatus: "ready",
+          sessionHasNext: false,
+          sessionHasPrevious: false,
+          selectedSessionInfo: session,
+        })
       }
       await selectSession(session.id, session)
       if (!owns() || container.state.activeSessionID !== session.id) return undefined
       if (attempt.prompt !== undefined) {
-        const sent = "command" in attempt.prompt
-          ? await api.runCommand({ ...attempt.prompt, delivery: "steer" })
-          : await api.sendPrompt({ ...attempt.prompt, delivery: "steer" })
+        const sent =
+          "command" in attempt.prompt
+            ? await api.runCommand({ ...attempt.prompt, delivery: "steer" })
+            : await api.sendPrompt({ ...attempt.prompt, delivery: "steer" })
         if (!sent) {
-          setState({ sessionCreation: { ...attempt, status: "failed", message: container.state.uploadError ?? "The first message could not be sent. Retry to submit it to this Session." } })
+          setState({
+            sessionCreation: {
+              ...attempt,
+              status: "failed",
+              message:
+                container.state.uploadError ??
+                "The first message could not be sent. Retry to submit it to this Session.",
+            },
+          })
           return undefined
         }
       }
@@ -2298,16 +3582,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const existing = await active.request("session.get", { sessionID: attempt.id })
       if (!owns()) return undefined
       if (existing.status === "ok") return accept(existing.value)
-      if (existing.status !== "failed" || existing.error.code !== "session_not_allowed") {
-        setState({ sessionCreation: { ...attempt, status: "unknown", message: describeOutcome(existing, "Session check") } })
+      if (existing.status !== "failed" || existing.error.code !== "not_found") {
+        setState({
+          sessionCreation: { ...attempt, status: "unknown", message: describeOutcome(existing, "Session check") },
+        })
         return undefined
       }
     }
-    const outcome = await active.request("session.create", { input: { id: attempt.id, workspace: attempt.workspace.id,
-      ...(attempt.agent === undefined ? {} : { agent: attempt.agent }), ...(attempt.model === undefined ? {} : { model: attempt.model }) } })
+    const outcome = await active.request("session.create", {
+      workspaceID: attempt.workspace.id,
+      input: {
+        id: attempt.id,
+        ...(attempt.agent === undefined ? {} : { agent: attempt.agent }),
+        ...(attempt.model === undefined ? {} : { model: attempt.model }),
+      },
+    })
     if (!owns()) return undefined
     if (outcome.status === "ok") return accept(outcome.value)
-    setState({ sessionCreation: { ...attempt, status: outcome.status === "unknown" ? "unknown" : "failed", message: describeOutcome(outcome, "Session creation") } })
+    setState({
+      sessionCreation: {
+        ...attempt,
+        status: outcome.status === "unknown" ? "unknown" : "failed",
+        message: describeOutcome(outcome, "Session creation"),
+      },
+    })
     return undefined
   }
 
@@ -2316,7 +3614,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     readonly admittedFrom: number
     readonly deviceID: string
     readonly files?: readonly FileAttachmentInput[]
-    readonly prerequisites: readonly { readonly operation: RemoteOperation; readonly input: Readonly<Record<string, unknown>>; readonly force?: boolean; completed: boolean; attempted: boolean }[]
+    readonly prerequisites: readonly {
+      readonly operation: OperationName
+      readonly input: Readonly<Record<string, unknown>>
+      readonly force?: boolean
+      completed: boolean
+      attempted: boolean
+    }[]
     uploaded?: readonly FileAttachmentInput[]
     uploadedAt?: number
     uploadsReady: boolean
@@ -2327,8 +3631,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const confirmSend = (id: string) => {
     const progress = sends.get(id)
-    if (!progress || progress.deviceID !== container.state.activeDeviceID || progress.mutation.kind !== "prompt" && progress.mutation.kind !== "command" ||
-      !progress.prerequisites.every((step) => step.completed) || container.state.mutations.find((mutation) => mutation.id === id)?.phase === "preparing") return false
+    if (
+      !progress ||
+      progress.deviceID !== container.state.activeDeviceID ||
+      (progress.mutation.kind !== "prompt" && progress.mutation.kind !== "command") ||
+      !progress.prerequisites.every((step) => step.completed) ||
+      container.state.mutations.find((mutation) => mutation.id === id)?.phase === "preparing"
+    )
+      return false
     sends.delete(id)
     return true
   }
@@ -2341,17 +3651,34 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const previous = sendPreparation.get(key)
     const prepared = Promise.withResolvers<void>()
     sendPreparation.set(key, prepared.promise)
-    const owns = () => sends.get(progress.mutation.id) === progress && progress.deviceID === container.state.activeDeviceID &&
-      token === selectionToken && container.state.activeSessionID === sessionID && container.state.transport.kind === "open"
+    const owns = () =>
+      sends.get(progress.mutation.id) === progress &&
+      progress.deviceID === container.state.activeDeviceID &&
+      token === selectionToken &&
+      container.state.activeSessionID === sessionID &&
+      container.state.transport.kind === "open"
     const run = (async () => {
       try {
         await previous
         if (!owns()) {
-          finishMutation(progress.mutation.id, "failed", "Select this Session on the same connected machine before retrying the send.")
+          finishMutation(
+            progress.mutation.id,
+            "failed",
+            "Select this Session on the same connected machine before retrying the send.",
+          )
           return
         }
-        setState({ mutations: container.state.mutations.map((entry) => entry.id === progress.mutation.id ? { ...entry, state: "sending", detail: undefined } : entry) })
-        if (progress.uploadedAt !== undefined && now() - progress.uploadedAt >= RemoteLimits.attachmentTtlMs && progress.files?.some((file) => file.uri.startsWith("data:"))) progress.uploadsReady = false
+        setState({
+          mutations: container.state.mutations.map((entry) =>
+            entry.id === progress.mutation.id ? { ...entry, state: "sending", detail: undefined } : entry,
+          ),
+        })
+        if (
+          progress.uploadedAt !== undefined &&
+          now() - progress.uploadedAt >= WebLimits.attachmentTtlMs &&
+          progress.files?.some((file) => file.uri.startsWith("data:"))
+        )
+          progress.uploadsReady = false
         if (!progress.uploadsReady) {
           progress.uploaded = await prepareUploads(sessionID, progress.files, token)
           if (progress.files !== undefined && progress.uploaded === undefined) {
@@ -2363,7 +3690,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         }
         for (const prerequisite of progress.prerequisites) {
           if (!owns()) {
-            finishMutation(progress.mutation.id, "failed", "The selected Session or machine changed before the send was admitted.")
+            finishMutation(
+              progress.mutation.id,
+              "failed",
+              "The selected Session or machine changed before the send was admitted.",
+            )
             return
           }
           const view = container.state.view
@@ -2371,54 +3702,101 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           if (prerequisite.completed) {
             if (prerequisite.operation === "session.switchModel") {
               if (model === undefined) {
-                finishMutation(progress.mutation.id, "failed", "The Session model selection is no longer known. Choose it again before retrying this send.")
+                finishMutation(
+                  progress.mutation.id,
+                  "failed",
+                  "The Session model selection is no longer known. Choose it again before retrying this send.",
+                )
                 return
               }
               const selected = container.state.selectedSessionInfo
-              const knownModel = selected?.id === sessionID && selected.model !== undefined
-                ? selected.model
-                : view?.id === sessionID ? view.model : undefined
-              const modelChanged = knownModel === undefined || model.id !== knownModel.id || model.providerID !== knownModel.providerID ||
-                model.variant !== knownModel.variant || model.profile !== knownModel.profile
+              const knownModel =
+                selected?.id === sessionID && selected.model !== undefined
+                  ? selected.model
+                  : view?.id === sessionID
+                    ? view.model
+                    : undefined
+              const modelChanged =
+                knownModel === undefined ||
+                model.id !== knownModel.id ||
+                model.providerID !== knownModel.providerID ||
+                model.variant !== knownModel.variant ||
+                model.profile !== knownModel.profile
               if (modelChanged && (prerequisite.force || model.profile !== undefined)) {
-                finishMutation(progress.mutation.id, "failed", "The Session model changed after this send selected its model. Choose that model again before retrying this send.")
+                finishMutation(
+                  progress.mutation.id,
+                  "failed",
+                  "The Session model changed after this send selected its model. Choose that model again before retrying this send.",
+                )
                 return
               }
               if (modelChanged) prerequisite.completed = false
             }
-            const agentChanged = prerequisite.operation === "session.switchAgent" && prerequisite.input.agent !== view?.agent
+            const agentChanged =
+              prerequisite.operation === "session.switchAgent" && prerequisite.input.agent !== view?.agent
             if (agentChanged) prerequisite.completed = false
             if (prerequisite.completed) continue
           }
-          if (!prerequisite.attempted &&
-            (prerequisite.operation === "session.switchAgent" && prerequisite.input.agent === view?.agent ||
-              prerequisite.operation === "session.switchModel" && !prerequisite.force && model !== undefined && model.id === view?.model?.id &&
-              model.providerID === view.model.providerID && model.variant === view.model.variant && model.profile === view.model.profile)) {
+          if (
+            !prerequisite.attempted &&
+            ((prerequisite.operation === "session.switchAgent" && prerequisite.input.agent === view?.agent) ||
+              (prerequisite.operation === "session.switchModel" &&
+                !prerequisite.force &&
+                model !== undefined &&
+                model.id === view?.model?.id &&
+                model.providerID === view.model.providerID &&
+                model.variant === view.model.variant &&
+                model.profile === view.model.profile))
+          ) {
             prerequisite.completed = true
             continue
           }
           prerequisite.completed = false
           prerequisite.attempted = true
-          const outcome = await request({ ...progress.mutation, state: "sending", phase: "preparing" }, { sessionID, operation: prerequisite.operation, input: prerequisite.input, retain: true })
+          const outcome = await request(
+            { ...progress.mutation, state: "sending", phase: "preparing" },
+            { sessionID, operation: prerequisite.operation, input: prerequisite.input, retain: true },
+          )
           if (outcome.status !== "ok") return
           prerequisite.completed = true
           if (owns() && container.state.view) {
-            if (prerequisite.operation === "session.switchModel" && model !== undefined) setState({ view: { ...container.state.view, model },
-              confirmedModelSwitches: { ...container.state.confirmedModelSwitches, [sessionID]: {
-                revision: (container.state.confirmedModelSwitches?.[sessionID]?.revision ?? 0) + 1, model,
-              } },
-              ...(container.state.selectedSessionInfo?.id === sessionID ? { selectedSessionInfo: { ...container.state.selectedSessionInfo, model } } : {}) })
-            if (prerequisite.operation === "session.switchAgent" && typeof prerequisite.input.agent === "string") setState({ view: { ...container.state.view, agent: prerequisite.input.agent } })
+            if (prerequisite.operation === "session.switchModel" && model !== undefined)
+              setState({
+                view: { ...container.state.view, model },
+                confirmedModelSwitches: {
+                  ...container.state.confirmedModelSwitches,
+                  [sessionID]: {
+                    revision: (container.state.confirmedModelSwitches?.[sessionID]?.revision ?? 0) + 1,
+                    model,
+                  },
+                },
+                ...(container.state.selectedSessionInfo?.id === sessionID
+                  ? { selectedSessionInfo: { ...container.state.selectedSessionInfo, model } }
+                  : {}),
+              })
+            if (prerequisite.operation === "session.switchAgent" && typeof prerequisite.input.agent === "string")
+              setState({ view: { ...container.state.view, agent: prerequisite.input.agent } })
           }
         }
         if (!owns()) {
-          finishMutation(progress.mutation.id, "failed", "The selected Session or machine changed before the send was admitted.")
+          finishMutation(
+            progress.mutation.id,
+            "failed",
+            "The selected Session or machine changed before the send was admitted.",
+          )
           return
         }
-        const input = { ...progress.mutation.input, ...(progress.files === undefined ? {} : { files: progress.uploaded }) }
+        const input = {
+          ...progress.mutation.input,
+          ...(progress.files === undefined ? {} : { files: progress.uploaded }),
+        }
         if (progress.prerequisites.length === 0 && progress.mutation.kind !== "skill") prepared.resolve()
-        const admission = await request({ ...progress.mutation, state: "sending", phase: "admitting" }, { sessionID, input })
-        if (progress.mutation.kind === "prompt" && admission.status === "ok") latency.recordClient("prompt.admit", monotonicNow() - progress.admittedFrom)
+        const admission = await request(
+          { ...progress.mutation, state: "sending", phase: "admitting" },
+          { sessionID, input },
+        )
+        if (progress.mutation.kind === "prompt" && admission.status === "ok")
+          latency.recordClient("prompt.admit", monotonicNow() - progress.admittedFrom)
       } catch (cause) {
         finishMutation(progress.mutation.id, "failed", cause instanceof Error ? cause.message : "The send failed.")
       } finally {
@@ -2427,11 +3805,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
     })()
     progress.running = run
-    void run.then(() => { progress.running = undefined })
+    void run.then(() => {
+      progress.running = undefined
+    })
     return run
   }
 
-  const acceptSend = (mutation: PendingMutation, input: { readonly files?: readonly FileAttachmentInput[]; readonly agent?: string; readonly model?: ModelRefView; readonly forceModelSwitch?: boolean }) => {
+  const acceptSend = (
+    mutation: PendingMutation,
+    input: {
+      readonly files?: readonly FileAttachmentInput[]
+      readonly agent?: string
+      readonly model?: ModelRefView
+      readonly forceModelSwitch?: boolean
+    },
+  ) => {
     const view = container.state.view ?? createSessionView(mutation.sessionID)
     const progress: SendProgress = {
       mutation,
@@ -2439,21 +3827,44 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       deviceID: container.state.activeDeviceID!,
       files: input.files,
       prerequisites: [
-        ...(input.agent !== undefined ? [{ operation: "session.switchAgent" as const, input: { agent: input.agent } }] : []),
+        ...(input.agent !== undefined
+          ? [{ operation: "session.switchAgent" as const, input: { agent: input.agent } }]
+          : []),
         ...(input.model !== undefined
-          ? [{ operation: "session.switchModel" as const, input: { model: input.model }, ...(input.forceModelSwitch ? { force: true } : {}) }] : []),
+          ? [
+              {
+                operation: "session.switchModel" as const,
+                input: { model: input.model },
+                ...(input.forceModelSwitch ? { force: true } : {}),
+              },
+            ]
+          : []),
       ].map((step) => ({ ...step, completed: false, attempted: false })),
       uploadsReady: input.files === undefined,
     }
     sends.set(mutation.id, progress)
-    if ((mutation.kind === "prompt" || mutation.kind === "command") && pendingRead?.sessionID === mutation.sessionID) pendingRead.retained.add(mutation.id)
+    if ((mutation.kind === "prompt" || mutation.kind === "command") && pendingRead?.sessionID === mutation.sessionID)
+      pendingRead.retained.add(mutation.id)
     setState({
       mutations: [...container.state.mutations, mutation],
-      ...(mutation.kind !== "prompt" && mutation.kind !== "command" ? {} : { view: { ...view, messages: [...view.messages, {
-        kind: "user" as const, id: mutation.id, text: mutationText(mutation)!,
-        delivery: mutation.input.delivery === "queue" ? "queue" as const : "steer" as const,
-        state: "pending" as const, created: mutation.created ?? now(),
-      }] } }),
+      ...(mutation.kind !== "prompt" && mutation.kind !== "command"
+        ? {}
+        : {
+            view: {
+              ...view,
+              messages: [
+                ...view.messages,
+                {
+                  kind: "user" as const,
+                  id: mutation.id,
+                  text: mutationText(mutation)!,
+                  delivery: mutation.input.delivery === "queue" ? ("queue" as const) : ("steer" as const),
+                  state: "pending" as const,
+                  created: mutation.created ?? now(),
+                },
+              ],
+            },
+          }),
     })
     void progressSend(progress)
     return true
@@ -2506,15 +3917,20 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       drafts: {},
       queuedPromptDrafts: {},
       promptDraftFocus: undefined,
-      mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+      mutations: container.state.mutations.filter(
+        (mutation) => mutation.kind !== "goal" || typeof mutation.input.goal !== "string",
+      ),
       mutationToasts: [],
       sessionCreation: undefined,
       activeSessionID: undefined,
       view: undefined,
-      team: undefined, familyActivity: undefined, todos: undefined,
+      team: undefined,
+      familyActivity: undefined,
+      todos: undefined,
       teamCues: [],
       lastRelayDrop: undefined,
-      connection: container.state.owner === undefined ? { kind: "signed-out" } : deviceConnection(container.state.devices.length),
+      connection:
+        container.state.owner === undefined ? { kind: "signed-out" } : deviceConnection(container.state.devices.length),
     })
     endAlerts(retainMachineOffline)
   }
@@ -2537,25 +3953,51 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const owner = transport
       const deviceID = container.state.activeDeviceID
       const generation = container.state.generation
-      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
-      const outcome = await owner.request("machine.latency.list", before === undefined ? {} : { input: { before } })
-      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open")
+        return { status: "unavailable" }
+      const outcome = await owner.request("telemetry.list", before === undefined ? {} : { input: { before } })
+      if (
+        transport !== owner ||
+        container.state.activeDeviceID !== deviceID ||
+        container.state.generation !== generation
+      )
+        return { status: "unavailable" }
       if (outcome.status === "unavailable") return { status: "unavailable" }
       if (outcome.status === "unknown") return { status: "unknown" }
-      if (outcome.status === "failed") return { status: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" }
-      const value = outcome.value
+      if (outcome.status === "failed")
+        return { status: outcome.error.code === "unknown_operation" ? "unsupported" : "failed" }
+      const value =
+        typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       if (typeof value !== "object" || value === null || Array.isArray(value)) return { status: "failed" }
       const data = Reflect.get(value, "data")
       const cursor = Reflect.get(value, "cursor")
-      if (!Array.isArray(data) || data.length > RemoteLimits.maxLatencyPage || typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) return { status: "failed" }
+      if (
+        !Array.isArray(data) ||
+        data.length > WebLimits.maxLatencyPage ||
+        typeof cursor !== "object" ||
+        cursor === null ||
+        Array.isArray(cursor)
+      )
+        return { status: "failed" }
       const next = Reflect.get(cursor, "next")
-      if (next !== undefined && (typeof next !== "string" || next.length < 1 || next.length > 256)) return { status: "failed" }
+      if (next !== undefined && (typeof next !== "string" || next.length < 1 || next.length > 256))
+        return { status: "failed" }
       const rows = data.flatMap((entry: unknown) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry) || Object.keys(entry).some((key) => key !== "receivedAt" && key !== "sample")) return []
+        if (
+          typeof entry !== "object" ||
+          entry === null ||
+          Array.isArray(entry) ||
+          Object.keys(entry).some((key) => key !== "receivedAt" && key !== "sample")
+        )
+          return []
         const receivedAt = Reflect.get(entry, "receivedAt")
         const sample = Reflect.get(entry, "sample")
-        return typeof receivedAt === "number" && Number.isSafeInteger(receivedAt) && receivedAt >= 0 && isRemoteLatencySample(sample)
-          ? [{ receivedAt, sample }] : []
+        return typeof receivedAt === "number" &&
+          Number.isSafeInteger(receivedAt) &&
+          receivedAt >= 0 &&
+          validLatencySample(sample)
+          ? [{ receivedAt, sample }]
+          : []
       })
       if (rows.length !== data.length) return { status: "failed" }
       return { status: "ok", data: rows, ...(next === undefined ? {} : { next }) }
@@ -2564,12 +4006,24 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const owner = transport
       const deviceID = container.state.activeDeviceID
       const generation = container.state.generation
-      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
-      const outcome = await owner.request("machine.telemetry.consent.get", { timeoutMs: 5_000 })
-      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open")
+        return { status: "unavailable" }
+      const outcome = await owner.request("telemetry.consent.get", { timeoutMs: 5_000 })
+      if (
+        transport !== owner ||
+        container.state.activeDeviceID !== deviceID ||
+        container.state.generation !== generation
+      )
+        return { status: "unavailable" }
       if (outcome.status !== "ok") {
-        const unsupported = outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "unknown_operation"
-        setState({ telemetryConsent: { status: unsupported ? "unsupported" : "failed", ...(unsupported ? {} : { error: "Could not read telemetry consent." }) } })
+        const unsupported =
+          outcome.status === "unknown" || (outcome.status === "failed" && outcome.error.code === "unknown_operation")
+        setState({
+          telemetryConsent: {
+            status: unsupported ? "unsupported" : "failed",
+            ...(unsupported ? {} : { error: "Could not read telemetry consent." }),
+          },
+        })
         return { status: unsupported ? "unsupported" : "failed" }
       }
       const value = outcome.value
@@ -2582,12 +4036,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         setState({ telemetryConsent: { status: "failed", error: "The machine returned an invalid consent response." } })
         return { status: "failed" }
       }
-      setState({ telemetryConsent: data.consent === undefined ? { status: "undecided" } : { status: data.consent.enabled ? "enabled" : "disabled", consent: data.consent } })
+      setState({
+        telemetryConsent:
+          data.consent === undefined
+            ? { status: "undecided" }
+            : { status: data.consent.enabled ? "enabled" : "disabled", consent: data.consent },
+      })
       if (data.consent?.enabled) {
         latencyUnsupported = false
         scheduleLatencyUpload()
-      }
-      else {
+      } else {
         cancelLatencyUpload?.()
         cancelLatencyUpload = undefined
         pendingLatency.length = 0
@@ -2600,31 +4058,52 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const deviceID = container.state.activeDeviceID
       const generation = container.state.generation
       const previousConsent = container.state.telemetryConsent
-      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open") return { status: "unavailable" }
+      if (owner === undefined || deviceID === undefined || container.state.transport.kind !== "open")
+        return { status: "unavailable" }
       if (!enabled) {
         cancelLatencyUpload?.()
         cancelLatencyUpload = undefined
         pendingLatency.length = 0
-        setState({ telemetryConsent: { ...previousConsent, status: "disabled", error: undefined }, latencySync: "idle" })
+        setState({
+          telemetryConsent: { ...previousConsent, status: "disabled", error: undefined },
+          latencySync: "idle",
+        })
       }
-      const outcome = await owner.request("machine.telemetry.consent.set", { input: { enabled, noticeVersion: 1 }, timeoutMs: 10_000 })
-      if (transport !== owner || container.state.activeDeviceID !== deviceID || container.state.generation !== generation) return { status: "unavailable" }
+      const outcome = await owner.request("telemetry.consent.set", {
+        input: { enabled, noticeVersion: 1 },
+        timeoutMs: 10_000,
+      })
+      if (
+        transport !== owner ||
+        container.state.activeDeviceID !== deviceID ||
+        container.state.generation !== generation
+      )
+        return { status: "unavailable" }
       if (outcome.status !== "ok") {
-        setState({ telemetryConsent: { ...previousConsent, error: outcome.status === "unknown" ? "The decision was not confirmed; it was not resent." : "The decision could not be saved." } })
+        setState({
+          telemetryConsent: {
+            ...previousConsent,
+            error:
+              outcome.status === "unknown"
+                ? "The decision was not confirmed; it was not resent."
+                : "The decision could not be saved.",
+          },
+        })
         return { status: outcome.status === "unknown" ? "unknown" : "failed" }
       }
       const value = outcome.value
       const data = typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined
       if (!validTelemetryConsent(data)) {
-        setState({ telemetryConsent: { ...previousConsent, error: "The machine returned an invalid consent decision." } })
+        setState({
+          telemetryConsent: { ...previousConsent, error: "The machine returned an invalid consent decision." },
+        })
         return { status: "failed" }
       }
       setState({ telemetryConsent: { status: data.enabled ? "enabled" : "disabled", consent: data } })
       if (data.enabled) {
         latencyUnsupported = false
         scheduleLatencyUpload()
-      }
-      else {
+      } else {
         cancelLatencyUpload?.()
         cancelLatencyUpload = undefined
         pendingLatency.length = 0
@@ -2641,7 +4120,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // disconnect, or a newer read describes an account this store no longer shows.
       if (token !== accountToken) return
       const elapsed = Math.max(0, Math.round(monotonicNow() - startedAt))
-      latency.recordRequest({ operation: "account.read", outcome: me.ok ? "ok" : "failed", queueMs: 0, settlementMs: elapsed, totalMs: elapsed })
+      latency.recordRequest({
+        operation: "account.read",
+        outcome: me.ok ? "ok" : "failed",
+        queueMs: 0,
+        settlementMs: elapsed,
+        totalMs: elapsed,
+      })
       if (!me.ok) {
         if (me.status === 401 || me.status === 403) {
           // The account answer is authoritative: the browser session is gone, so the
@@ -2706,9 +4191,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           sessionHasNext: false,
           sessionHasPrevious: false,
           drafts,
-          sessionCreation: creation?.status === "creating"
-            ? { ...creation, status: "unknown", message: "The machine went offline before creation settled. Check or retry this session explicitly." }
-            : creation,
+          sessionCreation:
+            creation?.status === "creating"
+              ? {
+                  ...creation,
+                  status: "unknown",
+                  message: "The machine went offline before creation settled. Check or retry this session explicitly.",
+                }
+              : creation,
           connection: { kind: "offline", deviceName: selected.name },
           transport: { kind: "idle" },
           notifications: delivery.entries(),
@@ -2719,7 +4209,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const first = activeDevices[0]
       const stillPresent = activeDevices.some((device) => device.id === container.state.activeDeviceID)
       const remembered = activeDevices.find((device) => device.id === readRememberedMachine(storage))
-      const adopted = stillPresent ? undefined : remembered ?? (activeDevices.length === 1 ? first : undefined)
+      const adopted = stillPresent ? undefined : (remembered ?? (activeDevices.length === 1 ? first : undefined))
       setState({
         owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt },
         devices,
@@ -2738,14 +4228,26 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       accountToken += 1
       const discarded = new Set(sends.keys())
       sends.clear()
-      setState({ mutations: container.state.mutations.filter((mutation) => !discarded.has(mutation.id)),
-        mutationToasts: container.state.mutationToasts?.filter((toast) => !discarded.has(toast.id)) })
+      setState({
+        mutations: container.state.mutations.filter((mutation) => !discarded.has(mutation.id)),
+        mutationToasts: container.state.mutationToasts?.filter((toast) => !discarded.has(toast.id)),
+      })
       clearCatalogs()
       endQueries(currentScope())
       await options.http.logout()
       api.disconnect()
-      setState({ owner: undefined, devices: [], sessions: [], advertised: [], activeSessionID: undefined, view: undefined,
-        team: undefined, teamCues: [], connection: { kind: "signed-out" }, notice: "Signed out." })
+      setState({
+        owner: undefined,
+        devices: [],
+        sessions: [],
+        advertised: [],
+        activeSessionID: undefined,
+        view: undefined,
+        team: undefined,
+        teamCues: [],
+        connection: { kind: "signed-out" },
+        notice: "Signed out.",
+      })
     },
     createEnrollment: () => options.http.createEnrollment(),
     revokeDevice: async (deviceID) => {
@@ -2781,7 +4283,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const drafts = sameDevice ? container.state.drafts : {}
       const queuedPromptDrafts = sameDevice ? container.state.queuedPromptDrafts : {}
       const promptDraftFocus = sameDevice ? container.state.promptDraftFocus : undefined
-      const creation = container.state.sessionCreation?.deviceID === deviceID ? container.state.sessionCreation : undefined
+      const creation =
+        container.state.sessionCreation?.deviceID === deviceID ? container.state.sessionCreation : undefined
       const previous = transport
       transport = undefined
       lastStatusKind = "idle"
@@ -2806,20 +4309,60 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       subscribedSessionID = undefined
       queued = []
       sessionsToken += 1
-      endScope({ activeDeviceID: deviceID, transport: { kind: "idle" }, telemetryConsent: { status: "loading" }, sessions: [], carouselSessions: [], carouselStatus: "loading", sessionStatus: undefined, advertised: [], activeSessionID: undefined, view: undefined, notice: undefined, drafts, queuedPromptDrafts, promptDraftFocus,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set"),
+      endScope({
+        activeDeviceID: deviceID,
+        transport: { kind: "idle" },
+        telemetryConsent: { status: "loading" },
+        sessions: [],
+        carouselSessions: [],
+        carouselStatus: "loading",
+        sessionStatus: undefined,
+        advertised: [],
+        activeSessionID: undefined,
+        view: undefined,
+        notice: undefined,
+        drafts,
+        queuedPromptDrafts,
+        promptDraftFocus,
+        mutations: container.state.mutations.filter(
+          (mutation) => mutation.kind !== "goal" || typeof mutation.input.goal !== "string",
+        ),
         mutationToasts: [],
         lastRelayDrop: container.state.activeDeviceID === deviceID ? container.state.lastRelayDrop : undefined,
-        team: undefined, familyActivity: undefined, teamCues: [], todos: undefined,
-        sessionGroups: [], selectedWorkspaceID: undefined, selectedSessionInfo: undefined, sessionQuery: "", sessionFilter: "all",
-        sessionListStatus: "idle", sessionRowsStale: false, sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
-        sessionCreation: creation?.status === "creating" ? { ...creation, status: "unknown", message: "The connection changed before creation settled. Check or retry this session explicitly." } : creation,
+        team: undefined,
+        familyActivity: undefined,
+        teamCues: [],
+        todos: undefined,
+        sessionGroups: [],
+        selectedWorkspaceID: undefined,
+        selectedSessionInfo: undefined,
+        sessionQuery: "",
+        sessionFilter: "all",
+        sessionListStatus: "idle",
+        sessionRowsStale: false,
+        sessionPageLoading: false,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+        sessionCreation:
+          creation?.status === "creating"
+            ? {
+                ...creation,
+                status: "unknown",
+                message: "The connection changed before creation settled. Check or retry this session explicitly.",
+              }
+            : creation,
       })
       endAlerts(false, switching)
       const created = options.createTransport(deviceID, {
         onRequestTiming: (sample) => {
-          if (isCurrentConnection(created) && sample.operation !== "machine.telemetry.consent.get" && sample.operation !== "machine.telemetry.consent.set" &&
-            sample.operation !== "machine.latency.append" && sample.operation !== "machine.latency.list") latency.recordRequest(sample)
+          if (
+            isCurrentConnection(created) &&
+            sample.operation !== "telemetry.consent.get" &&
+            sample.operation !== "telemetry.consent.set" &&
+            sample.operation !== "telemetry.append" &&
+            sample.operation !== "telemetry.list"
+          )
+            latency.recordRequest({ ...sample, operation: telemetryOperation(sample.operation) })
         },
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
@@ -2837,13 +4380,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           sessionsToken += 1
           setState({ sessionListStatus: "loading" })
           void refreshSessionGroups(created)
-          if (selectionReadyToken === selectionToken && subscribedSessionID === container.state.activeSessionID) void resyncSelected()
+          if (selectionReadyToken === selectionToken && subscribedSessionID === container.state.activeSessionID)
+            void resyncSelected()
         },
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
           for (const event of events) {
             const createdAt = typeof event === "object" && event !== null ? Reflect.get(event, "created") : undefined
-            if (typeof createdAt === "string" && Number.isFinite(Date.parse(createdAt))) latency.recordClient("stream.delay", now() - Date.parse(createdAt))
+            if (typeof createdAt === "number" && Number.isSafeInteger(createdAt) && createdAt >= 0)
+              latency.recordClient("stream.delay", now() - createdAt)
             queueEvent(sessionID, event)
           }
         },
@@ -2905,111 +4450,240 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     loadMoreTeam: async () => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || team.next === undefined || team.pageLoading || container.state.transport.kind !== "open") return
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.status !== "ready" ||
+        team.next === undefined ||
+        team.pageLoading ||
+        container.state.transport.kind !== "open"
+      )
+        return
       await loadTeam(owner, selectionToken, team.rootID, team.next)
     },
     loadTeamControls: async () => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || container.state.transport.kind !== "open") return
+      if (!teamWatching || owner === undefined || team?.status !== "ready" || container.state.transport.kind !== "open")
+        return
       const token = selectionToken
       await Promise.all([
         ...(team.shellStatus === "loading" ? [loadTeamShells(owner, token, team.rootID)] : []),
         ...(team.sideChatStatus === "loading" ? [loadSideChats(owner, token, team.rootID)] : []),
-        ...(!team.economicsUnsupported && team.tasks.some((task) => task.tokens === undefined) ? [loadTeamEconomics(owner, token, team.rootID,
-          team.tasks.filter((task) => task.tokens === undefined).slice(0, 15).map((task) => task.sessionID))] : []),
+        ...(!team.economicsUnsupported && team.tasks.some((task) => task.tokens === undefined)
+          ? [
+              loadTeamEconomics(
+                owner,
+                token,
+                team.rootID,
+                team.tasks
+                  .filter((task) => task.tokens === undefined)
+                  .slice(0, 15)
+                  .map((task) => task.sessionID),
+              ),
+            ]
+          : []),
       ])
     },
     loadSelectedSubagentEconomics: async () => {
       const owner = transport
       const team = container.state.team
       const childID = container.state.selectedSessionInfo?.id
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || container.state.selectedSessionInfo?.parentID !== team.rootID ||
-        !team.tasks.some((task) => task.sessionID === childID) || childID === undefined || team.economicsUnsupported) return
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.status !== "ready" ||
+        container.state.selectedSessionInfo?.parentID !== team.rootID ||
+        !team.tasks.some((task) => task.sessionID === childID) ||
+        childID === undefined ||
+        team.economicsUnsupported
+      )
+        return
       const token = selectionToken
-      if (selectedEconomicsRead?.owner === owner && selectedEconomicsRead.token === token && selectedEconomicsRead.rootID === team.rootID && selectedEconomicsRead.childID === childID) return
+      if (
+        selectedEconomicsRead?.owner === owner &&
+        selectedEconomicsRead.token === token &&
+        selectedEconomicsRead.rootID === team.rootID &&
+        selectedEconomicsRead.childID === childID
+      )
+        return
       selectedEconomicsRead = { owner, token, rootID: team.rootID, childID }
       await loadTeamEconomics(owner, token, team.rootID, [childID])
     },
     loadMoreSideChats: async () => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.sideChatStatus !== "ready" || team.sideChatNext === undefined || team.sideChatLoading || container.state.transport.kind !== "open") return
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.sideChatStatus !== "ready" ||
+        team.sideChatNext === undefined ||
+        team.sideChatLoading ||
+        container.state.transport.kind !== "open"
+      )
+        return
       setState({ team: { ...team, sideChatLoading: true } })
       await loadSideChats(owner, selectionToken, team.rootID, team.sideChatNext)
     },
     cancelSubagent: async (childID) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID && ["starting", "running", "waiting"].includes(task.state)))
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.status !== "ready" ||
+        !team.tasks.some(
+          (task) => task.sessionID === childID && ["starting", "running", "waiting"].includes(task.state),
+        )
+      )
         return { status: "failed", message: "Subagent is not available for cancellation." }
       const rootID = team.rootID
       const token = selectionToken
-      const outcome = await owner.request("session.subagent.cancel", { sessionID: rootID, input: { childID }, timeoutMs: 10_000 })
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check this subagent before retrying." }
+      const outcome = await owner.request("session.subagent.cancel", {
+        sessionID: rootID,
+        input: { childID },
+        timeoutMs: 10_000,
+      })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check this subagent before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Cancel subagent")
-      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const data =
+        typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
-      if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable cancellation; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
+      if (task?.parentID !== rootID || task.sessionID !== childID)
+        return {
+          status: "unknown",
+          message: "The device returned an unreadable cancellation; check the subagent before retrying.",
+        }
+      setState({
+        team: {
+          ...container.state.team,
+          tasks: container.state.team.tasks.map((item) =>
+            item.sessionID === childID ? { ...item, ...task, question: task.question } : item,
+          ),
+        },
+      })
       return { status: "ok", message: "" }
     },
     answerSubagent: async (childID, questionID, text) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID && task.state === "waiting" && task.question?.id === questionID))
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.status !== "ready" ||
+        !team.tasks.some(
+          (task) => task.sessionID === childID && task.state === "waiting" && task.question?.id === questionID,
+        )
+      )
         return { status: "failed", message: "This subagent question is no longer pending." }
       const rootID = team.rootID
       const token = selectionToken
       const answerKey = `${rootID}:${childID}:${questionID}`
-      if (childAnswers.has(answerKey)) return { status: "failed", message: "An answer to this subagent question is already being sent." }
+      if (childAnswers.has(answerKey))
+        return { status: "failed", message: "An answer to this subagent question is already being sent." }
       childAnswers.add(answerKey)
-      const outcome = await owner.request("session.subagent.answer", { sessionID: rootID, input: { childID, questionID, text }, timeoutMs: 10_000 }).finally(() => childAnswers.delete(answerKey))
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check the question before retrying." }
+      const outcome = await owner
+        .request("session.subagent.answer", {
+          sessionID: rootID,
+          input: { childID, questionID, text },
+          timeoutMs: 10_000,
+        })
+        .finally(() => childAnswers.delete(answerKey))
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check the question before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Answer subagent")
-      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const data =
+        typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const task = readTeamTask(data)
-      if (task?.parentID !== rootID || task.sessionID !== childID) return { status: "unknown", message: "The device returned an unreadable answer; check the subagent before retrying." }
-      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((item) => item.sessionID === childID ? { ...item, ...task, question: task.question } : item) } })
+      if (task?.parentID !== rootID || task.sessionID !== childID)
+        return {
+          status: "unknown",
+          message: "The device returned an unreadable answer; check the subagent before retrying.",
+        }
+      setState({
+        team: {
+          ...container.state.team,
+          tasks: container.state.team.tasks.map((item) =>
+            item.sessionID === childID ? { ...item, ...task, question: task.question } : item,
+          ),
+        },
+      })
       return { status: "ok", message: "" }
     },
     pinSubagent: async (childID, pinned) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.status !== "ready" || !team.tasks.some((task) => task.sessionID === childID))
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.status !== "ready" ||
+        !team.tasks.some((task) => task.sessionID === childID)
+      )
         return { status: "failed", message: "Subagent is not available for pinning." }
       const rootID = team.rootID
       const token = selectionToken
-      const outcome = await owner.request(pinned ? "session.pin" : "session.unpin", { sessionID: childID, timeoutMs: 10_000 })
+      const outcome = await owner.request(pinned ? "session.pin" : "session.unpin", {
+        sessionID: childID,
+        timeoutMs: 10_000,
+      })
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
         return { status: "unknown", message: "The family changed; check this subagent before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, pinned ? "Pin subagent" : "Unpin subagent")
       await loadTeam(owner, token, rootID, undefined, true)
       const refreshed = container.state.team?.tasks.find((item) => item.sessionID === childID)
-      if (!refreshed || pinned && refreshed.pinnedAt === undefined || !pinned && refreshed.pinnedAt !== undefined)
+      if (!refreshed || (pinned && refreshed.pinnedAt === undefined) || (!pinned && refreshed.pinnedAt !== undefined))
         return { status: "unknown", message: "Pin state could not be refreshed; check the task before retrying." }
       return { status: "ok", message: "" }
     },
     killTeamShell: async (shellID) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && shell.status === "running"))
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.shellStatus !== "ready" ||
+        !team.shells.some((shell) => shell.id === shellID && shell.status === "running")
+      )
         return { status: "failed", message: "Shell is not running in this family." }
       const rootID = team.rootID
       const token = selectionToken
-      const outcome = await owner.request("session.team.shell.kill", { sessionID: rootID, input: { shellID }, timeoutMs: 10_000 })
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check this shell before retrying." }
+      const outcome = await owner.request("session.team.shell.kill", {
+        sessionID: rootID,
+        input: { shellID },
+        timeoutMs: 10_000,
+      })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check this shell before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Kill shell")
-      setState({ team: { ...container.state.team, shells: container.state.team.shells.map((shell) => shell.id === shellID ? { ...shell, status: "killed" as const, completedAt: now() } : shell) } })
+      setState({
+        team: {
+          ...container.state.team,
+          shells: container.state.team.shells.map((shell) =>
+            shell.id === shellID ? { ...shell, status: "killed" as const, completedAt: now() } : shell,
+          ),
+        },
+      })
       return { status: "ok", message: "" }
     },
     teamShellOutput: async (ownerID, shellID, cursor) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && shell.ownerID === ownerID)) throw new Error("Shell is not in this family.")
+      if (
+        !teamWatching ||
+        owner === undefined ||
+        team?.shellStatus !== "ready" ||
+        !team.shells.some((shell) => shell.id === shellID && shell.ownerID === ownerID)
+      )
+        throw new Error("Shell is not in this family.")
       const token = selectionToken
-      const outcome = await owner.request("session.shell.output", { sessionID: ownerID, input: { shellID, cursor: cursor ?? 0, limit: shellOutputPageLimit }, timeoutMs: 5_000 })
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== team.rootID) throw new Error("The family changed during the output read.")
+      const outcome = await owner.request("shell.output", {
+        sessionID: ownerID,
+        input: { id: shellID, cursor: cursor ?? 0, limit: shellOutputPageLimit },
+        timeoutMs: 5_000,
+      })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== team.rootID)
+        throw new Error("The family changed during the output read.")
       if (outcome.status !== "ok") throw new Error(singlePageFailure(outcome))
       const page = readShellOutputPage(outcome.value)
       if (!page) throw new Error(unreadablePage)
@@ -3018,26 +4692,54 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     createSideChat: async () => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.sideChatStatus !== "ready") return { status: "failed", message: "Side chats are unavailable." }
+      if (!teamWatching || owner === undefined || team?.sideChatStatus !== "ready")
+        return { status: "failed", message: "Side chats are unavailable." }
       const rootID = team.rootID
       const token = selectionToken
       const id = options.createSessionID?.() ?? `ses_${crypto.randomUUID().replaceAll("-", "")}`
-      const outcome = await owner.request("session.side-chat.create", { sessionID: rootID, input: { id }, timeoutMs: 10_000 })
-      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID) return { status: "unknown", message: "The family changed; check the side-chat list before retrying." }
+      const outcome = await owner.request("session.side-chat.create", {
+        sessionID: rootID,
+        input: { id },
+        timeoutMs: 10_000,
+      })
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check the side-chat list before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Create side chat")
-      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const data =
+        typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const info = readSessionInfo(data)
-      if (info?.id !== id || info.parentID !== rootID || info.agent !== "btw") return { status: "unknown", message: "The device returned an unreadable side chat; check the list before retrying." }
-      setState({ team: { ...container.state.team, sideChats: [{ id, title: info.title, updatedAt: info.updatedAt }, ...container.state.team.sideChats] } })
+      if (info?.id !== id || info.parentID !== rootID || info.agent !== "btw")
+        return {
+          status: "unknown",
+          message: "The device returned an unreadable side chat; check the list before retrying.",
+        }
+      setState({
+        team: {
+          ...container.state.team,
+          sideChats: [{ id, title: info.title, updatedAt: info.updatedAt }, ...container.state.team.sideChats],
+        },
+      })
       return { status: "ok", sessionID: id }
     },
     selectWorkspace: (workspaceID) => {
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return
-      if (!container.state.sessionGroups.some((group) => group.id === workspaceID) || container.state.selectedWorkspaceID === workspaceID) return
+      if (
+        !container.state.sessionGroups.some((group) => group.id === workspaceID) ||
+        container.state.selectedWorkspaceID === workspaceID
+      )
+        return
       cancelSearch?.()
       sessionsToken += 1
       sessionPages = []
-      setState({ selectedWorkspaceID: workspaceID, sessions: [], advertised: [], sessionListStatus: "loading", sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false })
+      setState({
+        selectedWorkspaceID: workspaceID,
+        sessions: [],
+        advertised: [],
+        sessionListStatus: "loading",
+        sessionRowsStale: false,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+      })
       void loadSessions(sessionsToken)
     },
     searchSessions: (query, filter = container.state.sessionFilter) => {
@@ -3045,7 +4747,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (container.state.sessionQuery === query && container.state.sessionFilter === filter) return
       cancelSearch?.()
       sessionsToken += 1
-      setState({ sessionQuery: query, sessionFilter: filter, sessionListStatus: "loading", sessionRowsStale: container.state.sessions.length > 0, sessionHasNext: false, sessionHasPrevious: false })
+      setState({
+        sessionQuery: query,
+        sessionFilter: filter,
+        sessionListStatus: "loading",
+        sessionRowsStale: container.state.sessions.length > 0,
+        sessionHasNext: false,
+        sessionHasPrevious: false,
+      })
       cancelSearch = schedule(() => {
         cancelSearch = undefined
         void loadSessions(sessionsToken)
@@ -3053,18 +4762,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     nextSessionsPage: async () => {
       const cursor = sessionPages.at(-1)?.next
-      if (cursor !== undefined && container.state.sessionListStatus === "ready" && container.state.transport.kind === "open") await loadSessions(sessionsToken, cursor)
+      if (
+        cursor !== undefined &&
+        container.state.sessionListStatus === "ready" &&
+        container.state.transport.kind === "open"
+      )
+        await loadSessions(sessionsToken, cursor)
     },
     previousSessionsPage: async () => {
       const cursor = sessionPages[0]?.previous
-      if (cursor !== undefined && container.state.sessionListStatus === "ready" && container.state.transport.kind === "open") await loadSessions(sessionsToken, cursor, "previous")
+      if (
+        cursor !== undefined &&
+        container.state.sessionListStatus === "ready" &&
+        container.state.transport.kind === "open"
+      )
+        await loadSessions(sessionsToken, cursor, "previous")
     },
     setDraft: (sessionID, text) => {
       if (sessionID !== container.state.activeSessionID) return
       const queued = container.state.queuedPromptDrafts
       setState({
         drafts: { ...container.state.drafts, [sessionID]: text },
-        ...(queued?.[sessionID] !== undefined && text !== queued[sessionID] ? { queuedPromptDrafts: Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)) } : {}),
+        ...(queued?.[sessionID] !== undefined && text !== queued[sessionID]
+          ? { queuedPromptDrafts: Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)) }
+          : {}),
       })
     },
     loadCatalog: async (target, options = {}) => {
@@ -3084,18 +4805,38 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (!isCurrentConnection(owner) || container.state.transport.kind !== "open") return
       const generation = catalogGeneration
-      setState({ catalogs: { ...container.state.catalogs, [key]: { status: "loading", agents: [], models: [], commands: [], skills: [], references: [], resources: [] } } })
+      setState({
+        catalogs: {
+          ...container.state.catalogs,
+          [key]: { status: "loading", agents: [], models: [], commands: [], skills: [], references: [], resources: [] },
+        },
+      })
       const read = (async () => {
-        const outcome = await owner.request("sessionID" in target ? "session.catalog" : "workspace.catalog",
-          "sessionID" in target ? { sessionID: target.sessionID } : { input: { workspace: target.workspaceID } })
+        const outcome = await owner.request(
+          "catalog.get",
+          "sessionID" in target ? { sessionID: target.sessionID } : { workspaceID: target.workspaceID },
+        )
         if (generation !== catalogGeneration || !isCurrentConnection(owner)) return
-        const value = outcome.status === "ok" ? readCatalog(outcome.value) : undefined
+        const value =
+          outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null
+            ? readCatalog(Reflect.get(outcome.value, "data"))
+            : undefined
         const previous = container.state.catalogs[key]
         if (previous?.status !== "loading") return
-        setState({ catalogs: { ...container.state.catalogs, [key]: value ?? { ...previous,
-          status: outcome.status === "failed" && outcome.error.code === "unknown_operation" ? "unsupported" : "error",
-          message: outcome.status === "ok" ? "The device returned an unreadable catalog." : describeOutcome(outcome, "Catalog"),
-        } } })
+        setState({
+          catalogs: {
+            ...container.state.catalogs,
+            [key]: value ?? {
+              ...previous,
+              status:
+                outcome.status === "failed" && outcome.error.code === "unknown_operation" ? "unsupported" : "error",
+              message:
+                outcome.status === "ok"
+                  ? "The device returned an unreadable catalog."
+                  : describeOutcome(outcome, "Catalog"),
+            },
+          },
+        })
       })()
       catalogReads.set(key, read)
       await read
@@ -3109,18 +4850,28 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       await fileReads.get(key)
       if (fileTokens.get(key) !== token) return { status: "failed", message: "Search superseded by a newer query." }
       const owner = transport
-      if (owner === undefined || container.state.transport.kind !== "open") return { status: "failed", message: notConnectedPage }
+      if (owner === undefined || container.state.transport.kind !== "open")
+        return { status: "failed", message: notConnectedPage }
       const generation = catalogGeneration
-      const read = owner.request("sessionID" in target ? "session.file.find" : "workspace.file.find", {
-        ...( "sessionID" in target ? { sessionID: target.sessionID } : {}),
-        input: { ...( "workspaceID" in target ? { workspace: target.workspaceID } : {}), query, ...(limit === undefined ? {} : { limit }) },
-      }).then((outcome): FileFindResult => {
-        if (generation !== catalogGeneration || !isCurrentConnection(owner) || fileTokens.get(key) !== token)
-          return { status: "failed", message: "Search superseded by a newer query or connection." }
-        if (outcome.status !== "ok") return { status: outcome.status === "failed" && outcome.error.code === "unknown_operation" ? "unsupported" : "failed", message: describeOutcome(outcome, "File search") }
-        const files = readFileFind(outcome.value)
-        return files === undefined ? { status: "failed", message: "The device returned unreadable file matches." } : { status: "ok", files }
-      })
+      const read = owner
+        .request("fs.find", {
+          ...("sessionID" in target ? { sessionID: target.sessionID } : { workspaceID: target.workspaceID }),
+          input: { query, ...(limit === undefined ? {} : { limit }) },
+        })
+        .then((outcome): FileFindResult => {
+          if (generation !== catalogGeneration || !isCurrentConnection(owner) || fileTokens.get(key) !== token)
+            return { status: "failed", message: "Search superseded by a newer query or connection." }
+          if (outcome.status !== "ok")
+            return {
+              status:
+                outcome.status === "failed" && outcome.error.code === "unknown_operation" ? "unsupported" : "failed",
+              message: describeOutcome(outcome, "File search"),
+            }
+          const files = readFileFind(outcome.value)
+          return files === undefined
+            ? { status: "failed", message: "The device returned unreadable file matches." }
+            : { status: "ok", files }
+        })
       fileReads.set(key, read)
       const result = await read
       if (fileReads.get(key) === read) {
@@ -3130,18 +4881,37 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     createSession: async (input) => {
-      if (container.state.sessionCreation?.status === "creating" || container.state.sessionCreation?.status === "unknown") return undefined
+      if (
+        container.state.sessionCreation?.status === "creating" ||
+        container.state.sessionCreation?.status === "unknown"
+      )
+        return undefined
       const scope = currentScope()
-      const listed = scope === undefined ? undefined : queryClient.getQueryState<readonly RemoteWorkspaceInfo[]>(remoteKeys.workspaces(scope))
-      const workspace = listed?.status === "success" && listed.fetchStatus === "idle" ? listed.data?.find((item) => item.id === input.workspaceID) : undefined
+      const listed =
+        scope === undefined
+          ? undefined
+          : queryClient.getQueryState<readonly WorkspaceView[]>(remoteKeys.workspaces(scope))
+      const workspace =
+        listed?.status === "success" && listed.fetchStatus === "idle"
+          ? listed.data?.find((item) => item.id === input.workspaceID)
+          : undefined
       const deviceID = container.state.activeDeviceID
       if (!workspace || !deviceID) {
         setState({ notice: "Select an available workspace from the connected machine." })
         return undefined
       }
-      return createSession({ id: options.createSessionID?.() ?? `ses_${crypto.randomUUID().replaceAll("-", "")}`, deviceID, workspace, status: "creating",
-        ...(input.agent === undefined ? {} : { agent: input.agent }), ...(input.model === undefined ? {} : { model: input.model }),
-        ...(input.prompt === undefined ? {} : { prompt: input.prompt }) }, false)
+      return createSession(
+        {
+          id: options.createSessionID?.() ?? `ses_${crypto.randomUUID().replaceAll("-", "")}`,
+          deviceID,
+          workspace,
+          status: "creating",
+          ...(input.agent === undefined ? {} : { agent: input.agent }),
+          ...(input.model === undefined ? {} : { model: input.model }),
+          ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+        },
+        false,
+      )
     },
     retrySessionCreation: async () => {
       const attempt = container.state.sessionCreation
@@ -3153,37 +4923,77 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     reloadMessages,
     loadOlderMessages,
-    loadOversizedMessage,
-    loadImageSource: (input) => {
+    loadImageSource: async (input) => {
       if (imageScope?.deviceID !== input.deviceID || imageScope.sessionID !== input.sessionID) {
         clearImageSources()
         imageScope = { deviceID: input.deviceID, sessionID: input.sessionID }
       }
-      if (!/^[0-9a-f]{64}$/.test(input.digest) || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(input.mime))
+      if (
+        !/^[0-9a-f]{64}$/.test(input.digest) ||
+        !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(input.mime)
+      )
         return Promise.reject(new Error("Invalid attachment"))
       const cached = imageSources.get(input.digest)
       if (cached !== undefined) {
         if (cached.mime !== input.mime) return Promise.reject(new Error("Invalid attachment"))
         imageSources.delete(input.digest)
         imageSources.set(input.digest, cached)
-        return cached.promise
+        const blob = await cached.promise
+        if (cached.controller.signal.aborted) throw new Error("Attachment unavailable")
+        const source = URL.createObjectURL(blob)
+        imageURLs.add(source)
+        return {
+          source,
+          release: () => {
+            if (imageURLs.delete(source)) URL.revokeObjectURL(source)
+          },
+        }
       }
+      const owner = transport
+      if (
+        !owner ||
+        input.deviceID !== container.state.activeDeviceID ||
+        input.sessionID !== container.state.activeSessionID
+      )
+        throw new Error("Attachment unavailable")
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 120_000)
       const promise = (async () => {
-        const response = await (options.fetch ?? fetch)(`/api/remote/devices/${encodeURIComponent(input.deviceID)}/sessions/${encodeURIComponent(input.sessionID)}/attachments/${input.digest}`,
-          { credentials: "same-origin", signal: controller.signal })
-        if (!response.ok) throw new Error("Attachment unavailable")
-        const payload: unknown = await response.json()
-        if (typeof payload !== "object" || payload === null || !("mime" in payload) || !("data" in payload) || !("bytes" in payload) ||
-          payload.mime !== input.mime || typeof payload.bytes !== "number" || !Number.isSafeInteger(payload.bytes) || payload.bytes < 0 || payload.bytes > 10 * 1024 * 1024 ||
-          typeof payload.data !== "string" || payload.data.length > 14 * 1024 * 1024 ||
-          !isWellFormedBase64(payload.data) || controller.signal.aborted)
-          throw new Error("Invalid attachment")
-        const source = `data:${input.mime};base64,${payload.data}`
+        const outcome = await owner.request("session.attachment.read", {
+          sessionID: input.sessionID,
+          input: { digest: input.digest },
+          signal: controller.signal,
+          timeoutMs: 120_000,
+        })
+        if (
+          outcome.status !== "ok" ||
+          typeof outcome.value !== "object" ||
+          outcome.value === null ||
+          !("release" in outcome.value) ||
+          typeof outcome.value.release !== "function"
+        )
+          throw new Error("Attachment unavailable")
+        const asset = outcome.value
+        const release = outcome.value.release
+        const blob = (() => {
+          try {
+            if (
+              !("data" in asset) ||
+              !(asset.data instanceof Uint8Array) ||
+              asset.data.byteLength > 10 * 1024 * 1024 ||
+              !("mime" in asset) ||
+              asset.mime !== input.mime ||
+              controller.signal.aborted
+            )
+              throw new Error("Invalid attachment")
+            return new Blob([Uint8Array.from(asset.data).buffer], { type: input.mime })
+          } finally {
+            release()
+          }
+        })()
         const entry = imageSources.get(input.digest)
         if (entry?.controller === controller) {
-          imageSources.set(input.digest, { ...entry, size: source.length })
+          imageSources.set(input.digest, { ...entry, size: blob.size })
           let size = [...imageSources.values()].reduce((total, value) => total + (value.size ?? 0), 0)
           let count = [...imageSources.values()].filter((value) => value.size !== undefined).length
           for (const [digest, value] of imageSources) {
@@ -3194,35 +5004,83 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             count--
           }
         }
-        return source
-      })().catch((error: unknown) => {
-        if (imageSources.get(input.digest)?.promise === promise) imageSources.delete(input.digest)
-        throw error
-      }).finally(() => clearTimeout(timeout))
+        return blob
+      })()
+        .catch((error: unknown) => {
+          if (imageSources.get(input.digest)?.promise === promise) imageSources.delete(input.digest)
+          throw error
+        })
+        .finally(() => clearTimeout(timeout))
       imageSources.set(input.digest, { mime: input.mime, controller, promise })
-      return promise
+      const blob = await promise
+      if (controller.signal.aborted) throw new Error("Attachment unavailable")
+      const source = URL.createObjectURL(blob)
+      imageURLs.add(source)
+      return {
+        source,
+        release: () => {
+          if (imageURLs.delete(source)) URL.revokeObjectURL(source)
+        },
+      }
     },
     loadShellOutputPage,
     switchModel: async (model) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return false
-      const outcome = await request({ id: `model_${now()}_${createMessageID()}`, kind: "model", label: "Switch model", state: "sending",
-        sessionID, operation: "session.switchModel", input: { model } }, { sessionID })
+      const outcome = await request(
+        {
+          id: `model_${now()}_${createMessageID()}`,
+          kind: "model",
+          label: "Switch model",
+          state: "sending",
+          sessionID,
+          operation: "session.switchModel",
+          input: { model },
+        },
+        { sessionID },
+      )
       return outcome.status === "ok"
     },
     switchAgent: async (agent) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return false
-      const outcome = await request({ id: `agent_${now()}_${createMessageID()}`, kind: "agent", label: "Switch agent", state: "sending",
-        sessionID, operation: "session.switchAgent", input: { agent } }, { sessionID })
+      const outcome = await request(
+        {
+          id: `agent_${now()}_${createMessageID()}`,
+          kind: "agent",
+          label: "Switch agent",
+          state: "sending",
+          sessionID,
+          operation: "session.switchAgent",
+          input: { agent },
+        },
+        { sessionID },
+      )
       return outcome.status === "ok"
     },
     activateSkill: async (skill) => {
       const sessionID = container.state.activeSessionID
-      if (sessionID === undefined || !skill.trim() || container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
+      if (
+        sessionID === undefined ||
+        !skill.trim() ||
+        container.state.transport.kind !== "open" ||
+        container.state.connection.kind === "offline"
+      )
+        return false
       const id = createMessageID()
-      return acceptSend({ id, kind: "skill", label: `Load ${skill}`, state: "sending", phase: "admitting", sessionID,
-        operation: "session.skill", input: { id, skill } }, {})
+      return acceptSend(
+        {
+          id,
+          kind: "skill",
+          label: `Load ${skill}`,
+          state: "sending",
+          phase: "admitting",
+          sessionID,
+          operation: "session.skill",
+          input: { id, skill },
+        },
+        {},
+      )
     },
     sendPrompt: async (input) => {
       const sessionID = container.state.activeSessionID
@@ -3233,46 +5091,127 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
       if (text.length === 0 && !input.files?.length && !input.agents?.length && !input.skills?.length) return false
-      if (input.skills !== undefined && (input.skills.length > RemoteLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))) return false
+      if (
+        input.skills !== undefined &&
+        (input.skills.length > WebLimits.maxPromptSkills || input.skills.some((id) => !id.trim() || id.length > 128))
+      )
+        return false
       const queuedDraft = container.state.queuedPromptDrafts?.[sessionID]
       const delivery = queuedDraft !== undefined && queuedDraft.trim() === text ? "queue" : input.delivery
-      if (!requestFits("session.prompt", sessionID, { text, delivery, agents: input.agents, skills: input.skills }, input.files)) return false
+      const metadata = input.skills?.length ? { skills: input.skills.map((id) => ({ id })) } : undefined
+      if (!requestFits("session.prompt", sessionID, { text, delivery, agents: input.agents, metadata }, input.files))
+        return false
       const messageID = createMessageID()
-      const accepted = acceptSend({ id: messageID, kind: "prompt", label: delivery === "queue" ? "Queued prompt" : "Prompt", state: "sending", phase: "preparing",
-        created: now(), sessionID, operation: "session.prompt", input: { id: messageID, text, delivery,
-          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }),
-          ...(input.skills?.length ? { skills: input.skills } : {}) } }, input)
+      const accepted = acceptSend(
+        {
+          id: messageID,
+          kind: "prompt",
+          label: delivery === "queue" ? "Queued prompt" : "Prompt",
+          state: "sending",
+          phase: "preparing",
+          created: now(),
+          sessionID,
+          operation: "session.prompt",
+          input: {
+            id: messageID,
+            text,
+            delivery,
+            ...(input.files === undefined ? {} : { files: input.files }),
+            ...(input.agents === undefined ? {} : { agents: input.agents }),
+            ...(metadata === undefined ? {} : { metadata }),
+          },
+        },
+        input,
+      )
       if (accepted && queuedDraft !== undefined && queuedDraft.trim() === text) {
         const queued = container.state.queuedPromptDrafts
-        setState({ queuedPromptDrafts: Object.fromEntries(Object.entries(queued ?? {}).filter(([id]) => id !== sessionID)) })
+        setState({
+          queuedPromptDrafts: Object.fromEntries(Object.entries(queued ?? {}).filter(([id]) => id !== sessionID)),
+        })
       }
       return accepted
     },
     runCommand: async (input) => {
       const sessionID = container.state.activeSessionID
-      if (sessionID === undefined || !input.command.trim() || container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
-      if (!requestFits("session.command", sessionID, { command: input.command, arguments: input.arguments, delivery: input.delivery, agents: input.agents }, input.files)) return false
+      if (
+        sessionID === undefined ||
+        !input.command.trim() ||
+        container.state.transport.kind !== "open" ||
+        container.state.connection.kind === "offline"
+      )
+        return false
+      if (
+        !requestFits(
+          "session.command",
+          sessionID,
+          { command: input.command, arguments: input.arguments, delivery: input.delivery, agents: input.agents },
+          input.files,
+        )
+      )
+        return false
       const id = createMessageID()
-      return acceptSend({ id, kind: "command", label: `/${input.command}`, state: "sending", phase: "preparing", created: now(), sessionID, operation: "session.command",
-        input: { id, command: input.command, delivery: input.delivery,
-          ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
-          ...(input.files === undefined ? {} : { files: input.files }), ...(input.agents === undefined ? {} : { agents: input.agents }) },
-      }, input)
+      return acceptSend(
+        {
+          id,
+          kind: "command",
+          label: `/${input.command}`,
+          state: "sending",
+          phase: "preparing",
+          created: now(),
+          sessionID,
+          operation: "session.command",
+          input: {
+            id,
+            command: input.command,
+            delivery: input.delivery,
+            ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
+            ...(input.files === undefined ? {} : { files: input.files }),
+            ...(input.agents === undefined ? {} : { agents: input.agents }),
+          },
+        },
+        input,
+      )
     },
     cancelUpload: () => cancelUpload(),
     compactSession: async () => {
       const sessionID = container.state.activeSessionID
-      if (sessionID === undefined || container.state.transport.kind !== "open" || container.state.connection.kind === "offline") return false
-      if (container.state.mutations.some((entry) => entry.operation === "session.compact" && entry.sessionID === sessionID && entry.state === "sending")) return false
+      if (
+        sessionID === undefined ||
+        container.state.transport.kind !== "open" ||
+        container.state.connection.kind === "offline"
+      )
+        return false
+      if (
+        container.state.mutations.some(
+          (entry) =>
+            entry.operation === "session.compact" && entry.sessionID === sessionID && entry.state === "sending",
+        )
+      )
+        return false
       const id = `cmp_${crypto.randomUUID().replaceAll("-", "")}`
-      const outcome = await request({ id, kind: "compact", label: "Compact context", state: "sending", sessionID,
-        operation: "session.compact", input: { id } }, { sessionID })
+      const outcome = await request(
+        {
+          id,
+          kind: "compact",
+          label: "Compact context",
+          state: "sending",
+          sessionID,
+          operation: "session.compact",
+          input: { id },
+        },
+        { sessionID },
+      )
       return outcome.status === "ok"
     },
     retryMutation: async (id) => {
       const progress = sends.get(id)
       if (progress) {
-        if (progress.deviceID !== container.state.activeDeviceID || progress.mutation.sessionID !== container.state.activeSessionID || container.state.transport.kind !== "open") return
+        if (
+          progress.deviceID !== container.state.activeDeviceID ||
+          progress.mutation.sessionID !== container.state.activeSessionID ||
+          container.state.transport.kind !== "open"
+        )
+          return
         await progressSend(progress)
         return
       }
@@ -3283,9 +5222,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     dismissMutation: (id) => {
       const progress = sends.get(id)
       sends.delete(id)
-      setState({ mutations: container.state.mutations.filter((entry) => entry.id !== id),
-        ...(progress === undefined || progress.deviceID !== container.state.activeDeviceID || container.state.view?.id !== progress.mutation.sessionID ? {} : { view: { ...container.state.view,
-          messages: container.state.view.messages.filter((message) => message.id !== id || message.kind !== "user" || message.state !== "pending") } }) })
+      setState({
+        mutations: container.state.mutations.filter((entry) => entry.id !== id),
+        ...(progress === undefined ||
+        progress.deviceID !== container.state.activeDeviceID ||
+        container.state.view?.id !== progress.mutation.sessionID
+          ? {}
+          : {
+              view: {
+                ...container.state.view,
+                messages: container.state.view.messages.filter(
+                  (message) => message.id !== id || message.kind !== "user" || message.state !== "pending",
+                ),
+              },
+            }),
+      })
     },
     dismissMutationToast: (id) => {
       setState({ mutationToasts: (container.state.mutationToasts ?? []).filter((entry) => entry.id !== id) })
@@ -3301,7 +5252,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       await readNotices("notice.read", { ids: [id] })
     },
     readAllNotifications: async () => {
-      delivery.remove(delivery.entries().filter((entry) => !entry.synced).map((entry) => entry.id))
+      delivery.remove(
+        delivery
+          .entries()
+          .filter((entry) => !entry.synced)
+          .map((entry) => entry.id),
+      )
       publishNotices()
       await readNotices("notice.readAll")
     },
@@ -3330,23 +5286,32 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (!sessionID || !scope || !source) return
       const current = container.state.dismissedPredictions
       if (current.some((item) => item.sessionID === sessionID && item.scope === scope && item.source === source)) return
-      setState({ dismissedPredictions: [...current.filter((item) => item.scope !== scope), { sessionID, scope, source }].slice(-32) })
+      setState({
+        dismissedPredictions: [...current.filter((item) => item.scope !== scope), { sessionID, scope, source }].slice(
+          -32,
+        ),
+      })
     },
     requestPrediction: async (input) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return false
       const token = selectionToken
       const hint = input.hint?.trim().slice(0, 2000)
-      setState({ dismissedPredictions: container.state.dismissedPredictions.filter((item) => item.sessionID !== sessionID) })
-      const outcome = await request({
-        id: `prediction_${now()}_${createMessageID()}`,
-        kind: "prediction",
-        label: "Suggest next message",
-        state: "sending",
-        sessionID,
-        operation: "session.prediction",
-        input: { memory: [...input.memory], ...(hint ? { hint } : {}) },
-      }, { sessionID })
+      setState({
+        dismissedPredictions: container.state.dismissedPredictions.filter((item) => item.sessionID !== sessionID),
+      })
+      const outcome = await request(
+        {
+          id: `prediction_${now()}_${createMessageID()}`,
+          kind: "prediction",
+          label: "Suggest next message",
+          state: "sending",
+          sessionID,
+          operation: "session.prediction",
+          input: { memory: [...input.memory], ...(hint ? { hint } : {}) },
+        },
+        { sessionID },
+      )
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
       if (outcome.status === "ok" && predictionUnavailable(outcome.value)) {
         setState({ notice: "No suggestion available for the latest reply" })
@@ -3373,15 +5338,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (sessionID === undefined) return false
       const token = selectionToken
-      const outcome = await request({
-        id: `prompt_generate_${now()}_${createMessageID()}`,
-        kind: "promptGenerate",
-        label: "Generate prompt",
-        state: "sending",
-        sessionID,
-        operation: "session.promptGenerate",
-        input: { mode: input.mode, intent, memory: [...input.memory] },
-      }, { sessionID })
+      const outcome = await request(
+        {
+          id: `prompt_generate_${now()}_${createMessageID()}`,
+          kind: "promptGenerate",
+          label: "Generate prompt",
+          state: "sending",
+          sessionID,
+          operation: "session.promptGenerate",
+          input: { mode: input.mode, intent, memory: [...input.memory] },
+        },
+        { sessionID },
+      )
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return false
       if (outcome.status !== "ok") return false
       if (predictionUnavailable(outcome.value)) {
@@ -3398,7 +5366,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const queued = container.state.queuedPromptDrafts ?? {}
       setState({
         drafts: { ...container.state.drafts, [sessionID]: next },
-        queuedPromptDrafts: input.mode === "queue" ? { ...queued, [sessionID]: next } : Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)),
+        queuedPromptDrafts:
+          input.mode === "queue"
+            ? { ...queued, [sessionID]: next }
+            : Object.fromEntries(Object.entries(queued).filter(([id]) => id !== sessionID)),
         promptDraftFocus: { sessionID, revision: (container.state.promptDraftFocus?.revision ?? 0) + 1 },
       })
       return true
@@ -3423,9 +5394,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     replyGuardrail: async (id, reply) => {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined) return
-      const pending = container.state.view?.id === sessionID ? container.state.view.requests.find((entry) => entry.kind === "guardrail" && entry.id === id) : undefined
+      const pending =
+        container.state.view?.id === sessionID
+          ? container.state.view.requests.find((entry) => entry.kind === "guardrail" && entry.id === id)
+          : undefined
       if (pending?.kind !== "guardrail" || !canReplyToRequest(pending, sessionID)) {
-        setState({ notice: "This review is no longer pending in the selected Session's family. Reload before replying." })
+        setState({
+          notice: "This review is no longer pending in the selected Session's family. Reload before replying.",
+        })
         return
       }
       if (pending.hardReview && reply === "always") {
@@ -3433,10 +5409,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return
       }
       if (reply !== "reject" && !guardrailContextAvailable(pending)) {
-        setState({ notice: "This review has no concrete targets or command to inspect. Reject it or reload before approving." })
+        setState({
+          notice: "This review has no concrete targets or command to inspect. Reject it or reload before approving.",
+        })
         return
       }
-      if (container.state.mutations.some((entry) => entry.kind === "guardrail" && entry.input.requestID === id && entry.state === "sending")) return
+      if (
+        container.state.mutations.some(
+          (entry) => entry.kind === "guardrail" && entry.input.requestID === id && entry.state === "sending",
+        )
+      )
+        return
       const token = selectionToken
       const owner = transport
       const outcome = await request(
@@ -3446,12 +5429,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           label: `Guardrail ${reply}`,
           state: "sending",
           sessionID,
-          operation: "session.guardrail.reply",
+          operation: "session.guardrail.request.reply",
           input: { requestID: id, reply },
         },
         { sessionID },
       )
-      if (token === selectionToken && container.state.activeSessionID === sessionID && owner !== undefined && isCurrentConnection(owner)) settleRequest(id, outcome)
+      if (
+        token === selectionToken &&
+        container.state.activeSessionID === sessionID &&
+        owner !== undefined &&
+        isCurrentConnection(owner)
+      )
+        settleRequest(id, outcome)
     },
     replyForm: async (formID, answer) => {
       const sessionID = container.state.activeSessionID
@@ -3475,7 +5464,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const sessionID = container.state.activeSessionID
       if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
       const token = selectionToken
-      const outcome = await request({ id: `form_cancel_${formID}_${now()}`, kind: "form", label: "Cancel form", state: "sending", sessionID, operation: "session.form.cancel", input: { formID } }, { sessionID })
+      const outcome = await request(
+        {
+          id: `form_cancel_${formID}_${now()}`,
+          kind: "form",
+          label: "Cancel form",
+          state: "sending",
+          sessionID,
+          operation: "session.form.cancel",
+          input: { formID },
+        },
+        { sessionID },
+      )
       if (token === selectionToken && container.state.activeSessionID === sessionID) settleRequest(formID, outcome)
     },
     setYolo: async (level) => {
@@ -3518,7 +5518,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           label: "Stop goal",
           state: "sending",
           sessionID,
-          operation: "session.goal.stop",
+          operation: "session.autonomy.set",
           input: { goal: null },
         },
         { sessionID },
@@ -3537,8 +5537,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const abandoned = new Set(sends.keys())
       sends.clear()
       clearImageSources()
-      oversizedReads.forEach((controller) => controller.abort())
-      oversizedReads.clear()
       cancelUpload("Attachment upload was cancelled by workspace disposal. Files were not sent.")
       clearCatalogs()
       endQueries(currentScope())
@@ -3560,10 +5558,27 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       transport?.close(1000, "disposed")
       transport = undefined
       subscribedSessionID = undefined
-      setState({ drafts: {}, queuedPromptDrafts: {}, promptDraftFocus: undefined, sessionCreation: undefined,
-        mutations: container.state.mutations.filter((mutation) => mutation.operation !== "session.goal.set" && !abandoned.has(mutation.id)),
-        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !abandoned.has(toast.id) && !container.state.mutations.some((mutation) => mutation.operation === "session.goal.set" && mutation.id === toast.id)),
-        team: undefined, familyActivity: undefined, teamCues: [] })
+      setState({
+        drafts: {},
+        queuedPromptDrafts: {},
+        promptDraftFocus: undefined,
+        sessionCreation: undefined,
+        mutations: container.state.mutations.filter(
+          (mutation) =>
+            (mutation.kind !== "goal" || typeof mutation.input.goal !== "string") && !abandoned.has(mutation.id),
+        ),
+        mutationToasts: (container.state.mutationToasts ?? []).filter(
+          (toast) =>
+            !abandoned.has(toast.id) &&
+            !container.state.mutations.some(
+              (mutation) =>
+                mutation.kind === "goal" && typeof mutation.input.goal === "string" && mutation.id === toast.id,
+            ),
+        ),
+        team: undefined,
+        familyActivity: undefined,
+        teamCues: [],
+      })
       endAlerts(false, false)
       subscriptions.forEach((subscription) => subscription.unsubscribe())
       subscriptions.clear()
@@ -3576,7 +5591,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * that event is in flight.
    */
   const ownsPendingForm = (formID: string, sessionID: string) => {
-    if (container.state.view?.id === sessionID && container.state.view.requests.some((request) => request.kind === "form" && request.id === formID && request.form.sessionID === sessionID)) return true
+    if (
+      container.state.view?.id === sessionID &&
+      container.state.view.requests.some(
+        (request) => request.kind === "form" && request.id === formID && request.form.sessionID === sessionID,
+      )
+    )
+      return true
     setState({ notice: "This form is no longer pending or belongs to another session." })
     return false
   }
@@ -3585,7 +5606,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (outcome.status !== "ok") return
     const view = container.state.view
     if (view === undefined) return
-    setState({ view: replaceRequests(view, view.requests.filter((request) => request.id !== requestID)) })
+    setState({
+      view: replaceRequests(
+        view,
+        view.requests.filter((request) => request.id !== requestID),
+      ),
+    })
   }
 
   const applyAutonomyResponse = (outcome: RemoteRequestOutcome, sessionID: string) => {
@@ -3599,12 +5625,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ view: { ...view, autonomy }, notice: undefined })
   }
 
-  const goalRequests = (sessionID: string) => container.state.mutations.filter((mutation) =>
-    mutation.kind === "goal" && mutation.operation === "session.goal.set" && mutation.sessionID === sessionID)
+  const goalRequests = (sessionID: string) =>
+    container.state.mutations.filter(
+      (mutation) =>
+        mutation.kind === "goal" && typeof mutation.input.goal === "string" && mutation.sessionID === sessionID,
+    )
 
   const refreshAutonomy = async (owner: RemoteTransport, sessionID: string, token: number) => {
     const read = await owner.request("session.autonomy.get", { sessionID })
-    if (token !== selectionToken || container.state.activeSessionID !== sessionID || !isCurrentConnection(owner) || read.status !== "ok") return
+    if (
+      token !== selectionToken ||
+      container.state.activeSessionID !== sessionID ||
+      !isCurrentConnection(owner) ||
+      read.status !== "ok"
+    )
+      return
     applyAutonomyResponse(read, sessionID)
   }
 
@@ -3621,17 +5656,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         label: "Set goal",
         state: "sending",
         sessionID,
-        operation: "session.goal.set",
+        operation: "session.autonomy.set",
         input: { goal: text },
       },
       { sessionID },
     )
     if (owner !== transport || container.state.activeDeviceID !== deviceID) return
     applyAutonomyResponse(outcome, sessionID)
-    if (outcome.status === "unknown" || outcome.status === "failed" && outcome.error.code === "outcome_unknown") {
+    if (outcome.status === "unknown" || (outcome.status === "failed" && outcome.error.code === "outcome_unknown")) {
       if (outcome.status === "failed") finishMutation(id, "unknown", outcome.error.message)
       if (owner !== undefined) await refreshAutonomy(owner, sessionID, token)
-      if (owner !== undefined && token === selectionToken && container.state.activeSessionID === sessionID && isCurrentConnection(owner) && container.state.mutations.some((mutation) => mutation.id === id))
+      if (
+        owner !== undefined &&
+        token === selectionToken &&
+        container.state.activeSessionID === sessionID &&
+        isCurrentConnection(owner) &&
+        container.state.mutations.some((mutation) => mutation.id === id)
+      )
         finishMutation(id, "unknown", "The goal request was not confirmed. Check the Session goal before retrying.")
     }
     if (owner !== transport || container.state.activeDeviceID !== deviceID) return
@@ -3653,7 +5694,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ notice: "Reconnected." })
       return
     }
-    const resubscribed = await owner.request("session.subscribe", { sessionID })
+    const resubscribed = await owner.request("event.subscribe", { sessionID })
+    registerSubscription(owner, sessionID, resubscribed)
     if (!isCurrentConnection(owner)) return
     if (container.state.activeSessionID !== sessionID) {
       // A superseded reload registered a subscription this store no longer shows, so
@@ -3676,41 +5718,49 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const remaining = container.state.notice
     setState({
-      notice:
-        remaining === undefined
-          ? "Reconnected. The connection is live again."
-          : `Reconnected. ${remaining}`,
+      notice: remaining === undefined ? "Reconnected. The connection is live again." : `Reconnected. ${remaining}`,
     })
   }
-
 }
 
-export function notificationSessionTitle(state: {
-  readonly sessions: readonly { readonly id: string; readonly title: string }[]
-  readonly carouselSessions?: readonly { readonly id: string; readonly title: string }[]
-  readonly selectedSessionInfo?: { readonly id: string; readonly title: string }
-}, sessionID: string): string | undefined {
-  return state.sessions.find((row) => row.id === sessionID)?.title ?? state.carouselSessions?.find((row) => row.id === sessionID)?.title ??
+export function notificationSessionTitle(
+  state: {
+    readonly sessions: readonly { readonly id: string; readonly title: string }[]
+    readonly carouselSessions?: readonly { readonly id: string; readonly title: string }[]
+    readonly selectedSessionInfo?: { readonly id: string; readonly title: string }
+  },
+  sessionID: string,
+): string | undefined {
+  return (
+    state.sessions.find((row) => row.id === sessionID)?.title ??
+    state.carouselSessions?.find((row) => row.id === sessionID)?.title ??
     (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo.title : undefined)
+  )
 }
 
-export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean } = {}): SessionInfoView | undefined {
+export function readSessionInfo(
+  value: unknown,
+  options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean } = {},
+): SessionInfoView | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
   const id = typeof record.id === "string" && record.id.length > 0 ? record.id : undefined
   if (id === undefined) return undefined
   const time = typeof record.time === "object" && record.time !== null ? (record.time as Record<string, unknown>) : {}
-  const location = typeof record.location === "object" && record.location !== null
-    ? record.location as Record<string, unknown>
-    : {}
+  const location =
+    typeof record.location === "object" && record.location !== null ? (record.location as Record<string, unknown>) : {}
   const model = readModelRef(record.model)
   return {
     id,
     ...(typeof record.parentID === "string" && record.parentID.length > 0 ? { parentID: record.parentID } : {}),
     title: typeof record.title === "string" && record.title.length > 0 ? record.title : id,
     ...(typeof record.projectID === "string" && record.projectID.length > 0 ? { projectID: record.projectID } : {}),
-    ...(typeof location.directory === "string" && location.directory.length > 0 ? { directory: location.directory } : {}),
-    ...(typeof location.workspaceID === "string" && location.workspaceID.length > 0 ? { workspaceID: location.workspaceID } : {}),
+    ...(typeof location.directory === "string" && location.directory.length > 0
+      ? { directory: location.directory }
+      : {}),
+    ...(typeof location.workspaceID === "string" && location.workspaceID.length > 0
+      ? { workspaceID: location.workspaceID }
+      : {}),
     ...(typeof record.agent === "string" ? { agent: record.agent } : {}),
     ...(model === undefined ? {} : { model, modelLabel: modelLabel(model) }),
     updatedAt: typeof time.updated === "number" ? time.updated : 0,
@@ -3738,21 +5788,54 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
   const startedAt = typeof time === "object" && time !== null ? Reflect.get(time, "created") : undefined
   const updatedAt = typeof time === "object" && time !== null ? Reflect.get(time, "updated") : undefined
   const pinnedAt = Reflect.get(value, "pinnedAt")
-  if (typeof sessionID !== "string" || sessionID.length === 0 || typeof parentID !== "string" || parentID.length === 0 ||
-    typeof description !== "string" || (agent !== undefined && typeof agent !== "string") ||
-    (state !== "starting" && state !== "running" && state !== "waiting" && state !== "cancelling" &&
-      state !== "cancelled" && state !== "completed" && state !== "failed" && state !== "lost") ||
-    typeof revision !== "number" || !Number.isInteger(revision) || revision < 0 ||
-    typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return undefined
+  if (
+    typeof sessionID !== "string" ||
+    sessionID.length === 0 ||
+    typeof parentID !== "string" ||
+    parentID.length === 0 ||
+    typeof description !== "string" ||
+    (agent !== undefined && typeof agent !== "string") ||
+    (state !== "starting" &&
+      state !== "running" &&
+      state !== "waiting" &&
+      state !== "cancelling" &&
+      state !== "cancelled" &&
+      state !== "completed" &&
+      state !== "failed" &&
+      state !== "lost") ||
+    typeof revision !== "number" ||
+    !Number.isInteger(revision) ||
+    revision < 0 ||
+    typeof updatedAt !== "number" ||
+    !Number.isFinite(updatedAt)
+  )
+    return undefined
   const model = readModelRef(Reflect.get(value, "model"))
-  return { sessionID, parentID, description, ...(agent === undefined ? {} : { agent }),
-    ...(model === undefined ? {} : { modelLabel: modelLabel(model) }), state, revision, updatedAt,
+  return {
+    sessionID,
+    parentID,
+    description,
+    ...(agent === undefined ? {} : { agent }),
+    ...(model === undefined ? {} : { modelLabel: modelLabel(model) }),
+    state,
+    revision,
+    updatedAt,
     ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
     ...(typeof pinnedAt === "number" && Number.isFinite(pinnedAt) ? { pinnedAt } : {}),
-    ...(typeof questionID === "string" && typeof questionText === "string" && state === "waiting" ? { question: { id: questionID, text: questionText } } : {}) }
+    ...(typeof questionID === "string" && typeof questionText === "string" && state === "waiting"
+      ? { question: { id: questionID, text: questionText } }
+      : {}),
+  }
 }
 
-function readTeamEconomics(value: unknown): (Pick<TeamTaskView, "sessionID" | "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens">) | undefined {
+function readTeamEconomics(
+  value: unknown,
+):
+  | Pick<
+      TeamTaskView,
+      "sessionID" | "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens"
+    >
+  | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const sessionID = Reflect.get(value, "sessionID")
   if (typeof sessionID !== "string") return undefined
@@ -3764,20 +5847,33 @@ function readTeamEconomics(value: unknown): (Pick<TeamTaskView, "sessionID" | "c
   const cost = Reflect.get(value, "cost")
   const tokenUsage = Reflect.get(value, "tokens")
   const cache = typeof tokenUsage === "object" && tokenUsage !== null ? Reflect.get(tokenUsage, "cache") : undefined
-  const tokens = typeof tokenUsage === "object" && tokenUsage !== null && typeof cache === "object" && cache !== null
-    ? ["input", "output", "reasoning"].map((key) => Reflect.get(tokenUsage, key)).concat([Reflect.get(cache, "read"), Reflect.get(cache, "write")]) : []
-  return { sessionID,
+  const tokens =
+    typeof tokenUsage === "object" && tokenUsage !== null && typeof cache === "object" && cache !== null
+      ? ["input", "output", "reasoning"]
+          .map((key) => Reflect.get(tokenUsage, key))
+          .concat([Reflect.get(cache, "read"), Reflect.get(cache, "write")])
+      : []
+  return {
+    sessionID,
     ...(typeof cacheHitRatio === "number" && cacheHitRatio >= 0 && cacheHitRatio <= 1 ? { cacheHitRatio } : {}),
     ...(typeof cacheRead === "number" && cacheRead >= 0 ? { cacheRead } : {}),
     ...(typeof cacheWrite === "number" && cacheWrite >= 0 ? { cacheWrite } : {}),
     ...(typeof contextTotal === "number" && contextTotal >= 0 ? { contextTotal } : {}),
     ...(typeof contextLimit === "number" && contextLimit >= 0 ? { contextLimit } : {}),
     ...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { cost } : {}),
-    ...(tokens.length === 5 && tokens.every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0) ? { tokens: tokens.reduce((total, count) => total + count, 0) } : {}),
+    ...(tokens.length === 5 &&
+    tokens.every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0)
+      ? { tokens: tokens.reduce((total, count) => total + count, 0) }
+      : {}),
   }
 }
 
-function retainedEconomics(task: TeamTaskView | undefined): Pick<TeamTaskView, "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens"> {
+function retainedEconomics(
+  task: TeamTaskView | undefined,
+): Pick<
+  TeamTaskView,
+  "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens"
+> {
   if (task === undefined) return {}
   return {
     ...(task.cacheHitRatio === undefined ? {} : { cacheHitRatio: task.cacheHitRatio }),
@@ -3798,10 +5894,23 @@ function readTeamShell(value: unknown): TeamView["shells"][number] | undefined {
   const status = Reflect.get(value, "status")
   const startedAt = Reflect.get(value, "startedAt")
   const completedAt = Reflect.get(value, "completedAt")
-  if (typeof id !== "string" || typeof ownerID !== "string" || typeof command !== "string" ||
-    !["running", "exited", "timeout", "memory-limit", "killed"].includes(status) || typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined
-  return { id, ownerID, command, status,
-    startedAt, ...(typeof completedAt === "number" && Number.isFinite(completedAt) ? { completedAt } : {}) } as TeamView["shells"][number]
+  if (
+    typeof id !== "string" ||
+    typeof ownerID !== "string" ||
+    typeof command !== "string" ||
+    !["running", "exited", "timeout", "memory-limit", "killed"].includes(status) ||
+    typeof startedAt !== "number" ||
+    !Number.isFinite(startedAt)
+  )
+    return undefined
+  return {
+    id,
+    ownerID,
+    command,
+    status,
+    startedAt,
+    ...(typeof completedAt === "number" && Number.isFinite(completedAt) ? { completedAt } : {}),
+  } as TeamView["shells"][number]
 }
 
 function readTeamSideChat(value: unknown): TeamView["sideChats"][number] | undefined {
@@ -3809,7 +5918,13 @@ function readTeamSideChat(value: unknown): TeamView["sideChats"][number] | undef
   const id = Reflect.get(value, "id")
   const title = Reflect.get(value, "title")
   const updatedAt = Reflect.get(value, "updatedAt")
-  if (typeof id !== "string" || typeof title !== "string" || typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return undefined
+  if (
+    typeof id !== "string" ||
+    typeof title !== "string" ||
+    typeof updatedAt !== "number" ||
+    !Number.isFinite(updatedAt)
+  )
+    return undefined
   return { id, title, updatedAt }
 }
 
@@ -3821,24 +5936,48 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   const attention = Reflect.get(body, "attention")
   const outstanding = Reflect.get(body, "outstanding")
   const failed = Reflect.get(body, "failed")
-  if (!Array.isArray(running) || !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
-    !Array.isArray(attention) || !attention.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
-    (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
-    (failed !== undefined && (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
-  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
+  if (
+    !Array.isArray(running) ||
+    !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
+    !Array.isArray(attention) ||
+    !attention.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
+    (outstanding !== undefined &&
+      (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
+    (failed !== undefined &&
+      (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))
+  )
+    return undefined
+  return {
+    running: new Set(running),
+    attention: new Set(attention),
+    outstanding: new Set(outstanding ?? []),
+    failed: new Set(failed ?? []),
+  }
 }
 
-function validTelemetryConsent(value: unknown): value is RemoteTelemetryConsent {
-  return typeof value === "object" && value !== null && !Array.isArray(value) &&
-    Object.keys(value).length === 3 && typeof Reflect.get(value, "enabled") === "boolean" &&
-    Reflect.get(value, "noticeVersion") === 1 && typeof Reflect.get(value, "decidedAt") === "number" &&
-    Number.isSafeInteger(Reflect.get(value, "decidedAt")) && Reflect.get(value, "decidedAt") >= 0
+function validTelemetryConsent(value: unknown): value is TelemetryConsentView {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 3 &&
+    typeof Reflect.get(value, "enabled") === "boolean" &&
+    Reflect.get(value, "noticeVersion") === 1 &&
+    typeof Reflect.get(value, "decidedAt") === "number" &&
+    Number.isSafeInteger(Reflect.get(value, "decidedAt")) &&
+    Reflect.get(value, "decidedAt") >= 0
+  )
 }
 
-function validTelemetryConsentState(value: unknown): value is RemoteTelemetryConsentState {
-  return typeof value === "object" && value !== null && !Array.isArray(value) && Reflect.get(value, "noticeVersion") === 1 &&
-    (Object.keys(value).length === 1 && Reflect.get(value, "consent") === undefined ||
-      Object.keys(value).length === 2 && validTelemetryConsent(Reflect.get(value, "consent")))
+function validTelemetryConsentState(value: unknown): value is TelemetryConsentStateView {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Reflect.get(value, "noticeVersion") === 1 &&
+    ((Object.keys(value).length === 1 && Reflect.get(value, "consent") === undefined) ||
+      (Object.keys(value).length === 2 && validTelemetryConsent(Reflect.get(value, "consent"))))
+  )
 }
 
 function readAutonomyFromResponse(value: unknown): SessionAutonomyView | undefined {
@@ -3856,8 +5995,12 @@ function singlePageFailure(outcome: Exclude<RemoteRequestOutcome, { status: "ok"
   return describeOutcome(outcome, "Terminal output")
 }
 
-function teamActionFailure(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>, label: string): { readonly status: "failed" | "unknown"; readonly message: string } {
-  if (outcome.status === "failed" && outcome.error.code === "unknown_operation") return { status: "failed", message: "Update YCoding on this machine to use Team controls." }
+function teamActionFailure(
+  outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>,
+  label: string,
+): { readonly status: "failed" | "unknown"; readonly message: string } {
+  if (outcome.status === "failed" && outcome.error.code === "unknown_operation")
+    return { status: "failed", message: "Update YCoding on this machine to use Team controls." }
   return { status: outcome.status === "unknown" ? "unknown" : "failed", message: describeOutcome(outcome, label) }
 }
 
@@ -3871,10 +6014,21 @@ function mutationText(mutation: PendingMutation) {
   return `/${mutation.input.command}${typeof mutation.input.arguments === "string" && mutation.input.arguments ? ` ${mutation.input.arguments}` : ""}`
 }
 
-function predictionUnavailable(value: unknown) {
+function predictionUnavailable(envelope: unknown) {
+  const response = typeof envelope === "object" && envelope !== null ? Reflect.get(envelope, "data") : undefined
+  const value = typeof response === "object" && response !== null ? Reflect.get(response, "data") : undefined
   return typeof value === "object" && value !== null && "status" in value && value.status === "unavailable"
 }
 
-function generatedPromptText(value: unknown) {
-  return typeof value === "object" && value !== null && "status" in value && value.status === "generated" && "text" in value && typeof value.text === "string" ? value.text : undefined
+function generatedPromptText(envelope: unknown) {
+  const response = typeof envelope === "object" && envelope !== null ? Reflect.get(envelope, "data") : undefined
+  const value = typeof response === "object" && response !== null ? Reflect.get(response, "data") : undefined
+  return typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    value.status === "generated" &&
+    "text" in value &&
+    typeof value.text === "string"
+    ? value.text
+    : undefined
 }

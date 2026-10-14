@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { isNoticeRequest, parseClientMessage, type RemoteRequest } from "@ycoding-ai/remote"
+import type { RelayRequestView } from "../src/remote/wire-views"
+import { startRelayDouble } from "../test/relay-double"
 import { launchBrowser } from "./cdp"
 
 const port = 4196
@@ -39,37 +40,19 @@ for (const [decision, reply] of [
   ["Approve once", "once"],
 ] as const) {
   test(`a rendered hard review sends one ${decision} over the relay wire and removes its card`, async () => {
-    const requests: RemoteRequest[] = []
-    const invalidFrames: string[] = []
-    let acknowledge: (() => void) | undefined
-    const relay = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request, server) {
-        if (server.upgrade(request)) return undefined
-        return new Response("WebSocket required", { status: 426 })
-      },
-      websocket: {
-        open(socket) {
-          socket.send(JSON.stringify({ type: "sessions" }))
-        },
-        message(socket, raw) {
-          const frame = parseClientMessage(String(raw))
-          if (!frame.ok) {
-            invalidFrames.push(frame.error.code)
-            return
-          }
-          if (frame.value.type !== "request" || isNoticeRequest(frame.value)) return
-          const received = frame.value
-          requests.push(received)
-          acknowledge = () => socket.send(JSON.stringify({ type: "response", id: received.id, ok: true, value: null }))
-        },
+    const requests: RelayRequestView[] = []
+    const acknowledgement = Promise.withResolvers<void>()
+    const relay = await startRelayDouble({
+      handler: async (request) => {
+        requests.push(request)
+        await acknowledgement.promise
+        return { ok: true, value: null }
       },
     })
     const page = await browser!.openPage()
     try {
       await page.navigate(
-        `http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440&relay=${encodeURIComponent(`ws://127.0.0.1:${relay.port}`)}`,
+        `http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440&relay=${encodeURIComponent(relay.wsURL("dev_studio"))}`,
       )
       for (let attempt = 0; attempt < 50; attempt += 1) {
         if (await page.evaluate<boolean>(`document.querySelector('.request--hard') !== null`)) break
@@ -87,7 +70,7 @@ for (const [decision, reply] of [
         if (requests.length > 0) break
         await Bun.sleep(50)
       }
-      expect(invalidFrames).toEqual([])
+      expect(relay.rejectedFrames).toEqual([])
       expect(
         requests.map((request) => ({
           operation: request.operation,
@@ -95,11 +78,15 @@ for (const [decision, reply] of [
           input: request.input,
         })),
       ).toEqual([
-        { operation: "session.guardrail.reply", sessionID: "ses_fixture", input: { requestID: "grq_hard", reply } },
+        {
+          operation: "session.guardrail.request.reply",
+          sessionID: "ses_fixture",
+          input: { requestID: "grq_hard", reply },
+        },
       ])
       expect(await page.evaluate<boolean>(`document.querySelector('.request--hard') !== null`)).toBe(true)
-      if (!acknowledge) throw new Error("The relay did not receive a guardrail reply")
-      acknowledge()
+      expect(requests).toHaveLength(1)
+      acknowledgement.resolve()
       for (let attempt = 0; attempt < 50; attempt += 1) {
         if (await page.evaluate<boolean>(`document.querySelector('.request--hard') === null`)) break
         await Bun.sleep(50)
@@ -108,7 +95,8 @@ for (const [decision, reply] of [
       expect(requests).toHaveLength(1)
     } finally {
       await page.close()
-      await relay.stop(true)
+      acknowledgement.resolve()
+      await relay.stop()
     }
   }, 30_000)
 }

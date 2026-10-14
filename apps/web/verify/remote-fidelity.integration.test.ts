@@ -28,16 +28,33 @@ afterAll(async () => {
 
 describe("remote responsive state behavior", () => {
   test("Office settings follow Office availability, not heading-only CSS", async () => {
-    const reports: { readonly width: number; readonly section: boolean; readonly controls: number; readonly text: string }[] = []
+    const reports: {
+      readonly width: number
+      readonly section: boolean
+      readonly controls: number
+      readonly text: string
+    }[] = []
     for (const width of [390, 768, 1440] as const) {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Settings")
       try {
-        const state = await page.evaluate<{ readonly section: boolean; readonly controls: number; readonly text: string }>(`(() => { const section = document.querySelector('.settings__section[aria-labelledby="office-settings"]'); return {
+        const state = await page.evaluate<{
+          readonly section: boolean
+          readonly controls: number
+          readonly text: string
+        }>(`(() => { const section = document.querySelector('.settings__section[aria-labelledby="office-settings"]'); return {
           section: section !== null, controls: [...(section?.querySelectorAll('button') ?? [])].filter(button => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden').length,
           text: section?.innerText ?? '' }; })()`)
-        await Bun.write(new URL(`../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-office-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(
+          new URL(
+            `../../../.cache/tmp/phone-settings-${process.env.PHONE_CAPTURE_PHASE ?? "after"}-office-${width}.png`,
+            import.meta.url,
+          ),
+          Buffer.from(await page.screenshot(), "base64"),
+        )
         reports.push({ width, ...state })
-      } finally { await page.close() }
+      } finally {
+        await page.close()
+      }
     }
     expect(reports[0]).toEqual({ width: 390, section: false, controls: 0, text: "" })
     for (const state of reports.slice(1)) {
@@ -52,7 +69,14 @@ describe("remote responsive state behavior", () => {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Notifications")
       try {
         await page.evaluate(`document.querySelector('.notification-table')?.scrollIntoView({ block: 'center' })`)
-        const layout = await page.evaluate<{ readonly names: readonly string[]; readonly categories: readonly string[]; readonly details: readonly string[]; readonly lines: readonly number[]; readonly offsets: readonly number[]; readonly overflow: boolean }>(`(() => {
+        const layout = await page.evaluate<{
+          readonly names: readonly string[]
+          readonly categories: readonly string[]
+          readonly details: readonly string[]
+          readonly lines: readonly number[]
+          readonly offsets: readonly number[]
+          readonly overflow: boolean
+        }>(`(() => {
           const table = document.querySelector('.notification-table'), heads = [...table.querySelectorAll('thead th')], row = table.querySelector('tbody tr');
           return { names: heads.map(head => head.textContent.trim()), categories: [...table.querySelectorAll('tbody th > span:first-child')].map(cell => cell.textContent.trim()), details: [...table.querySelectorAll('tbody th .field__hint')].map(cell => cell.textContent.trim()),
             lines: heads.map(head => { const range = document.createRange(); range.selectNodeContents(head); return range.getClientRects().length }),
@@ -66,9 +90,14 @@ describe("remote responsive state behavior", () => {
           "Get notified when a paired machine stops reporting.",
         ])
         expect(layout.lines, JSON.stringify(layout)).toEqual([1, 1, 1])
-        expect(layout.offsets.every((offset) => offset <= 1), JSON.stringify(layout)).toBe(true)
+        expect(
+          layout.offsets.every((offset) => offset <= 1),
+          JSON.stringify(layout),
+        ).toBe(true)
         expect(layout.overflow).toBe(false)
-      } finally { await page.close() }
+      } finally {
+        await page.close()
+      }
     }
   }, 20_000)
 
@@ -76,9 +105,19 @@ describe("remote responsive state behavior", () => {
     for (const width of [1440, 390] as const) {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Appearance")
       try {
-        expect(await page.evaluate<boolean>(`document.querySelector('#autonomy-settings, .autonomy-choices, input[aria-label="Goal"]') === null`)).toBe(true)
-        expect(await page.evaluate<boolean>(`document.querySelector('.page-head__support')?.textContent?.includes('autonomy') === false`)).toBe(true)
-      } finally { await page.close() }
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('#autonomy-settings, .autonomy-choices, input[aria-label="Goal"]') === null`,
+          ),
+        ).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('.page-head__support')?.textContent?.includes('autonomy') === false`,
+          ),
+        ).toBe(true)
+      } finally {
+        await page.close()
+      }
     }
   }, 30_000)
 
@@ -90,49 +129,125 @@ describe("remote responsive state behavior", () => {
           static permission = ${JSON.stringify(permission)};
           static async requestPermission() { this.permission = 'granted'; return this.permission; }
         } })`)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-390`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('#notification-settings') !== null`); attempt += 1) await Bun.sleep(50)
+        await page.navigate(
+          `http://127.0.0.1:${port}/verify/remote.html?scenario=autonomy-goal-notification-settings-390`,
+        )
+        for (
+          let attempt = 0;
+          attempt < 40 && !(await page.evaluate<boolean>(`document.querySelector('#notification-settings') !== null`));
+          attempt += 1
+        )
+          await Bun.sleep(50)
         const row = `(() => { const row = [...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'System alerts');
           return { button: row?.querySelector('button') !== null, status: row?.querySelector('.field__hint')?.textContent?.trim() ?? '' }; })()`
         expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({
           button: permission === "default",
-          status: permission === "granted" ? "System alerts are allowed in this browser." : permission === "denied"
-            ? "System alerts are blocked in this browser's site settings." : "System alerts are not requested yet.",
+          status:
+            permission === "granted"
+              ? "System alerts are allowed in this browser."
+              : permission === "denied"
+                ? "System alerts are blocked in this browser's site settings."
+                : "System alerts are not requested yet.",
         })
         if (permission === "default") {
-          await page.evaluate(`[...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'System alerts')?.querySelector('button')?.click()`)
-          for (let attempt = 0; attempt < 40 && (await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).button; attempt += 1) await Bun.sleep(50)
-          expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({ button: false, status: "System alerts are allowed in this browser." })
+          await page.evaluate(
+            `[...(document.querySelector('#notification-settings')?.closest('section')?.querySelectorAll('.defs__row') ?? [])].find(item => item.querySelector('.defs__key')?.textContent === 'System alerts')?.querySelector('button')?.click()`,
+          )
+          for (
+            let attempt = 0;
+            attempt < 40 && (await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).button;
+            attempt += 1
+          )
+            await Bun.sleep(50)
+          expect(await page.evaluate<{ readonly button: boolean; readonly status: string }>(row)).toEqual({
+            button: false,
+            status: "System alerts are allowed in this browser.",
+          })
         }
-      } finally { await page.close() }
+      } finally {
+        await page.close()
+      }
     }
   }, 30_000)
 
   test("renders System, Light, and Dark Appearance icons in both themes at every viewport", async () => {
-    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
-      const page = await fixture(`scenario=autonomy-goal-notification-settings-${width === 820 ? 768 : width}`, width, "Appearance", theme, height)
-      try {
-        const icons = await page.evaluate<readonly { readonly name: string; readonly paths: number; readonly width: number; readonly height: number }[]>(`[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button => ({ name: button.textContent.trim(), paths: button.querySelectorAll('svg path[d]').length, width: button.querySelector('svg')?.getBoundingClientRect().width ?? 0, height: button.querySelector('svg')?.getBoundingClientRect().height ?? 0 }))`)
-        expect(icons.map((icon) => icon.name)).toEqual(["System", "Light", "Dark"])
-        expect(icons.every((icon) => icon.paths > 0 && icon.width >= 16 && icon.height >= 16), JSON.stringify({ width, theme, icons })).toBe(true)
-        await page.evaluate(`document.querySelector('.appearance-segments')?.scrollIntoView({ block: 'center' })`)
-        await Bun.write(new URL(`../../../.cache/tmp/shell-settings-appearance-${width}x${height}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      } finally { await page.close() }
-    }
+    for (const [width, height] of [
+      [1440, 900],
+      [820, 1180],
+      [390, 844],
+    ] as const)
+      for (const theme of ["light", "dark"] as const) {
+        const page = await fixture(
+          `scenario=autonomy-goal-notification-settings-${width === 820 ? 768 : width}`,
+          width,
+          "Appearance",
+          theme,
+          height,
+        )
+        try {
+          const icons = await page.evaluate<
+            readonly {
+              readonly name: string
+              readonly paths: number
+              readonly width: number
+              readonly height: number
+            }[]
+          >(
+            `[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button => ({ name: button.textContent.trim(), paths: button.querySelectorAll('svg path[d]').length, width: button.querySelector('svg')?.getBoundingClientRect().width ?? 0, height: button.querySelector('svg')?.getBoundingClientRect().height ?? 0 }))`,
+          )
+          expect(icons.map((icon) => icon.name)).toEqual(["System", "Light", "Dark"])
+          expect(
+            icons.every((icon) => icon.paths > 0 && icon.width >= 16 && icon.height >= 16),
+            JSON.stringify({ width, theme, icons }),
+          ).toBe(true)
+          await page.evaluate(`document.querySelector('.appearance-segments')?.scrollIntoView({ block: 'center' })`)
+          await Bun.write(
+            new URL(`../../../.cache/tmp/shell-settings-appearance-${width}x${height}-${theme}.png`, import.meta.url),
+            Buffer.from(await page.screenshot(), "base64"),
+          )
+        } finally {
+          await page.close()
+        }
+      }
   }, 30_000)
 
   test("confirms one or all revoked-device removals without affecting enrolled machines", async () => {
-    for (const [width, height] of [[1440, 900], [820, 1180], [390, 844]] as const) {
-      const page = await fixture(`scenario=devices-enrollment-${width === 820 ? 768 : width}&deviceCleanup=two`, width, "Legacy-MacBook", undefined, height)
+    for (const [width, height] of [
+      [1440, 900],
+      [820, 1180],
+      [390, 844],
+    ] as const) {
+      const page = await fixture(
+        `scenario=devices-enrollment-${width === 820 ? 768 : width}&deviceCleanup=two`,
+        width,
+        "Legacy-MacBook",
+        undefined,
+        height,
+      )
       try {
         const removeOne = 'button[aria-label="Remove Legacy-MacBook"]'
-        expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(removeOne)}) !== null && document.querySelector('button[aria-label="Remove all revoked devices"]') !== null`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector(${JSON.stringify(removeOne)}) !== null && document.querySelector('button[aria-label="Remove all revoked devices"]') !== null`,
+          ),
+        ).toBe(true)
         await page.evaluate(`document.querySelector(${JSON.stringify(removeOne)})?.click()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"]')?.open === true`)).toBe(true)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"]')?.contains(document.activeElement) === true`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('dialog[aria-label="Remove revoked device"]')?.open === true`,
+          ),
+        ).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('dialog[aria-label="Remove revoked device"]')?.contains(document.activeElement) === true`,
+          ),
+        ).toBe(true)
         expect(await page.evaluate<number>(`window.remoteCleanupReport().length`)).toBe(0)
         if (width === 1440) {
-          const geometry = await page.evaluate<{ readonly sameInset: boolean; readonly actionsInside: boolean }>(`(() => {
+          const geometry = await page.evaluate<{
+            readonly sameInset: boolean
+            readonly actionsInside: boolean
+          }>(`(() => {
             const dialog=document.querySelector('dialog[aria-label="Remove revoked device"]'),head=dialog.querySelector('.overlay__head'),body=dialog.querySelector('.overlay__body'),title=head.querySelector('.overlay__title'),text=body.querySelector('p'),actions=body.querySelector('.device-cleanup-actions');
             const headBox=head.getBoundingClientRect(),titleBox=title.getBoundingClientRect(),bodyBox=body.getBoundingClientRect(),textBox=text.getBoundingClientRect(),actionsBox=actions.getBoundingClientRect(),headStyle=getComputedStyle(head),bodyStyle=getComputedStyle(body);
             const left=parseFloat(bodyStyle.paddingLeft),right=parseFloat(bodyStyle.paddingRight),bottom=parseFloat(bodyStyle.paddingBottom);
@@ -142,23 +257,81 @@ describe("remote responsive state behavior", () => {
           expect(geometry.actionsInside).toBe(true)
         }
         await page.pressEscape()
-        expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe("Remove Legacy-MacBook")
-        expect(await page.evaluate<boolean>(`document.querySelector('.device-table .device__name')?.textContent?.includes('Studio Mac') ?? false`)).toBe(true)
+        expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe(
+          "Remove Legacy-MacBook",
+        )
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('.device-table .device__name')?.textContent?.includes('Studio Mac') ?? false`,
+          ),
+        ).toBe(true)
         await page.evaluate(`document.querySelector(${JSON.stringify(removeOne)})?.click()`)
-        await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
-        for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`)).toEqual(["Studio Mac", "Workstation-Box", "Backup Mac"])
-        for (let attempt = 0; attempt < 120 && await page.evaluate<boolean>(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled !== false`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<boolean>(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled === false`)).toBe(true)
+        await page.evaluate(
+          `document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`,
+        )
+        for (
+          let attempt = 0;
+          attempt < 40 && (await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`));
+          attempt += 1
+        )
+          await Bun.sleep(50)
+        expect(
+          await page.evaluate<readonly string[]>(
+            `[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`,
+          ),
+        ).toEqual(["Studio Mac", "Workstation-Box", "Backup Mac"])
+        for (
+          let attempt = 0;
+          attempt < 120 &&
+          (await page.evaluate<boolean>(
+            `document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled !== false`,
+          ));
+          attempt += 1
+        )
+          await Bun.sleep(50)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('button[aria-label="Remove all revoked devices"]')?.disabled === false`,
+          ),
+        ).toBe(true)
         await page.evaluate(`document.querySelector('button[aria-label="Remove all revoked devices"]')?.click()`)
-        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`); attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`)).toBe(true)
-        await page.evaluate(`document.querySelector('dialog[aria-label="Remove all revoked devices"] button[data-confirm-remove]')?.click()`)
-        for (let attempt = 0; attempt < 120 && await page.evaluate<boolean>(`document.body.innerText.includes('Backup Mac')`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`)).toEqual(["Studio Mac", "Workstation-Box"])
+        for (
+          let attempt = 0;
+          attempt < 40 &&
+          !(await page.evaluate<boolean>(
+            `document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`,
+          ));
+          attempt += 1
+        )
+          await Bun.sleep(25)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('dialog[aria-label="Remove all revoked devices"]')?.open === true`,
+          ),
+        ).toBe(true)
+        await page.evaluate(
+          `document.querySelector('dialog[aria-label="Remove all revoked devices"] button[data-confirm-remove]')?.click()`,
+        )
+        for (
+          let attempt = 0;
+          attempt < 120 && (await page.evaluate<boolean>(`document.body.innerText.includes('Backup Mac')`));
+          attempt += 1
+        )
+          await Bun.sleep(50)
+        expect(
+          await page.evaluate<readonly string[]>(
+            `[...document.querySelectorAll('.device-table .device__name')].map(row => row.textContent.trim())`,
+          ),
+        ).toEqual(["Studio Mac", "Workstation-Box"])
         expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy", "all"])
-        expect(await page.evaluate<boolean>(`document.activeElement?.textContent?.includes('Create enrollment code') ?? false`)).toBe(true)
-      } finally { await page.close() }
+        expect(
+          await page.evaluate<boolean>(
+            `document.activeElement?.textContent?.includes('Create enrollment code') ?? false`,
+          ),
+        ).toBe(true)
+      } finally {
+        await page.close()
+      }
     }
   }, 30_000)
 
@@ -166,16 +339,42 @@ describe("remote responsive state behavior", () => {
     const page = await fixture("scenario=devices-enrollment-390&deviceCleanupFailure=once", 390, "Legacy-MacBook")
     try {
       await page.evaluate(`document.querySelector('button[aria-label="Remove Legacy-MacBook"]')?.click()`)
-      await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Remove revoked device"] [role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`)).toBe(true)
+      await page.evaluate(
+        `document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`,
+      )
+      for (
+        let attempt = 0;
+        attempt < 40 &&
+        !(await page.evaluate<boolean>(
+          `document.querySelector('[role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`,
+        ));
+        attempt += 1
+      )
+        await Bun.sleep(50)
+      expect(
+        await page.evaluate<boolean>(
+          `document.querySelector('dialog[aria-label="Remove revoked device"] [role="alert"]')?.textContent?.includes('Device cleanup is unavailable') ?? false`,
+        ),
+      ).toBe(true)
       expect(await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`)).toBe(true)
       expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy"])
-      await page.evaluate(`document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`)
-      for (let attempt = 0; attempt < 40 && await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(
+        `document.querySelector('dialog[aria-label="Remove revoked device"] button[data-confirm-remove]')?.click()`,
+      )
+      for (
+        let attempt = 0;
+        attempt < 40 && (await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`));
+        attempt += 1
+      )
+        await Bun.sleep(50)
       expect(await page.evaluate<boolean>(`document.body.innerText.includes('Legacy-MacBook')`)).toBe(false)
-      expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual(["dev_legacy", "dev_legacy"])
-    } finally { await page.close() }
+      expect(await page.evaluate<readonly string[]>(`window.remoteCleanupReport()`)).toEqual([
+        "dev_legacy",
+        "dev_legacy",
+      ])
+    } finally {
+      await page.close()
+    }
   }, 30_000)
 
   test("returns device-removal focus to the clicked control without a focused click", async () => {
@@ -190,39 +389,74 @@ describe("remote responsive state behavior", () => {
           trigger.click();
           trigger.focus = focus;
         })()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[open]')?.getAttribute('aria-label') === ${JSON.stringify(label === "Remove Legacy-MacBook" ? "Remove revoked device" : "Remove all revoked devices")}`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('dialog[open]')?.getAttribute('aria-label') === ${JSON.stringify(label === "Remove Legacy-MacBook" ? "Remove revoked device" : "Remove all revoked devices")}`,
+          ),
+        ).toBe(true)
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === ${JSON.stringify(label)}`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.activeElement?.getAttribute('aria-label') === ${JSON.stringify(label)}`,
+          ),
+        ).toBe(true)
       }
-    } finally { await page.close() }
+    } finally {
+      await page.close()
+    }
   }, 15_000)
 
   test("returns focus to the remote Sessions opener after an unfocused click", async () => {
     for (const [width, trigger, label] of [[390, ".app-header__menu", "Sessions"]] as const) {
       const page = await scenario("conversation-workspace", width, "Studio Mac")
       try {
-        await page.evaluate(`document.querySelector('.skip-link')?.focus(); document.querySelector(${JSON.stringify(trigger)})?.click()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="${label}"][open]') !== null`)).toBe(true)
+        await page.evaluate(
+          `document.querySelector('.skip-link')?.focus(); document.querySelector(${JSON.stringify(trigger)})?.click()`,
+        )
+        expect(
+          await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="${label}"][open]') !== null`),
+        ).toBe(true)
         await page.pressEscape()
-        const state = await page.evaluate<{ readonly open: boolean; readonly focused: boolean; readonly active: string }>(`({ open: document.querySelector('dialog[aria-label="${label}"][open]') !== null, focused: document.activeElement === document.querySelector(${JSON.stringify(trigger)}), active: document.activeElement?.outerHTML.slice(0, 120) ?? '' })`)
+        const state = await page.evaluate<{
+          readonly open: boolean
+          readonly focused: boolean
+          readonly active: string
+        }>(
+          `({ open: document.querySelector('dialog[aria-label="${label}"][open]') !== null, focused: document.activeElement === document.querySelector(${JSON.stringify(trigger)}), active: document.activeElement?.outerHTML.slice(0, 120) ?? '' })`,
+        )
         expect(state, `${label}: ${JSON.stringify(state)}`).toMatchObject({ open: false, focused: true })
-      } finally { await page.close() }
+      } finally {
+        await page.close()
+      }
     }
   }, 15_000)
 
   test("exposes one remote main landmark and the active narrow navigation destination", async () => {
     const page = await scenario("conversation-workspace", 390, "Token expiry refactor")
     try {
-      expect(await page.evaluate<{ readonly main: number; readonly skip: string | null; readonly current: string | null }>(`({
+      expect(
+        await page.evaluate<{
+          readonly main: number
+          readonly skip: string | null
+          readonly current: string | null
+        }>(`({
         main: document.querySelectorAll('main').length,
         skip: document.querySelector('.skip-link')?.getAttribute('href') ?? null,
         current: document.querySelector('.bottom-nav__item--active')?.getAttribute('aria-current') ?? null,
-      })`)).toEqual({ main: 1, skip: "#remote-main", current: "page" })
+      })`),
+      ).toEqual({ main: 1, skip: "#remote-main", current: "page" })
       await page.pressEscape()
-      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.hasAttribute('open') ?? false`)).toBe(false)
+      expect(
+        await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.hasAttribute('open') ?? false`),
+      ).toBe(false)
       await page.evaluate(`document.querySelector('.skip-link')?.focus()`)
       await page.pressKey("Enter", "Enter", 13)
-      for (let attempt = 0; attempt < 20 && await page.evaluate<string>(`document.activeElement?.id ?? ''`) !== "remote-main"; attempt += 1) await Bun.sleep(50)
+      for (
+        let attempt = 0;
+        attempt < 20 && (await page.evaluate<string>(`document.activeElement?.id ?? ''`)) !== "remote-main";
+        attempt += 1
+      )
+        await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.activeElement?.id ?? ''`)).toBe("remote-main")
     } finally {
       await page.close()
@@ -238,14 +472,24 @@ describe("remote responsive state behavior", () => {
         return { checked: radios.findIndex(radio => radio.getAttribute('aria-checked') === 'true'),
           tabs: radios.map(radio => radio.tabIndex), focus: radios.indexOf(document.activeElement) };
       })()`
-      const radioState = (selector: string) => page.evaluate<{ readonly checked: number; readonly tabs: readonly number[]; readonly focus: number }>(group(selector))
+      const radioState = (selector: string) =>
+        page.evaluate<{ readonly checked: number; readonly tabs: readonly number[]; readonly focus: number }>(
+          group(selector),
+        )
       expect(await radioState('.appearance-segments [role="radio"]')).toMatchObject({ checked: 0, tabs: [0, -1, -1] })
       await page.evaluate(`document.querySelector('.appearance-segments [role="radio"]')?.focus()`)
       await page.pressKey("ArrowRight", "ArrowRight", 39)
-      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({ checked: 1, tabs: [-1, 0, -1], focus: 1 })
+      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({
+        checked: 1,
+        tabs: [-1, 0, -1],
+        focus: 1,
+      })
       await page.pressKey("End", "End", 35)
-      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({ checked: 2, tabs: [-1, -1, 0], focus: 2 })
-
+      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({
+        checked: 2,
+        tabs: [-1, -1, 0],
+        focus: 2,
+      })
     } finally {
       await page.close()
     }
@@ -305,9 +549,15 @@ describe("remote responsive state behavior", () => {
 
   test("keeps the desktop rail compact and project-oriented", async () => {
     const page = await scenario("conversation-workspace", 1440, "auth_guard.go")
-    for (const [project, title] of [["auth", "Token expiry refactor"], ["indexer", "Query batch indexer"], ["mesh", "Mesh peer sync daemon"]] as const) {
+    for (const [project, title] of [
+      ["auth", "Token expiry refactor"],
+      ["indexer", "Query batch indexer"],
+      ["mesh", "Mesh peer sync daemon"],
+    ] as const) {
       await selectSessionWorkspace(page, project, title, ".workspace__rail", ".session-row")
-      const rows = await page.evaluate<readonly { readonly height: number; readonly text: string }[]>(`[...document.querySelectorAll('.workspace__rail .session-row')].map(row=>({height:row.getBoundingClientRect().height,text:row.textContent.replace(/\\s+/g,' ').trim()}))`)
+      const rows = await page.evaluate<readonly { readonly height: number; readonly text: string }[]>(
+        `[...document.querySelectorAll('.workspace__rail .session-row')].map(row=>({height:row.getBoundingClientRect().height,text:row.textContent.replace(/\\s+/g,' ').trim()}))`,
+      )
       expect(rows).toHaveLength(1)
       expect(rows[0]?.height).toBeLessThanOrEqual(96)
       expect(rows[0]?.text).toContain(project)
@@ -320,7 +570,14 @@ describe("remote responsive state behavior", () => {
   test("uses the compact Sessions composition with one page heading and a generic New session action", async () => {
     const page = await scenario("session-list", 768, "Async Auth Token Revocation Migration")
     await selectSessionWorkspace(page, "db-pruner", "Postgres Partition Pruning Worker")
-    const state = await page.evaluate<{ readonly headingVisible: boolean; readonly title: string; readonly newSession: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); const action=document.querySelector('.sessions-page > .page-head .new-session__trigger'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',title:document.querySelectorAll('.sessions-page h1').length===1?document.querySelector('.sessions-page h1').textContent.trim():'',newSession:action instanceof HTMLElement&&action.getBoundingClientRect().height>0,columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
+    const state = await page.evaluate<{
+      readonly headingVisible: boolean
+      readonly title: string
+      readonly newSession: boolean
+      readonly columns: number
+    }>(
+      `(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); const action=document.querySelector('.sessions-page > .page-head .new-session__trigger'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',title:document.querySelectorAll('.sessions-page h1').length===1?document.querySelector('.sessions-page h1').textContent.trim():'',newSession:action instanceof HTMLElement&&action.getBoundingClientRect().height>0,columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`,
+    )
     expect(state.headingVisible).toBe(true)
     expect(state.title).toBe("Sessions")
     expect(state.newSession).toBe(true)
@@ -367,7 +624,9 @@ describe("remote responsive state behavior", () => {
       })()`)
       const maximum = width >= 1600 ? 1600 : 1200
       expect(state.width, JSON.stringify(state)).toBeLessThanOrEqual(maximum)
-      expect(state.width, JSON.stringify(state)).toBeGreaterThanOrEqual(Math.min(maximum, state.available - (width >= 1600 ? 96 : 80)))
+      expect(state.width, JSON.stringify(state)).toBeGreaterThanOrEqual(
+        Math.min(maximum, state.available - (width >= 1600 ? 96 : 80)),
+      )
       expect(Math.abs(state.center - state.contentCenter)).toBeLessThanOrEqual(2)
       expect(state.tableWidth).toBeGreaterThanOrEqual(state.contentWidth - 2)
       expect(state.rows).toBe(1)
@@ -390,7 +649,11 @@ describe("remote responsive state behavior", () => {
           ["db-pruner", "Postgres Partition Pruning Worker"],
         ] as const) {
           await selectSessionWorkspace(page, directory, title)
-          targets.push(...await page.evaluate<readonly { readonly height: number; readonly width: number }[]>(`[...document.querySelectorAll('.sessions-table__select')].map(button => ({ height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width }))`))
+          targets.push(
+            ...(await page.evaluate<readonly { readonly height: number; readonly width: number }[]>(
+              `[...document.querySelectorAll('.sessions-table__select')].map(button => ({ height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width }))`,
+            )),
+          )
         }
         expect(targets).toHaveLength(4)
         expect(targets.every((target) => target.height >= 44 && target.width >= 44)).toBe(true)
@@ -438,8 +701,16 @@ describe("remote responsive state behavior", () => {
         expect(state.targets).toHaveLength(1)
         expect(state.targets.every((height) => height >= 44)).toBe(true)
         expect(state.rowCount).toBe(1)
-        if (width >= 768) expect(await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .workspace-nav__item').length`)).toBe(4)
-        else expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.workspace-select [aria-label="Workspace"]')].some(trigger => trigger.getBoundingClientRect().width > 0)`)).toBe(true)
+        if (width >= 768)
+          expect(
+            await page.evaluate<number>(`document.querySelectorAll('.workspace__rail .workspace-nav__item').length`),
+          ).toBe(4)
+        else
+          expect(
+            await page.evaluate<boolean>(
+              `[...document.querySelectorAll('.workspace-select [aria-label="Workspace"]')].some(trigger => trigger.getBoundingClientRect().width > 0)`,
+            ),
+          ).toBe(true)
         expect(state.overflowing).toBe(false)
         await page.close()
       }
@@ -454,7 +725,11 @@ describe("remote responsive state behavior", () => {
         return { label: control?.textContent?.trim().startsWith('Standard') ? 'Standard' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
       })()`)
       expect(status).toEqual({ label: "Standard", visible: true })
-      expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`)).toBe(true)
+      expect(
+        await page.evaluate<boolean>(
+          `document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`,
+        ),
+      ).toBe(true)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await page.close()
     }
@@ -462,7 +737,11 @@ describe("remote responsive state behavior", () => {
 
   test("aligns conversation decision cards with the transcript in one centered column", async () => {
     const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
-    const layout = await page.evaluate<{ readonly transcript: { readonly left: number; readonly right: number }; readonly cards: readonly { readonly left: number; readonly right: number }[]; readonly requestsFollowTranscript: boolean }>(`(() => {
+    const layout = await page.evaluate<{
+      readonly transcript: { readonly left: number; readonly right: number }
+      readonly cards: readonly { readonly left: number; readonly right: number }[]
+      readonly requestsFollowTranscript: boolean
+    }>(`(() => {
       const transcript = document.querySelector('.transcript')
       const requests = document.querySelector('.requests')
       if (!(transcript instanceof HTMLElement) || !(requests instanceof HTMLElement)) throw new Error('Conversation transcript or pending decisions missing')
@@ -474,7 +753,12 @@ describe("remote responsive state behavior", () => {
       }
     })()`)
     expect(layout.cards).toHaveLength(6)
-    expect(layout.cards.every((card) => Math.abs(card.left - layout.transcript.left) <= 1 && Math.abs(card.right - layout.transcript.right) <= 1)).toBe(true)
+    expect(
+      layout.cards.every(
+        (card) =>
+          Math.abs(card.left - layout.transcript.left) <= 1 && Math.abs(card.right - layout.transcript.right) <= 1,
+      ),
+    ).toBe(true)
     expect(layout.requestsFollowTranscript).toBe(true)
     await page.close()
   }, 30_000)
@@ -528,13 +812,19 @@ describe("remote responsive state behavior", () => {
 
   test("keeps compact decision and account actions at least 44px", async () => {
     const tablet = await scenario("permission-guardrail-hard-review-form-requests", 768, "syslog daemon bridge")
-    const tabletHeights = await tablet.evaluate<readonly number[]>(`[...document.querySelectorAll('.requests button')].map(button=>button.getBoundingClientRect().height)`)
+    const tabletHeights = await tablet.evaluate<readonly number[]>(
+      `[...document.querySelectorAll('.requests button')].map(button=>button.getBoundingClientRect().height)`,
+    )
     expect(tabletHeights.length).toBeGreaterThan(0)
     expect(tabletHeights.every((height) => height >= 44)).toBe(true)
     await tablet.close()
 
     const mobile = await scenario("signed-out", 390, "Continue with Google")
-    expect(await mobile.evaluate<number>(`document.querySelector('.sign-in__provider')?.getBoundingClientRect().height ?? 0`)).toBeGreaterThanOrEqual(44)
+    expect(
+      await mobile.evaluate<number>(
+        `document.querySelector('.sign-in__provider')?.getBoundingClientRect().height ?? 0`,
+      ),
+    ).toBeGreaterThanOrEqual(44)
     await mobile.close()
   }, 30_000)
 
@@ -567,7 +857,11 @@ describe("remote responsive state behavior", () => {
         expect(state.workspace).toBe(false)
         expect(state.heading).toBe("Sign in to your workspace")
         expect(state.providers.map((provider) => provider.label)).toEqual(["Continue with Google", "Sign in"])
-        expect(state.providers.every((provider) => provider.height >= 44 && Math.abs(provider.width - state.panelWidth) <= 1)).toBe(true)
+        expect(
+          state.providers.every(
+            (provider) => provider.height >= 44 && Math.abs(provider.width - state.panelWidth) <= 1,
+          ),
+        ).toBe(true)
         expect(state.centered).toBe(true)
         expect(state.overflowing).toBe(false)
       }
@@ -579,16 +873,18 @@ describe("remote responsive state behavior", () => {
     const page = await scenario("devices-enrollment", 390, "Enrollment code (shown once)")
     for (const width of [320, 390, 430] as const) {
       await page.setViewport(width, 844)
-      const rows = await page.evaluate<readonly {
-        readonly height: number
-        readonly name: string
-        readonly registration: string
-        readonly connection: string
-        readonly lastSeen: string
-        readonly actionHeight: number
-        readonly aligned: boolean
-        readonly contained: boolean
-      }[]>(`[...document.querySelectorAll('.device-table .device')].map(row => {
+      const rows = await page.evaluate<
+        readonly {
+          readonly height: number
+          readonly name: string
+          readonly registration: string
+          readonly connection: string
+          readonly lastSeen: string
+          readonly actionHeight: number
+          readonly aligned: boolean
+          readonly contained: boolean
+        }[]
+      >(`[...document.querySelectorAll('.device-table .device')].map(row => {
         const name = row.querySelector('.device__name')
         const registration = row.querySelector('.device__registration')
         const connection = row.querySelector('.device__connection')
@@ -631,15 +927,25 @@ describe("remote responsive state behavior", () => {
     await pending.close()
 
     const signedOut = await scenario("signed-out", 390, "Continue with Google")
-    expect(await signedOut.evaluate<boolean>(`document.querySelector('.app') === null && document.querySelector('main.sign-in') !== null`)).toBe(true)
+    expect(
+      await signedOut.evaluate<boolean>(
+        `document.querySelector('.app') === null && document.querySelector('main.sign-in') !== null`,
+      ),
+    ).toBe(true)
     await signedOut.close()
 
     const offline = await scenario("selected-machine-offline", 768, "Reconnect")
-    expect(await offline.evaluate<string>(`document.querySelector('.status-strip')?.innerText ?? ''`)).toContain("Studio Mac is not reachable")
+    expect(await offline.evaluate<string>(`document.querySelector('.status-strip')?.innerText ?? ''`)).toContain(
+      "Studio Mac is not reachable",
+    )
     await offline.close()
 
     const devices = await scenario("devices-enrollment", 1440, "Enrollment code (shown once)")
-    const deviceState = await devices.evaluate<{ readonly account: string; readonly revokedActions: number; readonly selected: boolean }>(`(() => {
+    const deviceState = await devices.evaluate<{
+      readonly account: string
+      readonly revokedActions: number
+      readonly selected: boolean
+    }>(`(() => {
       const rows=[...document.querySelectorAll('.device-table .device')];
       const revoked=rows.find(row=>row.textContent.includes('Legacy-MacBook'));
       return {
@@ -672,8 +978,23 @@ describe("remote responsive state behavior", () => {
         }).observe(document, { subtree: true, childList: true, characterData: true });
       })()`)
       await page.navigate(url("/verify/remote.html?view=settings&accountDelay=900"))
-      for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.status-strip__body')?.textContent?.includes('Checking account') === true`); attempt += 1) await Bun.sleep(20)
-      const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean; readonly screen: number }>(`({
+      for (
+        let attempt = 0;
+        attempt < 30 &&
+        !(await page.evaluate<boolean>(
+          `document.querySelector('.status-strip__body')?.textContent?.includes('Checking account') === true`,
+        ));
+        attempt += 1
+      )
+        await Bun.sleep(20)
+      const read = () =>
+        page.evaluate<{
+          readonly status: string
+          readonly account: string
+          readonly signIn: boolean
+          readonly overflow: boolean
+          readonly screen: number
+        }>(`({
         status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
         account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
         signIn: document.querySelector('main.sign-in') !== null,
@@ -684,23 +1005,42 @@ describe("remote responsive state behavior", () => {
       expect(pending.status).toContain("Checking account")
       expect(pending.account).toContain("Checking account")
       expect(pending.screen).toBe(1)
-      expect(await page.evaluate<boolean>(`document.querySelector('button') !== null && [...document.querySelectorAll('button')].every(button => !button.textContent?.includes('Create enrollment code'))`)).toBe(true)
+      expect(
+        await page.evaluate<boolean>(
+          `document.querySelector('button') !== null && [...document.querySelectorAll('button')].every(button => !button.textContent?.includes('Create enrollment code'))`,
+        ),
+      ).toBe(true)
       expect(pending.signIn).toBe(false)
       await Bun.sleep(300)
       expect((await read()).status).toContain("Checking account")
-      for (let attempt = 0; attempt < 40 && !(await read()).account.includes("user_fixture"); attempt++) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 40 && !(await read()).account.includes("user_fixture"); attempt++)
+        await Bun.sleep(50)
       const settled = await read()
       expect(settled.status).toBe("")
-      expect(await page.evaluate<string>(`document.querySelector('.remote-connection-label')?.textContent?.trim() ?? ''`)).toBe("Connected")
+      expect(
+        await page.evaluate<string>(`document.querySelector('.remote-connection-label')?.textContent?.trim() ?? ''`),
+      ).toBe("Connected")
       expect(settled.account).toContain("user_fixture")
       expect(settled.screen).toBe(0)
       expect(settled.signIn).toBe(false)
       expect(settled.overflow).toBe(false)
-      const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
+      const samples =
+        await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(
+          `window.accountSamples`,
+        )
       expect(samples.some((sample) => sample.status.includes("Checking account"))).toBe(true)
       expect(samples.some((sample) => sample.status === "" && sample.account.includes("user_fixture"))).toBe(true)
-      expect(samples.every((sample) => !sample.status.includes("Signed out") && !sample.account.includes("not signed in") && !sample.signIn)).toBe(true)
-      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
+      expect(
+        samples.every(
+          (sample) =>
+            !sample.status.includes("Signed out") && !sample.account.includes("not signed in") && !sample.signIn,
+        ),
+      ).toBe(true)
+      expect(
+        await page.evaluate<number>(
+          `window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`,
+        ),
+      ).toBe(0)
     } finally {
       await page.close()
     }
@@ -727,7 +1067,13 @@ describe("remote responsive state behavior", () => {
           }).observe(document, { subtree: true, childList: true, characterData: true });
         })()`)
         await page.navigate(url(`/verify/remote.html?view=settings&account=${mode}&accountDelay=900`))
-        const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
+        const read = () =>
+          page.evaluate<{
+            readonly status: string
+            readonly account: string
+            readonly signIn: boolean
+            readonly overflow: boolean
+          }>(`({
           status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
           account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
           signIn: document.querySelector('main.sign-in') !== null,
@@ -736,7 +1082,8 @@ describe("remote responsive state behavior", () => {
         expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
         await Bun.sleep(300)
         expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
-        const settledNow = (state: { readonly status: string; readonly signIn: boolean }) => expectedSignIn ? state.signIn : state.status.includes(expectedStatus)
+        const settledNow = (state: { readonly status: string; readonly signIn: boolean }) =>
+          expectedSignIn ? state.signIn : state.status.includes(expectedStatus)
         for (let attempt = 0; attempt < 40 && !settledNow(await read()); attempt++) await Bun.sleep(50)
         const settled = await read()
         expect(settled.signIn).toBe(expectedSignIn)
@@ -745,10 +1092,15 @@ describe("remote responsive state behavior", () => {
           expect(settled.account).toContain(expectedAccount)
         }
         expect(settled.overflow).toBe(false)
-        const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
+        const samples =
+          await page.evaluate<
+            readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]
+          >(`window.accountSamples`)
         const boundary = samples.findIndex(settledNow)
         expect(boundary).toBeGreaterThan(0)
-        expect(samples.slice(0, boundary).every((sample) => !sample.signIn && !sample.status.includes("Signed out"))).toBe(true)
+        expect(
+          samples.slice(0, boundary).every((sample) => !sample.signIn && !sample.status.includes("Signed out")),
+        ).toBe(true)
         expect(samples.at(-1)?.signIn).toBe(expectedSignIn)
         if (mode === "unavailable") expect(samples.every((sample) => !sample.signIn)).toBe(true)
       } finally {
@@ -781,20 +1133,35 @@ describe("remote responsive state behavior", () => {
   }, 30_000)
 
   test("sends each rendered hard-review decision once and removes its pending card", async () => {
-    for (const [label, reply] of [["Reject", "reject"], ["Approve once", "once"]] as const) {
-      const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
+    for (const [label, reply] of [
+      ["Reject", "reject"],
+      ["Approve once", "once"],
+    ] as const) {
+      const page = await scenario(
+        "permission-guardrail-hard-review-form-requests",
+        1440,
+        "Clarify Disambiguation Query",
+      )
       try {
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
-        await page.evaluate(`[...document.querySelectorAll('.request--hard .request__actions button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`)
+        expect(
+          await page.evaluate<readonly string[]>(
+            `[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`,
+          ),
+        ).toEqual(["Approve once", "Reject"])
+        await page.evaluate(
+          `[...document.querySelectorAll('.request--hard .request__actions button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`,
+        )
         for (let attempt = 0; attempt < 30; attempt += 1) {
           if (await page.evaluate<boolean>(`document.querySelector('.request--hard') === null`)) break
           await Bun.sleep(50)
         }
-        expect(await page.evaluate<{ readonly requests: readonly unknown[]; readonly pending: number }>(`({
-          requests: window.remoteMutationReport().filter(request => request.operation === 'session.guardrail.reply'),
+        expect(
+          await page.evaluate<{ readonly requests: readonly unknown[]; readonly pending: number }>(`({
+          requests: window.remoteMutationReport().filter(request => request.operation === 'session.guardrail.request.reply'),
           pending: document.querySelectorAll('.request--hard').length,
-        })`)).toEqual({
-          requests: [{ operation: "session.guardrail.reply", input: { requestID: "grq_hard", reply } }],
+        })`),
+        ).toEqual({
+          requests: [{ operation: "session.guardrail.request.reply", input: { requestID: "grq_hard", reply } }],
           pending: 0,
         })
       } finally {
@@ -806,20 +1173,48 @@ describe("remote responsive state behavior", () => {
   test("supports keyboard and coarse-pointer operation for device, delivery, appearance, and overlays", async () => {
     const workspace = await scenario("conversation-workspace", 768, "Run test suite against auth services.")
     await workspace.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+    for (
+      let attempt = 0;
+      attempt < 40 &&
+      !(await workspace.evaluate<boolean>(
+        `document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`,
+      ));
+      attempt += 1
+    )
+      await Bun.sleep(50)
     await workspace.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
     await workspace.pressKey("Enter", "Enter", 13)
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
+    expect(
+      await workspace.evaluate<boolean>(
+        `document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`,
+      ),
+    ).toBe(true)
     await workspace.pressEscape()
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+    expect(
+      await workspace.evaluate<boolean>(
+        `document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`,
+      ),
+    ).toBe(true)
 
     await workspace.evaluate(`document.querySelector('a[href^="/remote/session?"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-toggle') !== null`); attempt += 1) await Bun.sleep(50)
+    for (
+      let attempt = 0;
+      attempt < 40 &&
+      !(await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-toggle') !== null`));
+      attempt += 1
+    )
+      await Bun.sleep(50)
 
     await workspace.evaluate(`document.querySelector('.composer__delivery-toggle')?.focus()`)
-    expect(await workspace.evaluate<string | null>(`document.activeElement?.getAttribute('aria-label') ?? null`)).toBe("Steer mode; switch to Queue")
+    expect(await workspace.evaluate<string | null>(`document.activeElement?.getAttribute('aria-label') ?? null`)).toBe(
+      "Steer mode; switch to Queue",
+    )
     await workspace.pressKey(" ", "Space", 32)
-    expect(await workspace.evaluate<{ readonly pressed: string | null; readonly label: string | null }>(`(() => { const toggle = document.querySelector('.composer__delivery-toggle'); return { pressed: toggle?.getAttribute('aria-pressed') ?? null, label: toggle?.getAttribute('aria-label') ?? null } })()`)).toEqual({ pressed: "true", label: "Queue mode; switch to Steer" })
+    expect(
+      await workspace.evaluate<{ readonly pressed: string | null; readonly label: string | null }>(
+        `(() => { const toggle = document.querySelector('.composer__delivery-toggle'); return { pressed: toggle?.getAttribute('aria-pressed') ?? null, label: toggle?.getAttribute('aria-label') ?? null } })()`,
+      ),
+    ).toEqual({ pressed: "true", label: "Queue mode; switch to Steer" })
 
     await workspace.close()
 
@@ -840,7 +1235,11 @@ describe("remote responsive state behavior", () => {
 
   test("keeps Settings controls in product order and density", async () => {
     const mobile = await scenario("autonomy-goal-notification-settings", 390, "Machine offline")
-    const state = await mobile.evaluate<{ readonly categoriesHidden: boolean; readonly themes: readonly string[]; readonly headingSizes: readonly number[] }>(`(() => ({
+    const state = await mobile.evaluate<{
+      readonly categoriesHidden: boolean
+      readonly themes: readonly string[]
+      readonly headingSizes: readonly number[]
+    }>(`(() => ({
       categoriesHidden:[...document.querySelectorAll('#appearance-settings,#notification-settings')].every(heading=>{const section=heading.closest('section');const category=section?.querySelector('.settings__category');return category instanceof HTMLElement&&getComputedStyle(category).display==='none'}),
       themes:[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button=>button.textContent.trim()).slice(0,3),
       headingSizes:[...document.querySelectorAll('#appearance-settings,#notification-settings')].map(heading=>parseFloat(getComputedStyle(heading).fontSize))
@@ -856,15 +1255,43 @@ async function scenario(scenarioName: string, width: number, expected: string, t
   return fixture(`scenario=${scenarioName}-${width}`, width, expected, theme)
 }
 
-async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>, directory: string, expected: string, scope = ".app", row = ".sessions-table__row") {
+async function selectSessionWorkspace(
+  page: Awaited<ReturnType<NonNullable<typeof browser>["openPage"]>>,
+  directory: string,
+  expected: string,
+  scope = ".app",
+  row = ".sessions-table__row",
+) {
   if (scope === ".workspace__rail") {
     await page.evaluate(`document.querySelector('.remote-nav a[href="/remote/sessions"]').click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav__item') !== null`); attempt += 1) await Bun.sleep(50)
+    for (
+      let attempt = 0;
+      attempt < 40 &&
+      !(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-nav__item') !== null`));
+      attempt += 1
+    )
+      await Bun.sleep(50)
     await selectSessionWorkspace(page, directory, expected)
-    await page.evaluate(`[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row')?.textContent?.includes(${JSON.stringify(expected)}) ?? false`); attempt += 1) await Bun.sleep(50)
-    expect(await page.evaluate<string>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? ''`)).toBe(directory)
-    expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-select') === null`)).toBe(true)
+    await page.evaluate(
+      `[...document.querySelectorAll('.sessions-table__select')].find(button => button.textContent.includes(${JSON.stringify(expected)}))?.click()`,
+    )
+    for (
+      let attempt = 0;
+      attempt < 40 &&
+      !(await page.evaluate<boolean>(
+        `document.querySelector('.workspace__rail .session-row')?.textContent?.includes(${JSON.stringify(expected)}) ?? false`,
+      ));
+      attempt += 1
+    )
+      await Bun.sleep(50)
+    expect(
+      await page.evaluate<string>(
+        `document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? ''`,
+      ),
+    ).toBe(directory)
+    expect(await page.evaluate<boolean>(`document.querySelector('.workspace__rail .workspace-select') === null`)).toBe(
+      true,
+    )
     return
   }
   await page.evaluate(`(async () => {
@@ -886,7 +1313,12 @@ async function selectSessionWorkspace(page: Awaited<ReturnType<NonNullable<typeo
     document.querySelector('.custom-select__confirm')?.click();
   })()`)
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(`${scope} ${row}`)})?.textContent?.includes(${JSON.stringify(expected)}) ?? false`)) return
+    if (
+      await page.evaluate<boolean>(
+        `document.querySelector(${JSON.stringify(`${scope} ${row}`)})?.textContent?.includes(${JSON.stringify(expected)}) ?? false`,
+      )
+    )
+      return
     await Bun.sleep(50)
   }
   throw new Error(`Session workspace ${directory} did not settle`)

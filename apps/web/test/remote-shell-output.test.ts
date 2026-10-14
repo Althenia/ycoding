@@ -101,6 +101,7 @@ const shellMessages = () => [
         type: "tool",
         id: "call_bg",
         name: "shell",
+        time: { created: 3, completed: 4 },
         state: {
           status: "completed",
           input: { command: "bun test --watch", background: true },
@@ -128,14 +129,13 @@ function deferred(): { readonly promise: Promise<void>; readonly release: () => 
   return { promise, release }
 }
 
-const shellRequests = (test: Harness) =>
-  test.relay.requests.filter((request) => request.operation === "session.shell.output")
+const shellRequests = (test: Harness) => test.relay.requests.filter((request) => request.operation === "shell.output")
 
 describe("paged shell output", () => {
   test("reads one explicit page at the client's cursor and appends it", async () => {
     const test = await harness({
       handler: (request) =>
-        request.operation === "session.shell.output"
+        request.operation === "shell.output"
           ? { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
           : "default",
     })
@@ -157,7 +157,7 @@ describe("paged shell output", () => {
       expect(shellOutputFetchFor(test.store.state().view!, "sh_page")).toEqual({ state: "idle" })
       // The request names the shell, the session that owns it, the cursor, and one page budget.
       expect(shellRequests(test).map((request) => ({ sessionID: request.sessionID, input: request.input }))).toEqual([
-        { sessionID: "ses_a", input: { shellID: "sh_page", cursor: 6, limit: 65_536 } },
+        { sessionID: "ses_a", input: { id: "sh_page", cursor: 6, limit: 65_536 } },
       ])
       // A read is not a mutation: nothing is queued for a retry, and nothing else is requested.
       expect(test.store.state().mutations).toEqual([])
@@ -172,7 +172,7 @@ describe("paged shell output", () => {
   test("stops at the captured end with cursor equal to size", async () => {
     const test = await harness({
       handler: (request) =>
-        request.operation === "session.shell.output"
+        request.operation === "shell.output"
           ? { ok: true, value: { data: { output: "tail\n", cursor: 20, size: 20, truncated: false } } }
           : "default",
     })
@@ -197,7 +197,7 @@ describe("paged shell output", () => {
     const gate = deferred()
     const test = await harness({
       handler: async (request) => {
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         await gate.promise
         return { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
       },
@@ -225,7 +225,7 @@ describe("paged shell output", () => {
     let page = 0
     const test = await harness({
       handler: (request) => {
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         page += 1
         // The first read meets a held incomplete character: no bytes, cursor unchanged.
         return page === 1
@@ -262,11 +262,17 @@ describe("paged shell output", () => {
     }
   })
 
-  test("reports a device that does not offer paged output without changing the page", async () => {
+  test("reports a typed page rejection without changing the captured output", async () => {
     const test = await harness({
       handler: (request) =>
-        request.operation === "session.shell.output"
-          ? { ok: false, code: "unknown_operation", message: "unsupported operation" }
+        request.operation === "shell.output"
+          ? {
+              wire: (peer, dispatch) =>
+                peer.error(dispatch, "ycoding.v5.InvalidRequestError", {
+                  _tag: "InvalidRequestError",
+                  message: "Paged output rejected",
+                }),
+            }
           : "default",
     })
     try {
@@ -284,7 +290,7 @@ describe("paged shell output", () => {
       })
       const fetch = shellOutputFetchFor(test.store.state().view!, "sh_page")
       expect(fetch?.state).toBe("error")
-      expect(fetch?.state === "error" ? fetch.message : "").toContain("does not offer paged terminal output")
+      expect(fetch?.state === "error" ? fetch.message : "").toContain("Paged output rejected")
     } finally {
       await test.stop()
     }
@@ -294,7 +300,7 @@ describe("paged shell output", () => {
     const gate = deferred()
     const test = await harness({
       handler: async (request) => {
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         await gate.promise
         return { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
       },
@@ -325,7 +331,7 @@ describe("paged shell output", () => {
     const gate = deferred()
     const test = await harness({
       handler: async (request) => {
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         await gate.promise
         return { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
       },
@@ -338,7 +344,8 @@ describe("paged shell output", () => {
       const reading = test.store.loadShellOutputPage("sh_page")
       await test.runUntil(() => shellRequests(test).length === 1)
       let returned = false
-      const returning = test.store.selectSession("ses_b")
+      const returning = test.store
+        .selectSession("ses_b")
         .then(() => test.store.selectSession("ses_a"))
         .finally(() => {
           returned = true
@@ -370,7 +377,7 @@ describe("paged shell output", () => {
     const gate = deferred()
     const test = await harness({
       handler: async (request) => {
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         await gate.promise
         return { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
       },
@@ -429,7 +436,7 @@ describe("paged shell output", () => {
             },
           }
         }
-        if (request.operation !== "session.shell.output") return "default"
+        if (request.operation !== "shell.output") return "default"
         await gate.promise
         return { ok: true, value: { data: { output: "second\n", cursor: 13, size: 20, truncated: false } } }
       },
@@ -445,9 +452,7 @@ describe("paged shell output", () => {
       if (before === undefined) throw new Error("expected the shell message")
       // The device advanced to byte 13 while the page from byte 6 was still in flight.
       await test.store.reloadMessages()
-      await test.runUntil(
-        () => shellOutputFor(test.store.state().view!, "sh_page")?.cursor === 13,
-      )
+      await test.runUntil(() => shellOutputFor(test.store.state().view!, "sh_page")?.cursor === 13)
       gate.release()
       await reading
       await test.flush()
@@ -467,7 +472,7 @@ describe("paged shell output", () => {
   test("reads a background shell tool's capture from the shell id the device reported", async () => {
     const test = await harness({
       handler: (request) =>
-        request.operation === "session.shell.output"
+        request.operation === "shell.output"
           ? { ok: true, value: { data: { output: "watch\n", cursor: 6, size: 40, truncated: false } } }
           : "default",
     })
@@ -484,7 +489,7 @@ describe("paged shell output", () => {
         size: 40,
         truncated: false,
       })
-      expect(shellRequests(test).map((request) => request.input)).toEqual([{ shellID: "sh_bg", cursor: 0, limit: 65_536 }])
+      expect(shellRequests(test).map((request) => request.input)).toEqual([{ id: "sh_bg", cursor: 0, limit: 65_536 }])
     } finally {
       await test.stop()
     }

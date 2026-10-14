@@ -16,7 +16,21 @@ const pending = Promise.withResolvers<RelayHandlerOutcome>()
 
 beforeAll(async () => {
   relay = await startRelayDouble({
-    handler: (request) => (request.operation === "session.pending.list" && hold ? pending.promise : "default"),
+    handler: (request) => {
+      if (request.operation === "catalog.get")
+        return {
+          ok: true,
+          value: {
+            agents: [{ id: "god", name: "God", mode: "primary", hidden: false }],
+            models: [{ providerID: "openai", id: "gpt-5", name: "GPT-5", variants: [] }],
+            commands: [],
+            skills: [],
+            references: [],
+            resources: [],
+          },
+        }
+      return request.operation === "session.pending.list" && hold ? pending.promise : "default"
+    },
   })
   const { createServer } = await import("vite")
   vite = await createServer({

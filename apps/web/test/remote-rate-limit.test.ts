@@ -1,87 +1,159 @@
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, parseClientMessage, parseRelayToAgentMessage, serializeResponse, serializeSessions, serializeStatus, type RemoteRequest, type RemoteStatus } from "@ycoding-ai/remote"
+import { WebLimits, type RelayRequestView } from "../src/remote/wire-views"
+import { createAgentPeer, binaryData, binaryFrame, startAgent } from "./core-peer"
+import { fixtureSession, fixtureSnapshot } from "./wire-peer"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { loadWorkspaces } from "./remote-queries"
-import { waitFor } from "./relay-double"
+import { fixtureResult, waitFor } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
 
 async function harness(count: number, statusGate?: Promise<void>) {
   const sockets = new Map<string, Bun.ServerWebSocket<{ id: string }>>()
   const closed: { code: number; reason: string }[] = []
-  const requests: RemoteRequest[] = []
-  let storedStatus: RemoteStatus | undefined
+  const requests: RelayRequestView[] = []
   let statusReads = 0
   let statusResponses = 0
-  let pongs = 0
-  const relay = createRelay({
-    now: Date.now,
-    newID: () => crypto.randomUUID(),
-    send: (connectionID, raw) => {
-      if (connectionID !== "agent") {
-        sockets.get(connectionID)?.send(raw)
-        return
-      }
-      const parsed = parseRelayToAgentMessage(raw)
-      if (!parsed.ok) throw new Error(parsed.error.message)
-      if (parsed.value.type !== "request") return
-      const request = parsed.value
+  let clientPings = 0
+  const gatedResponses: Promise<void>[] = []
+  const agent = createAgentPeer(
+    () => performance.now(),
+    (request, dispatch, peer) => {
       requests.push(request)
       if (request.operation === "session.interrupt") return
       const offset = Number(request.input?.cursor ?? 0)
-      const limit = Number(request.input?.limit ?? RemoteLimits.maxSessionListPage)
-      const data = request.operation === "session.status"
-        ? { running: [], attention: [] }
-        : request.operation === "session.catalog" || request.operation === "workspace.catalog"
-        ? { agents: [], models: [], commands: [], skills: [], references: [], resources: [] }
-        : request.operation === "session.file.find" || request.operation === "workspace.file.find"
-        ? { files: [{ path: "src/a.ts", uri: "file:///work/src/a.ts", kind: "file" }] }
-        : request.operation === "workspace.list"
-        ? [{ id: "wsp_even", projectID: "prj_even", directory: "/work/even" },
-          { id: "wsp_odd", projectID: "prj_odd", directory: "/work/odd" }]
-        : request.operation === "session.list"
-        ? Array.from({ length: Math.min(limit, Math.ceil(count / 2) - offset) }, (_, index) => ({
-            id: `ses_${(offset + index) * 2 + (request.input?.workspace === "wsp_odd" ? 1 : 0)}`,
-            title: `Session ${(offset + index) * 2}`,
-            time: { created: 1, updated: 1 },
-          }))
-        : {}
-      const respond = async () => {
-        await relay.handleAgentMessage("agent", serializeResponse({
-          type: "response",
-          id: request.id,
-          ok: true,
-          value: request.operation === "session.file.find" || request.operation === "workspace.file.find" || request.operation === "session.catalog" || request.operation === "workspace.catalog" ? data : {
-            data,
-            ...(request.operation === "session.list"
-              ? { cursor: { ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
-                ...(offset + limit < Math.ceil(count / 2) ? { next: String(offset + limit) } : {}) } }
-              : {}),
-          },
-        }))
+      const limit = Number(request.input?.limit ?? WebLimits.maxSessionListPage)
+      const data =
+        request.operation === "session.status"
+          ? { running: [], attention: [] }
+          : request.operation === "catalog.get"
+            ? { agents: [], models: [], commands: [], skills: [], references: [], resources: [] }
+            : request.operation === "fs.find"
+              ? { files: [{ path: "src/a.ts", uri: "file:///work/src/a.ts", kind: "file" }] }
+              : request.operation === "workspace.list"
+                ? [
+                    { id: "wsp_even", projectID: "prj_even", directory: "/work/even" },
+                    { id: "wsp_odd", projectID: "prj_odd", directory: "/work/odd" },
+                  ]
+                : request.operation === "session.list"
+                  ? Array.from({ length: Math.min(limit, Math.ceil(count / 2) - offset) }, (_, index) => ({
+                      ...fixtureSession(
+                        `ses_${(offset + index) * 2 + (request.input?.workspace === "wsp_odd" ? 1 : 0)}`,
+                      ),
+                      title: `Session ${(offset + index) * 2}`,
+                      time: { created: 1, updated: 1 },
+                    }))
+                  : {}
+      const respond = () => {
         if (request.operation === "session.status") statusResponses += 1
+        if (peer.cancelled.has(dispatch.requestID)) return
+        const value =
+          request.operation === "session.status" ||
+          request.operation === "fs.find" ||
+          request.operation === "catalog.get"
+            ? data
+            : {
+                data,
+                ...(request.operation === "session.list"
+                  ? {
+                      cursor: {
+                        ...(offset > 0 ? { previous: String(Math.max(0, offset - limit)) } : {}),
+                        ...(offset + limit < Math.ceil(count / 2) ? { next: String(offset + limit) } : {}),
+                      },
+                    }
+                  : {}),
+              }
+        if (request.operation === "session.snapshot") {
+          peer.result(dispatch, fixtureSnapshot(request.sessionID!))
+          return
+        }
+        if (request.operation === "event.subscribe") {
+          peer.control({
+            case: "resyncRequired",
+            value: { scope: dispatch.request.scope!, sourceEpoch: peer.backendEpoch },
+          })
+          peer.result(dispatch, { subscription_id: `sub-${request.sessionID}-${crypto.randomUUID()}` })
+          return
+        }
+        if (request.operation === "session.get") {
+          peer.result(dispatch, { data: fixtureSession(request.sessionID!) })
+          return
+        }
+        if (request.operation === "session.autonomy.get") {
+          peer.result(dispatch, { data: { mode: "normal", yolo: 0 } })
+          return
+        }
+        if (request.operation === "session.subagent.list") {
+          peer.result(dispatch, {
+            data: { data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} },
+          })
+          return
+        }
+        if (request.operation === "session.team.shell.list") {
+          peer.result(dispatch, { data: [], truncated: false })
+          return
+        }
+        if (request.operation === "telemetry.consent.get") {
+          peer.result(dispatch, { data: { noticeVersion: 1 } })
+          return
+        }
+        if (request.operation === "session.form.list") {
+          peer.result(dispatch, { data: [] })
+          return
+        }
+        if (
+          [
+            "session.pending.list",
+            "session.todo.list",
+            "session.capturedChanges.list",
+            "session.permission.list",
+            "session.guardrail.request.list",
+          ].includes(request.operation)
+        ) {
+          peer.result(dispatch, { data: [] })
+          return
+        }
+        if (request.operation === "session.compaction.list") {
+          peer.result(dispatch, {
+            data: { data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 },
+          })
+          return
+        }
+        peer.result(dispatch, fixtureResult(request.operation, value))
       }
-      if (request.operation === "session.status" && statusGate && ++statusReads === 1) void statusGate.then(respond)
+      if (request.operation === "session.status" && statusGate && ++statusReads === 1)
+        gatedResponses.push(statusGate.then(respond))
       else void respond()
     },
+  )
+  const deliveries: Promise<void>[] = []
+  let agentDelivery = Promise.resolve()
+  const relay = createRelay({
+    now: Date.now,
+    monotonic: () => performance.now(),
+    newID: () => crypto.randomUUID(),
+    send: (connectionID, raw) =>
+      connectionID === "agent" ? agent.receive(raw.slice().buffer) : sockets.get(connectionID)?.send(raw),
     close: (connectionID, code, reason) => {
-      closed.push({ code, reason })
+      if (connectionID === "agent" || sockets.has(connectionID)) closed.push({ code, reason })
       sockets.get(connectionID)?.close(code, reason)
     },
-    saveSubscriptions: () => {},
-    savePending: () => {},
-    loadStatus: async () => storedStatus,
-    saveStatus: async (status) => { storedStatus = status },
     loadOfflineCheck: async () => undefined,
     saveOfflineCheck: async () => undefined,
-    notices: { append: () => ({ notices: [], total: 0 }), repeat: () => [], complete: () => ({ notices: [], total: 0 }), page: () => ({ notices: [], total: 0 }), remove: () => ({ ids: [], total: 0 }), clear: () => {}, unavailable: () => false, markUnavailable: () => {} },
-    saveNoticeSubscription: () => {},
-    savePriority: () => {},
-    authorizeClientCommand: async () => ({ ok: true }),
-    authorizeAgentCommand: async () => ({ ok: true }),
-    authorityTtlMs: 5_000,
+    notices: {
+      append: () => ({ notices: [], total: 0 }),
+      repeat: () => [],
+      complete: () => ({ notices: [], total: 0 }),
+      page: () => ({ notices: [], total: 0 }),
+      remove: () => ({ ids: [], total: 0 }),
+      clear: () => {},
+      unavailable: () => false,
+      markUnavailable: () => {},
+    },
+    authorizeClientCommand: async () => ({ ok: true, ownerID: "usr_test" }),
+    authorizeAgentCommand: async () => ({ ok: true, ownerID: "usr_test" }),
   })
   const connection = {
     ownerID: "usr_test",
@@ -93,15 +165,22 @@ async function harness(count: number, statusGate?: Promise<void>) {
     pending: [],
   }
   await relay.attach({ ...connection, connectionID: "agent", role: "agent" })
+  agent.message = (raw) => {
+    agentDelivery = agentDelivery.then(() => relay.handleAgentMessage("agent", raw))
+    deliveries.push(agentDelivery)
+  }
+  startAgent(agent)
+  while (deliveries.length) await Promise.all(deliveries.splice(0))
   const server = Bun.serve<{ id: string }>({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, server) {
-      if (new URL(request.url).pathname === "/api/me") return Response.json({
-        user: { id: connection.ownerID },
-        session: { expiresAt: connection.credentialExpiresAt },
-        devices: [{ id: connection.deviceID, name: "Test machine", status: "active", online: true, createdAt: 1 }],
-      })
+      if (new URL(request.url).pathname === "/api/me")
+        return Response.json({
+          user: { id: connection.ownerID },
+          session: { expiresAt: connection.credentialExpiresAt },
+          devices: [{ id: connection.deviceID, name: "Test machine", status: "active", online: true, createdAt: 1 }],
+        })
       if (server.upgrade(request, { data: { id: crypto.randomUUID() } })) return undefined
       return new Response("WebSocket required", { status: 426 })
     },
@@ -111,9 +190,9 @@ async function harness(count: number, statusGate?: Promise<void>) {
         await relay.attach({ ...connection, connectionID: socket.data.id, role: "client" })
       },
       message(socket, raw) {
-        const parsed = parseClientMessage(String(raw))
-        if (parsed.ok && parsed.value.type === "pong") pongs += 1
-        return relay.handleClientMessage(socket.data.id, String(raw))
+        const frame = binaryFrame(raw)
+        if (frame.body.case === "control" && frame.body.value.kind.case === "ping") clientPings += 1
+        return relay.handleClientMessage(socket.data.id, binaryData(raw))
       },
       close(socket) {
         sockets.delete(socket.data.id)
@@ -125,16 +204,35 @@ async function harness(count: number, statusGate?: Promise<void>) {
     server,
     closed,
     requests,
-    get statusResponses() { return statusResponses },
-    get pongs() { return pongs },
-    ping: () => {
-      for (const socket of sockets.values()) socket.send('{"type":"ping"}')
+    diagnostics: () => ({
+      agent: agent.connection.state,
+      relayAgent: relay.agentConnected(),
+      peers: sockets.size,
+      closed: closed.slice(0, 8),
+      closedCount: closed.length,
+      requests: requests.slice(-40).map((request) => request.operation),
+      requestCount: requests.length,
+      failures: agent.failures.slice(0, 8).map((error) => error.message),
+    }),
+    get statusResponses() {
+      return statusResponses
     },
+    settleStatus: () => Promise.all(gatedResponses),
+    get clientPings() {
+      return clientPings
+    },
+    ping: () => relay.sweep(),
     drop: () => {
       for (const socket of sockets.values()) socket.close(1012, "Connection interrupted")
     },
-    status: (running: readonly string[], attention: readonly string[]) => relay.handleAgentMessage("agent", serializeStatus({ type: "status", running, attention })),
-    invalidate: () => relay.handleAgentMessage("agent", serializeSessions({ type: "sessions" })),
+    status: async (running: readonly string[], attention: readonly string[]) => {
+      agent.control({ case: "status", value: { running: [...running], attention: [...attention] } })
+      while (deliveries.length) await Promise.all(deliveries.splice(0))
+    },
+    invalidate: async () => {
+      agent.control({ case: "inventoryInvalidated", value: {} })
+      while (deliveries.length) await Promise.all(deliveries.splice(0))
+    },
   }
 }
 
@@ -144,11 +242,24 @@ describe("remote request budget integration", () => {
     const fixture = await harness(100, status.promise)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
+      createTransport: (_deviceID, handlers) =>
+        createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
     })
     try {
       await store.load()
-      await waitFor(() => store.state().sessionListStatus === "ready" && store.state().sessions.length === 25)
+      await waitFor(() => store.state().sessionListStatus === "ready" && store.state().sessions.length === 25).catch(
+        (cause: unknown) => {
+          throw new Error(
+            JSON.stringify({
+              ...fixture.diagnostics(),
+              transport: store.state().transport,
+              connection: store.state().connection,
+              list: store.state().sessionListStatus,
+            }),
+            { cause },
+          )
+        },
+      )
       await store.nextSessionsPage()
       expect(store.state().sessions).toHaveLength(50)
       expect(await loadWorkspaces(store)).toHaveLength(2)
@@ -158,20 +269,32 @@ describe("remote request budget integration", () => {
       await waitFor(() => store.state().carouselStatus === "ready", 500)
       status.resolve()
       expect(fixture.closed).toEqual([])
-    } finally { status.resolve(); store.dispose(); await fixture.server.stop(true) }
+    } finally {
+      status.resolve()
+      await fixture.settleStatus()
+      store.dispose()
+      await fixture.server.stop(true)
+    }
   }, 5_000)
 
   test("a failed status request leaves the small Session inventory and carousel readable", async () => {
     const fixture = await harness(10)
     const logged: unknown[][] = []
     const originalError = console.error
-    console.error = (...args: unknown[]) => { logged.push(args) }
+    console.error = (...args: unknown[]) => {
+      logged.push(args)
+    }
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
       createTransport: (_deviceID, handlers) => {
         const transport = createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers })
-        return { ...transport, request: (operation, input) => operation === "session.status"
-          ? Promise.reject(new Error("Synthetic status transport failure token=secret")) : transport.request(operation, input) }
+        return {
+          ...transport,
+          request: (operation, input) =>
+            operation === "session.status"
+              ? Promise.reject(new Error("Synthetic status transport failure token=secret"))
+              : transport.request(operation, input),
+        }
       },
     })
     try {
@@ -181,7 +304,11 @@ describe("remote request budget integration", () => {
       expect(store.state().carouselStatus).toBe("ready")
       expect(fixture.closed).toEqual([])
       expect(logged).toEqual([["Session status read failed"]])
-    } finally { console.error = originalError; store.dispose(); await fixture.server.stop(true) }
+    } finally {
+      console.error = originalError
+      store.dispose()
+      await fixture.server.stop(true)
+    }
   })
 
   test("a late status reply from the closed socket cannot reset the recovered carousel", async () => {
@@ -189,58 +316,92 @@ describe("remote request budget integration", () => {
     const fixture = await harness(10, status.promise)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
-        url: `ws://127.0.0.1:${fixture.server.port}`, handlers, resetDelayMs: 10, random: () => 0.5,
-      }),
+      createTransport: (_deviceID, handlers) =>
+        createRemoteTransport({
+          url: `ws://127.0.0.1:${fixture.server.port}`,
+          handlers,
+          resetDelayMs: 10,
+          random: () => 0.5,
+        }),
     })
     try {
       await store.load()
-      await waitFor(() => store.state().sessions.length === 5 && fixture.requests.some((request) => request.operation === "session.status"))
+      await waitFor(
+        () =>
+          store.state().sessions.length === 5 &&
+          fixture.requests.some((request) => request.operation === "session.status"),
+      )
       fixture.drop()
-      await waitFor(() => fixture.requests.filter((request) => request.operation === "session.status").length === 2 &&
-        store.state().carouselStatus === "ready" && store.state().carouselSessions?.length === 5, 5_000)
+      await waitFor(
+        () =>
+          fixture.requests.filter((request) => request.operation === "session.status").length === 2 &&
+          store.state().carouselStatus === "ready" &&
+          store.state().carouselSessions?.length === 5,
+        5_000,
+      )
       const carousel = store.state().carouselSessions
       status.resolve()
       await waitFor(() => fixture.statusResponses === 2)
       expect(store.state().carouselSessions).toEqual(carousel)
       expect(store.state().connection.kind).toBe("connected")
       expect(fixture.closed).toEqual([])
-    } finally { status.resolve(); store.dispose(); await fixture.server.stop(true) }
+    } finally {
+      status.resolve()
+      await fixture.settleStatus()
+      store.dispose()
+      await fixture.server.stop(true)
+    }
   }, 10_000)
 
-  for (const selected of [false, true]) test(`loads the small running and recent inventory promptly after reconnect${selected ? " with a selected Session" : ""}`, async () => {
-    const fixture = await harness(10)
-    const clock = createRemoteStoreClock()
-    const store = createRemoteStore({
-      http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
-        url: `ws://127.0.0.1:${fixture.server.port}`,
-        handlers,
-        resetDelayMs: 10,
-        random: () => 0.5,
-      }),
-      schedule: clock.schedule,
-      monotonicNow: clock.now,
-    })
-    try {
-      await store.load()
-      await waitFor(() => store.state().sessions.length === 5 && store.state().carouselSessions?.length === 5)
-      if (selected) await store.selectSession("ses_0")
-      fixture.drop()
-      await waitFor(() => fixture.requests.filter((request) => request.operation === "workspace.list").length >= 2 &&
-        store.state().sessionListStatus === "ready" && store.state().sessions.length === 5, 5_000)
-      await waitFor(() => store.state().carouselStatus === "ready" && store.state().carouselSessions?.length === 5, 1_000)
-      expect(fixture.closed).toEqual([])
-      expect(store.state().connection.kind).toBe("connected")
-      if (selected) expect(store.state().activeSessionID).toBe("ses_0")
-    } finally { store.dispose(); await fixture.server.stop(true) }
-  }, 10_000)
+  for (const selected of [false, true])
+    test(`loads the small running and recent inventory promptly after reconnect${selected ? " with a selected Session" : ""}`, async () => {
+      const fixture = await harness(10)
+      const store = createRemoteStore({
+        http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+        createTransport: (_deviceID, handlers) =>
+          createRemoteTransport({
+            url: `ws://127.0.0.1:${fixture.server.port}`,
+            handlers,
+            resetDelayMs: 10,
+            random: () => 0.5,
+          }),
+      })
+      try {
+        await store.load()
+        await waitFor(() => store.state().sessions.length === 5 && store.state().carouselSessions?.length === 5)
+        if (selected) await store.selectSession("ses_0")
+        fixture.drop()
+        await waitFor(
+          () =>
+            fixture.requests.filter((request) => request.operation === "workspace.list").length >= 2 &&
+            store.state().sessionListStatus === "ready" &&
+            store.state().sessions.length === 5,
+          5_000,
+        )
+        await waitFor(
+          () => store.state().carouselStatus === "ready" && store.state().carouselSessions?.length === 5,
+          1_000,
+        )
+        expect(fixture.closed).toEqual([])
+        expect(store.state().connection.kind).toBe("connected")
+        if (selected) expect(store.state().activeSessionID).toBe("ses_0")
+      } catch (cause) {
+        throw new Error(
+          `Reconnect did not settle: ${JSON.stringify({ fixture: fixture.diagnostics(), transport: store.state().transport, connection: store.state().connection, sessionListStatus: store.state().sessionListStatus, carouselStatus: store.state().carouselStatus, sessions: store.state().sessions.length, carousel: store.state().carouselSessions?.length })}`,
+          { cause },
+        )
+      } finally {
+        store.dispose()
+        await fixture.server.stop(true)
+      }
+    }, 10_000)
 
   test("keeps status, catalog, file reads, and inventory invalidation bursts inside the relay window", async () => {
     const fixture = await harness(200)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
+      createTransport: (_deviceID, handlers) =>
+        createRemoteTransport({ url: `ws://127.0.0.1:${fixture.server.port}`, handlers }),
     })
     try {
       await store.load()
@@ -248,31 +409,41 @@ describe("remote request budget integration", () => {
       await fixture.status(["ses_2"], ["ses_4"])
       await waitFor(() => store.state().sessionStatus?.running.has("ses_2") === true, 25_000)
       await Promise.all([
-        store.loadCatalog({ sessionID: "ses_2" }), store.loadCatalog({ workspaceID: "wsp_even" }),
-        store.findFiles({ sessionID: "ses_2" }, "a"), store.findFiles({ workspaceID: "wsp_even" }, "a"),
+        store.loadCatalog({ sessionID: "ses_2" }),
+        store.loadCatalog({ workspaceID: "wsp_even" }),
+        store.findFiles({ sessionID: "ses_2" }, "a"),
+        store.findFiles({ workspaceID: "wsp_even" }, "a"),
       ])
       for (let index = 0; index < 123; index += 1) await fixture.invalidate()
       fixture.ping()
       for (let index = 0; index < 121; index += 1)
         expect((await store.findFiles({ sessionID: "ses_2" }, `query-${index}`)).status).toBe("ok")
-      await waitFor(() => store.state().sessionListStatus === "ready" && store.state().catalogs["session:ses_2"]?.status === "ready", 30_000)
+      await waitFor(
+        () =>
+          store.state().sessionListStatus === "ready" && store.state().catalogs["session:ses_2"]?.status === "ready",
+        30_000,
+      )
       expect(fixture.closed).toEqual([])
-      expect(fixture.requests.length).toBeGreaterThan(RemoteLimits.maxClientRequestsPerWindow)
+      expect(fixture.requests.length).toBeGreaterThan(WebLimits.maxClientRequestsPerWindow)
       expect(fixture.requests.filter((request) => request.operation === "session.status")).toHaveLength(1)
-      expect(fixture.requests.filter((request) => request.operation === "session.catalog" || request.operation === "workspace.catalog")).toHaveLength(2)
-      expect(fixture.requests.filter((request) => request.operation === "session.file.find" || request.operation === "workspace.file.find")).toHaveLength(123)
+      expect(fixture.requests.filter((request) => request.operation === "catalog.get")).toHaveLength(2)
+      expect(fixture.requests.filter((request) => request.operation === "fs.find")).toHaveLength(123)
       expect(store.state().connection.kind).toBe("connected")
-    } finally { store.dispose(); await fixture.server.stop(true) }
+    } finally {
+      store.dispose()
+      await fixture.server.stop(true)
+    }
   }, 60_000)
   test("loads a bounded first page of a large inventory and continues only on demand", async () => {
     const count = 14_501
     const fixture = await harness(count)
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({
-        url: `ws://127.0.0.1:${fixture.server.port}`,
-        handlers,
-      }),
+      createTransport: (_deviceID, handlers) =>
+        createRemoteTransport({
+          url: `ws://127.0.0.1:${fixture.server.port}`,
+          handlers,
+        }),
     })
     try {
       await store.load()
@@ -282,9 +453,16 @@ describe("remote request budget integration", () => {
       expect(store.state().sessions).toHaveLength(25)
       expect(store.state().sessions.map((session) => session.id)).toContain("ses_0")
       expect(store.state().sessions.map((session) => session.id)).toContain("ses_48")
-      expect(fixture.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined)).toHaveLength(1)
-      expect(fixture.requests.filter((request) => request.operation === "session.list" && request.input?.workspace === undefined)
-        .every((request) => typeof request.input?.limit === "number" && request.input.limit <= 10)).toBe(true)
+      expect(
+        fixture.requests.filter(
+          (request) => request.operation === "session.list" && request.input?.workspace !== undefined,
+        ),
+      ).toHaveLength(1)
+      expect(
+        fixture.requests
+          .filter((request) => request.operation === "session.list" && request.input?.workspace === undefined)
+          .every((request) => typeof request.input?.limit === "number" && request.input.limit <= 10),
+      ).toBe(true)
       expect(store.state().sessionHasNext).toBe(true)
       await store.nextSessionsPage()
       expect(store.state().sessions).toHaveLength(50)
@@ -305,8 +483,16 @@ describe("remote request budget integration", () => {
       expect(fixture.closed).toEqual([])
       expect(store.state().connection.kind).toBe("connected")
       expect(store.state().sessions.map((session) => session.id)).toEqual(initial.map((session) => session.id))
-      expect(fixture.requests.filter((request) => request.operation === "machine.telemetry.consent.get")).toHaveLength(2)
-      expect(fixture.requests.every((request) => request.operation === "workspace.list" || request.operation === "session.list" || request.operation === "session.status" || request.operation === "machine.telemetry.consent.get")).toBe(true)
+      expect(fixture.requests.filter((request) => request.operation === "telemetry.consent.get")).toHaveLength(2)
+      expect(
+        fixture.requests.every(
+          (request) =>
+            request.operation === "workspace.list" ||
+            request.operation === "session.list" ||
+            request.operation === "session.status" ||
+            request.operation === "telemetry.consent.get",
+        ),
+      ).toBe(true)
     } finally {
       store.dispose()
       await fixture.server.stop(true)
@@ -314,41 +500,47 @@ describe("remote request budget integration", () => {
   }, 60_000)
 
   test("bounds delayed requests, cancels unsent mutations on a drop, and never replays them", async () => {
-    const pacedBudget = RemoteLimits.maxClientRequestsPerWindow - 3
+    const pacedBudget = WebLimits.maxClientRequestsPerWindow - 3
     const fixture = await harness(0)
     const transport = createRemoteTransport({
       url: `ws://127.0.0.1:${fixture.server.port}`,
       resetDelayMs: 10,
       random: () => 1,
+      pingIntervalMs: 100,
     })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
       for (let index = 0; index < pacedBudget - 2; index += 1)
-        expect((await transport.request("session.active")).status).toBe("ok")
-      fixture.ping()
-      await waitFor(() => fixture.pongs === 1)
+        expect((await transport.request("session.list")).status).toBe("ok")
+      await waitFor(() => fixture.clientPings > 1)
       const sent = transport.request("session.interrupt", { sessionID: "ses_test" })
       await waitFor(() => fixture.requests.length === pacedBudget - 1)
       let settled = 0
-      const delayed = Array.from({ length: 31 }, () => transport.request("session.prompt", {
-        sessionID: "ses_test",
-        input: { text: "Never replay this prompt" },
-        timeoutMs: 1,
-      }).then((outcome) => {
-        settled += 1
-        return outcome
-      }))
-      expect(await transport.request("session.active")).toEqual({ status: "unavailable", reason: "in-flight-limit" })
+      const delayed = Array.from({ length: 31 }, () =>
+        transport
+          .request("session.prompt", {
+            sessionID: "ses_test",
+            input: { text: "Never replay this prompt" },
+            timeoutMs: 1,
+          })
+          .then((outcome) => {
+            settled += 1
+            return outcome
+          }),
+      )
+      expect(await transport.request("session.list")).toEqual({ status: "unavailable", reason: "in-flight-limit" })
       await Bun.sleep(20)
       expect(fixture.closed).toEqual([])
       expect(settled).toBe(0)
       expect(fixture.requests).toHaveLength(pacedBudget - 1)
       fixture.drop()
       expect((await sent).status).toBe("unknown")
-      expect(await Promise.all(delayed)).toEqual(Array.from({ length: 31 }, () => ({ status: "unavailable", reason: "not-connected" })))
+      expect(await Promise.all(delayed)).toEqual(
+        Array.from({ length: 31 }, () => ({ status: "unavailable", reason: "not-connected" })),
+      )
       await waitFor(() => transport.status().kind === "open")
-      expect((await transport.request("session.active")).status).toBe("ok")
+      expect((await transport.request("session.list")).status).toBe("ok")
       expect(fixture.requests.filter((request) => request.operation === "session.prompt")).toEqual([])
       expect(fixture.closed).toEqual([])
     } finally {

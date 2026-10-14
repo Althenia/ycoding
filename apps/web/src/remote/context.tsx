@@ -1,4 +1,3 @@
-import { RemoteWebSocketPath } from "@ycoding-ai/remote"
 import { QueryClientProvider } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
 import { createContext, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js"
@@ -8,6 +7,7 @@ import { createRemoteHttp, type SignInProvider } from "./http"
 import { createRemoteQueries, createRemoteQueryClient, type QueryScope, type RemoteQueries } from "./queries"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "./store"
 import { createRemoteTransport } from "./transport"
+import { remoteWebSocketURL } from "./endpoint"
 
 export type RemoteContextValue = {
   readonly store: RemoteStore
@@ -27,11 +27,6 @@ export type RemoteContextValue = {
 
 const RemoteContext = createContext<RemoteContextValue>()
 
-function webSocketURL(deviceID: string): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-  return `${protocol}//${window.location.host}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`
-}
-
 /** One remote workspace lifetime: the store and the read options its routes and panels share. */
 export type RemoteSession = { readonly store: RemoteStore; readonly queries: RemoteQueries }
 
@@ -40,21 +35,28 @@ export function createRemoteSession(createStore?: () => RemoteStore): RemoteSess
     createStore?.() ??
     createRemoteStore({
       http: createRemoteHttp(),
-      createTransport: (deviceID, handlers) => createRemoteTransport({ url: webSocketURL(deviceID), handlers }),
+      createTransport: (deviceID, handlers) =>
+        createRemoteTransport({ url: remoteWebSocketURL(window.location.origin, deviceID), handlers }),
       queryClient: createRemoteQueryClient(),
     })
   return { store, queries: createRemoteQueries(store.link, store.queryClient) }
 }
 
 /** Owns the session it is given, or one it creates, until it unmounts. */
-export function RemoteProvider(props: { readonly children: JSX.Element; readonly createStore?: () => RemoteStore; readonly session?: RemoteSession }) {
+export function RemoteProvider(props: {
+  readonly children: JSX.Element
+  readonly createStore?: () => RemoteStore
+  readonly session?: RemoteSession
+}) {
   const session = props.session ?? createRemoteSession(props.createStore)
   const store = session.store
   const state = useStore(store.container)
   const scope = useStore(
     store.container,
     (current): QueryScope | undefined =>
-      current.activeDeviceID === undefined ? undefined : { deviceID: current.activeDeviceID, generation: current.generation },
+      current.activeDeviceID === undefined
+        ? undefined
+        : { deviceID: current.activeDeviceID, generation: current.generation },
     (a, b) => a?.deviceID === b?.deviceID && a?.generation === b?.generation,
   )
   const [deviceAliases, setDeviceAliases] = createSignal(readDeviceAliases())
@@ -77,7 +79,8 @@ export function RemoteProvider(props: { readonly children: JSX.Element; readonly
     setDeviceAlias: (deviceID, alias) => setDeviceAliases(setDeviceAlias(deviceID, alias)),
     queries: session.queries,
     // Return to the route the reader opened, so signing in from Settings lands on Settings.
-    signIn: (provider) => window.location.assign(store.signInURL(provider, window.location.pathname + window.location.search)),
+    signIn: (provider) =>
+      window.location.assign(store.signInURL(provider, window.location.pathname + window.location.search)),
     authError,
   }
   return (

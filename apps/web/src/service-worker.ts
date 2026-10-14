@@ -1,5 +1,12 @@
-import { isAlertTitle } from "@ycoding-ai/remote"
-import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
+import { validAlertTitle } from "./remote/wire-views"
+import {
+  CACHE_NAME,
+  CACHE_PREFIX,
+  OFFLINE_FALLBACK_URL,
+  PRECACHE_URLS,
+  shouldCacheStaticAsset,
+  shouldHandleNavigation,
+} from "./pwa/offline"
 import { alertCopy, isAlertDeviceID, overflowCopy, sessionURL } from "./remote/alert"
 
 /**
@@ -15,24 +22,53 @@ const scope = globalThis as unknown as {
   addEventListener: {
     (type: "install" | "activate", listener: (event: { waitUntil: (promise: Promise<unknown>) => void }) => void): void
     (type: "fetch", listener: (event: FetchEvent) => void): void
-    (type: "push", listener: (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => void): void
-    (type: "notificationclick", listener: (event: { notification: { data?: unknown; close: () => void }; waitUntil: (promise: Promise<unknown>) => void }) => void): void
-    (type: "pushsubscriptionchange", listener: (event: { newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null };
-      oldSubscription?: { endpoint: string }; waitUntil: (promise: Promise<unknown>) => void }) => void): void
+    (
+      type: "push",
+      listener: (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => void,
+    ): void
+    (
+      type: "notificationclick",
+      listener: (event: {
+        notification: { data?: unknown; close: () => void }
+        waitUntil: (promise: Promise<unknown>) => void
+      }) => void,
+    ): void
+    (
+      type: "pushsubscriptionchange",
+      listener: (event: {
+        newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null }
+        oldSubscription?: { endpoint: string }
+        waitUntil: (promise: Promise<unknown>) => void
+      }) => void,
+    ): void
   }
   skipWaiting: () => void
-  clients: { claim: () => void; matchAll: (options: { type: "window"; includeUncontrolled: true }) => Promise<readonly {
-    url: string; visibilityState: string; focused: boolean; focus: () => Promise<unknown>; postMessage: (message: unknown) => void }[]>;
-    openWindow: (url: string) => Promise<unknown> }
-  registration: { showNotification: (title: string, options: Record<string, unknown>) => Promise<void>;
-    pushManager: { subscribe: (options: { userVisibleOnly: true; applicationServerKey: Uint8Array<ArrayBuffer> }) => Promise<{
-      endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null }> } }
+  clients: {
+    claim: () => void
+    matchAll: (options: { type: "window"; includeUncontrolled: true }) => Promise<
+      readonly {
+        url: string
+        visibilityState: string
+        focused: boolean
+        focus: () => Promise<unknown>
+        postMessage: (message: unknown) => void
+      }[]
+    >
+    openWindow: (url: string) => Promise<unknown>
+  }
+  registration: {
+    showNotification: (title: string, options: Record<string, unknown>) => Promise<void>
+    pushManager: {
+      subscribe: (options: { userVisibleOnly: true; applicationServerKey: Uint8Array<ArrayBuffer> }) => Promise<{
+        endpoint: string
+        getKey: (name: "p256dh" | "auth") => ArrayBuffer | null
+      }>
+    }
+  }
   location: { origin: string }
 }
 
-scope.addEventListener("install", (
-  event: { waitUntil: (promise: Promise<unknown>) => void },
-) => {
+scope.addEventListener("install", (event: { waitUntil: (promise: Promise<unknown>) => void }) => {
   event.waitUntil(precacheShell().then(() => scope.skipWaiting()))
 })
 
@@ -40,7 +76,13 @@ scope.addEventListener("activate", (event: { waitUntil: (promise: Promise<unknow
   event.waitUntil(
     caches
       .keys()
-      .then((names) => Promise.all(names.filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME).map((name) => caches.delete(name))))
+      .then((names) =>
+        Promise.all(
+          names
+            .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)
+            .map((name) => caches.delete(name)),
+        ),
+      )
       .then(() => scope.clients.claim()),
   )
 })
@@ -51,71 +93,136 @@ scope.addEventListener("fetch", (event: FetchEvent) => {
     event.respondWith(navigationResponse(request))
     return
   }
-  if (shouldCacheStaticAsset({ url: request.url, method: request.method, mode: request.mode, destination: request.destination }, scope.location.origin)) {
+  if (
+    shouldCacheStaticAsset(
+      { url: request.url, method: request.method, mode: request.mode, destination: request.destination },
+      scope.location.origin,
+    )
+  ) {
     event.respondWith(cacheFirst(request))
   }
 })
 
-scope.addEventListener("push", (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => {
-  event.waitUntil((async () => {
-    const payload = await Promise.resolve().then(() => event.data?.json()).catch(() => undefined)
-    const alert = pushAlert(payload)
-    await scope.registration.showNotification(alert.title, { ...alert.options, icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" })
-  })())
-})
+scope.addEventListener(
+  "push",
+  (event: { data?: { json: () => unknown }; waitUntil: (promise: Promise<unknown>) => void }) => {
+    event.waitUntil(
+      (async () => {
+        const payload = await Promise.resolve()
+          .then(() => event.data?.json())
+          .catch(() => undefined)
+        const alert = pushAlert(payload)
+        await scope.registration.showNotification(alert.title, {
+          ...alert.options,
+          icon: "/icons/icon-256.png",
+          badge: "/icons/icon-256.png",
+        })
+      })(),
+    )
+  },
+)
 
-scope.addEventListener("notificationclick", (event: { notification: { data?: unknown; close: () => void }; waitUntil: (promise: Promise<unknown>) => void }) => {
-  event.notification.close()
-  event.waitUntil((async () => {
-    const data = event.notification.data
-    const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
-    const current = clients.find((client) => {
-      const url = new URL(client.url)
-      return url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
-    })
-    if (!isRecord(data) || !isSessionID(data.sessionID)) {
-      if (current && await current.focus().then(() => true, () => false)) return
-      await scope.clients.openWindow("/remote")
-      return
-    }
-    const deviceID = isAlertDeviceID(data.deviceID) ? data.deviceID : undefined
-    const noticeID = deviceID !== undefined && isNoticeID(data.noticeID) ? data.noticeID : undefined
-    if (current) {
-      const delivered = await current.focus().then(() => {
-        current.postMessage({ type: "ycoding:open-session", sessionID: data.sessionID,
-          ...(deviceID === undefined ? {} : { deviceID }), ...(noticeID === undefined ? {} : { noticeID }) })
-        return true
-      }).catch(() => false)
-      if (delivered) return
-    }
-    await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID))
-  })())
-})
+scope.addEventListener(
+  "notificationclick",
+  (event: { notification: { data?: unknown; close: () => void }; waitUntil: (promise: Promise<unknown>) => void }) => {
+    event.notification.close()
+    event.waitUntil(
+      (async () => {
+        const data = event.notification.data
+        const clients = await scope.clients.matchAll({ type: "window", includeUncontrolled: true })
+        const current = clients.find((client) => {
+          const url = new URL(client.url)
+          return (
+            url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
+          )
+        })
+        if (!isRecord(data) || !isSessionID(data.sessionID)) {
+          if (
+            current &&
+            (await current.focus().then(
+              () => true,
+              () => false,
+            ))
+          )
+            return
+          await scope.clients.openWindow("/remote")
+          return
+        }
+        const deviceID = isAlertDeviceID(data.deviceID) ? data.deviceID : undefined
+        const noticeID = deviceID !== undefined && isNoticeID(data.noticeID) ? data.noticeID : undefined
+        if (current) {
+          const delivered = await current
+            .focus()
+            .then(() => {
+              current.postMessage({
+                type: "ycoding:open-session",
+                sessionID: data.sessionID,
+                ...(deviceID === undefined ? {} : { deviceID }),
+                ...(noticeID === undefined ? {} : { noticeID }),
+              })
+              return true
+            })
+            .catch(() => false)
+          if (delivered) return
+        }
+        await scope.clients.openWindow(sessionURL(data.sessionID, deviceID, noticeID))
+      })(),
+    )
+  },
+)
 
-scope.addEventListener("pushsubscriptionchange", (event: { newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null };
-  oldSubscription?: { endpoint: string }; waitUntil: (promise: Promise<unknown>) => void }) => {
-  event.waitUntil((async () => {
-    const renewed = await (async () => {
-      const replaces = event.oldSubscription?.endpoint
-      if (replaces === undefined) return false
-      const key: unknown = event.newSubscription ? undefined
-        : await fetch("/api/push/key", { credentials: "same-origin" }).then((response) => response.ok ? response.json() : undefined)
-      const applicationServerKey = isRecord(key) && typeof key.publicKey === "string" ? decodeKey(key.publicKey) : undefined
-      const subscription = event.newSubscription ??
-        (applicationServerKey ? await scope.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }) : undefined)
-      const p256dh = subscription?.getKey("p256dh")
-      const auth = subscription?.getKey("auth")
-      if (!subscription || !p256dh || !auth) return false
-      const response = await fetch("/api/push/subscriptions", { method: "POST", credentials: "same-origin",
-        headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint,
-          keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) }, replaces }) })
-      return response.ok
-    })().catch(() => false)
-    if (renewed) return
-    await scope.registration.showNotification("YCoding — alerts paused", { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
-      tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" }).catch(() => undefined)
-  })())
-})
+scope.addEventListener(
+  "pushsubscriptionchange",
+  (event: {
+    newSubscription?: { endpoint: string; getKey: (name: "p256dh" | "auth") => ArrayBuffer | null }
+    oldSubscription?: { endpoint: string }
+    waitUntil: (promise: Promise<unknown>) => void
+  }) => {
+    event.waitUntil(
+      (async () => {
+        const renewed = await (async () => {
+          const replaces = event.oldSubscription?.endpoint
+          if (replaces === undefined) return false
+          const key: unknown = event.newSubscription
+            ? undefined
+            : await fetch("/api/push/key", { credentials: "same-origin" }).then((response) =>
+                response.ok ? response.json() : undefined,
+              )
+          const applicationServerKey =
+            isRecord(key) && typeof key.publicKey === "string" ? decodeKey(key.publicKey) : undefined
+          const subscription =
+            event.newSubscription ??
+            (applicationServerKey
+              ? await scope.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+              : undefined)
+          const p256dh = subscription?.getKey("p256dh")
+          const auth = subscription?.getKey("auth")
+          if (!subscription || !p256dh || !auth) return false
+          const response = await fetch("/api/push/subscriptions", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              endpoint: subscription.endpoint,
+              keys: { p256dh: encodeKey(new Uint8Array(p256dh)), auth: encodeKey(new Uint8Array(auth)) },
+              replaces,
+            }),
+          })
+          return response.ok
+        })().catch(() => false)
+        if (renewed) return
+        await scope.registration
+          .showNotification("YCoding — alerts paused", {
+            body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
+            tag: "ycoding-push-renewal",
+            icon: "/icons/icon-256.png",
+            badge: "/icons/icon-256.png",
+          })
+          .catch(() => undefined)
+      })(),
+    )
+  },
+)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -128,25 +235,75 @@ function isSessionID(value: unknown): value is string {
 function pushAlert(value: unknown): { readonly title: string; readonly options: Record<string, unknown> } {
   if (isRecord(value) && value.category === "test" && Object.keys(value).length === 1)
     return { title: "YCoding — test alert", options: { body: "Push alerts reach this device." } }
-  if (isRecord(value) && value.category === "machine-offline" && isAlertDeviceID(value.deviceID) &&
-    typeof value.offlineAt === "number" && Number.isSafeInteger(value.offlineAt) && value.offlineAt > 0)
-    return { title: "YCoding — machine offline", options: { body: "The connected machine stopped reporting.", tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}` } }
-  if (isRecord(value) && (value.category === "approval-requested" || value.category === "agent-completed") && isAlertDeviceID(value.deviceID) &&
-    typeof value.overflow === "number" && Number.isSafeInteger(value.overflow) && value.overflow > 0 && Object.keys(value).length === 3)
-    return { title: overflowCopy(value.category, value.overflow).title, options: { body: overflowCopy(value.category, value.overflow).body,
-      tag: `ycoding-${value.deviceID}-overflow-${value.category}`, renotify: true } }
-  if (!isRecord(value) || (value.category !== "approval-requested" && value.category !== "agent-completed") || !isSessionID(value.sessionID) ||
-    !isAlertDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
+  if (
+    isRecord(value) &&
+    value.category === "machine-offline" &&
+    isAlertDeviceID(value.deviceID) &&
+    typeof value.offlineAt === "number" &&
+    Number.isSafeInteger(value.offlineAt) &&
+    value.offlineAt > 0
+  )
+    return {
+      title: "YCoding — machine offline",
+      options: {
+        body: "The connected machine stopped reporting.",
+        tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}`,
+      },
+    }
+  if (
+    isRecord(value) &&
+    (value.category === "approval-requested" || value.category === "agent-completed") &&
+    isAlertDeviceID(value.deviceID) &&
+    typeof value.overflow === "number" &&
+    Number.isSafeInteger(value.overflow) &&
+    value.overflow > 0 &&
+    Object.keys(value).length === 3
+  )
+    return {
+      title: overflowCopy(value.category, value.overflow).title,
+      options: {
+        body: overflowCopy(value.category, value.overflow).body,
+        tag: `ycoding-${value.deviceID}-overflow-${value.category}`,
+        renotify: true,
+      },
+    }
+  if (
+    !isRecord(value) ||
+    (value.category !== "approval-requested" && value.category !== "agent-completed") ||
+    !isSessionID(value.sessionID) ||
+    !isAlertDeviceID(value.deviceID) ||
+    (value.noticeID !== undefined && !isNoticeID(value.noticeID))
+  )
     return { title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update" } }
-  const title = isAlertTitle(value.title) ? value.title : undefined
-  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" || value.need === "blocked" ? value.need : undefined
-  const copy = alertCopy(value.category, { ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
-  return { title: copy.title, options: {
-    body: copy.body,
-    tag: value.noticeID === undefined ? `ycoding-${value.sessionID}-${value.category}` : `ycoding-${value.deviceID}-${value.noticeID}`,
-    ...(value.repeat === true ? { renotify: true } : {}),
-    data: { sessionID: value.sessionID, deviceID: value.deviceID, ...(value.noticeID === undefined ? {} : { noticeID: value.noticeID }) },
-  } }
+  const title = validAlertTitle(value.title) ? value.title : undefined
+  const need =
+    value.need === "permission" ||
+    value.need === "question" ||
+    value.need === "review" ||
+    value.need === "failed" ||
+    value.need === "blocked"
+      ? value.need
+      : undefined
+  const copy = alertCopy(value.category, {
+    ...(title === undefined ? {} : { title }),
+    ...(need === undefined ? {} : { need }),
+  })
+  return {
+    title: copy.title,
+    options: {
+      body: copy.body,
+      tag:
+        value.noticeID === undefined
+          ? `ycoding-${value.sessionID}-${value.category}`
+          : `ycoding-${value.deviceID}-${value.noticeID}`,
+      ...(value.repeat === true ? { renotify: true } : {}),
+      data: {
+        sessionID: value.sessionID,
+        deviceID: value.deviceID,
+        ...(value.noticeID === undefined ? {} : { noticeID: value.noticeID }),
+      },
+    },
+  }
 }
 
 function isNoticeID(value: unknown): value is string {
@@ -156,11 +313,18 @@ function isNoticeID(value: unknown): value is string {
 function decodeKey(value: string): Uint8Array<ArrayBuffer> | undefined {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return undefined
   try {
-    const decoded = atob(value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "="))
+    const decoded = atob(
+      value
+        .replaceAll("-", "+")
+        .replaceAll("_", "/")
+        .padEnd(Math.ceil(value.length / 4) * 4, "="),
+    )
     const bytes = new Uint8Array(decoded.length)
     for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index)
     return bytes.length === 65 && bytes[0] === 4 ? bytes : undefined
-  } catch { return undefined }
+  } catch {
+    return undefined
+  }
 }
 
 function encodeKey(value: Uint8Array): string {
@@ -173,7 +337,9 @@ async function precacheShell(): Promise<void> {
   const cache = await caches.open(CACHE_NAME)
   await cache.addAll([...PRECACHE_URLS])
   const html = await (await cache.match("/"))?.text()
-  const assets = [...(html ?? "").matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].flatMap((match) => match[1] ? [match[1]] : [])
+  const assets = [...(html ?? "").matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].flatMap((match) =>
+    match[1] ? [match[1]] : [],
+  )
   if (assets.length === 0) throw new Error("Built shell entry assets are missing")
   await cache.addAll(assets)
 }

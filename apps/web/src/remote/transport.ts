@@ -1,66 +1,87 @@
 import {
+  createRemoteConnection,
+  receiveBinary,
+  frameReservation,
+  decodeRemoteResult,
+  decodeRemoteEvent,
+  create,
+  encodeStrict,
+  FrameSchema,
+  ControlSchema,
+  PublicEventSchema,
+  SessionLogItemSchema,
+  LosslessStringSchema,
+  remotePayloadCodecs,
+  ConnectorNoticePageSchema,
+  decodeLossless,
+  PriorityMode,
+  AttentionNeed,
+  LedgerClass,
+  FailureCategory,
+  ReservationBudget,
+  takeAsset,
+  WireLimit,
   RemoteCloseCode,
-  RemoteLimits,
-  parseChunkedValue,
-  parseRelayToClientMessage,
+  type Connection,
+  type Decision,
+  type Frame,
   type RemoteError,
-  type RemoteNoticeFrame,
-  type RemoteNoticeOperation,
-  type RemoteOperation,
-  type RemotePriorityHint,
-  type RemoteRelayToClient,
+  type Scope,
+  type Presentation,
 } from "@ycoding-ai/remote"
+import { prepareRemoteRequest, readWireMessage } from "./wire"
+import type { NoticeFrame } from "./wire-views"
 
 export type RemoteRequestOutcome =
   | { readonly status: "ok"; readonly value: unknown }
   | { readonly status: "failed"; readonly error: RemoteError }
   | { readonly status: "unknown"; readonly error: RemoteError }
-  | { readonly status: "unavailable"; readonly reason: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled" }
-
+  | {
+      readonly status: "unavailable"
+      readonly reason: "not-connected" | "in-flight-limit" | "request-limit" | "cancelled"
+    }
 export type RemoteTransportStatus =
   | { readonly kind: "idle" }
   | { readonly kind: "connecting"; readonly attempt: number }
   | { readonly kind: "open"; readonly rttMs?: number }
   | { readonly kind: "reconnecting"; readonly attempt: number; readonly delayMs: number }
   | { readonly kind: "closed"; readonly code: number; readonly reason: string; readonly retryable: boolean }
-
 export type RemoteRequestTiming = {
-  readonly operation: RemoteOperation | RemoteNoticeOperation
+  readonly operation: string
   readonly outcome: RemoteRequestOutcome["status"]
   readonly reason?: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]
   readonly queueMs: number
   readonly settlementMs?: number
   readonly totalMs: number
 }
-
 export type RemoteTransportHandlers = {
   readonly onStatus?: (status: RemoteTransportStatus) => void
   readonly onSessions?: () => void
-  readonly onSessionStatus?: (status: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => void
+  readonly onSessionStatus?: (status: {
+    readonly running: readonly string[]
+    readonly attention: readonly string[]
+    readonly outstanding?: readonly string[]
+    readonly failed?: readonly string[]
+  }) => void
   readonly onEvents?: (sessionID: string, events: readonly unknown[]) => void
-  readonly onNotices?: (frame: RemoteNoticeFrame) => void
+  readonly onNotices?: (frame: NoticeFrame) => void
   readonly onRequestTiming?: (timing: RemoteRequestTiming) => void
-  /** Called after a successful reconnect so read-only state can be reloaded. */
   readonly onReconnect?: () => void
 }
-
 export type RemoteTransportRequest = {
   readonly sessionID?: string
+  readonly workspaceID?: string
   readonly input?: Readonly<Record<string, unknown>>
-  /** Overrides the default outcome timeout. Zero waits indefinitely. */
   readonly timeoutMs?: number
-  /** Aborting settles the request as cancelled and asks the relay to drop it. */
   readonly signal?: AbortSignal
 }
-
 export type RemoteTransport = {
   readonly connect: () => void
   readonly close: (code?: number, reason?: string) => void
-  readonly request: (operation: RemoteOperation | RemoteNoticeOperation, request?: RemoteTransportRequest) => Promise<RemoteRequestOutcome>
+  readonly request: (operation: string, request?: RemoteTransportRequest) => Promise<RemoteRequestOutcome>
   readonly status: () => RemoteTransportStatus
-  readonly setPriority: (mode: RemotePriorityHint["mode"]) => void
+  readonly setPriority: (mode: "interactive" | "background") => void
 }
-
 export type RemoteTransportOptions = {
   readonly url: string
   readonly handlers?: RemoteTransportHandlers
@@ -78,450 +99,623 @@ export type RemoteTransportOptions = {
   readonly now?: () => number
 }
 
-const defaultTimeoutMs = 30_000
-const defaultMaxInFlight = 32
-
 export function clientFrameDelay(sentAt: number[], now: number): number {
-  while (sentAt[0] !== undefined && now - sentAt[0] >= RemoteLimits.clientRateWindowMs) sentAt.shift()
-  return sentAt.length < RemoteLimits.maxClientRequestsPerWindow - 3
-    ? 0 : Math.max(1, Math.ceil(RemoteLimits.clientRateWindowMs - (now - sentAt[0]!)))
+  while (sentAt[0] !== undefined && now - sentAt[0] >= WireLimit.RATE_WINDOW_MS) sentAt.shift()
+  return sentAt.length < WireLimit.CLIENT_RATE - 3
+    ? 0
+    : Math.max(1, Math.ceil(WireLimit.RATE_WINDOW_MS - (now - sentAt[0]!)))
+}
+
+type Pending = {
+  readonly operation: string
+  readonly scope: Scope
+  readonly resolve: (outcome: RemoteRequestOutcome) => void
+  readonly timeout: number
+  cancel: () => void
+  sent: boolean
+  transmit: () => void
+}
+type Owner = {
+  readonly socket: WebSocket
+  readonly connection: Connection
+  readonly pending: Map<string, Pending>
+  readonly subscriptions: Map<string, { readonly id: string; hydration: "active" | "idle" | "invalidated" }>
+  readonly sentAt: number[]
+  readonly assets: ReservationBudget
+  active: boolean
+  sourceEpoch?: string
+  cancelTick?: () => void
+  cancelProbe?: () => void
+  ping?: { readonly id: bigint; readonly at: number }
+  rtt?: number
+  remove?: () => void
 }
 
 export function createRemoteTransport(options: RemoteTransportOptions): RemoteTransport {
   const handlers = options.handlers ?? {}
-  const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url))
-  const schedule = options.schedule ?? defaultSchedule
-  const random = options.random ?? Math.random
   const now = options.now ?? (() => performance.now())
-  const resetDelayMs = options.resetDelayMs ?? 500
-  const maxDelayMs = options.maxDelayMs ?? 15_000
-  const pingIntervalMs = options.pingIntervalMs ?? 30_000
-  const pongTimeoutMs = options.pongTimeoutMs ?? 10_000
+  const schedule =
+    options.schedule ??
+    ((callback, ms) => {
+      const timer = setTimeout(callback, ms)
+      return () => clearTimeout(timer)
+    })
+  const random = options.random ?? Math.random
   const visibility = options.document ?? (typeof document === "undefined" ? undefined : document)
   const network = options.window ?? (typeof window === "undefined" ? undefined : window)
-  const requestTimeoutMs = options.requestTimeoutMs ?? defaultTimeoutMs
-  const maxInFlight = options.maxInFlight ?? defaultMaxInFlight
-
   let current: RemoteTransportStatus = { kind: "idle" }
-  let socket: WebSocket | undefined
+  let owner: Owner | undefined
   let attempt = 0
   let closedByUs = false
   let connectedOnce = false
-  let cancelFlush: (() => void) | undefined
-  let cancelOpening: (() => void) | undefined
-  let timer: (() => void) | undefined
-  let probing = false
-  let probeID = 0
-  let listening = false
-  let removeSocketListeners: (() => void) | undefined
-  let cancelOutbound: (() => void) | undefined
-  const outbound: { readonly frame: unknown; readonly requestID?: string; readonly onSend?: () => void }[] = []
-  const sentAt: number[] = []
-
-  const pending = new Map<
-    string,
-    { readonly resolve: (outcome: RemoteRequestOutcome) => void; cancel: () => void; sent: boolean; chunks?: Map<number, string> }
-  >()
-  let nextID = 0
-  let wantedPriority: RemotePriorityHint["mode"] = visibility?.hidden ? "background" : "interactive"
-  let sentPriority: RemotePriorityHint["mode"] = "interactive"
-  let pingSentAt: number | undefined
-  let roundTripMs: number | undefined
-
-  const publish = (status: RemoteTransportStatus) => {
-    current = status
-    handlers.onStatus?.(status)
-  }
-
-  const settlePending = (outcome: RemoteRequestOutcome) => {
-    cancelOutbound?.()
-    cancelOutbound = undefined
-    outbound.length = 0
-    for (const entry of pending.values()) {
-      entry.cancel()
-      entry.resolve(entry.sent ? outcome : { status: "unavailable", reason: "not-connected" })
-    }
-    pending.clear()
-  }
-
-  const releaseTimer = () => {
-    timer?.()
-    timer = undefined
-    probing = false
-    probeID += 1
-  }
-
-  const stopListening = () => {
-    visibility?.removeEventListener("visibilitychange", followVisibility)
-    visibility?.removeEventListener("visibilitychange", resume)
-    network?.removeEventListener("online", resume)
-    listening = false
-  }
-
-  const setPriority = (mode: RemotePriorityHint["mode"]) => {
-    wantedPriority = mode
-    if (mode === sentPriority) return
-    if (send({ type: "priority", mode })) sentPriority = mode
-  }
-
-  const followVisibility = () => setPriority(visibility?.hidden ? "background" : "interactive")
-
-  const resume = () => {
-    if (closedByUs) return
-    if (visibility?.hidden) { releaseTimer(); return }
-    if (socket?.readyState === 1) probeSocket(socket)
-    if (socket === undefined && current.kind === "reconnecting") connect()
-  }
-
-  const resetLiveness = (owner: WebSocket) => {
-    releaseTimer()
-    if (visibility?.hidden) return
-    timer = schedule(() => {
-      if (socket === owner && !closedByUs && !visibility?.hidden) probeSocket(owner)
-    }, pingIntervalMs)
-  }
-
-  const probeSocket = (owner: WebSocket) => {
-    if (probing || socket !== owner || closedByUs || visibility?.hidden) return
-    releaseTimer()
-    probing = true
-    const id = probeID
-    send({ type: "ping" }, () => {
-      pingSentAt = now()
-      if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
-      timer = schedule(() => {
-        if (socket !== owner || id !== probeID || !probing || visibility?.hidden) return
-        endSocket(owner, 4000, "Relay heartbeat timed out")
-        owner.close(4000, "Relay heartbeat timed out")
-      }, pongTimeoutMs)
-    })
-  }
-
-  const endSocket = (owner: WebSocket, code: number, reason: string) => {
-    if (socket !== owner) return
-    cancelOpening?.()
-    cancelOpening = undefined
-    releaseTimer()
-    removeSocketListeners?.()
-    removeSocketListeners = undefined
-    socket = undefined
-    settlePending({
-      status: "unknown",
-      error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
-    })
-    const retryable = !closedByUs && code !== RemoteCloseCode.unauthorized && code !== RemoteCloseCode.forbidden
-    if (!retryable) stopListening()
-    publish({ kind: "closed", code, reason: closeReason(code, reason), retryable })
-    if (retryable) scheduleReconnect()
-  }
-
-  const scheduleReconnect = () => {
-    const delayMs = Math.min(maxDelayMs, resetDelayMs * 2 ** attempt)
-    const jittered = Math.round(delayMs * (0.5 + random() / 2))
-    attempt += 1
-    publish({ kind: "reconnecting", attempt, delayMs: jittered })
-    cancelFlush = schedule(() => {
-      if (!closedByUs) connect()
-    }, jittered)
-  }
-
-  const connect = () => {
-    if (socket !== undefined && socket.readyState <= 1) return
-    closedByUs = false
-    if (!listening) {
-      visibility?.addEventListener("visibilitychange", followVisibility)
-      visibility?.addEventListener("visibilitychange", resume)
-      network?.addEventListener("online", resume)
-      listening = true
-    }
-    cancelFlush?.()
-    cancelFlush = undefined
-    publish({ kind: "connecting", attempt })
-    let next: WebSocket
-    try {
-      next = createSocket(options.url)
-    } catch (cause) {
-      publish({ kind: "closed", code: 0, reason: cause instanceof Error ? cause.message : "socket failed", retryable: true })
-      scheduleReconnect()
-      return
-    }
-    socket = next
-    const opened = () => {
-      if (socket !== next || closedByUs) return
-      cancelOpening?.()
-      cancelOpening = undefined
-      const reconnected = connectedOnce
-      connectedOnce = true
-      attempt = 0
-      sentAt.length = 0
-      pingSentAt = undefined
-      roundTripMs = undefined
-      sentPriority = "interactive"
-      publish({ kind: "open" })
-      setPriority(wantedPriority)
-      if (reconnected) handlers.onReconnect?.()
-      resetLiveness(next)
-    }
-    const received = (message: MessageEvent) => {
-      if (socket !== next || closedByUs) return
-      resetLiveness(next)
-      if (pingSentAt !== undefined && current.kind === "open") {
-        const sample = now() - pingSentAt
-        pingSentAt = undefined
-        roundTripMs = roundTripMs === undefined ? sample : 0.3 * sample + 0.7 * roundTripMs
-        publish({ kind: "open", rttMs: Math.round(roundTripMs) })
-      }
-      handleFrame(typeof message.data === "string" ? message.data : "")
-    }
-    const errored = () => {
-      if (socket !== next || closedByUs) return
-      const reason =
-        next.readyState === next.CLOSED ? "The relay connection closed unexpectedly" : "The relay connection failed"
-      publish({ kind: "closed", code: 0, reason, retryable: true })
-    }
-    const closed = (event: CloseEvent) => endSocket(next, event.code, event.reason)
-    next.addEventListener("open", opened)
-    next.addEventListener("message", received)
-    next.addEventListener("error", errored)
-    next.addEventListener("close", closed)
-    removeSocketListeners = () => {
-      next.removeEventListener("open", opened)
-      next.removeEventListener("message", received)
-      next.removeEventListener("error", errored)
-      next.removeEventListener("close", closed)
-    }
-    cancelOpening = schedule(() => {
-      if (socket !== next || closedByUs || next.readyState !== 0) return
-      endSocket(next, 4000, "Relay connection timed out")
-      next.close(4000, "Relay connection timed out")
-    }, 30_000)
-  }
-
-  const flushOutbound = () => {
-    cancelOutbound?.()
-    cancelOutbound = undefined
-    if (socket === undefined || socket.readyState !== 1) return
-    while (outbound.length > 0 && clientFrameDelay(sentAt, now()) === 0) {
-      const entry = outbound.shift()!
-      entry.onSend?.()
-      socket.send(JSON.stringify(entry.frame))
-      sentAt.push(now())
-    }
-    if (outbound.length > 0)
-      cancelOutbound = schedule(flushOutbound, clientFrameDelay(sentAt, now()))
-  }
-
-  const send = (frame: unknown, onSend?: () => void, requestID?: string): boolean => {
-    if (socket === undefined || socket.readyState !== 1) return false
-    outbound.push({ frame, requestID, onSend })
-    flushOutbound()
-    return true
-  }
-
-  const handleFrame = (raw: string) => {
-    if (raw.length === 0) return
-    const parsed = parseRelayToClientMessage(raw)
-    if (!parsed.ok) {
-      handlers.onStatus?.({ kind: "closed", code: parsed.error.code === "message_too_large" ? 1009 : 1003, reason: parsed.error.message, retryable: true })
-      return
-    }
-    const frame = parsed.value
-    if (frame.type === "ping") {
-      send({ type: "pong" })
-      return
-    }
-    if (frame.type === "pong") return
-    if (frame.type === "sessions") {
-      handlers.onSessions?.()
-      return
-    }
-    if (frame.type === "status") {
-      handlers.onSessionStatus?.(frame)
-      return
-    }
-    if (frame.type === "event") {
-      handlers.onEvents?.(frame.sessionID, [frame.event])
-      return
-    }
-    if (frame.type === "events") {
-      handlers.onEvents?.(frame.sessionID, frame.events)
-      return
-    }
-    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline" || frame.type === "notice.present") {
-      handlers.onNotices?.(frame)
-      return
-    }
-    settle(frame)
-  }
-
-  const settle = (frame: Extract<RemoteRelayToClient, { type: "response" }>) => {
-    const entry = pending.get(frame.id)
-    if (!entry) return
-    if (!frame.ok) {
-      entry.cancel()
-      pending.delete(frame.id)
-      entry.resolve({ status: "failed", error: frame.error })
-      return
-    }
-    if (frame.chunk === undefined) {
-      entry.cancel()
-      pending.delete(frame.id)
-      entry.resolve({ status: "ok", value: frame.value })
-      return
-    }
-    const chunks = entry.chunks ?? new Map<number, string>()
-    if (typeof frame.value !== "string") {
-      entry.cancel()
-      pending.delete(frame.id)
-      entry.resolve({ status: "failed", error: { code: "invalid_message", message: "Chunked response carried a non-string slice" } })
-      return
-    }
-    // The shared parser bounds each frame and its chunk index; distinct map
-    // entries therefore bound the whole response, not just one frame's size.
-    chunks.set(frame.chunk.index, frame.value)
-    if (!frame.chunk.last) {
-      entry.chunks = chunks
-      return
-    }
-    entry.cancel()
-    pending.delete(frame.id)
-    const ordered = [...chunks.entries()].sort((left, right) => left[0] - right[0])
-    const contiguous = ordered.every(([index], position) => index === position)
-    if (!contiguous) {
-      entry.resolve({
-        status: "failed",
-        error: { code: "invalid_message", message: "Chunked response did not assemble into a complete value" },
-      })
-      return
-    }
-    const joined = parseChunkedValue(ordered.map(([, slice]) => slice))
-    entry.resolve(joined.ok ? { status: "ok", value: joined.value } : { status: "failed", error: joined.error })
-  }
-
+  let cancelReconnect: (() => void) | undefined
+  let priority: "interactive" | "background" = visibility?.hidden ? "background" : "interactive"
   let timingWarningReported = false
   const reportTiming = (timing: RemoteRequestTiming) => {
     try {
       handlers.onRequestTiming?.(timing)
     } catch {
-      if (timingWarningReported) return
+      if (!timingWarningReported) console.warn("Web latency diagnostics observer failed.")
       timingWarningReported = true
-      console.warn("Web latency diagnostics observer failed.")
     }
   }
-
-  const request: RemoteTransport["request"] = (operation, input = {}) => {
-    if (input.signal?.aborted) return unavailableRequest(operation, "cancelled")
-    if (socket === undefined || socket.readyState !== 1) {
-      return unavailableRequest(operation, "not-connected")
-    }
-    if (pending.size >= maxInFlight) {
-      return unavailableRequest(operation, "in-flight-limit")
-    }
-    const startedAt = now()
-    nextID += 1
-    const id = `req_${nextID}_${Math.floor(random() * 1_000_000).toString(36)}`
-    return new Promise<RemoteRequestOutcome>((settled) => {
-      const timeout = input.timeoutMs ?? requestTimeoutMs
-      let transmittedAt: number | undefined
-      let recorded = false
-      const resolve = (outcome: RemoteRequestOutcome) => {
-        if (recorded) return
-        recorded = true
-        input.signal?.removeEventListener("abort", abort)
-        const finishedAt = now()
-        const totalMs = Math.max(0, Math.round(finishedAt - startedAt))
-        const queueMs = Math.min(totalMs, Math.max(0, Math.round((transmittedAt ?? finishedAt) - startedAt)))
-        settled(outcome)
-        reportTiming({ operation, outcome: outcome.status,
-          ...(outcome.status === "unavailable" ? { reason: outcome.reason } : {}),
-          queueMs,
-          ...(transmittedAt === undefined ? {} : { settlementMs: Math.max(0, totalMs - queueMs) }), totalMs })
-      }
-      const entry = { resolve, cancel: () => {}, sent: false }
-      const abort = () => {
-        if (!pending.delete(id)) return
-        entry.cancel()
-        const queued = outbound.findIndex((item) => item.requestID === id)
-        if (queued >= 0) outbound.splice(queued, 1)
-        if (entry.sent) send({ type: "cancel", id })
-        resolve({ status: "unavailable", reason: "cancelled" })
-      }
-      input.signal?.addEventListener("abort", abort, { once: true })
-      pending.set(id, entry)
-      const sent = send(
-        {
-          type: "request",
-          id,
-          operation,
-          ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),
-          ...(input.input === undefined ? {} : { input: input.input }),
-        },
-        () => {
-          entry.sent = true
-          transmittedAt = now()
-          if (timeout > 0)
-            entry.cancel = schedule(() => {
-              if (!pending.delete(id)) return
-              send({ type: "cancel", id })
-              resolve({
-                status: "unknown",
-                error: { code: "outcome_unknown", message: "The request did not settle before the timeout" },
-              })
-            }, timeout)
-        },
-        id,
-      )
-      if (sent) return
-      pending.delete(id)
+  const publish = (status: RemoteTransportStatus) => {
+    current = status
+    handlers.onStatus?.(status)
+  }
+  const currentOwner = (value: Owner) => value.active && owner === value && !closedByUs
+  const stopListening = () => {
+    visibility?.removeEventListener("visibilitychange", followVisibility)
+    network?.removeEventListener("online", resume)
+  }
+  const end = (value: Owner, code: number, reason: string) => {
+    if (!value.active) return
+    value.active = false
+    value.cancelTick?.()
+    value.cancelProbe?.()
+    value.remove?.()
+    for (const entry of value.pending.values()) {
       entry.cancel()
-      resolve({ status: "unavailable", reason: "not-connected" })
+      entry.resolve(
+        entry.sent
+          ? {
+              status: "unknown",
+              error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
+            }
+          : { status: "unavailable", reason: "not-connected" },
+      )
+    }
+    value.pending.clear()
+    value.subscriptions.clear()
+    value.connection.close(FailureCategory.EPOCH)
+    if (owner !== value) return
+    owner = undefined
+    const retryable = !closedByUs && code !== RemoteCloseCode.unauthorized && code !== RemoteCloseCode.forbidden
+    publish({ kind: "closed", code, reason, retryable })
+    if (!retryable) {
+      stopListening()
+      return
+    }
+    const delayMs = Math.round(
+      Math.min(options.maxDelayMs ?? 15_000, (options.resetDelayMs ?? 500) * 2 ** attempt) * (0.5 + random() / 2),
+    )
+    attempt += 1
+    publish({ kind: "reconnecting", attempt, delayMs })
+    cancelReconnect = schedule(connect, delayMs)
+  }
+  const process = (value: Owner, decisions: readonly Decision[]) => {
+    if (!currentOwner(value)) return
+    const completed = decisions.filter(
+      (decision): decision is Extract<Decision, { type: "bulkComplete"; metadata: object }> =>
+        decision.type === "bulkComplete" && decision.metadata !== undefined,
+    )
+    for (const decision of decisions) {
+      if (!currentOwner(value)) break
+      if (decision.type === "closed") {
+        end(value, decision.code, FailureCategory[decision.category])
+        value.socket.close(decision.code, FailureCategory[decision.category])
+        continue
+      }
+      if (decision.type === "ready") {
+        value.sourceEpoch = decision.sourceEpoch
+        const reconnected = connectedOnce
+        connectedOnce = true
+        attempt = 0
+        publish({ kind: "open" })
+        enqueuePriority(value)
+        if (reconnected) handlers.onReconnect?.()
+        continue
+      }
+      if (decision.type === "events") {
+        if (decision.batch.scope?.target.case !== "session") throw new Error("Invalid Session event scope")
+        const events = decision.batch.events.map((event) => {
+          const decoded = decodeRemoteEvent(event.event!)
+          return readWireMessage(
+            decoded.$typeName === PublicEventSchema.typeName ? PublicEventSchema : SessionLogItemSchema,
+            decoded,
+          )
+        })
+        handlers.onEvents?.(decision.batch.scope.target.value, events)
+        if (decision.ordinal !== undefined)
+          process(value, value.connection.consume(LedgerClass.EVENT, decision.ordinal, now()))
+        continue
+      }
+      if (decision.type === "resync") {
+        if (decision.scope.target.case === "session") {
+          const subscription = value.subscriptions.get(decision.scope.target.value)
+          if (subscription) subscription.hydration = "invalidated"
+        }
+        handlers.onSessions?.()
+        continue
+      }
+      if (decision.type === "control") {
+        const control = decision.frame.body.case === "control" ? decision.frame.body.value.kind : undefined
+        if (control?.case === "inventoryInvalidated") handlers.onSessions?.()
+        if (control?.case === "status")
+          handlers.onSessionStatus?.({
+            running: control.value.running,
+            attention: control.value.attention,
+            ...(control.value.outstanding ? { outstanding: control.value.outstanding.items } : {}),
+            ...(control.value.failed ? { failed: control.value.failed.items } : {}),
+          })
+        if (control?.case === "notice") handlers.onNotices?.(noticeView(control.value))
+        continue
+      }
+      if (decision.type === "settled") {
+        const entry = value.pending.get(decision.requestID)
+        if (!entry) continue
+        entry.cancel()
+        if (decision.status === "unsent" || decision.status === "unavailable") {
+          entry.resolve({ status: "unavailable", reason: "not-connected" })
+          continue
+        }
+        if (decision.status === "unknown") {
+          entry.resolve({
+            status: "unknown",
+            error: { code: "outcome_unknown", message: "The request did not settle" },
+          })
+          continue
+        }
+        if (!decision.payload) throw new Error("Missing typed result")
+        const codec = remotePayloadCodecs.get(entry.operation)!
+        const schema =
+          decision.status === "success" ? codec.result.schema : codec.errors.get(decision.payload.typeName)?.schema
+        if (!schema) throw new Error("Unknown result schema")
+        if (
+          decision.status === "success" &&
+          (entry.operation === "notice.subscribe" || entry.operation === "notice.list")
+        ) {
+          const page = decodeRemoteResult(entry.operation, decision.payload, ConnectorNoticePageSchema)
+          const notices = noticeView(page.notice!)
+          if (notices.type !== "notice.added") throw new Error("Invalid notice page")
+          entry.resolve({
+            status: "ok",
+            value: {
+              notices: notices.notices,
+              total: notices.total,
+              unavailable: page.unavailable,
+              ...(page.next ? { next: page.next } : {}),
+            },
+          })
+          continue
+        }
+        const decoded = decodeRemoteResult(entry.operation, decision.payload)
+        const result = readWireMessage(schema, decoded)
+        if (decision.status === "rejected") {
+          const record = result as { code?: RemoteError["code"]; message?: string; _tag?: string }
+          entry.resolve({
+            status: "failed",
+            error: {
+              code: record.code ?? failureCode(decision.payload.typeName),
+              message: record.message ?? record._tag ?? "The device rejected the request",
+            },
+          })
+          continue
+        }
+        if (entry.operation === "session.attachment.read") {
+          const delivery = completed.find((delivery) => delivery.start.requestId === decision.requestID)
+          const asset = delivery && takeAsset(value.connection, delivery, value.assets)
+          if (!asset) throw new Error("Attachment ownership limit")
+          entry.resolve({
+            status: "ok",
+            value: { ...asset, mime: readWireMessage(LosslessStringSchema, asset.metadata.mime) },
+          })
+          continue
+        }
+        const fields = result as Record<string, unknown>
+        if (entry.operation === "event.subscribe" || entry.operation === "session.log") {
+          if (typeof fields.subscription_id !== "string") throw new Error("Missing subscription identity")
+          process(
+            value,
+            value.connection.acceptSubscription(decision.requestID, fields.subscription_id, entry.scope, now()),
+          )
+          value.connection.beginHydration(fields.subscription_id)
+          if (entry.scope.target.case === "session")
+            value.subscriptions.set(entry.scope.target.value, { id: fields.subscription_id, hydration: "active" })
+        }
+        if (entry.operation === "session.snapshot" && entry.scope.target.case === "session") {
+          const subscription = value.subscriptions.get(entry.scope.target.value)
+          const projection = fields.data as { sourceEpoch?: string }
+          if (subscription && projection.sourceEpoch) {
+            subscription.hydration = "idle"
+            process(value, value.connection.completeHydration(subscription.id, projection.sourceEpoch, now()))
+          }
+        }
+        entry.resolve({ status: "ok", value: result })
+        continue
+      }
+      if (decision.type === "bulkComplete" && decision.metadata === undefined)
+        value.connection.releaseBulk(decision.transferID)
+    }
+  }
+  const pump = (value: Owner) => {
+    if (!currentOwner(value) || value.socket.readyState !== 1) return
+    for (;;) {
+      const prepared = value.connection.prepareHandoff(now())
+      process(value, value.connection.takeDecisions())
+      if (!prepared || !currentOwner(value)) return
+      if (prepared.frame.ledger === LedgerClass.NORMAL && clientFrameDelay(value.sentAt, now()) > 0) {
+        value.connection.abortPrepared(prepared)
+        return
+      }
+      if (!value.connection.reservation.reserve(prepared.reservedBytes)) {
+        value.connection.abortPrepared(prepared)
+        process(value, value.connection.close(FailureCategory.LIMIT))
+        return
+      }
+      try {
+        const bytes = encodeStrict(FrameSchema, prepared.frame)
+        process(value, value.connection.handoff(prepared, bytes.byteLength, now()))
+        if (!currentOwner(value)) return
+        if (
+          prepared.frame.ledger === LedgerClass.NORMAL &&
+          prepared.frame.body.case !== "hello" &&
+          prepared.frame.body.case !== "ready"
+        )
+          value.sentAt.push(now())
+        if (prepared.frame.body.case === "request") value.pending.get(prepared.frame.body.value.requestId)?.transmit()
+        if (prepared.frame.body.case === "control" && prepared.frame.body.value.kind.case === "ping") {
+          value.ping = { id: prepared.frame.body.value.kind.value.id, at: now() }
+          startProbe(value)
+        }
+        value.socket.send(bytes)
+      } finally {
+        value.connection.reservation.release(prepared.reservedBytes)
+      }
+    }
+  }
+  const tick = (value: Owner) => {
+    if (!currentOwner(value)) return
+    process(value, value.connection.advance(now()))
+    pump(value)
+    if (currentOwner(value)) value.cancelTick = schedule(() => tick(value), 25)
+  }
+  const enqueuePriority = (value: Owner) => {
+    const body: Frame["body"] = {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "priority",
+          value: { mode: priority === "interactive" ? PriorityMode.INTERACTIVE : PriorityMode.BACKGROUND },
+        },
+      }),
+    }
+    process(value, value.connection.enqueue(body, frameReservation(body), now()))
+    pump(value)
+  }
+  const setPriority = (mode: "interactive" | "background") => {
+    if (priority === mode) return
+    priority = mode
+    if (owner && current.kind === "open") enqueuePriority(owner)
+  }
+  const startProbe = (value: Owner) => {
+    value.cancelProbe?.()
+    value.cancelProbe = undefined
+    if (!value.ping || visibility?.hidden) return
+    value.cancelProbe = schedule(() => {
+      if (!currentOwner(value) || visibility?.hidden) return
+      end(value, 4000, "Relay heartbeat timed out")
+      value.socket.close(4000, "Relay heartbeat timed out")
+    }, options.pongTimeoutMs ?? 10_000)
+  }
+  const followVisibility = () => {
+    setPriority(visibility?.hidden ? "background" : "interactive")
+    if (owner && visibility?.hidden) {
+      owner.cancelProbe?.()
+      owner.cancelProbe = undefined
+    }
+    if (!visibility?.hidden) resume()
+  }
+  const resume = () => {
+    if (closedByUs) return
+    if (owner === undefined && current.kind === "reconnecting") {
+      connect()
+      return
+    }
+    if (owner && !visibility?.hidden) {
+      process(owner, owner.connection.advance(now()))
+      pump(owner)
+      startProbe(owner)
+    }
+  }
+  const connect = () => {
+    if (owner?.active) return
+    closedByUs = false
+    cancelReconnect?.()
+    visibility?.addEventListener("visibilitychange", followVisibility)
+    network?.addEventListener("online", resume)
+    publish({ kind: "connecting", attempt })
+    const socket = (options.createSocket ?? ((url) => new WebSocket(url)))(options.url)
+    socket.binaryType = "arraybuffer"
+    const value: Owner = {
+      socket,
+      connection: createRemoteConnection({
+        now: now(),
+        budgets: { pendingRequests: options.maxInFlight ?? 32, pingIntervalMs: options.pingIntervalMs ?? 20_000 },
+      }),
+      pending: new Map(),
+      subscriptions: new Map(),
+      sentAt: [],
+      assets: new ReservationBudget(32 * 1024 * 1024),
+      active: true,
+    }
+    owner = value
+    const opened = () => {
+      if (!currentOwner(value)) return
+      process(value, value.connection.start(now()))
+      pump(value)
+    }
+    const received = (event: MessageEvent) => {
+      if (!currentOwner(value)) return
+      try {
+        const incoming = receiveBinary(value.connection, event.data, now())
+        value.cancelProbe?.()
+        value.cancelProbe = undefined
+        if (
+          incoming.frame?.body.case === "control" &&
+          incoming.frame.body.value.kind.case === "pong" &&
+          value.ping?.id === incoming.frame.body.value.kind.value.id
+        ) {
+          const rtt = Math.max(0, now() - value.ping.at)
+          value.rtt = value.rtt === undefined ? rtt : 0.3 * rtt + 0.7 * value.rtt
+          value.ping = undefined
+          if (current.kind === "open") publish({ kind: "open", rttMs: Math.round(value.rtt) })
+        }
+        process(value, incoming.decisions)
+        if (
+          incoming.frame?.ledger === LedgerClass.NORMAL &&
+          ["request", "result", "control"].includes(incoming.frame.body.case ?? "") &&
+          !incoming.decisions.some(
+            (decision) =>
+              decision.type === "assetMetadata" || decision.type === "resync" || decision.type === "dropped",
+          )
+        )
+          process(value, value.connection.consume(LedgerClass.NORMAL, incoming.frame.deliveryOrdinal, now()))
+        pump(value)
+      } catch {
+        const code = value.connection.state === "established" ? 1002 : 1008
+        end(value, code, "MALFORMED")
+        socket.close(code, "MALFORMED")
+      }
+    }
+    const closed = (event: CloseEvent) => end(value, event.code, event.reason || "The relay connection dropped.")
+    const errored = () => {
+      end(value, 1006, "The relay connection failed")
+      socket.close()
+    }
+    socket.addEventListener("open", opened)
+    socket.addEventListener("message", received)
+    socket.addEventListener("close", closed)
+    socket.addEventListener("error", errored)
+    value.remove = () => {
+      socket.removeEventListener("open", opened)
+      socket.removeEventListener("message", received)
+      socket.removeEventListener("close", closed)
+      socket.removeEventListener("error", errored)
+    }
+    tick(value)
+  }
+  const request: RemoteTransport["request"] = (operation, input = {}) => {
+    const value = owner
+    const unavailable = (reason: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]) => {
+      reportTiming({ operation, outcome: "unavailable", reason, queueMs: 0, totalMs: 0 })
+      return Promise.resolve<RemoteRequestOutcome>({ status: "unavailable", reason })
+    }
+    if (input.signal?.aborted) return unavailable("cancelled")
+    if (!value || current.kind !== "open" || !currentOwner(value)) return unavailable("not-connected")
+    if (value.pending.size >= (options.maxInFlight ?? 32)) return unavailable("in-flight-limit")
+    const prepared = prepareRemoteRequest(operation, input)
+    const admitted = value.connection.request(
+      prepared.codec.operation.operationId,
+      prepared.scope,
+      prepared.payload,
+      prepared.payload.byteLength + 512,
+      now(),
+    )
+    if (!admitted.requestID) {
+      process(value, admitted.decisions)
+      return Promise.resolve({ status: "unavailable", reason: "request-limit" })
+    }
+    const id = admitted.requestID
+    const started = now()
+    return new Promise((resolve) => {
+      let transmitted: number | undefined
+      let settled = false
+      const abort = () => {
+        const entry = value.pending.get(id)
+        if (!entry) return
+        value.pending.delete(id)
+        entry.cancel()
+        process(value, value.connection.cancel(id, now()))
+        entry.resolve(
+          entry.sent
+            ? {
+                status: "unknown",
+                error: { code: "outcome_unknown", message: "The transmitted request was cancelled before settlement" },
+              }
+            : { status: "unavailable", reason: "cancelled" },
+        )
+        pump(value)
+      }
+      const entry: Pending = {
+        operation,
+        scope: prepared.scope,
+        sent: false,
+        timeout: input.timeoutMs ?? options.requestTimeoutMs ?? 30_000,
+        cancel: () => {},
+        resolve: (outcome) => {
+          if (settled) return
+          settled = true
+          value.pending.delete(id)
+          input.signal?.removeEventListener("abort", abort)
+          if (
+            operation === "session.snapshot" &&
+            prepared.scope.target.case === "session" &&
+            outcome.status !== "ok" &&
+            currentOwner(value) &&
+            value.connection.state === "established"
+          ) {
+            const subscription = value.subscriptions.get(prepared.scope.target.value)
+            if (subscription?.hydration === "active" && value.sourceEpoch) {
+              subscription.hydration = "idle"
+              process(value, value.connection.completeHydration(subscription.id, value.sourceEpoch, now()))
+            }
+          }
+          resolve(outcome)
+          const totalMs = Math.max(0, Math.round(now() - started))
+          const queueMs = Math.min(totalMs, Math.max(0, Math.round((transmitted ?? now()) - started)))
+          reportTiming({
+            operation,
+            outcome: outcome.status,
+            ...(outcome.status === "unavailable" ? { reason: outcome.reason } : {}),
+            queueMs,
+            ...(transmitted === undefined ? {} : { settlementMs: totalMs - queueMs }),
+            totalMs,
+          })
+        },
+        transmit: () => {
+          entry.sent = true
+          transmitted = now()
+          if (entry.timeout > 0)
+            entry.cancel = schedule(() => {
+              process(value, value.connection.expireRequest(id, now()))
+              pump(value)
+            }, entry.timeout)
+        },
+      }
+      value.pending.set(id, entry)
+      input.signal?.addEventListener("abort", abort, { once: true })
+      process(value, admitted.decisions)
+      if (operation === "session.snapshot" && prepared.scope.target.case === "session") {
+        const subscription = value.subscriptions.get(prepared.scope.target.value)
+        if (subscription?.hydration === "invalidated") {
+          value.connection.beginHydration(subscription.id)
+          subscription.hydration = "active"
+        }
+      }
+      if (operation === "event.unsubscribe" && typeof input.input?.subscription_id === "string") {
+        process(value, value.connection.releaseSubscription(input.input.subscription_id, now()))
+        for (const [sessionID, subscription] of value.subscriptions)
+          if (subscription.id === input.input.subscription_id) value.subscriptions.delete(sessionID)
+      }
+      pump(value)
     })
   }
-
-  const unavailableRequest = (operation: RemoteOperation | RemoteNoticeOperation, reason: Extract<RemoteRequestOutcome, { status: "unavailable" }>["reason"]) => {
-    reportTiming({ operation, outcome: "unavailable", reason, queueMs: 0, totalMs: 0 })
-    return Promise.resolve({ status: "unavailable" as const, reason })
-  }
-
   return {
     connect,
-    close: (code = 1000, reason = "client closed") => {
-      closedByUs = true
-      cancelOpening?.()
-      cancelOpening = undefined
-      cancelFlush?.()
-      cancelFlush = undefined
-      releaseTimer()
-      stopListening()
-      removeSocketListeners?.()
-      removeSocketListeners = undefined
-      const active = socket
-      socket = undefined
-      active?.close(code, reason)
-      settlePending({
-        status: "unknown",
-        error: { code: "outcome_unknown", message: "The client closed the connection before this request settled" },
-      })
-      publish({ kind: "closed", code, reason, retryable: false })
-    },
     request,
     status: () => current,
     setPriority,
+    close: (code = 1000, reason = "client closed") => {
+      closedByUs = true
+      cancelReconnect?.()
+      cancelReconnect = undefined
+      stopListening()
+      if (owner) {
+        const value = owner
+        end(value, code, reason)
+        value.socket.close(code, reason)
+      } else publish({ kind: "closed", code, reason, retryable: false })
+    },
   }
 }
 
-function closeReason(code: number, reason: string): string {
-  if (reason.length > 0) return reason
-  if (code === RemoteCloseCode.unauthorized) return "Your session or device credential expired. Sign in again."
-  if (code === RemoteCloseCode.forbidden) return "This account is not permitted to use that device."
-  if (code === RemoteCloseCode.serviceRestart) return "A newer agent connection replaced this one."
-  if (code === RemoteCloseCode.policyViolation) return "The relay closed the connection for a policy violation."
-  if (code === RemoteCloseCode.tooLarge) return "A message exceeded the relay frame bound."
-  if (code === 1006) return "The relay connection dropped."
-  return `The relay connection closed with code ${code}.`
+function noticeView(notice: import("@ycoding-ai/remote").Notice): NoticeFrame {
+  const kind = notice.kind
+  if (kind.case === "cleared" || kind.case === "unavailable") return { type: `notice.${kind.case}` }
+  if (kind.case === "offline") return { type: "notice.offline", at: Number(kind.value.atMs) }
+  if (kind.case === "removed") return { type: "notice.removed", ids: kind.value.ids, total: Number(kind.value.total) }
+  if (kind.case === "added")
+    return {
+      type: "notice.added",
+      total: Number(kind.value.total),
+      notices: kind.value.notices.map((notice) => ({
+        id: notice.id,
+        category: notice.category === 1 ? "approval-requested" : "agent-completed",
+        sessionID: notice.sessionId,
+        createdAt: Number(notice.createdMs),
+      })),
+    }
+  if (kind.case === "present") return { type: "notice.present", items: kind.value.items.map(presentationView) }
+  throw new Error("Invalid notice")
 }
 
-function defaultSchedule(callback: () => void, ms: number): () => void {
-  const handle = setTimeout(callback, ms)
-  return () => clearTimeout(handle)
+function presentationView(item: Presentation): import("./wire-views").NoticePresentationView {
+  if (item.kind.case === "offline") return { kind: "offline", at: Number(item.kind.value.atMs) }
+  if (item.kind.case !== "notice" || !item.kind.value.notice) throw new Error("Invalid notice presentation")
+  const notice = item.kind.value.notice
+  const detail = item.kind.value.detail
+  const need =
+    detail?.need === undefined
+      ? undefined
+      : (
+          {
+            [AttentionNeed.PERMISSION]: "permission",
+            [AttentionNeed.QUESTION]: "question",
+            [AttentionNeed.REVIEW]: "review",
+            [AttentionNeed.FAILED]: "failed",
+            [AttentionNeed.BLOCKED]: "blocked",
+          } as const
+        )[detail.need]
+  return {
+    kind: "notice",
+    notice: {
+      id: notice.id,
+      category: notice.category === 1 ? "approval-requested" : "agent-completed",
+      sessionID: notice.sessionId,
+      createdAt: Number(notice.createdMs),
+    },
+    ...(detail
+      ? {
+          detail: {
+            ...(detail.title ? { title: decodeLossless(detail.title) } : {}),
+            ...(need ? { need } : {}),
+            ...(detail.repeat === true ? { repeat: true } : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+function failureCode(type: string): RemoteError["code"] {
+  if (
+    [
+      "ycoding.v5.SessionNotFoundError",
+      "ycoding.v5.MessageNotFoundError",
+      "ycoding.v5.AttachmentNotFoundError",
+      "ycoding.v5.ShellNotFoundError",
+    ].includes(type)
+  )
+    return "not_found"
+  if (
+    ["ycoding.v5.InvalidRequestError", "ycoding.v5.InvalidCursorError", "ycoding.v5.FormInvalidAnswerError"].includes(
+      type,
+    )
+  )
+    return "invalid_message"
+  if (type === "ycoding.v5.UnauthorizedError") return "unauthorized"
+  if (type === "ycoding.v5.ForbiddenError") return "forbidden"
+  if (type === "ycoding.v5.TelemetryDisabled") return "telemetry_disabled"
+  if (type === "ycoding.v5.ServiceUnavailableError") return "agent_unavailable"
+  return "internal_error"
 }

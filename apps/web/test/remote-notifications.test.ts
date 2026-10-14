@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { RemoteDeviceInfo, RemoteErrorCode, RemoteNoticePage, RemoteNoticeRequest } from "@ycoding-ai/remote"
+import type { RemoteDeviceInfo, RemoteErrorCode } from "@ycoding-ai/remote"
+import type { NoticePageView, NoticeRequestView } from "../src/remote/wire-views"
 import { createRemoteHttp } from "../src/remote/http"
 import type { StorageLike } from "../src/lib/storage"
 import { createNotificationDelivery, type DesktopAlert } from "../src/remote/notifications"
@@ -63,20 +64,23 @@ function durable(type: string, seq: number, sessionID = "ses_a"): unknown {
   return { id: `evt_${seq}`, type, durable: { aggregateID: sessionID, seq, version: 1 }, data: {} }
 }
 
-async function harness(options: {
-  readonly muted?: readonly (readonly [NotificationCategory, NotificationChannel])[]
-  readonly messages?: Record<string, readonly unknown[]>
-  readonly permissions?: readonly unknown[]
-  readonly guardrailRequests?: readonly unknown[]
-  readonly handler?: RelayRequestHandler
-  /** Overrides the enrolled devices so a case can switch between two of them. */
-  readonly devices?: readonly RemoteDeviceInfo[]
-  readonly noticeError?: { readonly code: RemoteErrorCode; readonly message: string }
-  readonly noticePage?: RemoteNoticePage
-  readonly noticeHandler?: (request: RemoteNoticeRequest) => unknown | Promise<unknown>
-} = {}): Promise<Harness> {
-  const devices: readonly RemoteDeviceInfo[] =
-    options.devices ?? [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true }]
+async function harness(
+  options: {
+    readonly muted?: readonly (readonly [NotificationCategory, NotificationChannel])[]
+    readonly messages?: Record<string, readonly unknown[]>
+    readonly permissions?: readonly unknown[]
+    readonly guardrailRequests?: readonly unknown[]
+    readonly handler?: RelayRequestHandler
+    /** Overrides the enrolled devices so a case can switch between two of them. */
+    readonly devices?: readonly RemoteDeviceInfo[]
+    readonly noticeError?: { readonly code: RemoteErrorCode; readonly message: string }
+    readonly noticePage?: NoticePageView
+    readonly noticeHandler?: (request: NoticeRequestView) => unknown | Promise<unknown>
+  } = {},
+): Promise<Harness> {
+  const devices: readonly RemoteDeviceInfo[] = options.devices ?? [
+    { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true },
+  ]
   const relay = await startRelayDouble({
     watermark: 5,
     advertisedSessions: ["ses_a", "ses_b"],
@@ -112,7 +116,14 @@ async function harness(options: {
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => {
       transports.push(handlers)
-      return createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20, schedule, createSocket: relay.createSocket })
+      return createRemoteTransport({
+        url: relay.wsURL(deviceID),
+        handlers,
+        resetDelayMs: 10,
+        maxDelayMs: 20,
+        schedule,
+        createSocket: relay.createSocket,
+      })
     },
     schedule,
     batchMs: 20,
@@ -160,7 +171,10 @@ async function harness(options: {
     flush,
     runUntil,
     togglePreference: (category, channel) => {
-      writeNotificationPreferences(preferences, toggleNotificationChannel(readNotificationPreferences(preferences), category, channel))
+      writeNotificationPreferences(
+        preferences,
+        toggleNotificationChannel(readNotificationPreferences(preferences), category, channel),
+      )
     },
     openSession,
     connect,
@@ -184,53 +198,109 @@ async function raised(test: Harness, category: NoticeCategory, sessionID = "ses_
 
 describe("remote notification delivery", () => {
   test("a synced notice outside the resident Sessions page takes its carousel title without a detail read", async () => {
-    const test = await harness({ handler: (request) => {
-      if (request.operation === "session.list" && request.input?.status === "running") return { ok: true, value: { data: [{ id: "ses_far", title: "Cross-workspace work", time: { created: 1, updated: 2 } }] } }
-      if (request.operation === "session.list" && request.input?.status === "idle") return { ok: true, value: { data: [] } }
-      return "default"
-    } })
+    const test = await harness({
+      handler: (request) => {
+        if (request.operation === "session.list" && request.input?.status === "running")
+          return {
+            ok: true,
+            value: { data: [{ id: "ses_far", title: "Cross-workspace work", time: { created: 1, updated: 2 } }] },
+          }
+        if (request.operation === "session.list" && request.input?.status === "idle")
+          return { ok: true, value: { data: [] } }
+        return "default"
+      },
+    })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().carouselSessions?.some((row) => row.id === "ses_far") === true)
       expect(test.store.state().sessions.some((row) => row.id === "ses_far")).toBe(false)
       await raised(test, "agent-completed", "ses_far")
-      expect(test.store.state().notifications[0]).toMatchObject({ sessionID: "ses_far", sessionTitle: "Cross-workspace work" })
-      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(0)
+      expect(test.store.state().notifications[0]).toMatchObject({
+        sessionID: "ses_far",
+        sessionTitle: "Cross-workspace work",
+      })
+      expect(
+        test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far"),
+      ).toHaveLength(0)
       expect(test.alerts[0]?.body).toBe("A session finished all its work.")
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("coalesces one detail read for unresolved notices and fills retained copies in place", async () => {
     const detail = Promise.withResolvers<Awaited<ReturnType<RelayRequestHandler>>>()
-    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_far" ? detail.promise : "default" })
+    const test = await harness({
+      handler: (request) =>
+        request.operation === "session.get" && request.sessionID === "ses_far" ? detail.promise : "default",
+    })
     try {
       await test.openSession()
       await raised(test, "agent-completed", "ses_far")
-      await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far").length === 1)
+      await test.runUntil(
+        () =>
+          test.relay.requests.filter(
+            (request) => request.operation === "session.get" && request.sessionID === "ses_far",
+          ).length === 1,
+      )
       await raised(test, "approval-requested", "ses_far")
       const notices = test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far")
       expect(notices).toHaveLength(2)
-      detail.resolve({ ok: true, value: { data: { id: "ses_far", title: "Unlisted root", time: { created: 1, updated: 2 } } } })
-      await test.runUntil(() => test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").every((entry) => entry.sessionTitle === "Unlisted root"))
-      expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => entry.id)).toEqual(notices.map((entry) => entry.id))
-      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
+      detail.resolve({
+        ok: true,
+        value: { data: { id: "ses_far", title: "Unlisted root", time: { created: 1, updated: 2 } } },
+      })
+      await test.runUntil(() =>
+        test.store
+          .state()
+          .notifications.filter((entry) => entry.sessionID === "ses_far")
+          .every((entry) => entry.sessionTitle === "Unlisted root"),
+      )
+      expect(
+        test.store
+          .state()
+          .notifications.filter((entry) => entry.sessionID === "ses_far")
+          .map((entry) => entry.id),
+      ).toEqual(notices.map((entry) => entry.id))
+      expect(
+        test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far"),
+      ).toHaveLength(1)
       expect(test.alerts.every((alert) => !alert.body.includes("Unlisted root"))).toBe(true)
-    } finally { detail.resolve("default"); await test.stop() }
+    } finally {
+      detail.resolve("default")
+      await test.stop()
+    }
   }, 15_000)
 
   test("a failed detail read keeps fixed copy and is not retried by later notices", async () => {
-    const test = await harness({ handler: (request) => request.operation === "session.get" && request.sessionID === "ses_far"
-      ? { ok: false, code: "session_not_allowed", message: "Unavailable" } : "default" })
+    const test = await harness({
+      handler: (request) =>
+        request.operation === "session.get" && request.sessionID === "ses_far"
+          ? { ok: false, code: "session_not_allowed", message: "Unavailable" }
+          : "default",
+    })
     try {
       await test.openSession()
       await raised(test, "agent-completed", "ses_far")
-      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_far"))
+      await test.runUntil(() =>
+        test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_far"),
+      )
       await raised(test, "approval-requested", "ses_far")
-      expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => [entry.sessionTitle, entry.body])).toEqual([
-        [undefined, "A session is waiting for you."], [undefined, "A session finished all its work."],
+      expect(
+        test.store
+          .state()
+          .notifications.filter((entry) => entry.sessionID === "ses_far")
+          .map((entry) => [entry.sessionTitle, entry.body]),
+      ).toEqual([
+        [undefined, "A session is waiting for you."],
+        [undefined, "A session finished all its work."],
       ])
-      expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
-    } finally { await test.stop() }
+      expect(
+        test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far"),
+      ).toHaveLength(1)
+    } finally {
+      await test.stop()
+    }
   }, 15_000)
 
   test("subscribes to the relay notice log on every open connection, including a reconnect", async () => {
@@ -240,8 +310,13 @@ describe("remote notification delivery", () => {
       expect(test.relay.noticeRequests.map((request) => request.operation)).toEqual(["notice.subscribe"])
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.relay.noticeRequests.length === 2)
-      expect(test.relay.noticeRequests.map((request) => request.operation)).toEqual(["notice.subscribe", "notice.subscribe"])
-    } finally { await test.stop() }
+      expect(test.relay.noticeRequests.map((request) => request.operation)).toEqual([
+        "notice.subscribe",
+        "notice.subscribe",
+      ])
+    } finally {
+      await test.stop()
+    }
   })
 
   test("status frames raise no notice by themselves: only the relay's list does", async () => {
@@ -259,7 +334,9 @@ describe("remote notification delivery", () => {
       await test.runUntil(() => test.store.state().sessionStatus?.attention.size === 0)
       expect(test.store.state().notifications).toEqual([])
       expect(test.alerts).toEqual([])
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("raises one notice and one desktop alert for one relay notice", async () => {
@@ -267,7 +344,9 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await raised(test, "agent-completed")
-      expect(test.store.state().notifications).toMatchObject([{ category: "agent-completed", body: "A session finished all its work.", synced: true, live: true }])
+      expect(test.store.state().notifications).toMatchObject([
+        { category: "agent-completed", body: "A session finished all its work.", synced: true, live: true },
+      ])
       expect(test.alerts).toHaveLength(1)
 
       test.relay.pushEvent("ses_a", durable("session.execution.succeeded", 6))
@@ -285,43 +364,75 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().notifications.length === 1)
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_denied",
+        type: "guardrail.decided",
+        data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" },
+      })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       expect(test.store.state().notifications.map((entry) => [entry.id, entry.synced, entry.live])).toEqual([
-        ["ntc_50", true, false], [expect.stringMatching(/^notice_/), false, true],
+        ["ntc_50", true, false],
+        [expect.stringMatching(/^notice_/), false, true],
       ])
-      expect(test.store.state().noticeSync).toEqual({ status: "ready", total: 3, loaded: 1, hidden: 0, loadingMore: false, message: undefined })
+      expect(test.store.state().noticeSync).toEqual({
+        status: "ready",
+        total: 3,
+        loaded: 1,
+        hidden: 0,
+        loadingMore: false,
+        message: undefined,
+      })
       expect(test.alerts).toHaveLength(0)
       test.relay.setNoticePage({ notices: [], total: 0, unavailable: false })
       test.relay.dropConnections(1006, "")
       await test.runUntil(() => test.relay.noticeRequests.length === 2 && test.store.state().notifications.length === 1)
       expect(test.store.state().notifications[0]?.synced).toBe(false)
       expect(test.store.state().noticeSync).toMatchObject({ status: "ready", total: 0, loaded: 0 })
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("a failed subscribe is visible, never reads as synced, and a reload recovers it", async () => {
-    const test = await harness({ noticeError: { code: "internal_error", message: "Notification storage is unavailable" } })
+    const test = await harness({
+      noticeError: { code: "internal_error", message: "Notification storage is unavailable" },
+    })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.status === "error")
-      expect(test.store.state().noticeSync).toMatchObject({ status: "error", message: "Notifications: Notification storage is unavailable", total: 0 })
+      expect(test.store.state().noticeSync).toMatchObject({
+        status: "error",
+        message: "Notifications: Notification storage is unavailable",
+        total: 0,
+      })
       test.relay.setNoticeError(undefined)
-      test.relay.setNoticePage({ notices: [{ id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 }], total: 1, unavailable: false })
+      test.relay.setNoticePage({
+        notices: [{ id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 }],
+        total: 1,
+        unavailable: false,
+      })
       await test.store.reloadNotifications()
       expect(test.store.state().noticeSync).toMatchObject({ status: "ready", total: 1, loaded: 1, message: undefined })
       expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["ntc_1"])
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
-  test("an unreadable page is rejected as a sync error instead of being listed", async () => {
-    const test = await harness({ noticeHandler: (request) => request.operation === "notice.subscribe" ? { notices: [{ id: "bad" }], total: 1, unavailable: false } : undefined })
+  test("a typed page rejection is shown as a sync error instead of an empty synced list", async () => {
+    const test = await harness({
+      noticeError: { code: "invalid_message", message: "Notifications could not be read from the relay." },
+    })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.status === "error")
-      expect(test.store.state().noticeSync.message).toBe("Notifications could not be read from the relay.")
+      expect(test.store.state().noticeSync.message).toBe(
+        "Notifications: Notifications could not be read from the relay.",
+      )
       expect(test.store.state().notifications).toEqual([])
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("a relay storage fault is shown from the page flag and the live frame, and read all clears it", async () => {
@@ -329,7 +440,9 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.status === "error")
-      expect(test.store.state().noticeSync.message).toBe("Some notifications could not be saved. Stored unread notifications remain available.")
+      expect(test.store.state().noticeSync.message).toBe(
+        "Some notifications could not be saved. Stored unread notifications remain available.",
+      )
       test.relay.pushNotices({ type: "notice.cleared" })
       await test.runUntil(() => test.store.state().noticeSync.status === "ready")
       expect(test.store.state().noticeSync).toMatchObject({ total: 0, message: undefined })
@@ -337,33 +450,65 @@ describe("remote notification delivery", () => {
       await test.runUntil(() => test.store.state().noticeSync.status === "error")
       expect(test.store.state().noticeSync.message).toContain("could not be saved")
       expect(test.store.state().notice).toBe(test.store.state().noticeSync.message)
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("Load more appends the next older page by cursor and keeps the relay total", async () => {
-    const page = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({ id: `ntc_${from - index}`, category: "agent-completed" as const, sessionID: "ses_a", createdAt: 1_000 + from - index }))
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `ntc_${from - index}`,
+        category: "agent-completed" as const,
+        sessionID: "ses_a",
+        createdAt: 1_000 + from - index,
+      }))
     const test = await harness({
       noticePage: { notices: page(120, 50), next: "ntc_71", total: 120, unavailable: false },
-      noticeHandler: (request) => request.operation === "notice.list" ? { notices: page(70, 50), next: "ntc_21", total: 120, unavailable: false } : undefined,
+      noticeHandler: (request) =>
+        request.operation === "notice.list"
+          ? { notices: page(70, 50), next: "ntc_21", total: 120, unavailable: false }
+          : undefined,
     })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.loaded === 50)
       await test.store.loadMoreNotifications()
-      expect(test.relay.noticeRequests.filter((request) => request.operation === "notice.list").map((request) => request.input)).toEqual([{ before: "ntc_71" }])
-      expect(test.store.state().noticeSync).toMatchObject({ status: "ready", total: 120, loaded: 100, loadingMore: false })
-      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual([...page(120, 50), ...page(70, 50)].map((entry) => entry.id))
+      expect(
+        test.relay.noticeRequests
+          .filter((request) => request.operation === "notice.list")
+          .map((request) => request.input),
+      ).toEqual([{ before: "ntc_71" }])
+      expect(test.store.state().noticeSync).toMatchObject({
+        status: "ready",
+        total: 120,
+        loaded: 100,
+        loadingMore: false,
+      })
+      expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(
+        [...page(120, 50), ...page(70, 50)].map((entry) => entry.id),
+      )
       expect(test.alerts).toEqual([])
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("a Load more response whose cursor a reload of the list replaced is discarded", async () => {
-    const page = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({ id: `ntc_${from - index}`, category: "agent-completed" as const, sessionID: "ses_a", createdAt: 1_000 + from - index }))
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `ntc_${from - index}`,
+        category: "agent-completed" as const,
+        sessionID: "ses_a",
+        createdAt: 1_000 + from - index,
+      }))
     let release: (value: unknown) => void = () => {}
-    const held = new Promise((resolve) => { release = resolve })
+    const held = new Promise((resolve) => {
+      release = resolve
+    })
     const test = await harness({
       noticePage: { notices: page(120, 50), next: "ntc_71", total: 120, unavailable: false },
-      noticeHandler: (request) => request.operation === "notice.list" ? held : undefined,
+      noticeHandler: (request) => (request.operation === "notice.list" ? held : undefined),
     })
     try {
       await test.openSession()
@@ -377,16 +522,27 @@ describe("remote notification delivery", () => {
       await loading
       expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(page(30, 10).map((entry) => entry.id))
       expect(test.store.state().noticeSync).toMatchObject({ total: 10, loaded: 10 })
-    } finally { release(undefined); await test.stop() }
+    } finally {
+      release(undefined)
+      await test.stop()
+    }
   })
 
   test("a Load more response for a cursor that is no longer the oldest loaded notice is discarded", async () => {
-    const page = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({ id: `ntc_${from - index}`, category: "agent-completed" as const, sessionID: "ses_a", createdAt: 1_000 + from - index }))
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `ntc_${from - index}`,
+        category: "agent-completed" as const,
+        sessionID: "ses_a",
+        createdAt: 1_000 + from - index,
+      }))
     let release: (value: unknown) => void = () => {}
-    const held = new Promise((resolve) => { release = resolve })
+    const held = new Promise((resolve) => {
+      release = resolve
+    })
     const test = await harness({
       noticePage: { notices: page(60, 10), next: "ntc_51", total: 60, unavailable: false },
-      noticeHandler: (request) => request.operation === "notice.list" ? held : undefined,
+      noticeHandler: (request) => (request.operation === "notice.list" ? held : undefined),
     })
     try {
       await test.openSession()
@@ -399,35 +555,76 @@ describe("remote notification delivery", () => {
       await loading
       expect(test.store.state().notifications).toHaveLength(9)
       expect(test.store.state().noticeSync).toMatchObject({ loadingMore: false, loaded: 9 })
-    } finally { release(undefined); await test.stop() }
+    } finally {
+      release(undefined)
+      await test.stop()
+    }
   })
 
   test("a failed Load more is shown as a sync error without dropping the loaded notices", async () => {
     const test = await harness({
-      noticePage: { notices: [{ id: "ntc_9", category: "agent-completed", sessionID: "ses_a", createdAt: 9 }], next: "ntc_9", total: 9, unavailable: false },
-      noticeHandler: (request) => request.operation === "notice.list" ? { notices: [{ id: "ntc_8" }], total: 9, unavailable: false } : undefined,
+      noticePage: {
+        notices: [{ id: "ntc_9", category: "agent-completed", sessionID: "ses_a", createdAt: 9 }],
+        next: "ntc_9",
+        total: 9,
+        unavailable: false,
+      },
     })
     try {
       await test.openSession()
       await test.runUntil(() => test.store.state().noticeSync.loaded === 1)
+      test.relay.setNoticeError({ code: "invalid_message", message: "Notifications could not be read from the relay." })
       await test.store.loadMoreNotifications()
-      expect(test.store.state().noticeSync).toMatchObject({ status: "error", loadingMore: false, loaded: 1, message: "Notifications could not be read from the relay." })
+      expect(test.store.state().noticeSync).toMatchObject({
+        status: "error",
+        loadingMore: false,
+        loaded: 1,
+        message: "Notifications: Notifications could not be read from the relay.",
+      })
       expect(test.store.state().notifications.map((entry) => entry.id)).toEqual(["ntc_9"])
-    } finally { await test.stop() }
+    } finally {
+      await test.stop()
+    }
   })
 
   test("raises a synced attention notice and a local guardrail-block notice without its own System alert, while a failed step adds none", async () => {
     const test = await harness()
     try {
       await test.openSession()
-      test.relay.pushEvent("ses_a", { id: "evt_20", type: "permission.asked", data: { id: "per_1", action: "shell" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_20",
+        type: "permission.asked",
+        data: { id: "per_1", action: "shell", resources: ["test"] },
+      })
       await test.flush()
-      test.relay.pushEvent("ses_a", { id: "evt_21", type: "guardrail.asked", data: { id: "grq_1", hardReview: true } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_21",
+        type: "guardrail.asked",
+        data: {
+          id: "grq_1",
+          rootSessionID: "ses_a",
+          action: "shell",
+          resources: ["test"],
+          ruleIDs: [],
+          standard: true,
+          reason: "Review required",
+          hardReview: true,
+        },
+      })
       await test.flush()
       await raised(test, "approval-requested", "ses_b")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_denied",
+        type: "guardrail.decided",
+        data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" },
+      })
       await test.runUntil(() => test.store.state().notifications.length === 2)
-      test.relay.pushEvent("ses_a", { id: "evt_22", type: "session.step.failed", durable: { aggregateID: "ses_a", seq: 6, version: 1 }, data: {} })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_22",
+        type: "session.step.failed",
+        durable: { aggregateID: "ses_a", seq: 6, version: 1 },
+        data: { assistantMessageID: "msg_failed", error: { type: "UnknownError", message: "Step failed" } },
+      })
       await test.flush()
 
       expect(test.store.state().notifications.map((entry) => [entry.category, entry.synced])).toEqual([
@@ -453,7 +650,11 @@ describe("remote notification delivery", () => {
       const notice = { id: "ntc_51", category: "approval-requested" as const, sessionID: "ses_a", createdAt: 5 }
       test.relay.pushNotices({ type: "notice.added", notices: [notice], total: 1 })
       test.relay.pushNotices({ type: "notice.present", items: [{ kind: "notice", notice }] })
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_denied",
+        type: "guardrail.decided",
+        data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" },
+      })
       await test.flush()
       await Bun.sleep(30)
       expect(test.store.state().notifications).toHaveLength(0)
@@ -468,9 +669,20 @@ describe("remote notification delivery", () => {
     let phase = "open-session"
     let probing: Promise<void> | undefined
     const watchdog = setTimeout(() => {
-      probing = test.relay.diagnostics().then((details) => { console.error(JSON.stringify({ diagnostic: "stored-channel", phase, transport: test.store.state().transport,
-        connection: test.store.state().connection, sessionListStatus: test.store.state().sessionListStatus, noticeSync: test.store.state().noticeSync,
-        notifications: test.store.state().notifications.map((entry) => entry.id), ...details })) })
+      probing = test.relay.diagnostics().then((details) => {
+        console.error(
+          JSON.stringify({
+            diagnostic: "stored-channel",
+            phase,
+            transport: test.store.state().transport,
+            connection: test.store.state().connection,
+            sessionListStatus: test.store.state().sessionListStatus,
+            noticeSync: test.store.state().noticeSync,
+            notifications: test.store.state().notifications.map((entry) => entry.id),
+            ...details,
+          }),
+        )
+      })
     }, 4_000)
     try {
       await test.openSession()
@@ -496,12 +708,26 @@ describe("remote notification delivery", () => {
       messages: {
         ses_a: [
           { id: "msg_1", type: "user", text: "before", time: { created: 1 } },
-          { id: "msg_2", type: "assistant", agent: "god", content: [{ type: "text", text: "done" }], time: { created: 2, completed: 3 } },
+          {
+            id: "msg_2",
+            type: "assistant",
+            agent: "god",
+            content: [{ type: "text", text: "done" }],
+            time: { created: 2, completed: 3 },
+          },
         ],
       },
       permissions: [{ id: "per_old", sessionID: "ses_a", action: "shell", resources: ["bun test"] }],
       guardrailRequests: [
-        { id: "grq_old", sessionID: "ses_a", rootSessionID: "ses_a", action: "rm -rf build", resources: ["build"], reason: "Deletion", hardReview: true },
+        {
+          id: "grq_old",
+          sessionID: "ses_a",
+          rootSessionID: "ses_a",
+          action: "rm -rf build",
+          resources: ["build"],
+          reason: "Deletion",
+          hardReview: true,
+        },
       ],
     })
     try {
@@ -683,10 +909,25 @@ describe("remote notification delivery", () => {
       await test.openSession()
       await test.connect("dev_1")
       const before = test.alerts.length
-      test.transports[0]?.onNotices?.({ type: "notice.present", items: [{ kind: "notice", notice: { id: "ntc_41", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
-        detail: { title: "Fix login", need: "review" } }] })
-      expect(test.alerts.slice(before)).toEqual([{ title: "YCoding — guardrail review", body: "“Fix login” is waiting for you to approve or reject a guarded action.",
-        tag: "ycoding-dev_1-ntc_41", sessionID: "ses_a", notice: { deviceID: "dev_1", noticeID: "ntc_41" } }])
+      test.transports[0]?.onNotices?.({
+        type: "notice.present",
+        items: [
+          {
+            kind: "notice",
+            notice: { id: "ntc_41", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+            detail: { title: "Fix login", need: "review" },
+          },
+        ],
+      })
+      expect(test.alerts.slice(before)).toEqual([
+        {
+          title: "YCoding — guardrail review",
+          body: "“Fix login” is waiting for you to approve or reject a guarded action.",
+          tag: "ycoding-dev_1-ntc_41",
+          sessionID: "ses_a",
+          notice: { deviceID: "dev_1", noticeID: "ntc_41" },
+        },
+      ])
     } finally {
       await test.stop()
     }
@@ -699,7 +940,10 @@ describe("remote notification delivery", () => {
       const first = await raised(test, "approval-requested")
       const second = await raised(test, "approval-requested")
       expect(test.store.state().notifications.map((entry) => entry.id)).toEqual([second, first])
-      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual(["approval-requested", "approval-requested"])
+      expect(test.store.state().notifications.map((entry) => entry.category)).toEqual([
+        "approval-requested",
+        "approval-requested",
+      ])
       expect(test.alerts).toHaveLength(2)
     } finally {
       await test.stop()
@@ -711,7 +955,11 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       const synced = await raised(test, "agent-completed")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_denied",
+        type: "guardrail.decided",
+        data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" },
+      })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       const local = test.store.state().notifications.find((entry) => !entry.synced)?.id ?? ""
 
@@ -720,7 +968,11 @@ describe("remote notification delivery", () => {
       expect(test.relay.noticeRequests.filter((request) => request.operation === "notice.read")).toEqual([])
 
       await test.store.readNotification(synced)
-      expect(test.relay.noticeRequests.filter((request) => request.operation === "notice.read").map((request) => request.input)).toEqual([{ ids: [synced] }])
+      expect(
+        test.relay.noticeRequests
+          .filter((request) => request.operation === "notice.read")
+          .map((request) => request.input),
+      ).toEqual([{ ids: [synced] }])
       expect(test.store.state().notifications.map((entry) => entry.id)).toEqual([synced])
       test.relay.pushNotices({ type: "notice.removed", ids: [synced], total: 0 })
       await test.runUntil(() => test.store.state().notifications.length === 0)
@@ -736,7 +988,11 @@ describe("remote notification delivery", () => {
     try {
       await test.openSession()
       await raised(test, "agent-completed")
-      test.relay.pushEvent("ses_a", { id: "evt_denied", type: "guardrail.decided", data: { decision: "deny" } })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_denied",
+        type: "guardrail.decided",
+        data: { rootSessionID: "ses_a", action: "shell", ruleIDs: [], decision: "deny" },
+      })
       await test.runUntil(() => test.store.state().notifications.length === 2)
       await test.store.readAllNotifications()
       expect(test.relay.noticeRequests.filter((request) => request.operation === "notice.readAll")).toHaveLength(1)

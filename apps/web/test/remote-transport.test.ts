@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { RemoteLimits, serializeResponse } from "@ycoding-ai/remote"
+import {
+  WireLimit,
+  create,
+  ResultSchema,
+  TypedPayloadSchema,
+  FrameSchema,
+  encodeStrict,
+  decodeStrict,
+} from "@ycoding-ai/remote"
 import { clientFrameDelay, createRemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor } from "./relay-double"
 
@@ -18,14 +26,17 @@ describe("remote transport integration", () => {
     let count = 0
     let maximum = 0
     for (const frame of arrivals.toSorted((left, right) => left.at - right.at)) {
-      if (windowStart < 0 || frame.at - windowStart >= RemoteLimits.clientRateWindowMs) { windowStart = frame.at; count = 0 }
+      if (windowStart < 0 || frame.at - windowStart >= WireLimit.RATE_WINDOW_MS) {
+        windowStart = frame.at
+        count = 0
+      }
       count++
       maximum = Math.max(maximum, count)
     }
     expect(arrivals.some((frame) => frame.kind === "ping")).toBe(true)
-    expect(maximum).toBeLessThanOrEqual(RemoteLimits.maxClientRequestsPerWindow)
+    expect(maximum).toBeLessThanOrEqual(WireLimit.CLIENT_RATE)
   })
-  test("reports the session advertisement and round-trips a request", async () => {
+  test("reports explicit inventory invalidation and round-trips a request", async () => {
     const relay = await startRelayDouble({ advertisedSessions: ["ses_a"] })
     let invalidations = 0
     const statuses: RemoteTransportStatus[] = []
@@ -33,7 +44,9 @@ describe("remote transport integration", () => {
       url: relay.wsURL("dev_1"),
       handlers: {
         onStatus: (status) => statuses.push(status),
-        onSessions: () => { invalidations += 1 },
+        onSessions: () => {
+          invalidations += 1
+        },
       },
       resetDelayMs: 10,
       maxDelayMs: 20,
@@ -41,13 +54,15 @@ describe("remote transport integration", () => {
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
+      expect(invalidations).toBe(0)
+      relay.pushSessions(["ses_a"])
       await waitFor(() => invalidations > 0)
       expect(invalidations).toBe(1)
       const response = await transport.request("session.list")
       expect(response.status).toBe("ok")
       if (response.status !== "ok") return
-      const list = response.value as { data: readonly { id: string }[] }
-      expect(list.data.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+      const list = response.value as { data: { data: readonly { id: string }[] } }
+      expect(list.data.data.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
       expect(statuses.some((status) => status.kind === "connecting")).toBe(true)
     } finally {
       transport.close()
@@ -59,16 +74,32 @@ describe("remote transport integration", () => {
     const notice = { id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 } as const
     const relay = await startRelayDouble({ noticePage: { notices: [notice], total: 1, unavailable: false } })
     const frames: unknown[] = []
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), handlers: { onNotices: (frame) => frames.push(frame) }, resetDelayMs: 10 })
+    const transport = createRemoteTransport({
+      url: relay.wsURL("dev_1"),
+      handlers: { onNotices: (frame) => frames.push(frame) },
+      resetDelayMs: 10,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
-      expect(await transport.request("notice.subscribe")).toEqual({ status: "ok", value: { notices: [notice], total: 1, unavailable: false } })
-      expect(await transport.request("notice.list", { input: { before: "ntc_1" } })).toMatchObject({ status: "ok", value: { total: 1 } })
-      expect(await transport.request("notice.read", { input: { ids: ["ntc_1"] } })).toEqual({ status: "ok", value: null })
-      expect(await transport.request("notice.readAll")).toEqual({ status: "ok", value: null })
+      expect(await transport.request("notice.subscribe")).toEqual({
+        status: "ok",
+        value: { notices: [notice], total: 1, unavailable: false },
+      })
+      expect(await transport.request("notice.list", { input: { before: "ntc_1" } })).toMatchObject({
+        status: "ok",
+        value: { total: 1 },
+      })
+      expect(await transport.request("notice.read", { input: { ids: ["ntc_1"] } })).toEqual({
+        status: "ok",
+        value: { data: {} },
+      })
+      expect(await transport.request("notice.readAll")).toEqual({ status: "ok", value: { data: {} } })
       expect(relay.noticeRequests.map((request) => [request.operation, request.input])).toEqual([
-        ["notice.subscribe", undefined], ["notice.list", { before: "ntc_1" }], ["notice.read", { ids: ["ntc_1"] }], ["notice.readAll", undefined],
+        ["notice.subscribe", undefined],
+        ["notice.list", { before: "ntc_1" }],
+        ["notice.read", { ids: ["ntc_1"] }],
+        ["notice.readAll", undefined],
       ])
       relay.pushNotices({ type: "notice.added", notices: [{ ...notice, id: "ntc_2" }], total: 2 })
       relay.pushNotices({ type: "notice.removed", ids: ["ntc_1"], total: 1 })
@@ -88,20 +119,23 @@ describe("remote transport integration", () => {
     }
   })
 
-  test("assembles an out-of-order chunked response into one value", async () => {
+  test("rejects out-of-order binary bulk pieces without publishing partial content", async () => {
     const relay = await startRelayDouble({
       handler: (request) => {
         if (request.operation !== "session.messages") return { ok: true, value: null }
-        const json = JSON.stringify({ data: [{ id: "msg_1", type: "system", text: "hello", time: { created: 1 } }] })
-        const third = Math.ceil(json.length / 3)
         return {
-          ok: true,
-          value: null,
-          chunks: [
-            { index: 1, slice: json.slice(third, third * 2) },
-            { index: 0, slice: json.slice(0, third) },
-            { index: 2, slice: json.slice(third * 2) },
-          ],
+          wire: (peer, dispatch) => {
+            const send = peer.message.bind(peer)
+            peer.message = (raw) => {
+              if (typeof raw === "string") throw new Error("Binary fixture required")
+              const frame = decodeStrict(FrameSchema, new Uint8Array(raw))
+              if (frame.body.case === "bulkPiece" && frame.body.value.index === 0) frame.body.value.index = 1
+              send(encodeStrict(FrameSchema, frame).slice().buffer)
+            }
+            peer.result(dispatch, {
+              data: { data: [{ id: "msg_1", type: "system", text: "x".repeat(100_000), time: { created: 1 } }] },
+            })
+          },
         }
       },
     })
@@ -110,9 +144,9 @@ describe("remote transport integration", () => {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
       const response = await transport.request("session.messages", { sessionID: "ses_a" })
-      expect(response.status).toBe("ok")
-      if (response.status !== "ok") return
-      expect(response.value).toMatchObject({ data: [{ id: "msg_1", text: "hello" }] })
+      expect(response).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
+      await waitFor(() => relay.closeEvents.length > 0)
+      expect(relay.closeEvents[0]).toEqual({ code: 1002, reason: "MALFORMED" })
     } finally {
       transport.close()
       await relay.stop()
@@ -120,59 +154,41 @@ describe("remote transport integration", () => {
   })
 
   test("assembles a legal multi-frame payload larger than one frame, including multibyte text", async () => {
-    // Measured case: a ~1 MiB shell capture is above the agent's single-frame
-    // bound, so the agent chunks it. It must assemble instead of failing at one frame.
     const line = "\u65e5\u672c\u8a9e \u30c6\u30ad\u30b9\u30c8 \ud83c\udf0d shell output line\n"
     const output = line.repeat(Math.ceil(1_200_000 / line.length))
-    const payload = { data: { id: "sh_1", output, cursor: 0, size: output.length } }
-    const text = JSON.stringify(payload)
-    expect(text.length).toBeGreaterThan(RemoteLimits.maxAgentMessageChars)
-    // 32 768 code units stays inside the agent frame bound even if every
-    // character escaped to six characters, so each emitted slice is legal.
-    const sliceChars = 32_768
-    const parts: string[] = []
-    for (let offset = 0; offset < text.length; offset += sliceChars) parts.push(text.slice(offset, offset + sliceChars))
-    expect(parts.length).toBeGreaterThan(1)
-    expect(parts.length).toBeLessThanOrEqual(RemoteLimits.maxChunksPerResponse)
-    // The transport generates shorter ids than this placeholder, so a frame that
-    // fits here always fits on the real wire.
-    const placeholderID = `req_${"0".repeat(40)}`
-    for (const [index, slice] of parts.entries()) {
-      const raw = serializeResponse({
-        type: "response",
-        id: placeholderID,
-        ok: true,
-        value: slice,
-        chunk: { index, last: index === parts.length - 1 },
-      })
-      expect(raw.length).toBeLessThanOrEqual(RemoteLimits.maxAgentMessageChars)
-    }
+    const payload = { data: [{ id: "msg_bulk", type: "system", text: output, time: { created: 1 } }] }
+    expect(new TextEncoder().encode(output).byteLength).toBeGreaterThan(WireLimit.INLINE_BODY_BYTES)
     const relay = await startRelayDouble({
-      handler: () => ({ ok: true, value: null, chunks: parts.map((slice, index) => ({ index, slice })) }),
+      handler: () => ({ ok: true, value: payload }),
     })
     const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
-      const response = await transport.request("session.snapshot", { sessionID: "ses_a" })
+      const response = await transport.request("session.messages", { sessionID: "ses_a" })
       expect(response.status).toBe("ok")
       if (response.status !== "ok") return
-      expect(response.value).toEqual(payload)
+      expect(response.value).toEqual({ data: payload })
     } finally {
       transport.close()
       await relay.stop()
     }
   })
 
-  test("rejects a chunked response whose slices assemble into malformed JSON", async () => {
+  test("rejects a malformed typed protobuf result without publishing partial content", async () => {
     const relay = await startRelayDouble({
       handler: () => ({
-        ok: true,
-        value: null,
-        chunks: [
-          { index: 0, slice: '{"data":[1,' },
-          { index: 1, slice: "2" },
-        ],
+        wire: (peer, dispatch) => {
+          const send = peer.message.bind(peer)
+          peer.message = (raw) => {
+            if (typeof raw === "string") throw new Error("Binary fixture required")
+            const frame = decodeStrict(FrameSchema, new Uint8Array(raw))
+            if (frame.body.case === "result" && frame.body.value.outcome.case === "success")
+              frame.body.value.outcome.value.payload = Uint8Array.of(255)
+            send(encodeStrict(FrameSchema, frame).slice().buffer)
+          }
+          peer.result(dispatch, { data: { data: [] } })
+        },
       }),
     })
     const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, requestTimeoutMs: 500 })
@@ -180,16 +196,16 @@ describe("remote transport integration", () => {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
       const response = await transport.request("session.messages", { sessionID: "ses_a" })
-      expect(response.status).toBe("failed")
-      if (response.status !== "failed") return
-      expect(response.error.code).toBe("invalid_message")
+      expect(response).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
+      await waitFor(() => relay.closeEvents.length > 0)
+      expect(relay.closeEvents[0]).toEqual({ code: 1002, reason: "MALFORMED" })
     } finally {
       transport.close()
       await relay.stop()
     }
   })
 
-  test("surfaces the agent's explicit failure above the chunk budget", async () => {
+  test("surfaces a typed backend failure above the response budget", async () => {
     const relay = await startRelayDouble({
       handler: () => ({
         ok: false,
@@ -197,51 +213,69 @@ describe("remote transport integration", () => {
         message: "Response exceeds the bounded chunk count; read again with after",
       }),
     })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, createSocket: relay.createSocket })
+    const transport = createRemoteTransport({
+      url: relay.wsURL("dev_1"),
+      resetDelayMs: 10,
+      createSocket: relay.createSocket,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open").catch(async (cause: unknown) => {
-        console.error(JSON.stringify({ diagnostic: "chunk-budget-open", transport: transport.status(), ...await relay.diagnostics() }))
+        console.error(
+          JSON.stringify({
+            diagnostic: "chunk-budget-open",
+            transport: transport.status(),
+            ...(await relay.diagnostics()),
+          }),
+        )
         throw cause
       })
       const response = await transport.request("session.messages", { sessionID: "ses_a" })
       expect(response.status).toBe("failed")
       if (response.status !== "failed") return
-      expect(response.error.code).toBe("message_too_large")
+      expect(response.error).toEqual({
+        code: "internal_error",
+        message: "Response exceeds the bounded chunk count; read again with after",
+      })
     } finally {
       transport.close()
       await relay.stop()
     }
   })
 
-  test("rejects a chunked response with a missing slice", async () => {
+  test("rejects a binary bulk response with a missing piece", async () => {
     const relay = await startRelayDouble({
       handler: () => ({
-        ok: true,
-        value: null,
-        chunks: [
-          { index: 0, slice: '{"data":[' },
-          { index: 2, slice: "1]}" },
-        ],
+        wire: (peer, dispatch) => {
+          const send = peer.message.bind(peer)
+          peer.message = (raw) => {
+            if (typeof raw === "string") throw new Error("Binary fixture required")
+            const frame = decodeStrict(FrameSchema, new Uint8Array(raw))
+            if (frame.body.case !== "bulkPiece" || frame.body.value.index !== 0) send(raw)
+          }
+          peer.result(dispatch, {
+            data: { data: [{ id: "msg_1", type: "system", text: "x".repeat(100_000), time: { created: 1 } }] },
+          })
+        },
       }),
     })
     const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, requestTimeoutMs: 500 })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
-      const response = await transport.request("session.list")
-      expect(response.status).toBe("failed")
-      if (response.status !== "failed") return
-      expect(response.error.code).toBe("invalid_message")
+      const response = await transport.request("session.messages", { sessionID: "ses_a" })
+      expect(response).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
+      await waitFor(() => relay.closeEvents.length > 0)
+      expect(relay.closeEvents[0]).toEqual({ code: 1002, reason: "MALFORMED" })
     } finally {
       transport.close()
       await relay.stop()
     }
   })
 
-  test("surfaces relay error codes such as an unavailable agent", async () => {
+  test("a relay without an available agent retires a transmitted read as unknown", async () => {
     const relay = await startRelayDouble({
-      handler: () => ({ ok: false, code: "agent_unavailable", message: "No agent is connected" }),
+      handler: () => "close",
     })
     const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10 })
     try {
@@ -249,9 +283,10 @@ describe("remote transport integration", () => {
       await waitFor(() => transport.status().kind === "open")
       const response = await transport.request("session.list")
       expect(response).toEqual({
-        status: "failed",
-        error: { code: "agent_unavailable", message: "No agent is connected" },
+        status: "unknown",
+        error: { code: "outcome_unknown", message: "The relay connection closed before this request settled" },
       })
+      expect(relay.requests).toHaveLength(1)
     } finally {
       transport.close()
       await relay.stop()
@@ -291,7 +326,12 @@ describe("remote transport integration", () => {
 
   test("bounds in-flight requests and refuses further work without sending it", async () => {
     const relay = await startRelayDouble({ handler: () => "silent" })
-    const transport = createRemoteTransport({ url: relay.wsURL("dev_1"), resetDelayMs: 10, maxInFlight: 1, requestTimeoutMs: 200 })
+    const transport = createRemoteTransport({
+      url: relay.wsURL("dev_1"),
+      resetDelayMs: 10,
+      maxInFlight: 1,
+      requestTimeoutMs: 200,
+    })
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
@@ -307,7 +347,7 @@ describe("remote transport integration", () => {
   })
 
   test("refuses work while the socket is not open", async () => {
-    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v4/client", resetDelayMs: 10 })
+    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v5/client", resetDelayMs: 10 })
     expect(await transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
     transport.close()
   })

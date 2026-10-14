@@ -37,7 +37,7 @@ const control = `document.querySelector('input[aria-labelledby="machine-awake-la
 const label = `${control}.nextElementSibling.textContent`
 const detail = `document.getElementById('machine-awake-status').textContent`
 const count = (operation: "get" | "set") =>
-  `window.keepAwakeFixture.calls.filter(call => call.operation === 'machine.keepAwake.${operation}').length`
+  `window.keepAwakeFixture.calls.filter(call => call.operation === 'keepAwake.${operation}').length`
 
 async function until(page: { evaluate<T>(expression: string): Promise<T> }, expression: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -99,7 +99,7 @@ describe("Settings Keep machine awake", () => {
           expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(true)
           expect(
             await page.evaluate<unknown>(
-              `window.keepAwakeFixture.calls.find(call => call.operation === 'machine.keepAwake.set').request.input`,
+              `window.keepAwakeFixture.calls.find(call => call.operation === 'keepAwake.set').request.input`,
             ),
           ).toEqual({ enabled: true })
           expect(await page.evaluate<string>(`JSON.stringify(localStorage)`)).toBe(before.storage)

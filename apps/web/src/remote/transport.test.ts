@@ -1,294 +1,334 @@
 import { expect, test } from "bun:test"
-import { RemoteLimits } from "@ycoding-ai/remote"
-import { createRemoteTransport, type RemoteTransportOptions, type RemoteTransportStatus } from "./transport"
+import { WireLimit, LedgerClass, create, ScopeSchema } from "@ycoding-ai/remote"
+import { transportFixture, fillWindow, fixtureSnapshot, fixtureSourceEpoch } from "../../test/wire-peer"
+import type { RemoteRequestTiming } from "./transport"
 
-class Socket extends EventTarget {
-  readyState = 0
-  readonly CLOSED = 3
-  readonly sent: string[] = []
-  send(frame: string) { this.sent.push(frame) }
-  close() { this.readyState = 3 }
-  open() { this.readyState = 1; this.dispatchEvent(new Event("open")) }
-  message(frame: unknown) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) })) }
-  priorities() { return this.frames().filter((frame) => frame.type === "priority") }
-  frames() { return this.sent.map((frame) => JSON.parse(frame) as { type: string; id?: string; mode?: string; operation?: string }) }
-}
-
-class Visibility extends EventTarget {
-  hidden = false
-  change(hidden: boolean) { this.hidden = hidden; this.dispatchEvent(new Event("visibilitychange")) }
-}
-
-function fixture(options: Partial<RemoteTransportOptions> = {}) {
-  const document = new Visibility()
-  const sockets: Socket[] = []
-  const statuses: RemoteTransportStatus[] = []
-  const batches: { sessionID: string; events: readonly unknown[] }[] = []
-  const tasks: { at: number; callback: () => void; cancelled: boolean }[] = []
-  const clock = { now: 0 }
-  const schedule: NonNullable<RemoteTransportOptions["schedule"]> = (callback, ms) => {
-    const task = { at: clock.now + ms, callback, cancelled: false }
-    tasks.push(task)
-    return () => { task.cancelled = true }
+test("Ready, rather than native WebSocket open, establishes the binary runtime", () => {
+  const f = transportFixture({ quiet: true })
+  try {
+    expect(f.transport.status().kind).toBe("connecting")
+    expect(f.sockets[0]!.binaryType).toBe("arraybuffer")
+  } finally {
+    f.transport.close()
   }
-  const advance = (ms: number) => {
-    const end = clock.now + ms
-    for (;;) {
-      const task = tasks.filter((entry) => !entry.cancelled && entry.at <= end).sort((a, b) => a.at - b.at)[0]
-      if (!task) break
-      task.cancelled = true
-      clock.now = task.at
-      task.callback()
+})
+
+test("canonical typed events are delivered as one ordered Session batch after snapshot hydration", async () => {
+  const f = transportFixture()
+  try {
+    const subscribed = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-browser" })
+    expect(await subscribed).toEqual({ status: "ok", value: { subscription_id: "sub-browser" } })
+    const events = [0, 1, 2].map((ordinal) => ({
+      id: `evt_${ordinal}`,
+      created: 1,
+      type: "session.text.delta",
+      data: { sessionID: "ses_browser", assistantMessageID: "msg_browser", ordinal, delta: String(ordinal) },
+    }))
+    f.sockets[0]!.events("ses_browser", events)
+    f.advance(50)
+    expect(f.batches).toEqual([])
+    const snapshot = f.transport.request("session.snapshot", { sessionID: "ses_browser", input: { limit: 100 } })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    expect((await snapshot).status).toBe("ok")
+    expect(f.batches).toEqual([{ sessionID: "ses_browser", events }])
+    const released = f.transport.request("event.unsubscribe", {
+      sessionID: "ses_browser",
+      input: { subscription_id: "sub-browser" },
+    })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { data: {} })
+    expect((await released).status).toBe("ok")
+    expect(f.sockets[0]!.failures).toEqual([])
+  } finally {
+    f.transport.close()
+  }
+})
+
+for (const settlement of ["rejected", "timed-out", "cancelled"] as const)
+  test(`a ${settlement} snapshot releases hydration without losing subsequent live events`, async () => {
+    const f = transportFixture()
+    try {
+      const subscribed = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+      f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-browser" })
+      await subscribed
+      const events = [
+        {
+          id: "evt_buffered",
+          created: 1,
+          type: "session.text.delta",
+          data: { sessionID: "ses_browser", assistantMessageID: "msg_browser", ordinal: 0, delta: "buffered" },
+        },
+      ]
+      f.sockets[0]!.events("ses_browser", events)
+      f.advance(50)
+      expect(f.batches).toEqual([])
+      const controller = new AbortController()
+      const snapshot = f.transport.request("session.snapshot", {
+        sessionID: "ses_browser",
+        input: { limit: 100 },
+        timeoutMs: 10,
+        signal: controller.signal,
+      })
+      if (settlement === "rejected")
+        f.sockets[0]!.error(f.sockets[0]!.dispatches.at(-1)!, "ycoding.v5.InvalidRequestError", {
+          _tag: "InvalidRequestError",
+          message: "History rejected",
+        })
+      if (settlement === "timed-out") f.advance(11)
+      if (settlement === "cancelled") controller.abort()
+      expect((await snapshot).status).toBe(settlement === "rejected" ? "failed" : "unknown")
+      expect(f.batches).toEqual([{ sessionID: "ses_browser", events }])
+      const later = [{ ...events[0]!, id: "evt_later", data: { ...events[0]!.data, delta: "later" } }]
+      f.sockets[0]!.events("ses_browser", later)
+      f.advance(50)
+      expect(f.batches).toEqual([
+        { sessionID: "ses_browser", events },
+        { sessionID: "ses_browser", events: later },
+      ])
+      expect(f.transport.status().kind).toBe("open")
+      expect(f.sockets[0]!.failures).toEqual([])
+    } finally {
+      f.transport.close()
     }
-    clock.now = end
-  }
-  const transport = createRemoteTransport({
-    url: "wss://relay.example.test/client",
-    document,
-    schedule,
-    now: () => clock.now,
-    pingIntervalMs: 600_000,
-    pongTimeoutMs: 500,
-    resetDelayMs: 2,
-    random: () => 0,
-    handlers: {
-      onStatus: (status) => { statuses.push(status) },
-      onEvents: (sessionID, events) => { batches.push({ sessionID, events }) },
-    },
-    createSocket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket },
-    ...options,
   })
-  transport.connect()
-  sockets[0]!.open()
-  return { document, sockets, statuses, batches, transport, advance, clock }
-}
 
-test("an events frame is delivered as one ordered batch", () => {
-  const f = fixture()
+test("a successful resync snapshot clears invalidation without requesting another resync", async () => {
+  let resyncs = 0
+  const f = transportFixture({ handlers: { onSessions: () => resyncs++ } })
   try {
-    f.sockets[0]!.message({ type: "events", sessionID: "ses_a", events: [{ n: 1 }, { n: 2 }, { n: 3 }] })
-    expect(f.batches).toEqual([{ sessionID: "ses_a", events: [{ n: 1 }, { n: 2 }, { n: 3 }] }])
-  } finally { f.transport.close() }
-})
-
-test("a legacy event frame is delivered as a one-element batch", () => {
-  const f = fixture()
-  try {
-    f.sockets[0]!.message({ type: "event", sessionID: "ses_a", event: { n: 1 } })
-    expect(f.batches).toEqual([{ sessionID: "ses_a", events: [{ n: 1 }] }])
-  } finally { f.transport.close() }
-})
-
-/** Sends `count` requests and answers each at once, so the rate window fills without holding in-flight slots. */
-async function fillWindow(f: ReturnType<typeof fixture>, count: number) {
-  for (let index = 0; index < count; index += 1) {
-    const outcome = f.transport.request("session.list", { timeoutMs: 0 })
-    const socket = f.sockets[0]!
-    socket.message({ type: "response", id: socket.frames().at(-1)!.id, ok: true, value: null })
-    await outcome
+    const subscribed = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-browser" })
+    await subscribed
+    const initial = f.transport.request("session.snapshot", { sessionID: "ses_browser", input: { limit: 100 } })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    await initial
+    f.sockets[0]!.control({
+      case: "resyncRequired",
+      value: {
+        scope: create(ScopeSchema, { target: { case: "session", value: "ses_browser" } }),
+        sourceEpoch: fixtureSourceEpoch,
+      },
+    })
+    expect(resyncs).toBe(1)
+    const refreshed = f.transport.request("session.snapshot", { sessionID: "ses_browser", input: { limit: 100 } })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    expect((await refreshed).status).toBe("ok")
+    expect(resyncs).toBe(1)
+    expect(f.transport.status().kind).toBe("open")
+  } finally {
+    f.transport.close()
   }
-}
+})
 
-test("aborting a request still queued removes it without sending and resolves cancelled", async () => {
-  const f = fixture()
+test("JSON runtime frames close the binary connection rather than becoming successful observations", () => {
+  const f = transportFixture()
   try {
+    f.sockets[0]!.message('{"type":"event","sessionID":"ses_browser"}')
+    expect(f.sockets[0]!.closes.at(-1)?.code).toBe(1002)
+    expect(f.batches).toEqual([])
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("aborting a queued-unsent request removes it without sending or inventing settlement time", async () => {
+  const timings: RemoteRequestTiming[] = []
+  const f = transportFixture({ handlers: { onRequestTiming: (timing) => timings.push(timing) } })
+  try {
+    await fillWindow(f, WireLimit.CLIENT_RATE - 4)
+    timings.length = 0
+    const before = f.sockets[0]!.requests().length
     const controller = new AbortController()
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
     const queued = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
-    expect(f.sockets[0]!.frames()).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 3)
-    controller.abort()
-    expect(await queued).toEqual({ status: "unavailable", reason: "cancelled" })
-    f.advance(RemoteLimits.clientRateWindowMs)
-    expect(f.sockets[0]!.frames()).toHaveLength(RemoteLimits.maxClientRequestsPerWindow - 3)
-  } finally { f.transport.close() }
-})
-
-test("reports paced queue time separately from the completed request round trip without retaining payloads", async () => {
-  const timings: unknown[] = []
-  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
-  try {
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
-    timings.length = 0
-    f.advance(25)
-    const outcome = f.transport.request("session.list", { input: { search: "private query" }, timeoutMs: 0 })
-    f.advance(RemoteLimits.clientRateWindowMs - 25)
-    const frame = f.sockets[0]!.frames().at(-1)!
-    f.advance(17)
-    f.sockets[0]!.message({ type: "response", id: frame.id, ok: true, value: { private: "response" } })
-    expect(await outcome).toEqual({ status: "ok", value: { private: "response" } })
-    expect(timings).toEqual([{ operation: "session.list", outcome: "ok", queueMs: 9_975, settlementMs: 17, totalMs: 9_992 }])
-    expect(JSON.stringify(timings)).not.toMatch(/private|query|response"/)
-  } finally { f.transport.close() }
-})
-
-test("records a queued cancellation without inventing response time or sending a request", async () => {
-  const timings: unknown[] = []
-  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
-  try {
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 3)
-    timings.length = 0
-    const controller = new AbortController()
-    const outcome = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
     f.advance(7)
     controller.abort()
-    expect(await outcome).toEqual({ status: "unavailable", reason: "cancelled" })
-    expect(timings).toEqual([{ operation: "session.list", outcome: "unavailable", reason: "cancelled", queueMs: 7, totalMs: 7 }])
-    f.advance(RemoteLimits.clientRateWindowMs)
-    expect(timings).toHaveLength(1)
-  } finally { f.transport.close() }
-})
-
-test("records sent timeout once and a rejected preflight with no wire time", async () => {
-  const timings: unknown[] = []
-  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
-  try {
-    const outcome = f.transport.request("session.snapshot", { timeoutMs: 35 })
-    const id = f.sockets[0]!.frames()[0]!.id
-    f.advance(35)
-    expect((await outcome).status).toBe("unknown")
-    expect(f.sockets[0]!.frames()).toEqual([{ type: "request", id, operation: "session.snapshot" }, { type: "cancel", id }])
-    expect(timings).toEqual([{ operation: "session.snapshot", outcome: "unknown", queueMs: 0, settlementMs: 35, totalMs: 35 }])
-    f.sockets[0]!.message({ type: "response", id: f.sockets[0]!.frames()[0]!.id, ok: true, value: "late" })
-    expect(timings).toHaveLength(1)
-    f.transport.close()
-    expect((await f.transport.request("session.list")).status).toBe("unavailable")
-    expect(timings.at(-1)).toEqual({ operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 0, totalMs: 0 })
-  } finally { f.transport.close() }
-})
-
-test("a timed-out mutation cancels relay work without replaying or reporting a definite failure", async () => {
-  const f = fixture()
-  try {
-    const outcome = f.transport.request("session.interrupt", { sessionID: "ses_a", timeoutMs: 15 })
-    const id = f.sockets[0]!.frames()[0]!.id
-    f.advance(15)
-    expect(await outcome).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
-    expect(f.sockets[0]!.frames().slice(1)).toEqual([{ type: "cancel", id }])
-    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
-    f.advance(2)
-    f.sockets[1]!.open()
-    expect(f.sockets[1]!.sent).toEqual([])
-  } finally { f.transport.close() }
-})
-
-test("keeps sent and unsent close outcomes distinct in the timing record", async () => {
-  const timings: unknown[] = []
-  const f = fixture({ handlers: { onRequestTiming: (sample) => timings.push(sample) } })
-  try {
-    const sent = f.transport.request("session.status", { timeoutMs: 0 })
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 4)
-    timings.length = 0
-    const queued = f.transport.request("session.list", { timeoutMs: 0 })
-    f.advance(9)
-    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
-    expect((await sent).status).toBe("unknown")
-    expect(await queued).toEqual({ status: "unavailable", reason: "not-connected" })
+    expect(await queued).toEqual({ status: "unavailable", reason: "cancelled" })
     expect(timings).toEqual([
-      { operation: "session.status", outcome: "unknown", queueMs: 0, settlementMs: 9, totalMs: 9 },
-      { operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 9, totalMs: 9 },
+      { operation: "session.list", outcome: "unavailable", reason: "cancelled", queueMs: 7, totalMs: 7 },
     ])
-  } finally { f.transport.close() }
+    f.advance(WireLimit.RATE_WINDOW_MS)
+    expect(f.sockets[0]!.requests()).toHaveLength(before)
+    expect(timings).toHaveLength(1)
+  } finally {
+    f.transport.close()
+  }
 })
 
-test("a failed local timing observer cannot change a request outcome", async () => {
-  const f = fixture({ handlers: { onRequestTiming: () => { throw new Error("observer failed") } } })
+test("paced queue time is distinct from response settlement and contains no request or result payload", async () => {
+  const timings: RemoteRequestTiming[] = []
+  const f = transportFixture({ handlers: { onRequestTiming: (timing) => timings.push(timing) } })
   try {
-    const result = f.transport.request("session.list", { timeoutMs: 0 })
-    const id = f.sockets[0]!.frames()[0]!.id
-    f.sockets[0]!.message({ type: "response", id, ok: true, value: { data: [] } })
-    expect(await result).toEqual({ status: "ok", value: { data: [] } })
+    await fillWindow(f, WireLimit.CLIENT_RATE - 4)
+    timings.length = 0
+    f.advance(25)
+    const request = f.transport.request("session.list", { input: { search: "private query" }, timeoutMs: 0 })
+    f.advance(WireLimit.RATE_WINDOW_MS - 25)
+    f.advance(17)
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { data: { data: [], cursor: {} } })
+    expect((await request).status).toBe("ok")
+    expect(timings).toEqual([
+      {
+        operation: "session.list",
+        outcome: "ok",
+        queueMs: WireLimit.RATE_WINDOW_MS - 25,
+        settlementMs: 17,
+        totalMs: WireLimit.RATE_WINDOW_MS - 8,
+      },
+    ])
+    expect(JSON.stringify(timings)).not.toMatch(/private|query|response/)
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("a timeout cancels one transmitted mutation as unknown and reconnect never replays it", async () => {
+  const timings: RemoteRequestTiming[] = []
+  const f = transportFixture({ handlers: { onRequestTiming: (timing) => timings.push(timing) } })
+  try {
+    const request = f.transport.request("session.interrupt", { sessionID: "ses_browser", timeoutMs: 35 })
+    f.advance(35)
+    expect(await request).toMatchObject({ status: "unknown", error: { code: "outcome_unknown" } })
+    expect(
+      f.sockets[0]!.sent.filter((frame) => frame.body.case === "control" && frame.body.value.kind.case === "cancel"),
+    ).toHaveLength(1)
+    expect(timings).toEqual([
+      { operation: "session.interrupt", outcome: "unknown", queueMs: 0, settlementMs: 35, totalMs: 35 },
+    ])
+    f.sockets[0]!.drop()
+    f.advance(1)
+    f.sockets[1]!.open()
+    expect(f.sockets[1]!.requests()).toEqual([])
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("closing distinguishes transmitted and queued-unsent requests and clears both before replacement", async () => {
+  const f = transportFixture()
+  try {
+    await fillWindow(f, WireLimit.CLIENT_RATE - 5)
+    const transmitted = f.transport.request("session.interrupt", { sessionID: "ses_browser", timeoutMs: 0 })
+    const queued = f.transport.request("session.interrupt", { sessionID: "ses_browser", timeoutMs: 0 })
+    f.transport.close()
+    expect((await transmitted).status).toBe("unknown")
+    expect(await queued).toEqual({ status: "unavailable", reason: "not-connected" })
+    f.transport.connect()
+    f.sockets[1]!.open()
+    f.advance(WireLimit.RATE_WINDOW_MS)
+    expect(f.sockets[1]!.requests()).toEqual([])
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("timing observers cannot turn a successful response into a protocol failure", async () => {
+  const f = transportFixture({
+    handlers: {
+      onRequestTiming: () => {
+        throw new Error("diagnostics failure")
+      },
+    },
+  })
+  try {
+    const request = f.transport.request("session.list")
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { data: { data: [], cursor: {} } })
+    expect((await request).status).toBe("ok")
+    expect(f.transport.status().kind).toBe("open")
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("a transmitted abort remains unknown, sends an eligible Tiny cancel and drops its late result", async () => {
+  const f = transportFixture()
+  try {
+    const controller = new AbortController()
+    const request = f.transport.request("session.interrupt", {
+      sessionID: "ses_browser",
+      signal: controller.signal,
+      timeoutMs: 0,
+    })
+    const original = f.sockets[0]!.dispatches.at(-1)!
+    await fillWindow(f, WireLimit.CLIENT_RATE - 5)
+    f.sockets[0]!.holdMessages = true
+    f.sockets[0]!.result(original, { data: {} })
+    controller.abort()
+    expect((await request).status).toBe("unknown")
+    const cancel = f.sockets[0]!.sent.find(
+      (frame) => frame.body.case === "control" && frame.body.value.kind.case === "cancel",
+    )
+    expect(cancel?.ledger).toBe(LedgerClass.TINY)
+    expect(f.sockets[0]!.requests().filter((request) => request.operation === "session.interrupt")).toHaveLength(1)
+    f.sockets[0]!.releaseMessages()
+    expect(f.transport.status().kind).toBe("open")
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("pre-aborted and disconnected requests report no wire time and never send", async () => {
+  const timings: RemoteRequestTiming[] = []
+  const f = transportFixture({ handlers: { onRequestTiming: (timing) => timings.push(timing) } })
+  try {
+    expect(await f.transport.request("session.list", { signal: AbortSignal.abort() })).toEqual({
+      status: "unavailable",
+      reason: "cancelled",
+    })
     f.transport.close()
     expect(await f.transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
-  } finally { f.transport.close() }
-})
-
-test("aborting a sent request sends a paced cancel, resolves cancelled, and drops the late response", async () => {
-  const f = fixture()
-  try {
-    const controller = new AbortController()
-    const outcome = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
-    const request = f.sockets[0]!.frames()[0]!
-    controller.abort()
-    expect(await outcome).toEqual({ status: "unavailable", reason: "cancelled" })
-    expect(f.sockets[0]!.frames().slice(1)).toEqual([{ type: "cancel", id: request.id }])
-    f.sockets[0]!.message({ type: "response", id: request.id, ok: true, value: "late" })
-    expect(f.transport.status().kind).toBe("open")
-    const next = f.transport.request("session.list", { timeoutMs: 0 })
-    f.sockets[0]!.message({ type: "response", id: f.sockets[0]!.frames()[2]!.id, ok: true, value: "fresh" })
-    expect(await next).toEqual({ status: "ok", value: "fresh" })
-  } finally { f.transport.close() }
-})
-
-test("a cancel frame waits behind the client rate window like any other frame", async () => {
-  const f = fixture()
-  try {
-    const controller = new AbortController()
-    const outcome = f.transport.request("session.list", { timeoutMs: 0, signal: controller.signal })
-    await fillWindow(f, RemoteLimits.maxClientRequestsPerWindow - 4)
-    const sentBeforeCancel = f.sockets[0]!.frames().length
-    controller.abort()
-    expect(await outcome).toEqual({ status: "unavailable", reason: "cancelled" })
-    expect(f.sockets[0]!.frames()).toHaveLength(sentBeforeCancel)
-    f.advance(RemoteLimits.clientRateWindowMs)
-    expect(f.sockets[0]!.frames().at(-1)).toMatchObject({ type: "cancel" })
-  } finally { f.transport.close() }
-})
-
-test("an already aborted signal resolves cancelled without sending", async () => {
-  const f = fixture()
-  try {
-    expect(await f.transport.request("session.list", { signal: AbortSignal.abort() })).toEqual({ status: "unavailable", reason: "cancelled" })
-    expect(f.sockets[0]!.sent).toEqual([])
-  } finally { f.transport.close() }
-})
-
-test("priority follows visibility, sends only on change, and is resent after reopen while hidden", () => {
-  const f = fixture()
-  try {
-    f.document.change(false)
-    expect(f.sockets[0]!.priorities()).toEqual([])
-    f.document.change(true)
-    f.document.change(true)
-    expect(f.sockets[0]!.priorities()).toEqual([{ type: "priority", mode: "background" }])
-    f.transport.setPriority("background")
-    expect(f.sockets[0]!.priorities()).toHaveLength(1)
-    f.document.change(false)
-    expect(f.sockets[0]!.priorities().at(-1)).toEqual({ type: "priority", mode: "interactive" })
-    f.document.change(true)
-    f.sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }))
-    f.advance(2)
-    f.sockets[1]!.open()
-    expect(f.sockets[1]!.priorities()).toEqual([{ type: "priority", mode: "background" }])
-  } finally { f.transport.close() }
-})
-
-test("an explicit priority call shares the visibility dedupe", () => {
-  const f = fixture()
-  try {
-    f.transport.setPriority("background")
-    f.transport.setPriority("background")
-    f.transport.setPriority("interactive")
-    expect(f.sockets[0]!.frames()).toEqual([
-      { type: "priority", mode: "background" },
-      { type: "priority", mode: "interactive" },
+    expect(timings).toEqual([
+      { operation: "session.list", outcome: "unavailable", reason: "cancelled", queueMs: 0, totalMs: 0 },
+      { operation: "session.list", outcome: "unavailable", reason: "not-connected", queueMs: 0, totalMs: 0 },
     ])
-  } finally { f.transport.close() }
+  } finally {
+    f.transport.close()
+  }
 })
 
-test("the interval between a ping and the next frame is published as a smoothed round trip", () => {
-  const f = fixture({ pingIntervalMs: 1_000 })
+test("priority is socket-owned, deduplicated and resent after a hidden reconnect", () => {
+  const f = transportFixture()
+  const priorities = (index: number) =>
+    f.sockets[index]!.sent.filter((frame) => frame.body.case === "control" && frame.body.value.kind.case === "priority")
   try {
-    expect(f.transport.status()).toEqual({ kind: "open" })
-    f.advance(1_000)
-    expect(f.sockets[0]!.frames()).toEqual([{ type: "ping" }])
-    f.advance(100)
-    f.sockets[0]!.message({ type: "pong" })
-    expect(f.transport.status()).toEqual({ kind: "open", rttMs: 100 })
-    f.advance(1_000)
-    f.advance(200)
-    f.sockets[0]!.message({ type: "pong" })
-    expect(f.transport.status()).toEqual({ kind: "open", rttMs: 130 })
-    f.sockets[0]!.message({ type: "pong" })
-    expect(f.transport.status()).toEqual({ kind: "open", rttMs: 130 })
-  } finally { f.transport.close() }
+    f.document.change(true)
+    f.document.change(true)
+    f.transport.setPriority("background")
+    expect(priorities(0)).toHaveLength(2)
+    f.document.change(false)
+    expect(priorities(0)).toHaveLength(3)
+    f.document.change(true)
+    f.sockets[0]!.drop()
+    f.advance(1)
+    f.sockets[1]!.open()
+    expect(priorities(1)).toHaveLength(1)
+    const resumed = priorities(1)[0]!.body
+    expect(resumed.case === "control" && resumed.value.kind.case === "priority" && resumed.value.kind.value.mode).toBe(
+      2,
+    )
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("a socket asset preserves the complete raw body and releases transferred consumer ownership", async () => {
+  const f = transportFixture()
+  try {
+    const request = f.transport.request("session.attachment.read", {
+      sessionID: "ses_browser",
+      input: { digest: "a".repeat(64) },
+    })
+    const bytes = new Uint8Array(65537).fill(213)
+    f.sockets[0]!.asset(f.sockets[0]!.dispatches.at(-1)!, bytes)
+    const outcome = await request
+    expect(outcome.status).toBe("ok")
+    if (outcome.status !== "ok") throw new Error("Asset was not delivered")
+    const asset = outcome.value as { data: Uint8Array; mime: string; release(): void }
+    expect(asset.data).toEqual(bytes)
+    expect(asset.mime).toBe("image/png")
+    asset.release()
+    asset.release()
+    expect(f.sockets[0]!.failures).toEqual([])
+  } finally {
+    f.transport.close()
+  }
 })

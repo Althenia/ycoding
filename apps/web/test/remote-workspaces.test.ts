@@ -4,7 +4,13 @@ import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { loadWorkspaces, queriesOf, workspacesOf } from "./remote-queries"
 import { remoteKeys } from "../src/remote/queries"
-import { pacedFlowTimeoutMs, startRelayDouble, waitFor, type RelayHandlerOutcome, type RelayRequestHandler } from "./relay-double"
+import {
+  pacedFlowTimeoutMs,
+  startRelayDouble,
+  waitFor,
+  type RelayHandlerOutcome,
+  type RelayRequestHandler,
+} from "./relay-double"
 
 const workspace = { id: "workspace_alpha", projectID: "project_alpha", directory: "/workspace/alpha", name: "Alpha" }
 const other = { id: "workspace_beta", projectID: "project_beta", directory: "/workspace/beta", name: "Beta" }
@@ -16,7 +22,7 @@ const created = {
   time: { created: 3, updated: 3 },
 }
 
-async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readonly typeof workspace[]) {
+async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readonly (typeof workspace)[]) {
   const relay = await startRelayDouble({
     handler: (request) => {
       if (request.operation === "workspace.list" && request.input?.sessionsOnly === true)
@@ -30,7 +36,8 @@ async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readon
   })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+    createTransport: (deviceID, handlers) =>
+      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
     createSessionID: () => created.id,
   })
   await store.load()
@@ -47,15 +54,35 @@ async function setup(handler?: RelayRequestHandler, sessionGroups?: () => readon
 
 describe("remote workspace session creation", () => {
   test("opens a created Session from its validated response without rereading its metadata", async () => {
-    const h = await setup((request) => request.operation === "session.snapshot" && request.sessionID === created.id
-      ? { ok: true, value: { sourceEpoch: "epoch_1", session: created, messages: [], watermark: { type: "log.synced", aggregateID: created.id, seq: 0 } } }
-      : "default", () => [workspace])
+    const h = await setup(
+      (request) =>
+        request.operation === "session.snapshot" && request.sessionID === created.id
+          ? {
+              ok: true,
+              value: {
+                sourceEpoch: "epoch_1",
+                session: created,
+                messages: [],
+                watermark: { type: "log.synced", aggregateID: created.id, seq: 0 },
+              },
+            }
+          : "default",
+      () => [workspace],
+    )
     try {
       await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
-      expect(h.store.state().selectedSessionInfo).toMatchObject({ id: created.id, title: created.title, directory: workspace.directory })
-      expect(h.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === created.id)).toEqual([])
-    } finally { await h.stop() }
+      expect(h.store.state().selectedSessionInfo).toMatchObject({
+        id: created.id,
+        title: created.title,
+        directory: workspace.directory,
+      })
+      expect(
+        h.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === created.id),
+      ).toEqual([])
+    } finally {
+      await h.stop()
+    }
   })
 
   test("uploads a file after creating the Session and sends its first prompt with the completed reference", async () => {
@@ -65,36 +92,65 @@ describe("remote workspace session creation", () => {
     })
     try {
       await loadWorkspaces(h.store)
-      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect screenshot", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] } })).toBe(created.id)
+      expect(
+        await h.store.createSession({
+          workspaceID: workspace.id,
+          prompt: { text: "Inspect screenshot", files: [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }] },
+        }),
+      ).toBe(created.id)
       await waitFor(() => h.relay.requests.some((request) => request.operation === "session.prompt"))
-      const operations = h.relay.requests.filter((request) => ["session.create", "session.attachment.upload", "session.prompt"].includes(request.operation))
-      expect(operations.map((request) => request.operation)).toEqual(["session.create", "session.attachment.upload", "session.prompt"])
+      const operations = h.relay.requests.filter((request) =>
+        ["session.create", "session.attachment.upload", "session.prompt"].includes(request.operation),
+      )
+      expect(operations.map((request) => request.operation)).toEqual([
+        "session.create",
+        "session.attachment.upload",
+        "session.prompt",
+      ])
       expect(operations[1]?.sessionID).toBe(created.id)
-      expect(operations[2]?.input?.files).toEqual([{ uri: `ycoding-upload://${String(operations[1]?.input?.uploadID)}`, name: "capture.png" }])
-    } finally { await h.stop() }
+      expect(operations[2]?.input?.files).toEqual([
+        { uri: `ycoding-upload://${String(operations[1]?.input?.uploadID)}`, name: "capture.png" },
+      ])
+    } finally {
+      await h.stop()
+    }
   })
 
-  test("failed first-prompt upload retains the created Session ID and attachment for explicit retry", async () => {
-    let failed = true
-    const h = await setup((request) => request.operation === "session.attachment.upload"
-      ? failed ? { ok: false, code: "invalid_message", message: "Upload failed" } : { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
-      : request.operation === "session.get" && request.sessionID === created.id ? { ok: true, value: { data: created } } : "default")
-    try {
-      await loadWorkspaces(h.store)
-      const files = [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }]
-      expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files } })).toBe(created.id)
-      await waitFor(() => h.store.state().mutations[0]?.state === "failed")
-      const mutation = h.store.state().mutations[0]!
-      expect(mutation).toMatchObject({ sessionID: created.id, detail: "Upload failed", input: { files } })
-      expect(h.store.state().sessionCreation).toBeUndefined()
-      expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
-      failed = false
-      await h.store.retryMutation(mutation.id)
-      expect(h.store.state().mutations).toEqual([])
-      expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
-      expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
-    } finally { await h.stop() }
-  }, pacedFlowTimeoutMs)
+  test(
+    "failed first-prompt upload retains the created Session ID and attachment for explicit retry",
+    async () => {
+      let failed = true
+      const h = await setup((request) =>
+        request.operation === "session.attachment.upload"
+          ? failed
+            ? { ok: false, code: "invalid_message", message: "Upload failed" }
+            : { ok: true, value: { uri: `ycoding-upload://${String(request.input?.uploadID)}` } }
+          : request.operation === "session.get" && request.sessionID === created.id
+            ? { ok: true, value: { data: created } }
+            : "default",
+      )
+      try {
+        await loadWorkspaces(h.store)
+        const files = [{ uri: "data:image/png;base64,AAAA", name: "capture.png" }]
+        expect(await h.store.createSession({ workspaceID: workspace.id, prompt: { text: "Inspect", files } })).toBe(
+          created.id,
+        )
+        await waitFor(() => h.store.state().mutations[0]?.state === "failed")
+        const mutation = h.store.state().mutations[0]!
+        expect(mutation).toMatchObject({ sessionID: created.id, detail: "Upload failed", input: { files } })
+        expect(h.store.state().sessionCreation).toBeUndefined()
+        expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+        failed = false
+        await h.store.retryMutation(mutation.id)
+        expect(h.store.state().mutations).toEqual([])
+        expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
+        expect(h.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+      } finally {
+        await h.stop()
+      }
+    },
+    pacedFlowTimeoutMs,
+  )
   test("keeps drafts with their Session across selection and same-device reconnect, but not another device", async () => {
     const h = await setup()
     try {
@@ -107,44 +163,69 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().drafts).toEqual({ ses_a: "Alpha draft", ses_b: "Beta draft" })
       h.store.connect("dev_other")
       expect(h.store.state().drafts).toEqual({})
-    } finally { await h.stop() }
+    } finally {
+      await h.stop()
+    }
   })
 
-  test("creates in a listed workspace, opens it, and submits only when the caller asks", async () => {
-    let createdVisible = false
-    const h = await setup((request) => request.operation === "session.list" && request.input?.workspace === workspace.id
-      ? { ok: true, value: { data: createdVisible ? [created] : [] } } : "default", () => [
-        { id: "wsp_prj_default__work", projectID: "prj_default", directory: "/work", name: "Current" },
-        ...(createdVisible ? [workspace] : []),
-      ])
-    try {
-      await h.store.selectSession("ses_a")
-      await loadWorkspaces(h.store)
-      expect(workspacesOf(h.store)).toMatchObject({ status: "success", data: [workspace, other] })
-      expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
-      expect(h.relay.requests.find((request) => request.operation === "session.create")?.input).toEqual({ id: created.id, workspace: workspace.id })
-      expect(h.store.state().sessions.some((session) => session.id === created.id && session.directory === workspace.directory)).toBe(true)
-      expect(h.store.state().activeSessionID).toBe(created.id)
-      expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
-      createdVisible = true
-      h.relay.pushSessions([])
-      await waitFor(() => h.store.state().sessionGroups.some((group) => group.id === workspace.id))
-      h.store.selectWorkspace(workspace.id)
-      await waitFor(() => h.store.state().sessions.some((session) => session.id === created.id))
-      expect(h.store.state().sessions[0]?.directory).toBe(workspace.directory)
-      expect(h.store.state().activeSessionID).toBe(created.id)
-      await h.store.sendPrompt({ text: "Continue on the selected repository", delivery: "steer" })
-      await waitFor(() => h.relay.requests.some((request) => request.operation === "session.prompt"))
-      expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.sessionID).toBe(created.id)
-    } finally { await h.stop() }
-  }, pacedFlowTimeoutMs)
+  test(
+    "creates in a listed workspace, opens it, and submits only when the caller asks",
+    async () => {
+      let createdVisible = false
+      const h = await setup(
+        (request) =>
+          request.operation === "session.list" && request.input?.workspace === workspace.id
+            ? { ok: true, value: { data: createdVisible ? [created] : [] } }
+            : "default",
+        () => [
+          { id: "wsp_prj_default__work", projectID: "prj_default", directory: "/work", name: "Current" },
+          ...(createdVisible ? [workspace] : []),
+        ],
+      )
+      try {
+        await h.store.selectSession("ses_a")
+        await loadWorkspaces(h.store)
+        expect(workspacesOf(h.store)).toMatchObject({ status: "success", data: [workspace, other] })
+        expect(await h.store.createSession({ workspaceID: workspace.id })).toBe(created.id)
+        expect(h.relay.requests.find((request) => request.operation === "session.create")).toMatchObject({
+          workspaceID: workspace.id,
+          input: { id: created.id },
+        })
+        expect(
+          h.store
+            .state()
+            .sessions.some((session) => session.id === created.id && session.directory === workspace.directory),
+        ).toBe(true)
+        expect(h.store.state().activeSessionID).toBe(created.id)
+        expect(h.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+        createdVisible = true
+        h.relay.pushSessions([])
+        await waitFor(() => h.store.state().sessionGroups.some((group) => group.id === workspace.id))
+        h.store.selectWorkspace(workspace.id)
+        await waitFor(() => h.store.state().sessions.some((session) => session.id === created.id))
+        expect(h.store.state().sessions[0]?.directory).toBe(workspace.directory)
+        expect(h.store.state().activeSessionID).toBe(created.id)
+        await h.store.sendPrompt({ text: "Continue on the selected repository", delivery: "steer" })
+        await waitFor(() => h.relay.requests.some((request) => request.operation === "session.prompt"))
+        expect(h.relay.requests.find((request) => request.operation === "session.prompt")?.sessionID).toBe(created.id)
+      } finally {
+        await h.stop()
+      }
+    },
+    pacedFlowTimeoutMs,
+  )
 
   test("keeps drafts and uncertain creation when the account reports the selected machine offline", async () => {
     const delayed = Promise.withResolvers<RelayHandlerOutcome>()
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace] } }
-      : request.operation === "session.create" ? delayed.promise
-      : request.operation === "session.get" ? { ok: true, value: { data: created } } : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? { ok: true, value: { data: [workspace] } }
+        : request.operation === "session.create"
+          ? delayed.promise
+          : request.operation === "session.get"
+            ? { ok: true, value: { data: created } }
+            : "default",
+    )
     try {
       await h.store.selectSession("ses_a")
       h.store.setDraft("ses_a", "Keep while offline")
@@ -152,7 +233,8 @@ describe("remote workspace session creation", () => {
       const creating = h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.relay.requests.some((request) => request.operation === "session.create"))
       h.relay.setMe({
-        user: { id: "user_1" }, session: { expiresAt: 4_102_444_800_000 },
+        user: { id: "user_1" },
+        session: { expiresAt: 4_102_444_800_000 },
         devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: false }],
       })
       await h.store.load()
@@ -167,14 +249,21 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().drafts.ses_a).toBe("Keep while offline")
       h.store.disconnect()
       expect(h.store.state().drafts).toEqual({})
-    } finally { delayed.resolve("default"); await h.stop() }
+    } finally {
+      delayed.resolve({ ok: true, value: { data: created } })
+      await h.stop()
+    }
   })
 
   test("refuses an unlisted workspace and distinguishes empty and failed inventory reads", async () => {
     let fail = false
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? fail ? { ok: false, code: "internal_error", message: "Inventory unavailable" } : { ok: true, value: { data: [] } }
-      : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? fail
+          ? { ok: false, code: "internal_error", message: "Inventory unavailable" }
+          : { ok: true, value: { data: [] } }
+        : "default",
+    )
     try {
       await loadWorkspaces(h.store)
       expect(workspacesOf(h.store)).toMatchObject({ status: "success", data: [] })
@@ -183,7 +272,9 @@ describe("remote workspace session creation", () => {
       fail = true
       expect(await loadWorkspaces(h.store).catch((error: Error) => error.message)).toContain("Inventory unavailable")
       expect(workspacesOf(h.store)?.status).toBe("error")
-    } finally { await h.stop() }
+    } finally {
+      await h.stop()
+    }
   })
 
   test("keeps the latest workspace read when a previous response arrives later", async () => {
@@ -196,20 +287,33 @@ describe("remote workspace session creation", () => {
     })
     try {
       await loadWorkspaces(h.store)
-      const first = h.store.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()), type: "all" })
+      const first = h.store.queryClient.refetchQueries({
+        queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()),
+        type: "all",
+      })
       await waitFor(() => reads === 2)
-      await h.store.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()), type: "all" })
+      await h.store.queryClient.refetchQueries({
+        queryKey: remoteKeys.workspaces(queriesOf(h.store).scope()),
+        type: "all",
+      })
       delayed.resolve({ ok: true, value: { data: [workspace] } })
       await first
       expect(workspacesOf(h.store)).toMatchObject({ status: "success", fetchStatus: "idle", data: [other] })
-    } finally { delayed.resolve("default"); await h.stop() }
+    } finally {
+      delayed.resolve("default")
+      await h.stop()
+    }
   })
 
   test("does not apply an inventory or creation outcome to a replacement connection", async () => {
     const delayed = Promise.withResolvers<RelayHandlerOutcome>()
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace] } }
-      : request.operation === "session.create" ? delayed.promise : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? { ok: true, value: { data: [workspace] } }
+        : request.operation === "session.create"
+          ? delayed.promise
+          : "default",
+    )
     try {
       await loadWorkspaces(h.store)
       const creating = h.store.createSession({ workspaceID: workspace.id })
@@ -221,15 +325,23 @@ describe("remote workspace session creation", () => {
       expect(h.store.state().sessionCreation).toBeUndefined()
       expect(workspacesOf(h.store)).toBeUndefined()
       expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)
-    } finally { delayed.resolve("default"); await h.stop() }
+    } finally {
+      delayed.resolve("default")
+      await h.stop()
+    }
   })
 
   test("deduplicates an in-flight creation and retains uncertain outcomes without replay", async () => {
     const delayed = Promise.withResolvers<RelayHandlerOutcome>()
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace] } }
-      : request.operation === "session.create" ? delayed.promise
-      : request.operation === "session.get" ? { ok: true, value: { data: created } } : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? { ok: true, value: { data: [workspace] } }
+        : request.operation === "session.create"
+          ? delayed.promise
+          : request.operation === "session.get"
+            ? { ok: true, value: { data: created } }
+            : "default",
+    )
     try {
       await loadWorkspaces(h.store)
       const creating = h.store.createSession({ workspaceID: workspace.id })
@@ -243,34 +355,56 @@ describe("remote workspace session creation", () => {
       expect(await h.store.retrySessionCreation()).toBe(created.id)
       expect(h.relay.requests.filter((request) => request.operation === "session.create")).toHaveLength(1)
       expect(h.store.state().sessionCreation).toBeUndefined()
-    } finally { delayed.resolve("default"); await h.stop() }
+    } finally {
+      delayed.resolve("default")
+      await h.stop()
+    }
   })
 
   test("retries an absent uncertain creation with the same Session ID only on explicit request", async () => {
     let attempts = 0
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace] } }
-      : request.operation === "session.create" ? ++attempts === 1 ? "close" : { ok: true, value: { data: created } }
-      : request.operation === "session.get" ? { ok: false, code: "session_not_allowed", message: "Session not found" } : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? { ok: true, value: { data: [workspace] } }
+        : request.operation === "session.create"
+          ? ++attempts === 1
+            ? "close"
+            : { ok: true, value: { data: created } }
+          : request.operation === "session.get"
+            ? { ok: false, code: "not_found", message: "Session not found" }
+            : "default",
+    )
     try {
       await loadWorkspaces(h.store)
       await h.store.createSession({ workspaceID: workspace.id })
       await waitFor(() => h.store.state().connection.kind === "connected")
       expect(attempts).toBe(1)
       expect(await h.store.retrySessionCreation()).toBe(created.id)
-      expect(h.relay.requests.filter((request) => request.operation === "session.create").map((request) => request.input?.id)).toEqual([created.id, created.id])
-    } finally { await h.stop() }
+      expect(
+        h.relay.requests
+          .filter((request) => request.operation === "session.create")
+          .map((request) => request.input?.id),
+      ).toEqual([created.id, created.id])
+    } finally {
+      await h.stop()
+    }
   })
 
   test("keeps a mismatched creation response uncertain instead of opening the wrong workspace", async () => {
-    const h = await setup((request) => request.operation === "workspace.list"
-      ? { ok: true, value: { data: [workspace] } }
-      : request.operation === "session.create" ? { ok: true, value: { data: { ...created, location: { directory: other.directory } } } } : "default")
+    const h = await setup((request) =>
+      request.operation === "workspace.list"
+        ? { ok: true, value: { data: [workspace] } }
+        : request.operation === "session.create"
+          ? { ok: true, value: { data: { ...created, location: { directory: other.directory } } } }
+          : "default",
+    )
     try {
       await loadWorkspaces(h.store)
       expect(await h.store.createSession({ workspaceID: workspace.id })).toBeUndefined()
       expect(h.store.state().sessionCreation?.status).toBe("unknown")
       expect(h.store.state().sessions.some((session) => session.id === created.id)).toBe(false)
-    } finally { await h.stop() }
+    } finally {
+      await h.stop()
+    }
   })
 })

@@ -5,25 +5,32 @@ import type { TodoView } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import type { RemoteTransportHandlers } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayHandlerOutcome } from "./relay-double"
+import { fixtureSnapshot } from "./wire-peer"
 
 const first = { content: "First", status: "pending", priority: "high" } as const
 const second = { content: "Second", status: "in_progress", priority: "medium" } as const
 
 test("a connector that never answers todo.list does not hold Session hydration or raise a state notice", async () => {
   const pending = Promise.withResolvers<{ readonly status: "ok"; readonly value: unknown }>()
-  const store = createRemoteStore({ http: createRemoteHttp(), createTransport: (_deviceID, handlers) => ({
-    connect: () => handlers.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
-    request: async (operation) => {
-      if (operation === "session.snapshot") return { status: "ok" as const, value: {
-        sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
-        messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
-      } }
-      if (operation === "session.todo.list") return pending.promise
-      if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
-      if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
-      return { status: "ok" as const, value: { data: [] } }
-    },
-  }) })
+  const store = createRemoteStore({
+    http: createRemoteHttp(),
+    createTransport: (_deviceID, handlers) => ({
+      connect: () => handlers.onStatus?.({ kind: "open" }),
+      close: () => {},
+      setPriority: () => {},
+      status: () => ({ kind: "open" }),
+      request: async (operation) => {
+        if (operation === "session.snapshot") return { status: "ok" as const, value: fixtureSnapshot("ses_a") }
+        if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: "sub-a" } }
+        if (operation === "session.todo.list") return pending.promise
+        if (operation === "notice.subscribe")
+          return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
+        if (operation === "session.autonomy.get")
+          return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
+        return { status: "ok" as const, value: { data: [] } }
+      },
+    }),
+  })
   try {
     store.connect("dev_1")
     const selecting = store.selectSession("ses_a")
@@ -33,16 +40,23 @@ test("a connector that never answers todo.list does not hold Session hydration o
     expect(store.state().view?.autonomy?.mode).toBe("normal")
     expect(store.state().notice).toBeUndefined()
     expect(store.state().todos).toBeUndefined()
-  } finally { pending.resolve({ status: "ok", value: { data: [] } }); store.dispose() }
+  } finally {
+    pending.resolve({ status: "ok", value: { data: [] } })
+    store.dispose()
+  }
 })
 
 test("selection reads todos, live updates replace the list, and reconnect reads again", async () => {
   let listed: readonly TodoView[] = [first]
-  const relay = await startRelayDouble({ advertisedSessions: ["ses_a", "ses_b"], handler: (request) =>
-    request.operation === "session.todo.list" ? { ok: true, value: { data: listed } } : "default" })
+  const relay = await startRelayDouble({
+    advertisedSessions: ["ses_a", "ses_b"],
+    handler: (request) =>
+      request.operation === "session.todo.list" ? { ok: true, value: { data: listed } } : "default",
+  })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
-    createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
+    createTransport: (deviceID, handlers) =>
+      createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10, maxDelayMs: 20 }),
     batchMs: 0,
   })
   try {
@@ -69,7 +83,9 @@ test("selection reads todos, live updates replace the list, and reconnect reads 
 
 test("a live todo update wins over a pending older list response", async () => {
   const held = Promise.withResolvers<RelayHandlerOutcome>()
-  const relay = await startRelayDouble({ handler: (request) => request.operation === "session.todo.list" ? held.promise : "default" })
+  const relay = await startRelayDouble({
+    handler: (request) => (request.operation === "session.todo.list" ? held.promise : "default"),
+  })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
@@ -106,11 +122,10 @@ test("a superseded same-Session read cannot overwrite reconnect's newer todo lis
         setPriority: () => {},
         status: () => ({ kind: "open" }),
         request: async (operation) => {
-          if (operation === "session.snapshot") return { status: "ok" as const, value: {
-            sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
-            messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
-          } }
-          if (operation === "session.todo.list") return ++reads === 1 ? held.promise : { status: "ok" as const, value: { data: [second] } }
+          if (operation === "session.snapshot") return { status: "ok" as const, value: fixtureSnapshot("ses_a") }
+          if (operation === "event.subscribe") return { status: "ok" as const, value: { subscription_id: "sub-a" } }
+          if (operation === "session.todo.list")
+            return ++reads === 1 ? held.promise : { status: "ok" as const, value: { data: [second] } }
           return { status: "ok" as const, value: { data: [] } }
         },
       }
@@ -133,8 +148,13 @@ test("a superseded same-Session read cannot overwrite reconnect's newer todo lis
 
 test("a background resync keeps the loaded todos visible and reuses unchanged items", async () => {
   let gate: ReturnType<typeof Promise.withResolvers<RelayHandlerOutcome>> | undefined
-  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) =>
-    request.operation === "session.todo.list" ? gate?.promise ?? { ok: true, value: { data: [{ ...first }, { ...second }] } } : "default" })
+  const relay = await startRelayDouble({
+    advertisedSessions: ["ses_a"],
+    handler: (request) =>
+      request.operation === "session.todo.list"
+        ? (gate?.promise ?? { ok: true, value: { data: [{ ...first }, { ...second }] } })
+        : "default",
+  })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
@@ -160,10 +180,12 @@ test("a background resync keeps the loaded todos visible and reuses unchanged it
     expect(refreshed?.[0]).toBe(loaded?.[0])
     expect(observed.every((todos) => todos !== undefined)).toBe(true)
 
-    relay.pushEvent("ses_a", { type: "todo.updated", data: { sessionID: "ses_a", todos: [{ ...first }, { ...second, status: "completed" }] } })
+    relay.pushEvent("ses_a", {
+      type: "todo.updated",
+      data: { sessionID: "ses_a", todos: [{ ...first }, { ...second, status: "completed" }] },
+    })
     await Bun.sleep(30)
     expect(store.state().todos).toBe(refreshed)
-
   } finally {
     gate?.resolve("default")
     store.dispose()
@@ -171,10 +193,23 @@ test("a background resync keeps the loaded todos visible and reuses unchanged it
   }
 })
 
-test("an unreadable background todo answer keeps the todos already shown", async () => {
+test("a typed background todo rejection keeps the todos already shown", async () => {
   let readable = true
-  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], handler: (request) =>
-    request.operation === "session.todo.list" ? { ok: true, value: { data: readable ? [{ ...first }] : "unreadable" } } : "default" })
+  const relay = await startRelayDouble({
+    advertisedSessions: ["ses_a"],
+    handler: (request) =>
+      request.operation === "session.todo.list"
+        ? readable
+          ? { ok: true, value: { data: [{ ...first }] } }
+          : {
+              wire: (peer, dispatch) =>
+                peer.error(dispatch, "ycoding.v5.InvalidRequestError", {
+                  _tag: "InvalidRequestError",
+                  message: "Todo read rejected",
+                }),
+            }
+        : "default",
+  })
   const store = createRemoteStore({
     http: createRemoteHttp({ baseURL: relay.httpURL }),
     createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),

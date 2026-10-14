@@ -7,7 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
-import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { WebLimits, validBase64, type CapturedChangesView, type CompactionHistoryView } from "./wire-views"
 import { parseUnifiedPatch } from "./file-change-diff"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
@@ -27,7 +27,12 @@ export function readModelRef(value: unknown): ModelRefView | undefined {
   if ("profile" in record && (typeof record.profile !== "string" || record.profile.length === 0)) return undefined
   const variant = stringField(record.variant)
   const profile = typeof record.profile === "string" && record.profile.length > 0 ? record.profile : undefined
-  return { id, providerID, ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }) }
+  return {
+    id,
+    providerID,
+    ...(variant === undefined ? {} : { variant }),
+    ...(profile === undefined ? {} : { profile }),
+  }
 }
 
 /** Display form of a model reference: `provider/model` plus an optional `#variant`. */
@@ -50,7 +55,8 @@ type GenerationSpeedHistoryView = {
 
 type ContextWindowView = { readonly model: ModelRefView; readonly used: number; readonly limit: number }
 
-const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
+const positiveInteger = (value: unknown) =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
 
 function readGenerationSpeedSample(value: unknown): GenerationSpeedSampleView | undefined {
   if (!isRecord(value)) return undefined
@@ -58,7 +64,14 @@ function readGenerationSpeedSample(value: unknown): GenerationSpeedSampleView | 
   const tokens = positiveInteger(value.tokens)
   const durationNs = positiveInteger(value.durationNs)
   const tokensPerSecond = numberField(value.tokensPerSecond)
-  if (!model || tokens === undefined || durationNs === undefined || tokensPerSecond === undefined || tokensPerSecond <= 0) return undefined
+  if (
+    !model ||
+    tokens === undefined ||
+    durationNs === undefined ||
+    tokensPerSecond === undefined ||
+    tokensPerSecond <= 0
+  )
+    return undefined
   return { model, tokens, durationNs, tokensPerSecond }
 }
 
@@ -81,16 +94,29 @@ function readContextWindow(model: unknown, used: unknown, limit: unknown): Conte
 
 function readAssistantContext(value: unknown): ContextWindowView | undefined {
   if (!isRecord(value) || !isRecord(value.tokens) || !isRecord(value.tokens.cache)) return undefined
-  const counts = [value.tokens.input, value.tokens.output, value.tokens.reasoning,
-    value.tokens.cache.read, value.tokens.cache.write]
-  if (!counts.every((count): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return undefined
-  return readContextWindow(value.model, counts.reduce((sum, count) => sum + count, 0),
-    isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined)
+  const counts = [
+    value.tokens.input,
+    value.tokens.output,
+    value.tokens.reasoning,
+    value.tokens.cache.read,
+    value.tokens.cache.write,
+  ]
+  if (!counts.every((count): count is number => typeof count === "number" && Number.isSafeInteger(count) && count >= 0))
+    return undefined
+  return readContextWindow(
+    value.model,
+    counts.reduce((sum, count) => sum + count, 0),
+    isRecord(value.diagnostics) ? value.diagnostics.contextLimit : undefined,
+  )
 }
 
 const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefined) =>
-  left !== undefined && right !== undefined && left.providerID === right.providerID && left.id === right.id &&
-  left.variant === right.variant && left.profile === right.profile
+  left !== undefined &&
+  right !== undefined &&
+  left.providerID === right.providerID &&
+  left.id === right.id &&
+  left.variant === right.variant &&
+  left.profile === right.profile
 
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed
@@ -100,8 +126,10 @@ export function generationSpeedDisplay(view: SessionView | undefined, selected: 
   const label = `${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
   const peak = Math.max(...history.recent.map((sample) => sample.tokensPerSecond))
   const levels = "▁▂▃▄▅▆▇█"
-  const trend = history.recent.length < 2 ? undefined
-    : history.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
+  const trend =
+    history.recent.length < 2
+      ? undefined
+      : history.recent.map((sample) => levels[Math.floor((sample.tokensPerSecond / peak) * 7)]).join("")
   return { label, ...(trend === undefined ? {} : { trend }) }
 }
 
@@ -110,7 +138,7 @@ const compactTokens = new Intl.NumberFormat("en-US", { notation: "compact", maxi
 export function contextWindowDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const context = view?.contextWindow
   if (!context || !sameModel(context.model, selected) || context.used <= 0 || context.limit <= 0) return undefined
-  const usedPercent = Math.round(context.used / context.limit * 100)
+  const usedPercent = Math.round((context.used / context.limit) * 100)
   if (usedPercent <= 0) return undefined
   return {
     usedPercent,
@@ -125,7 +153,12 @@ export type ToolContentBlock =
   | { readonly kind: "image"; readonly uri: string; readonly mime: string; readonly name?: string }
   | { readonly kind: "other"; readonly type: string; readonly summary: string }
 
-export type MessageAttachment = { readonly name: string; readonly mime: string; readonly bytes: number; readonly digest: string }
+export type MessageAttachment = {
+  readonly name: string
+  readonly mime: string
+  readonly bytes: number
+  readonly digest: string
+}
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -136,8 +169,15 @@ function readAttachments(value: unknown): readonly MessageAttachment[] {
     const digest = stringField(item.content.digest)
     const mime = stringField(item.mime)
     const bytes = item.content.bytes
-    if (digest === undefined || !/^[0-9a-f]{64}$/.test(digest) || mime === undefined ||
-      typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) return []
+    if (
+      digest === undefined ||
+      !/^[0-9a-f]{64}$/.test(digest) ||
+      mime === undefined ||
+      typeof bytes !== "number" ||
+      !Number.isSafeInteger(bytes) ||
+      bytes < 0
+    )
+      return []
     return [{ name: stringField(item.name) ?? "Attachment", mime, bytes, digest }]
   })
 }
@@ -175,7 +215,13 @@ export type AssistantPart =
       readonly text: string
       readonly phase?: "commentary" | "final_answer"
     }
-  | { readonly kind: "reasoning"; readonly ordinal: number; readonly text: string; readonly started?: number; readonly completed?: number }
+  | {
+      readonly kind: "reasoning"
+      readonly ordinal: number
+      readonly text: string
+      readonly started?: number
+      readonly completed?: number
+    }
   | {
       readonly kind: "tool"
       readonly callID: string
@@ -197,7 +243,6 @@ export type AssistantPart =
     }
 
 export type RemoteMessageView =
-  | { readonly kind: "oversized"; readonly id: string; readonly projected: boolean; readonly state: "loading" | "pending" | "error" }
   | {
       readonly kind: "user"
       readonly id: string
@@ -219,7 +264,13 @@ export type RemoteMessageView =
       readonly error?: string
       readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
     }
-  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly created: number }
+  | {
+      readonly kind: "system"
+      readonly id: string
+      readonly text: string
+      readonly source?: string
+      readonly created: number
+    }
   | {
       readonly kind: "synthetic"
       readonly id: string
@@ -251,7 +302,7 @@ export type RemoteMessageView =
       readonly jobID?: string
       readonly failureCode?: string
       readonly trigger?: string
-      readonly metrics?: RemoteCompactionHistory["data"][number]["metrics"]
+      readonly metrics?: CompactionHistoryView["data"][number]["metrics"]
       readonly created?: number
       readonly summary?: string
       readonly error?: string
@@ -267,7 +318,10 @@ export type RemoteMessageView =
 export type FormFieldView = Form.Field
 type FormWhenView = Form.When
 export type FormAnswerView = Form.Answer
-export type FormView = Omit<Form.Info, "id" | "fields"> & { readonly id: string; readonly fields: readonly FormFieldView[] }
+export type FormView = Omit<Form.Info, "id" | "fields"> & {
+  readonly id: string
+  readonly fields: readonly FormFieldView[]
+}
 
 export type PendingRequestView =
   | {
@@ -322,9 +376,9 @@ export type SessionView = {
   readonly autonomy?: SessionAutonomyView
   readonly executionStarted?: number
   readonly messages: readonly RemoteMessageView[]
-  readonly compactionHistory?: RemoteCompactionHistory
+  readonly compactionHistory?: CompactionHistoryView
   readonly requests: readonly PendingRequestView[]
-  readonly capturedChanges?: RemoteCapturedChangesPage["data"]
+  readonly capturedChanges?: CapturedChangesView["data"]
   readonly unhandledEvents: number
   readonly updatedAt?: number
   readonly activeAt?: number
@@ -336,20 +390,34 @@ export type SessionView = {
 
 export type TeamCue =
   | { readonly id: string; readonly kind: "delegated"; readonly childID: string }
-  | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" }
+  | {
+      readonly id: string
+      readonly kind: "reported"
+      readonly childID: string
+      readonly outcome: "completed" | "failed" | "cancelled" | "lost"
+    }
 
 export function readTeamCue(payload: unknown): TeamCue | undefined {
   if (!isRecord(payload) || !isRecord(payload.durable) || !isRecord(payload.data)) return undefined
   const id = stringField(payload.id)
   const parentID = stringField(payload.data.sessionID)
-  if (id === undefined || !id.startsWith("evt_") || parentID === undefined || payload.durable.aggregateID !== parentID ||
-    typeof payload.durable.seq !== "number" || !Number.isInteger(payload.durable.seq) || payload.durable.seq < 0) return undefined
+  if (
+    id === undefined ||
+    !id.startsWith("evt_") ||
+    parentID === undefined ||
+    payload.durable.aggregateID !== parentID ||
+    typeof payload.durable.seq !== "number" ||
+    !Number.isInteger(payload.durable.seq) ||
+    payload.durable.seq < 0
+  )
+    return undefined
   if (payload.type === "session.tool.progress" || payload.type === "session.tool.success") {
     const structured = recordField(payload.data.structured)
     const childID = structured && stringField(structured.sessionID)
     const callID = stringField(payload.data.callID)
     const messageID = stringField(payload.data.assistantMessageID)
-    if (childID === undefined || callID === undefined || messageID === undefined || structured?.status !== "running") return undefined
+    if (childID === undefined || callID === undefined || messageID === undefined || structured?.status !== "running")
+      return undefined
     return { id: `${messageID}:${callID}:${childID}`, kind: "delegated", childID }
   }
   if (payload.type !== "session.synthetic") return undefined
@@ -358,13 +426,25 @@ export function readTeamCue(payload: unknown): TeamCue | undefined {
   const childID = stringField(metadata.childID)
   const outcome = metadata.type
   const revision = metadata.revision
-  if (childID === undefined || (outcome !== "completed" && outcome !== "failed" && outcome !== "cancelled" && outcome !== "lost") ||
-    typeof revision !== "number" || !Number.isInteger(revision) || revision < 0) return undefined
+  if (
+    childID === undefined ||
+    (outcome !== "completed" && outcome !== "failed" && outcome !== "cancelled" && outcome !== "lost") ||
+    typeof revision !== "number" ||
+    !Number.isInteger(revision) ||
+    revision < 0
+  )
+    return undefined
   return { id: `${id}:${revision}:${childID}`, kind: "reported", childID, outcome }
 }
 
 export function isGoalSteerAdmission(payload: unknown): boolean {
-  if (!isRecord(payload) || payload.type !== "session.input.admitted" || !isRecord(payload.data) || !isRecord(payload.data.input)) return false
+  if (
+    !isRecord(payload) ||
+    payload.type !== "session.input.admitted" ||
+    !isRecord(payload.data) ||
+    !isRecord(payload.data.input)
+  )
+    return false
   const input = payload.data.input
   const autonomy = isRecord(input.data) ? recordField(recordField(input.data.metadata)?.autonomy) : undefined
   return input.type === "synthetic" && autonomy?.goal === true
@@ -417,22 +497,55 @@ export function formatPartDuration(ms: number): string {
 export function sessionStatusLabel(view: SessionView, now: number, waiting = 0): string {
   const goal = view.autonomy?.goal?.status === "active"
   const level = view.autonomy?.yolo ?? 0
-  const prefix = level > 0 && goal ? `YOLO ${level} + Goal · autonomous` : level > 0 ? `YOLO ${level} · auto-approve` : goal ? "Goal · autonomous" : ""
+  const prefix =
+    level > 0 && goal
+      ? `YOLO ${level} + Goal · autonomous`
+      : level > 0
+        ? `YOLO ${level} · auto-approve`
+        : goal
+          ? "Goal · autonomous"
+          : ""
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
-  const retry = view.status === "running" && assistant?.kind === "assistant" && assistant.completed === undefined ? assistant.retry : undefined
-  const retryProgress = assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "text" && part.text.length > 0 || part.kind === "reasoning" || part.kind === "tool")
-  const activeTool = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming")) : undefined
-  const activeReasoning = assistant?.kind === "assistant" ? assistant.parts.findLast((part) => part.kind === "reasoning" && part.completed === undefined) : undefined
+  const retry =
+    view.status === "running" && assistant?.kind === "assistant" && assistant.completed === undefined
+      ? assistant.retry
+      : undefined
+  const retryProgress =
+    assistant?.kind === "assistant" &&
+    assistant.parts.some(
+      (part) => (part.kind === "text" && part.text.length > 0) || part.kind === "reasoning" || part.kind === "tool",
+    )
+  const activeTool =
+    assistant?.kind === "assistant"
+      ? assistant.parts.findLast(
+          (part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming"),
+        )
+      : undefined
+  const activeReasoning =
+    assistant?.kind === "assistant"
+      ? assistant.parts.findLast((part) => part.kind === "reasoning" && part.completed === undefined)
+      : undefined
   const elapsed = view.executionStarted === undefined ? "" : ` · ${formatElapsed(now - view.executionStarted)}`
-  const status = view.status === "failed" ? "provider error"
-    : retry && retry.at > now ? `${retry.attempt - 1} failed · retry ${retry.attempt} · in ${Math.ceil((retry.at - now) / 1_000)}s`
-    : retry && !retryProgress ? `retrying · attempt ${retry.attempt}`
-    : view.requests.length && view.status === "running" ? `? awaiting input${elapsed}`
-    : view.status === "running" && activeTool ? `tool running${elapsed}`
-    : view.status === "running" && activeReasoning ? `thinking${elapsed}`
-    : view.status === "running" && waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}`
-    : view.status === "running" ? `cooking${elapsed}`
-    : waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}` : "ready"
+  const status =
+    view.status === "failed"
+      ? "provider error"
+      : retry && retry.at > now
+        ? `${retry.attempt - 1} failed · retry ${retry.attempt} · in ${Math.ceil((retry.at - now) / 1_000)}s`
+        : retry && !retryProgress
+          ? `retrying · attempt ${retry.attempt}`
+          : view.requests.length && view.status === "running"
+            ? `? awaiting input${elapsed}`
+            : view.status === "running" && activeTool
+              ? `tool running${elapsed}`
+              : view.status === "running" && activeReasoning
+                ? `thinking${elapsed}`
+                : view.status === "running" && waiting
+                  ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}`
+                  : view.status === "running"
+                    ? `cooking${elapsed}`
+                    : waiting
+                      ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}`
+                      : "ready"
   return prefix ? `${prefix} · ${status}` : status
 }
 
@@ -441,25 +554,37 @@ export function sessionStatusTimed(view: SessionView, waiting = 0): boolean {
   if (view.requests.length || waiting === 0) return true
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
   if (assistant?.kind === "assistant" && assistant.completed === undefined && assistant.retry) return true
-  return assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "tool" && (part.status === "running" || part.status === "streaming") || part.kind === "reasoning" && part.completed === undefined)
+  return (
+    assistant?.kind === "assistant" &&
+    assistant.parts.some(
+      (part) =>
+        (part.kind === "tool" && (part.status === "running" || part.status === "streaming")) ||
+        (part.kind === "reasoning" && part.completed === undefined),
+    )
+  )
 }
 
 export function toolSummary(part: Extract<AssistantPart, { kind: "tool" }>): string {
   const input = part.input ?? {}
-  const field = (key: string) => typeof input[key] === "string" ? input[key] : undefined
+  const field = (key: string) => (typeof input[key] === "string" ? input[key] : undefined)
   const name = part.name.toLowerCase()
   if (name === "shell") {
     const command = field("command") ?? "Shell"
     return command.length > 72 ? `${command.slice(0, 35)}…${command.slice(-35)}` : command
   }
-  if (name === "read" || name === "write" || name === "edit" || name === "patch") return `${name[0]!.toUpperCase()}${name.slice(1)} ${field("path") ?? "file"}`
-  if (name === "grep" || name === "glob") return `${name === "grep" ? "Grep" : "Glob"} "${field("pattern") ?? ""}"${field("path") ? ` in ${field("path")}` : ""}`
-  if (name === "subagent") return `${field("agent") ?? field("subagent_type") ?? "General"} Subagent — ${field("description") ?? "Subagent"}`
+  if (name === "read" || name === "write" || name === "edit" || name === "patch")
+    return `${name[0]!.toUpperCase()}${name.slice(1)} ${field("path") ?? "file"}`
+  if (name === "grep" || name === "glob")
+    return `${name === "grep" ? "Grep" : "Glob"} "${field("pattern") ?? ""}"${field("path") ? ` in ${field("path")}` : ""}`
+  if (name === "subagent")
+    return `${field("agent") ?? field("subagent_type") ?? "General"} Subagent — ${field("description") ?? "Subagent"}`
   if (name === "skill") return `Skill "${field("id") ?? "skill"}"`
   return part.name
 }
 
-export function toolTone(part: Extract<AssistantPart, { kind: "tool" }>): "success" | "error" | "attention" | "running" {
+export function toolTone(
+  part: Extract<AssistantPart, { kind: "tool" }>,
+): "success" | "error" | "attention" | "running" {
   if (part.name.toLowerCase() === "subagent" && part.structured?.status === "running") return "running"
   if (part.status === "completed") return "success"
   if (part.status === "streaming" || part.status === "running") return "running"
@@ -473,17 +598,42 @@ export function transcriptPartVisible(part: AssistantPart): boolean {
 }
 
 export function transcriptMessageVisible(message: RemoteMessageView): boolean {
-  if ((message.kind === "system" || message.kind === "synthetic") && (message.source === "session-state" || message.source === "team-view")) return false
+  if (
+    (message.kind === "system" || message.kind === "synthetic") &&
+    (message.source === "session-state" || message.source === "team-view")
+  )
+    return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
-  if (message.kind === "compaction") return message.status === "running" || message.status === "completed" || message.status === "failed" && (message.failureCode === "cancelled" || message.failureCode === "superseded" || message.jobID === undefined && message.failureCode === "aborted")
-  if (message.kind === "assistant") return message.parts.some(transcriptPartVisible) || message.completed !== undefined || message.error !== undefined || message.retry !== undefined
+  if (message.kind === "compaction")
+    return (
+      message.status === "running" ||
+      message.status === "completed" ||
+      (message.status === "failed" &&
+        (message.failureCode === "cancelled" ||
+          message.failureCode === "superseded" ||
+          (message.jobID === undefined && message.failureCode === "aborted")))
+    )
+  if (message.kind === "assistant")
+    return (
+      message.parts.some(transcriptPartVisible) ||
+      message.completed !== undefined ||
+      message.error !== undefined ||
+      message.retry !== undefined
+    )
   return true
 }
 
 export function visibleTranscriptMessages(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
-  const latestCompaction = messages.findLast((message) => message.kind === "compaction" && transcriptMessageVisible(message))?.id
-  const visible = messages.filter((message) => transcriptMessageVisible(message) && (message.kind !== "compaction" || message.id === latestCompaction))
-  const pendingInput = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
+  const latestCompaction = messages.findLast(
+    (message) => message.kind === "compaction" && transcriptMessageVisible(message),
+  )?.id
+  const visible = messages.filter(
+    (message) =>
+      transcriptMessageVisible(message) && (message.kind !== "compaction" || message.id === latestCompaction),
+  )
+  const pendingInput = (message: RemoteMessageView) =>
+    (message.kind === "user" && message.state === "pending") ||
+    (message.kind === "synthetic" && message.pending === true)
   return [...visible.filter((message) => !pendingInput(message)), ...visible.filter(pendingInput)]
 }
 
@@ -499,35 +649,88 @@ export function readPendingInputs(payload: unknown, sessionID: string): readonly
       const text = stringField(item.data.text)
       if (text === undefined) return []
       const attachments = readAttachments(item.data.files)
-      return [{ kind: "user", id, text, delivery, state: "pending", created,
-        ...(attachments.length === 0 ? {} : { attachments }) }]
+      return [
+        {
+          kind: "user",
+          id,
+          text,
+          delivery,
+          state: "pending",
+          created,
+          ...(attachments.length === 0 ? {} : { attachments }),
+        },
+      ]
     }
     if (item.type !== "synthetic") return []
     const text = stringField(item.data.text)
     if (text === undefined) return []
     const metadata = recordField(item.data.metadata)
-    return [{ kind: "synthetic", id, text, pending: true, created,
-      ...(stringField(item.data.description) === undefined ? {} : { description: stringField(item.data.description) }),
-      ...(metadata === undefined ? {} : { metadata }),
-      ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}) }]
+    return [
+      {
+        kind: "synthetic",
+        id,
+        text,
+        pending: true,
+        created,
+        ...(stringField(item.data.description) === undefined
+          ? {}
+          : { description: stringField(item.data.description) }),
+        ...(metadata === undefined ? {} : { metadata }),
+        ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
+      },
+    ]
   })
   return rows.length === payload.data.length ? rows : undefined
 }
 
-export function reconcilePendingInputs(view: SessionView, pending: readonly RemoteMessageView[], retainIDs: ReadonlySet<string> = new Set()): SessionView {
+export function reconcilePendingInputs(
+  view: SessionView,
+  pending: readonly RemoteMessageView[],
+  retainIDs: ReadonlySet<string> = new Set(),
+): SessionView {
   const known = new Map(view.messages.map((message) => [message.id, message]))
-  const retained = view.messages.filter((message) =>
-    !(message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending) || retainIDs.has(message.id))
+  const retained = view.messages.filter(
+    (message) =>
+      !(
+        (message.kind === "user" && message.state === "pending") ||
+        (message.kind === "synthetic" && message.pending)
+      ) || retainIDs.has(message.id),
+  )
   const admitted = pending.flatMap((message) => {
     const existing = known.get(message.id)
-    if (existing && !(existing.kind === "user" && existing.state === "pending" || existing.kind === "synthetic" && existing.pending)) return []
-    return [{ ...message, ...(existing?.kind === "user" && message.kind === "user" && existing.attachments && !message.attachments ? { attachments: existing.attachments } : {}) }]
+    if (
+      existing &&
+      !(
+        (existing.kind === "user" && existing.state === "pending") ||
+        (existing.kind === "synthetic" && existing.pending)
+      )
+    )
+      return []
+    return [
+      {
+        ...message,
+        ...(existing?.kind === "user" && message.kind === "user" && existing.attachments && !message.attachments
+          ? { attachments: existing.attachments }
+          : {}),
+      },
+    ]
   })
-  return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
+  return {
+    ...view,
+    messages: visibleTranscript([
+      ...retained.filter((message) => !admitted.some((item) => item.id === message.id)),
+      ...admitted,
+    ]),
+  }
 }
 
 export function classifySyntheticNotice(message: RemoteMessageView):
-  | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
+  | {
+      readonly kind: "subagent"
+      readonly label: string
+      readonly status: "completed" | "failed" | "waiting" | "updated"
+      readonly excerpt?: string
+    }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
   | { readonly kind: "goal"; readonly text: string }
   | undefined {
@@ -536,12 +739,32 @@ export function classifySyntheticNotice(message: RemoteMessageView):
   if (metadata?.source === "subagent_notification") {
     const type = metadata.type
     const status = type === "completed" || type === "failed" || type === "waiting" ? type : "updated"
-    const label = typeof metadata.agent === "string" ? metadata.agent : typeof metadata.childID === "string" ? metadata.childID : "Subagent"
-    return { kind: "subagent", label, status, ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}) }
+    const label =
+      typeof metadata.agent === "string"
+        ? metadata.agent
+        : typeof metadata.childID === "string"
+          ? metadata.childID
+          : "Subagent"
+    return {
+      kind: "subagent",
+      label,
+      status,
+      ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}),
+    }
   }
   if (metadata?.source === "subagent" || metadata?.source === "shell") {
-    const label = metadata.source === "shell" ? "Shell" : typeof metadata.agent === "string" ? metadata.agent : "Subagent"
-    const status = metadata.state === "completed" ? "finished" : metadata.state === "error" ? "failed" : metadata.state === "cancelled" ? "cancelled" : typeof metadata.state === "string" ? metadata.state : "finished"
+    const label =
+      metadata.source === "shell" ? "Shell" : typeof metadata.agent === "string" ? metadata.agent : "Subagent"
+    const status =
+      metadata.state === "completed"
+        ? "finished"
+        : metadata.state === "error"
+          ? "failed"
+          : metadata.state === "cancelled"
+            ? "cancelled"
+            : typeof metadata.state === "string"
+              ? metadata.state
+              : "finished"
     return { kind: "completion", label, status, description: message.description ?? "" }
   }
   if (isRecord(metadata?.autonomy) && metadata.autonomy.goal === true) return { kind: "goal", text: message.text }
@@ -549,8 +772,12 @@ export function classifySyntheticNotice(message: RemoteMessageView):
 }
 
 export function noticeSummary(source: string | undefined, text: string): string | undefined {
-  const prefix = source === "session-state" ? "Authoritative current Session state (JSON):\n"
-    : source === "team-view" ? "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n" : undefined
+  const prefix =
+    source === "session-state"
+      ? "Authoritative current Session state (JSON):\n"
+      : source === "team-view"
+        ? "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n"
+        : undefined
   if (!prefix || !text.startsWith(prefix)) return undefined
   const unavailable = source === "session-state" ? "Session state · unavailable" : "TeamView · unavailable"
   try {
@@ -562,10 +789,15 @@ export function noticeSummary(source: string | undefined, text: string): string 
       return `Session state · ${typeof autonomy.mode === "string" ? autonomy.mode : "unknown"} · YOLO ${typeof autonomy.yolo === "number" || typeof autonomy.yolo === "boolean" ? autonomy.yolo : 0} · ${count} ${count === 1 ? "task" : "tasks"}`
     }
     const children = Array.isArray(value.children) ? value.children : []
-    const states = children.flatMap((child) => isRecord(child) && typeof child.state === "string" ? [child.state] : [])
+    const states = children.flatMap((child) =>
+      isRecord(child) && typeof child.state === "string" ? [child.state] : [],
+    )
     const omitted = typeof value.omitted === "number" && value.omitted > 0 ? value.omitted : 0
     if (!states.length) return omitted ? `TeamView · ${omitted} omitted` : "TeamView · no children"
-    return `TeamView · ${[...new Set(states)].map((state) => `${states.filter((item) => item === state).length} ${state}`).concat(omitted ? [`${omitted} omitted`] : []).join(" · ")}`
+    return `TeamView · ${[...new Set(states)]
+      .map((state) => `${states.filter((item) => item === state).length} ${state}`)
+      .concat(omitted ? [`${omitted} omitted`] : [])
+      .join(" · ")}`
   } catch {
     return unavailable
   }
@@ -726,10 +958,7 @@ export function withShellOutputPage(
   )
 }
 
-function findToolShellPart(
-  view: SessionView,
-  shellID: string,
-): Extract<AssistantPart, { kind: "tool" }> | undefined {
+function findToolShellPart(view: SessionView, shellID: string): Extract<AssistantPart, { kind: "tool" }> | undefined {
   for (const message of view.messages) {
     if (message.kind !== "assistant") continue
     for (const part of message.parts) {
@@ -798,7 +1027,19 @@ export function readAutonomy(payload: unknown): SessionAutonomyView | undefined 
 export function applySessionEvent(view: SessionView, payload: unknown, now: number): SessionView {
   const event = readEvent(payload)
   if (!event) return bump(view)
-  if (["session.input.admitted", "session.execution.started", "session.step.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(event.type) && view.prediction)
+  if (
+    [
+      "session.input.admitted",
+      "session.execution.started",
+      "session.step.started",
+      "session.moved",
+      "session.deleted",
+      "session.archived",
+      "session.agent.selected",
+      "session.model.selected",
+    ].includes(event.type) &&
+    view.prediction
+  )
     view = { ...view, prediction: undefined }
   if (ignoredEventTypes.includes(event.type)) return view
   const data = event.data
@@ -808,7 +1049,14 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       const sessionID = stringField(data.sessionID)
       const sourceMessageID = stringField(data.sourceMessageID)
       const text = stringField(data.text)
-      if (sessionID !== view.id || sourceMessageID === undefined || text === undefined || text.length > 400 || /[\r\n\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) return view
+      if (
+        sessionID !== view.id ||
+        sourceMessageID === undefined ||
+        text === undefined ||
+        text.length > 400 ||
+        /[\r\n\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)
+      )
+        return view
       return { ...view, prediction: { sessionID, sourceMessageID, text } }
     }
     case "session.created": {
@@ -836,28 +1084,57 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.diagnostics.updated": {
       if (stringField(data.sessionID) !== view.id || !isRecord(data.diagnostics)) return view
       const context = isRecord(data.diagnostics.context) ? data.diagnostics.context : undefined
-      return { ...view, generationSpeed: readGenerationSpeed(data.diagnostics.generationSpeed),
-        contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit), updatedAt: now }
+      return {
+        ...view,
+        generationSpeed: readGenerationSpeed(data.diagnostics.generationSpeed),
+        contextWindow: readContextWindow(data.diagnostics.model, context?.total, context?.limit),
+        updatedAt: now,
+      }
     }
     case "session.execution.started":
       return { ...clearAssistantRetry(view), status: "running", executionStarted: now, updatedAt: now }
     case "session.execution.succeeded":
       return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now, activeAt }
     case "session.execution.failed":
-      return { ...clearAssistantRetry(view), status: "failed", executionStarted: undefined, lastError: readError(data.error), updatedAt: now, activeAt }
+      return {
+        ...clearAssistantRetry(view),
+        status: "failed",
+        executionStarted: undefined,
+        lastError: readError(data.error),
+        updatedAt: now,
+        activeAt,
+      }
     case "session.execution.interrupted":
-      return { ...clearAssistantRetry(view), status: "interrupted", executionStarted: undefined, updatedAt: now, activeAt }
+      return {
+        ...clearAssistantRetry(view),
+        status: "interrupted",
+        executionStarted: undefined,
+        updatedAt: now,
+        activeAt,
+      }
     case "session.status":
       return applyStatus(view, data, now)
     case "session.idle":
       return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
     case "session.retry.scheduled":
-      return { ...withAssistant(view, data, now, (message) => ({ ...message, retry: readAssistantRetry(data) ?? message.retry })), status: "running", updatedAt: now }
+      return {
+        ...withAssistant(view, data, now, (message) => ({
+          ...message,
+          retry: readAssistantRetry(data) ?? message.retry,
+        })),
+        status: "running",
+        updatedAt: now,
+      }
     case "session.input.admitted":
       return applyAdmitted(view, data, now)
     case "session.input.promoted":
       return view.messages.some((message) => message.id === data.inputID && message.kind === "synthetic")
-        ? { ...view, messages: view.messages.map((message) => message.id === data.inputID && message.kind === "synthetic" ? { ...message, pending: false } : message) }
+        ? {
+            ...view,
+            messages: view.messages.map((message) =>
+              message.id === data.inputID && message.kind === "synthetic" ? { ...message, pending: false } : message,
+            ),
+          }
         : updateUserMessage(view, stringField(data.inputID), (message) => ({ ...message, state: "promoted" }))
     case "session.input.consumed": {
       const ids = stringList(data.inputIDs)
@@ -878,14 +1155,20 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         }
       })
     case "session.step.ended":
-      return { ...withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined })), activeAt }
+      return {
+        ...withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined })),
+        activeAt,
+      }
     case "session.step.failed":
-      return { ...withAssistant(view, data, now, (message) => ({
-        ...message,
-        completed: now,
-        retry: undefined,
-        error: readError(data.error)?.message ?? "The step failed",
-      })), activeAt }
+      return {
+        ...withAssistant(view, data, now, (message) => ({
+          ...message,
+          completed: now,
+          retry: undefined,
+          error: readError(data.error)?.message ?? "The step failed",
+        })),
+        activeAt,
+      }
     case "session.text.started":
       return withTextPart(view, data, now, (part) => part)
     case "session.text.delta":
@@ -904,7 +1187,11 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         text: part.text + (stringField(data.delta) ?? ""),
       }))
     case "session.reasoning.ended":
-      return withReasoningPart(view, data, now, (part) => ({ ...part, text: stringField(data.text) ?? part.text, completed: now }))
+      return withReasoningPart(view, data, now, (part) => ({
+        ...part,
+        text: stringField(data.text) ?? part.text,
+        completed: now,
+      }))
     case "session.tool.input.started":
       return withToolPart(view, data, now, (part) => ({
         ...part,
@@ -982,10 +1269,13 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.compaction.started":
       return withCompaction(view, data, "running", event.created ?? now)
     case "session.compaction.ended":
-      return stringField(data.jobID) === undefined ? view : {
-        ...withCompaction(view, data, "completed", event.created ?? now),
-        generationSpeed: undefined, contextWindow: undefined,
-      }
+      return stringField(data.jobID) === undefined
+        ? view
+        : {
+            ...withCompaction(view, data, "completed", event.created ?? now),
+            generationSpeed: undefined,
+            contextWindow: undefined,
+          }
     case "session.compaction.failed":
       return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
     case "session.synthetic":
@@ -995,7 +1285,9 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         text: stringField(data.text) ?? "",
         ...(stringField(data.description) === undefined ? {} : { description: stringField(data.description) }),
         ...(recordField(data.metadata) === undefined ? {} : { metadata: recordField(data.metadata) }),
-        ...(isRecord(data.metadata) && stringField(data.metadata.contextSource) ? { source: stringField(data.metadata.contextSource) } : {}),
+        ...(isRecord(data.metadata) && stringField(data.metadata.contextSource)
+          ? { source: stringField(data.metadata.contextSource) }
+          : {}),
         created: now,
       })
     case "session.skill.activated":
@@ -1011,8 +1303,11 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.revert.cleared":
       return pushNotice(view, "revert", "Revert cleared", now)
     case "session.revert.committed":
-      return { ...pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now),
-        generationSpeed: undefined, contextWindow: undefined }
+      return {
+        ...pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now),
+        generationSpeed: undefined,
+        contextWindow: undefined,
+      }
     case "permission.asked":
       return pushRequest(view, {
         kind: "permission",
@@ -1067,7 +1362,13 @@ export function readSnapshotParts(content: unknown): readonly AssistantPart[] {
     }
     if (item.type === "reasoning") {
       const time = recordField(item.time)
-      parts.push({ kind: "reasoning", ordinal: parts.length, text: stringField(item.text) ?? "", ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}), ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}) })
+      parts.push({
+        kind: "reasoning",
+        ordinal: parts.length,
+        text: stringField(item.text) ?? "",
+        ...(time && numberField(time.created) !== undefined ? { started: numberField(time.created) } : {}),
+        ...(time && numberField(time.completed) !== undefined ? { completed: numberField(time.completed) } : {}),
+      })
       continue
     }
     if (item.type === "tool") {
@@ -1110,9 +1411,21 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
     if (type === "file") {
       const mime = stringField(item.mime)
       const uri = stringField(item.uri)
-      if (mime !== undefined && imageMimes.has(mime) && uri !== undefined &&
-        uri.startsWith(`data:${mime};base64,`) && isWellFormedBase64(uri.slice(`data:${mime};base64,`.length)))
-        return [{ kind: "image", uri, mime, ...(stringField(item.name) === undefined ? {} : { name: stringField(item.name) }) }]
+      if (
+        mime !== undefined &&
+        imageMimes.has(mime) &&
+        uri !== undefined &&
+        uri.startsWith(`data:${mime};base64,`) &&
+        validBase64(uri.slice(`data:${mime};base64,`.length))
+      )
+        return [
+          {
+            kind: "image",
+            uri,
+            mime,
+            ...(stringField(item.name) === undefined ? {} : { name: stringField(item.name) }),
+          },
+        ]
       return [{ kind: "other", type, summary: stringField(item.name) ?? "File" }]
     }
     const summary = Object.entries(item)
@@ -1132,7 +1445,17 @@ export function readForms(value: unknown): readonly FormView[] {
     const title = stringField(item.title)
     if (id === undefined || sessionID === undefined || title === undefined || !Array.isArray(item.fields)) return []
     const fields = item.fields.flatMap(readFormField)
-    return fields.length === 0 || fields.length !== item.fields.length ? [] : [{ id, sessionID, title, ...(recordField(item.metadata) === undefined ? {} : { metadata: recordField(item.metadata) }), fields }]
+    return fields.length === 0 || fields.length !== item.fields.length
+      ? []
+      : [
+          {
+            id,
+            sessionID,
+            title,
+            ...(recordField(item.metadata) === undefined ? {} : { metadata: recordField(item.metadata) }),
+            fields,
+          },
+        ]
   })
 }
 
@@ -1143,46 +1466,112 @@ function readFormField(value: unknown): readonly FormFieldView[] {
   if (key === undefined || type === undefined) return []
   const when = readFormWhen(value.when)
   if (value.when !== undefined && (!Array.isArray(value.when) || when.length !== value.when.length)) return []
-  const common = { key, ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }), ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }), ...(typeof value.required === "boolean" ? { required: value.required } : {}), ...(value.when === undefined ? {} : { when }) }
+  const common = {
+    key,
+    ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }),
+    ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }),
+    ...(typeof value.required === "boolean" ? { required: value.required } : {}),
+    ...(value.when === undefined ? {} : { when }),
+  }
   if (type === "external") {
     const url = stringField(value.url)
-    return url === undefined ? [] : [{ key, type, url, ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }), ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }) }]
+    return url === undefined
+      ? []
+      : [
+          {
+            key,
+            type,
+            url,
+            ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }),
+            ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }),
+          },
+        ]
   }
   if (type === "string") {
     const options = readFormOptions(value.options)
-    if (value.options !== undefined && (!Array.isArray(value.options) || options.length !== value.options.length)) return []
-    return [{ ...common, type,
-      ...(value.options === undefined ? {} : { options }),
-      ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
-      ...(typeof value.default === "string" ? { default: value.default } : {}),
-      ...(typeof value.placeholder === "string" ? { placeholder: value.placeholder } : {}),
-      ...(typeof value.pattern === "string" ? { pattern: value.pattern } : {}),
-      ...(typeof value.minLength === "number" ? { minLength: value.minLength } : {}),
-      ...(typeof value.maxLength === "number" ? { maxLength: value.maxLength } : {}),
-      ...(value.format === "email" || value.format === "uri" || value.format === "date" || value.format === "date-time" ? { format: value.format } : {}),
-    }]
+    if (value.options !== undefined && (!Array.isArray(value.options) || options.length !== value.options.length))
+      return []
+    return [
+      {
+        ...common,
+        type,
+        ...(value.options === undefined ? {} : { options }),
+        ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
+        ...(typeof value.default === "string" ? { default: value.default } : {}),
+        ...(typeof value.placeholder === "string" ? { placeholder: value.placeholder } : {}),
+        ...(typeof value.pattern === "string" ? { pattern: value.pattern } : {}),
+        ...(typeof value.minLength === "number" ? { minLength: value.minLength } : {}),
+        ...(typeof value.maxLength === "number" ? { maxLength: value.maxLength } : {}),
+        ...(value.format === "email" ||
+        value.format === "uri" ||
+        value.format === "date" ||
+        value.format === "date-time"
+          ? { format: value.format }
+          : {}),
+      },
+    ]
   }
   if (type === "multiselect") {
     const options = readFormOptions(value.options)
     if (!Array.isArray(value.options) || options.length !== value.options.length) return []
-    return [{ ...common, type, options,
-      ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
-      ...(Array.isArray(value.default) ? { default: stringList(value.default) } : {}),
-      ...(typeof value.minItems === "number" ? { minItems: value.minItems } : {}),
-      ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
-    }]
+    return [
+      {
+        ...common,
+        type,
+        options,
+        ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
+        ...(Array.isArray(value.default) ? { default: stringList(value.default) } : {}),
+        ...(typeof value.minItems === "number" ? { minItems: value.minItems } : {}),
+        ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
+      },
+    ]
   }
-  if (type === "number" || type === "integer") return [{ ...common, type, ...(typeof value.minimum === "number" ? { minimum: value.minimum } : {}), ...(typeof value.maximum === "number" ? { maximum: value.maximum } : {}), ...(typeof value.default === "number" ? { default: value.default } : {}) }]
-  if (type === "boolean") return [{ ...common, type, ...(typeof value.default === "boolean" ? { default: value.default } : {}) }]
+  if (type === "number" || type === "integer")
+    return [
+      {
+        ...common,
+        type,
+        ...(typeof value.minimum === "number" ? { minimum: value.minimum } : {}),
+        ...(typeof value.maximum === "number" ? { maximum: value.maximum } : {}),
+        ...(typeof value.default === "number" ? { default: value.default } : {}),
+      },
+    ]
+  if (type === "boolean")
+    return [{ ...common, type, ...(typeof value.default === "boolean" ? { default: value.default } : {}) }]
   return []
 }
 
-function readFormOptions(value: unknown) { return Array.isArray(value) ? value.flatMap((option) => isRecord(option) && stringField(option.value) !== undefined && stringField(option.label) !== undefined ? [{ value: stringField(option.value) ?? "", label: stringField(option.label) ?? "", ...(stringField(option.description) === undefined ? {} : { description: stringField(option.description) }) }] : []) : [] }
-function readFormWhen(value: unknown): readonly FormWhenView[] { return Array.isArray(value) ? value.flatMap((when) => isRecord(when) && stringField(when.key) !== undefined && (when.op === "eq" || when.op === "neq") && (typeof when.value === "string" || typeof when.value === "number" || typeof when.value === "boolean") ? [{ key: stringField(when.key) ?? "", op: when.op, value: when.value }] : []) : [] }
+function readFormOptions(value: unknown) {
+  return Array.isArray(value)
+    ? value.flatMap((option) =>
+        isRecord(option) && stringField(option.value) !== undefined && stringField(option.label) !== undefined
+          ? [
+              {
+                value: stringField(option.value) ?? "",
+                label: stringField(option.label) ?? "",
+                ...(stringField(option.description) === undefined
+                  ? {}
+                  : { description: stringField(option.description) }),
+              },
+            ]
+          : [],
+      )
+    : []
+}
+function readFormWhen(value: unknown): readonly FormWhenView[] {
+  return Array.isArray(value)
+    ? value.flatMap((when) =>
+        isRecord(when) &&
+        stringField(when.key) !== undefined &&
+        (when.op === "eq" || when.op === "neq") &&
+        (typeof when.value === "string" || typeof when.value === "number" || typeof when.value === "boolean")
+          ? [{ key: stringField(when.key) ?? "", op: when.op, value: when.value }]
+          : [],
+      )
+    : []
+}
 
-function readError(
-  value: unknown,
-): { readonly code: string; readonly message: string } | undefined {
+function readError(value: unknown): { readonly code: string; readonly message: string } | undefined {
   if (!isRecord(value)) return undefined
   const code = stringField(value.code) ?? stringField(value.type)
   const message = stringField(value.message)
@@ -1194,17 +1583,29 @@ function readAssistantRetry(value: unknown): Extract<RemoteMessageView, { kind: 
   if (!isRecord(value)) return undefined
   const attempt = positiveInteger(value.attempt)
   const at = numberField(value.at)
-  return attempt === undefined || at === undefined || at < 0 ? undefined : { attempt, at, code: readError(value.error)?.code ?? "unknown" }
+  return attempt === undefined || at === undefined || at < 0
+    ? undefined
+    : { attempt, at, code: readError(value.error)?.code ?? "unknown" }
 }
 
 function applyStatus(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
   const status = isRecord(data.status) ? data.status : {}
   if (status.type === "busy") return { ...view, status: "running", updatedAt: now }
-  if (status.type === "idle") return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
+  if (status.type === "idle")
+    return { ...clearAssistantRetry(view), status: "idle", executionStarted: undefined, updatedAt: now }
   if (status.type === "retry") {
     const assistant = view.messages.findLast((message) => message.kind === "assistant")
-    return { ...(assistant?.kind !== "assistant" ? view : withAssistant(view, { assistantMessageID: assistant.id }, now, (message) => ({ ...message,
-      retry: { attempt: numberField(status.attempt) ?? 1, at: numberField(status.next) ?? now, code: stringField(status.message) ?? "retrying" } }))),
+    return {
+      ...(assistant?.kind !== "assistant"
+        ? view
+        : withAssistant(view, { assistantMessageID: assistant.id }, now, (message) => ({
+            ...message,
+            retry: {
+              attempt: numberField(status.attempt) ?? 1,
+              at: numberField(status.next) ?? now,
+              code: stringField(status.message) ?? "retrying",
+            },
+          }))),
       status: "running",
       updatedAt: now,
     }
@@ -1216,14 +1617,26 @@ function bump(view: SessionView): SessionView {
   return { ...view, unhandledEvents: view.unhandledEvents + 1 }
 }
 
-function readEvent(
-  payload: unknown,
-): { readonly type: string; readonly id?: string; readonly created?: number; readonly metadata?: Record<string, unknown>; readonly data: Record<string, unknown> } | undefined {
+function readEvent(payload: unknown):
+  | {
+      readonly type: string
+      readonly id?: string
+      readonly created?: number
+      readonly metadata?: Record<string, unknown>
+      readonly data: Record<string, unknown>
+    }
+  | undefined {
   if (!isRecord(payload)) return undefined
   const type = stringField(payload.type)
   if (type === undefined) return undefined
   if (!isRecord(payload.data)) return undefined
-  return { type, id: stringField(payload.id), created: numberField(payload.created), metadata: recordField(payload.metadata), data: payload.data }
+  return {
+    type,
+    id: stringField(payload.id),
+    created: numberField(payload.created),
+    metadata: recordField(payload.metadata),
+    data: payload.data,
+  }
 }
 
 function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: number): SessionView {
@@ -1253,7 +1666,11 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
     kind: "user",
     id,
     text,
-    ...(attachments.length > 0 ? { attachments } : existing?.kind === "user" && existing.attachments ? { attachments: existing.attachments } : {}),
+    ...(attachments.length > 0
+      ? { attachments }
+      : existing?.kind === "user" && existing.attachments
+        ? { attachments: existing.attachments }
+        : {}),
     delivery: deliveryField(pending.delivery),
     state: existing?.kind === "user" ? existing.state : "pending",
     created: existing?.kind === "user" ? existing.created : now,
@@ -1261,8 +1678,19 @@ function applyAdmitted(view: SessionView, data: Record<string, unknown>, now: nu
   return existing ? replaceMessage(view, message) : pushMessage(view, message)
 }
 
-function pushNotice(view: SessionView, notice: Extract<RemoteMessageView, { kind: "notice" }>["notice"], text: string, now: number): SessionView {
-  return pushMessage(view, { kind: "notice", id: `notice_${notice}_${view.messages.length}`, notice, text, created: now })
+function pushNotice(
+  view: SessionView,
+  notice: Extract<RemoteMessageView, { kind: "notice" }>["notice"],
+  text: string,
+  now: number,
+): SessionView {
+  return pushMessage(view, {
+    kind: "notice",
+    id: `notice_${notice}_${view.messages.length}`,
+    notice,
+    text,
+    created: now,
+  })
 }
 
 function updateUserMessage(
@@ -1288,15 +1716,16 @@ function withAssistant(
   if (id === undefined) return bump(view)
   const existing = view.messages.find((message) => message.id === id)
   if (existing && existing.kind !== "assistant") return view
-  const message =
-    existing ?? { kind: "assistant" as const, id, parts: [] as readonly AssistantPart[], created: now }
+  const message = existing ?? { kind: "assistant" as const, id, parts: [] as readonly AssistantPart[], created: now }
   const updated = update(message)
   return existing ? replaceMessage(view, updated) : pushMessage(view, updated)
 }
 
 export function clearAssistantRetry(view: SessionView): SessionView {
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
-  return assistant?.kind === "assistant" && assistant.retry ? replaceMessage(view, { ...assistant, retry: undefined }) : view
+  return assistant?.kind === "assistant" && assistant.retry
+    ? replaceMessage(view, { ...assistant, retry: undefined })
+    : view
 }
 
 function withTextPart(
@@ -1361,9 +1790,7 @@ function withToolPart(
     }
     return {
       ...message,
-      parts: message.parts.map((part, position) =>
-        position === index && part.kind === "tool" ? update(part) : part,
-      ),
+      parts: message.parts.map((part, position) => (position === index && part.kind === "tool" ? update(part) : part)),
     }
   })
 }
@@ -1381,8 +1808,12 @@ function applyShell(view: SessionView, data: Record<string, unknown>, now: numbe
     id,
     shellID,
     command: stringField(shell.command) ?? (existing?.kind === "shell" ? existing.command : "command"),
-    status: ended ? stringField(shell.status) ?? "exited" : "running",
-    ...(exit === undefined ? existing?.kind === "shell" && existing.exit !== undefined ? { exit: existing.exit } : {} : { exit }),
+    status: ended ? (stringField(shell.status) ?? "exited") : "running",
+    ...(exit === undefined
+      ? existing?.kind === "shell" && existing.exit !== undefined
+        ? { exit: existing.exit }
+        : {}
+      : { exit }),
     ...(output === undefined
       ? existing?.kind === "shell" && existing.output !== undefined
         ? { output: existing.output }
@@ -1404,7 +1835,10 @@ function withCompaction(
   error?: string,
 ): SessionView {
   const jobID = stringField(data.jobID)
-  const existing = view.messages.find((message) => message.kind === "compaction" && (message.jobID === jobID && jobID !== undefined || message.id === jobID))
+  const existing = view.messages.find(
+    (message) =>
+      message.kind === "compaction" && ((message.jobID === jobID && jobID !== undefined) || message.id === jobID),
+  )
   const id = existing?.id ?? jobID ?? stringField(data.inputID) ?? `compaction_${view.messages.length}`
   const trigger = stringField(data.reason) ?? stringField(data.trigger)
   const messageTrigger = trigger ?? (existing?.kind === "compaction" ? existing.trigger : undefined)
@@ -1423,60 +1857,141 @@ function withCompaction(
     ...(error === undefined ? {} : { error }),
   }
   const updated = existing ? replaceMessage(view, message) : pushMessage(view, message)
-  return { ...updated, messages: visibleTranscript(updated.messages),
-    ...(view.compactionHistory === undefined || jobID === undefined ? {} : { compactionHistory: updateCompactionHistory(view.compactionHistory, message) }) }
+  return {
+    ...updated,
+    messages: visibleTranscript(updated.messages),
+    ...(view.compactionHistory === undefined || jobID === undefined
+      ? {}
+      : { compactionHistory: updateCompactionHistory(view.compactionHistory, message) }),
+  }
 }
 
-function updateCompactionHistory(history: RemoteCompactionHistory, message: Extract<RemoteMessageView, { kind: "compaction" }>): RemoteCompactionHistory {
+function updateCompactionHistory(
+  history: CompactionHistoryView,
+  message: Extract<RemoteMessageView, { kind: "compaction" }>,
+): CompactionHistoryView {
   if (message.jobID === undefined) return history
   const prior = history.data.find((entry) => entry.jobID === message.jobID)
-  if (prior && (prior.status === "completed" || prior.status === "failed") && (message.status === "pending" || message.status === "running")) return history
-  const entry = { jobID: message.jobID, trigger: message.trigger ?? prior?.trigger ?? "", status: message.status,
+  if (
+    prior &&
+    (prior.status === "completed" || prior.status === "failed") &&
+    (message.status === "pending" || message.status === "running")
+  )
+    return history
+  const entry = {
+    jobID: message.jobID,
+    trigger: message.trigger ?? prior?.trigger ?? "",
+    status: message.status,
     created: message.created ?? prior?.created ?? 0,
-    ...(message.status === "completed" && (message.metrics ?? prior?.metrics) ? { metrics: message.metrics ?? prior?.metrics } : {}),
-    ...(message.status === "failed" && message.failureCode ? { code: message.failureCode } : {}) }
-  const entries = prior === undefined ? [...history.data, entry] : history.data.map((item) => item.jobID === message.jobID ? entry : item)
-  const saved = (item: typeof entry | typeof prior) => item?.status === "completed" && item.metrics ? item.metrics.inputTokens - item.metrics.retainedTokens : 0
-  const omitted = entries.length > RemoteLimits.maxCompactionHistory ? entries[0] : undefined
-  return { data: entries.slice(-RemoteLimits.maxCompactionHistory),
+    ...(message.status === "completed" && (message.metrics ?? prior?.metrics)
+      ? { metrics: message.metrics ?? prior?.metrics }
+      : {}),
+    ...(message.status === "failed" && message.failureCode ? { code: message.failureCode } : {}),
+  }
+  const entries =
+    prior === undefined
+      ? [...history.data, entry]
+      : history.data.map((item) => (item.jobID === message.jobID ? entry : item))
+  const saved = (item: typeof entry | typeof prior) =>
+    item?.status === "completed" && item.metrics ? item.metrics.inputTokens - item.metrics.retainedTokens : 0
+  const omitted = entries.length > WebLimits.maxCompactionHistory ? entries[0] : undefined
+  return {
+    data: entries.slice(-WebLimits.maxCompactionHistory),
     truncated: history.truncated || omitted !== undefined,
     completedBefore: history.completedBefore + (omitted?.status === "completed" && omitted.metrics ? 1 : 0),
-    completedCount: history.completedCount + Number(entry.status === "completed" && entry.metrics !== undefined) - Number(prior?.status === "completed" && prior.metrics !== undefined),
-    totalSavedTokens: history.totalSavedTokens + saved(entry) - saved(prior) }
+    completedCount:
+      history.completedCount +
+      Number(entry.status === "completed" && entry.metrics !== undefined) -
+      Number(prior?.status === "completed" && prior.metrics !== undefined),
+    totalSavedTokens: history.totalSavedTokens + saved(entry) - saved(prior),
+  }
 }
 
-function readCompactionMetrics(value: unknown): NonNullable<RemoteCompactionHistory["data"][number]["metrics"]> | undefined {
+function readCompactionMetrics(
+  value: unknown,
+): NonNullable<CompactionHistoryView["data"][number]["metrics"]> | undefined {
   if (!isRecord(value)) return undefined
-  if (!nonNegativeInteger(value.excludedMessages) || !nonNegativeInteger(value.excludedParts) || !nonNegativeInteger(value.inputTokens) || !nonNegativeInteger(value.retainedTokens)) return undefined
-  return { excludedMessages: value.excludedMessages, excludedParts: value.excludedParts, inputTokens: value.inputTokens, retainedTokens: value.retainedTokens }
+  if (
+    !nonNegativeInteger(value.excludedMessages) ||
+    !nonNegativeInteger(value.excludedParts) ||
+    !nonNegativeInteger(value.inputTokens) ||
+    !nonNegativeInteger(value.retainedTokens)
+  )
+    return undefined
+  return {
+    excludedMessages: value.excludedMessages,
+    excludedParts: value.excludedParts,
+    inputTokens: value.inputTokens,
+    retainedTokens: value.retainedTokens,
+  }
 }
 
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
-export function readCompactionHistory(value: unknown): RemoteCompactionHistory | undefined {
-  if (!isRecord(value) || !Array.isArray(value.data) || value.data.length > RemoteLimits.maxCompactionHistory || typeof value.truncated !== "boolean" ||
-    typeof value.completedBefore !== "number" || !Number.isSafeInteger(value.completedBefore) || value.completedBefore < 0 ||
-    typeof value.completedCount !== "number" || !Number.isSafeInteger(value.completedCount) || value.completedCount < 0 ||
-    typeof value.totalSavedTokens !== "number" || !Number.isSafeInteger(value.totalSavedTokens)) return undefined
-  const data = value.data.map((item): RemoteCompactionHistory["data"][number] | undefined => {
-    if (!isRecord(item) || typeof item.jobID !== "string" || !/^cmp_[A-Za-z0-9_-]+$/.test(item.jobID) ||
-      typeof item.trigger !== "string" || item.trigger.length === 0 || item.trigger.length > 64 ||
-      (item.status !== "pending" && item.status !== "running" && item.status !== "completed" && item.status !== "failed") ||
-      typeof item.created !== "number" || !Number.isSafeInteger(item.created) || item.created < 0) return undefined
+export function readCompactionHistory(value: unknown): CompactionHistoryView | undefined {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.data) ||
+    value.data.length > WebLimits.maxCompactionHistory ||
+    typeof value.truncated !== "boolean" ||
+    typeof value.completedBefore !== "number" ||
+    !Number.isSafeInteger(value.completedBefore) ||
+    value.completedBefore < 0 ||
+    typeof value.completedCount !== "number" ||
+    !Number.isSafeInteger(value.completedCount) ||
+    value.completedCount < 0 ||
+    typeof value.totalSavedTokens !== "number" ||
+    !Number.isSafeInteger(value.totalSavedTokens)
+  )
+    return undefined
+  const data = value.data.map((item): CompactionHistoryView["data"][number] | undefined => {
+    if (
+      !isRecord(item) ||
+      typeof item.jobID !== "string" ||
+      !/^cmp_[A-Za-z0-9_-]+$/.test(item.jobID) ||
+      typeof item.trigger !== "string" ||
+      item.trigger.length === 0 ||
+      item.trigger.length > 64 ||
+      (item.status !== "pending" &&
+        item.status !== "running" &&
+        item.status !== "completed" &&
+        item.status !== "failed") ||
+      typeof item.created !== "number" ||
+      !Number.isSafeInteger(item.created) ||
+      item.created < 0
+    )
+      return undefined
     const status = item.status
     const metrics = status === "completed" ? readCompactionMetrics(item.metrics) : undefined
     const code = status === "failed" ? stringField(item.code) : undefined
-    if (status === "completed" && !metrics || status === "failed" && (code === undefined || code.length > 64)) return undefined
-    return { jobID: item.jobID, trigger: item.trigger, status, created: item.created,
-      ...(metrics ? { metrics } : {}), ...(code ? { code } : {}) }
+    if ((status === "completed" && !metrics) || (status === "failed" && (code === undefined || code.length > 64)))
+      return undefined
+    return {
+      jobID: item.jobID,
+      trigger: item.trigger,
+      status,
+      created: item.created,
+      ...(metrics ? { metrics } : {}),
+      ...(code ? { code } : {}),
+    }
   })
   if (data.some((item) => item === undefined)) return undefined
   const entries = data.filter((item): item is NonNullable<typeof item> => item !== undefined)
   const completed = entries.filter((item) => item.status === "completed")
-  if (value.completedBefore + completed.length !== value.completedCount || !value.truncated && value.completedBefore > 0) return undefined
-  return { data: entries, truncated: value.truncated, completedBefore: value.completedBefore, completedCount: value.completedCount, totalSavedTokens: value.totalSavedTokens }
+  if (
+    value.completedBefore + completed.length !== value.completedCount ||
+    (!value.truncated && value.completedBefore > 0)
+  )
+    return undefined
+  return {
+    data: entries,
+    truncated: value.truncated,
+    completedBefore: value.completedBefore,
+    completedCount: value.completedCount,
+    totalSavedTokens: value.totalSavedTokens,
+  }
 }
 
 export function visibleTranscript(messages: readonly RemoteMessageView[]): readonly RemoteMessageView[] {
@@ -1486,14 +2001,21 @@ export function visibleTranscript(messages: readonly RemoteMessageView[]): reado
     const position = positions.get(message.boundaryMessageID)
     return position !== undefined && position < index ? Math.max(latest, position) : latest
   }, -1)
-  const retained = boundary < 0 ? messages : messages.filter((message, index) => index > boundary || message.kind === "compaction")
+  const retained =
+    boundary < 0 ? messages : messages.filter((message, index) => index > boundary || message.kind === "compaction")
   const latestCompaction = retained.findLast((message) => message.kind === "compaction")?.id
-  const checkpoint = retained.findLast((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)?.id
-  return retained.filter((message) => message.kind !== "compaction" || message.id === latestCompaction || message.id === checkpoint)
+  const checkpoint = retained.findLast(
+    (message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID,
+  )?.id
+  return retained.filter(
+    (message) => message.kind !== "compaction" || message.id === latestCompaction || message.id === checkpoint,
+  )
 }
 
 export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]): boolean {
-  return messages.some((message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID)
+  return messages.some(
+    (message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID,
+  )
 }
 
 function pushMessage(view: SessionView, message: RemoteMessageView): SessionView {
@@ -1538,21 +2060,53 @@ export function readProjectedMessage(value: unknown): RemoteMessageView | undefi
   }
   if (type === "system") {
     const metadata = recordField(value.metadata)
-    return { kind: "system", id, text: stringField(value.text) ?? "", ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
+    return {
+      kind: "system",
+      id,
+      text: stringField(value.text) ?? "",
+      ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
+      created,
+    }
   }
   if (type === "synthetic") {
     const description = stringField(value.description)
     const metadata = recordField(value.metadata)
-    return { kind: "synthetic", id, text: stringField(value.text) ?? "", ...(description === undefined ? {} : { description }), ...(metadata === undefined ? {} : { metadata }), ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}), created }
+    return {
+      kind: "synthetic",
+      id,
+      text: stringField(value.text) ?? "",
+      ...(description === undefined ? {} : { description }),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(metadata && stringField(metadata.contextSource) ? { source: stringField(metadata.contextSource) } : {}),
+      created,
+    }
   }
   if (type === "agent-switched") {
-    return { kind: "notice", id, notice: "agent-switched", text: `Agent: ${stringField(value.agent) ?? "unknown"}`, created }
+    return {
+      kind: "notice",
+      id,
+      notice: "agent-switched",
+      text: `Agent: ${stringField(value.agent) ?? "unknown"}`,
+      created,
+    }
   }
   if (type === "model-switched") {
-    return { kind: "notice", id, notice: "model-switched", text: `Model: ${modelLabel(readModelRef(value.model)) ?? "unknown"}`, created }
+    return {
+      kind: "notice",
+      id,
+      notice: "model-switched",
+      text: `Model: ${modelLabel(readModelRef(value.model)) ?? "unknown"}`,
+      created,
+    }
   }
   if (type === "skill") {
-    return { kind: "notice", id, notice: "skill", text: `Skill: ${stringField(value.name) ?? stringField(value.skill) ?? "unknown"}`, created }
+    return {
+      kind: "notice",
+      id,
+      notice: "skill",
+      text: `Skill: ${stringField(value.name) ?? stringField(value.skill) ?? "unknown"}`,
+      created,
+    }
   }
   if (type === "shell") {
     const output = readShellOutput(value.output)
@@ -1687,7 +2241,11 @@ export type SessionSnapshot = {
  */
 export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   if (!isRecord(payload) || !Array.isArray(payload.messages)) return undefined
-  if (payload.before !== undefined && (typeof payload.before !== "string" || payload.before.length === 0 || payload.before.length > 256)) return undefined
+  if (
+    payload.before !== undefined &&
+    (typeof payload.before !== "string" || payload.before.length === 0 || payload.before.length > 256)
+  )
+    return undefined
   const session = isRecord(payload.session) ? payload.session : {}
   const watermark = isRecord(payload.watermark) ? numberField(payload.watermark.seq) : undefined
   const sourceEpoch = stringField(payload.sourceEpoch)
@@ -1698,16 +2256,21 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
     return message ? [message] : []
   })
   const messages = visibleTranscript(allMessages)
-  const compactionIndex = payload.messages.findLastIndex((item) => isRecord(item) && item.type === "compaction" && item.status === "completed")
-  const assistant = payload.messages.findLast((item, index) => index > compactionIndex && isRecord(item) &&
-    item.type === "assistant" && isRecord(item.tokens))
+  const compactionIndex = payload.messages.findLastIndex(
+    (item) => isRecord(item) && item.type === "compaction" && item.status === "completed",
+  )
+  const assistant = payload.messages.findLast(
+    (item, index) => index > compactionIndex && isRecord(item) && item.type === "assistant" && isRecord(item.tokens),
+  )
   const contextWindow = readAssistantContext(assistant)
   const generationSpeed = assistant === undefined ? undefined : readGenerationSpeed(payload.generationSpeed)
   const visibleIDs = new Set(messages.map((message) => message.id))
   return {
     messages,
     ...(payload.before === undefined ? {} : { before: payload.before }),
-    coveredAssistantIDs: allMessages.flatMap((message) => message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : []),
+    coveredAssistantIDs: allMessages.flatMap((message) =>
+      message.kind === "assistant" && !visibleIDs.has(message.id) ? [message.id] : [],
+    ),
     ...(stringField(session.title) === undefined ? {} : { title: stringField(session.title) }),
     ...(stringField(session.parentID) === undefined ? {} : { parentID: stringField(session.parentID) }),
     ...(stringField(session.agent) === undefined ? {} : { agent: stringField(session.agent) }),
@@ -1720,11 +2283,19 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   }
 }
 
-function openPartKey(message: Extract<RemoteMessageView, { kind: "assistant" }>, part: AssistantPart): string | undefined {
+function openPartKey(
+  message: Extract<RemoteMessageView, { kind: "assistant" }>,
+  part: AssistantPart,
+): string | undefined {
   if (message.completed !== undefined) return undefined
   if (part.kind === "text") return part.text === "" ? partKey(message.id, "text", String(part.ordinal)) : undefined
-  if (part.kind === "reasoning") return part.text === "" && part.completed === undefined ? partKey(message.id, "reasoning", String(part.ordinal)) : undefined
-  return part.status === "streaming" && (part.inputText ?? "") === "" ? partKey(message.id, "tool", part.callID) : undefined
+  if (part.kind === "reasoning")
+    return part.text === "" && part.completed === undefined
+      ? partKey(message.id, "reasoning", String(part.ordinal))
+      : undefined
+  return part.status === "streaming" && (part.inputText ?? "") === ""
+    ? partKey(message.id, "tool", part.callID)
+    : undefined
 }
 
 /** Part keys a snapshot already covers; matching ephemeral fragments are stale. */
@@ -1733,7 +2304,8 @@ export function sealedPartKeys(messages: readonly RemoteMessageView[]): readonly
     if (message.kind !== "assistant") return []
     return message.parts.flatMap((part) => {
       if (openPartKey(message, part) !== undefined) return []
-      if (part.kind === "text" || part.kind === "reasoning") return [partKey(message.id, part.kind, String(part.ordinal))]
+      if (part.kind === "text" || part.kind === "reasoning")
+        return [partKey(message.id, part.kind, String(part.ordinal))]
       if (part.kind === "tool") return [partKey(message.id, "tool", part.callID)]
       return []
     })
@@ -1741,17 +2313,25 @@ export function sealedPartKeys(messages: readonly RemoteMessageView[]): readonly
 }
 
 export function streamedPartText(messages: readonly RemoteMessageView[]): ReadonlyMap<string, string> {
-  return new Map(messages.flatMap((message) => {
-    if (message.kind !== "assistant") return []
-    return message.parts.flatMap((part): readonly (readonly [string, string])[] => {
-      const key = part.kind === "tool" ? partKey(message.id, "tool", part.callID) : partKey(message.id, part.kind, String(part.ordinal))
-      const text = part.kind === "tool" ? part.inputText : part.text
-      return text === undefined || text === "" ? [] : [[key, text]]
-    })
-  }))
+  return new Map(
+    messages.flatMap((message) => {
+      if (message.kind !== "assistant") return []
+      return message.parts.flatMap((part): readonly (readonly [string, string])[] => {
+        const key =
+          part.kind === "tool"
+            ? partKey(message.id, "tool", part.callID)
+            : partKey(message.id, part.kind, String(part.ordinal))
+        const text = part.kind === "tool" ? part.inputText : part.text
+        return text === undefined || text === "" ? [] : [[key, text]]
+      })
+    }),
+  )
 }
 
-export function carryStreamedText(messages: readonly RemoteMessageView[], streamed: ReadonlyMap<string, string>): readonly RemoteMessageView[] {
+export function carryStreamedText(
+  messages: readonly RemoteMessageView[],
+  streamed: ReadonlyMap<string, string>,
+): readonly RemoteMessageView[] {
   if (streamed.size === 0) return messages
   return messages.map((message) => {
     if (message.kind !== "assistant") return message
@@ -1770,7 +2350,11 @@ export function carryStreamedText(messages: readonly RemoteMessageView[], stream
 /** Part key for an ephemeral fragment, when it names one. */
 export function ephemeralPartKey(payload: unknown): string | undefined {
   if (!isRecord(payload) || typeof payload.type !== "string") return undefined
-  if (!payload.type.startsWith("session.text.") && !payload.type.startsWith("session.reasoning.") && !payload.type.startsWith("session.tool.")) {
+  if (
+    !payload.type.startsWith("session.text.") &&
+    !payload.type.startsWith("session.reasoning.") &&
+    !payload.type.startsWith("session.tool.")
+  ) {
     return undefined
   }
   if (!isRecord(payload.data)) return undefined
@@ -1782,7 +2366,11 @@ export function ephemeralPartKey(payload: unknown): string | undefined {
   }
   const ordinal = numberField(payload.data.ordinal)
   if (ordinal === undefined) return undefined
-  return partKey(assistantMessageID, payload.type.startsWith("session.reasoning.") ? "reasoning" : "text", String(ordinal))
+  return partKey(
+    assistantMessageID,
+    payload.type.startsWith("session.reasoning.") ? "reasoning" : "text",
+    String(ordinal),
+  )
 }
 
 export function ephemeralAssistantID(payload: unknown): string | undefined {
@@ -1803,7 +2391,11 @@ export function openedPartKey(payload: unknown): string | undefined {
   if (payload.type === "session.text.started" || payload.type === "session.reasoning.started") {
     const ordinal = numberField(payload.data.ordinal)
     if (ordinal === undefined) return undefined
-    return partKey(assistantMessageID, payload.type === "session.reasoning.started" ? "reasoning" : "text", String(ordinal))
+    return partKey(
+      assistantMessageID,
+      payload.type === "session.reasoning.started" ? "reasoning" : "text",
+      String(ordinal),
+    )
   }
   return undefined
 }
@@ -1858,37 +2450,89 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
   })
 }
 
-export function readFormRequests(payload: unknown, now: number): readonly Extract<PendingRequestView, { kind: "form" }>[] {
+export function readFormRequests(
+  payload: unknown,
+  now: number,
+): readonly Extract<PendingRequestView, { kind: "form" }>[] {
   return readForms(payload).map((form) => ({ kind: "form", id: form.id, form, askedAt: now }))
 }
 
-export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPage | undefined {
-  if (!isRecord(value) || !Array.isArray(value.data) ||
-    (value.cursor !== undefined && (!isRecord(value.cursor) || value.cursor.next !== undefined && (typeof value.cursor.next !== "string" || value.cursor.next.length === 0 || value.cursor.next.length > 256)))) return undefined
+export function readCapturedChangesPage(value: unknown): CapturedChangesView | undefined {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.data) ||
+    (value.cursor !== undefined &&
+      (!isRecord(value.cursor) ||
+        (value.cursor.next !== undefined &&
+          (typeof value.cursor.next !== "string" || value.cursor.next.length === 0 || value.cursor.next.length > 256))))
+  )
+    return undefined
   const files = value.data.map((entry: unknown) => {
-    if (!isRecord(entry) || typeof entry.placementMessageID !== "string" || entry.placementMessageID === "" || typeof entry.path !== "string" || !Number.isSafeInteger(entry.additions) || !Number.isSafeInteger(entry.deletions) ||
-      (entry.additions as number) < 0 || (entry.deletions as number) < 0 || !["created", "deleted", "modified"].includes(String(entry.status)) || !Array.isArray(entry.files)) return undefined
+    if (
+      !isRecord(entry) ||
+      typeof entry.placementMessageID !== "string" ||
+      entry.placementMessageID === "" ||
+      typeof entry.path !== "string" ||
+      !Number.isSafeInteger(entry.additions) ||
+      !Number.isSafeInteger(entry.deletions) ||
+      (entry.additions as number) < 0 ||
+      (entry.deletions as number) < 0 ||
+      !["created", "deleted", "modified"].includes(String(entry.status)) ||
+      !Array.isArray(entry.files)
+    )
+      return undefined
     const patches = entry.files.map((patch: unknown) => {
-      if (!isRecord(patch) || typeof patch.diff !== "string" || patch.path !== entry.path || !Number.isSafeInteger(patch.additions) || !Number.isSafeInteger(patch.deletions) ||
-        (patch.additions as number) < 0 || (patch.deletions as number) < 0 || !["created", "deleted", "modified"].includes(String(patch.status)) ||
-        (patch.unavailable !== undefined && patch.unavailable !== true)) return undefined
+      if (
+        !isRecord(patch) ||
+        typeof patch.diff !== "string" ||
+        patch.path !== entry.path ||
+        !Number.isSafeInteger(patch.additions) ||
+        !Number.isSafeInteger(patch.deletions) ||
+        (patch.additions as number) < 0 ||
+        (patch.deletions as number) < 0 ||
+        !["created", "deleted", "modified"].includes(String(patch.status)) ||
+        (patch.unavailable !== undefined && patch.unavailable !== true)
+      )
+        return undefined
       const parsed = patch.unavailable === true ? undefined : parseUnifiedPatch(patch.diff)
-      if (patch.unavailable === true ? patch.diff !== "" || patch.additions !== 0 || patch.deletions !== 0
-        : !parsed || parsed.unified.filter((line) => line.kind === "added").length !== patch.additions ||
-          parsed.unified.filter((line) => line.kind === "removed").length !== patch.deletions) return undefined
-      return { path: entry.path as string, diff: patch.diff, additions: patch.additions as number, deletions: patch.deletions as number,
-        status: patch.status as "created" | "deleted" | "modified", ...(patch.unavailable === true ? { unavailable: true } : {}) }
+      if (
+        patch.unavailable === true
+          ? patch.diff !== "" || patch.additions !== 0 || patch.deletions !== 0
+          : !parsed ||
+            parsed.unified.filter((line) => line.kind === "added").length !== patch.additions ||
+            parsed.unified.filter((line) => line.kind === "removed").length !== patch.deletions
+      )
+        return undefined
+      return {
+        path: entry.path as string,
+        diff: patch.diff,
+        additions: patch.additions as number,
+        deletions: patch.deletions as number,
+        status: patch.status as "created" | "deleted" | "modified",
+        ...(patch.unavailable === true ? { unavailable: true } : {}),
+      }
     })
-    if (patches.some((patch) => patch === undefined) || patches.length === 0 ||
+    if (
+      patches.some((patch) => patch === undefined) ||
+      patches.length === 0 ||
       patches.reduce((total, patch) => total + (patch?.additions ?? 0), 0) !== entry.additions ||
-      patches.reduce((total, patch) => total + (patch?.deletions ?? 0), 0) !== entry.deletions) return undefined
-    return { placementMessageID: entry.placementMessageID, path: entry.path, additions: entry.additions as number, deletions: entry.deletions as number,
-      status: entry.status as "created" | "deleted" | "modified", files: patches.filter((patch): patch is NonNullable<typeof patch> => patch !== undefined) }
+      patches.reduce((total, patch) => total + (patch?.deletions ?? 0), 0) !== entry.deletions
+    )
+      return undefined
+    return {
+      placementMessageID: entry.placementMessageID,
+      path: entry.path,
+      additions: entry.additions as number,
+      deletions: entry.deletions as number,
+      status: entry.status as "created" | "deleted" | "modified",
+      files: patches.filter((patch): patch is NonNullable<typeof patch> => patch !== undefined),
+    }
   })
   if (files.some((file) => file === undefined)) return undefined
   return {
     data: files.filter((file): file is NonNullable<typeof file> => file !== undefined),
-    ...(isRecord(value.cursor) && typeof value.cursor.next === "string" ? { cursor: { next: value.cursor.next } } : {}) }
+    ...(isRecord(value.cursor) && typeof value.cursor.next === "string" ? { cursor: { next: value.cursor.next } } : {}),
+  }
 }
 
 /** Durable sequence and epoch carried by one event payload. */
@@ -1907,8 +2551,11 @@ export function canReplyToRequest(request: PendingRequestView, activeSessionID: 
 }
 
 export function guardrailContextAvailable(request: PendingRequestView): boolean {
-  return request.kind !== "guardrail" || request.resources.some((resource) => resource.trim() !== "") ||
-    typeof request.metadata?.command === "string" && request.metadata.command.trim() !== ""
+  return (
+    request.kind !== "guardrail" ||
+    request.resources.some((resource) => resource.trim() !== "") ||
+    (typeof request.metadata?.command === "string" && request.metadata.command.trim() !== "")
+  )
 }
 
 /** Replaces the request queue with an authoritative list read. */

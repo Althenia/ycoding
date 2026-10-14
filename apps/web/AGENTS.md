@@ -1,5 +1,17 @@
 # Web package guide
 
+## Binary relay contracts
+
+Use the declared v5 operation payloads, result wrappers, scope and error variants. Send Session form operations with Form scope naming the owning Session; keep that Session in the request params. Read event creation times as numeric milliseconds. Preserve the required durable envelope on durable PublicEvent branches and keep live-only deltas ephemeral. Release an owned subscription before replacing it, including reselecting the same Session, using its original connection and subscription identity. Use canonical snapshots and typed bulk delivery for transcript recovery.
+
+Complete initial or invalidated-stream hydration when its snapshot settles. Use the successful snapshot's canonical source epoch, or the connection's verified Ready epoch after rejection, timeout or cancellation; do not complete hydration on a closed connection. Begin hydration again for an invalidated stream before its resync read; keep ordinary subscribed reloads live.
+
+Keep native fixtures schema-valid. Give each subscription its own identity, release its producer ownership on unsubscribe, and acknowledge telemetry batches with their accepted sample count. Wait for delivered events and observable state rather than assuming v5 event coalescing fits an old flush delay.
+
+Serialize in-process fixture agent frames so canonical-epoch resync admission settles before its dependent subscription result.
+
+Detect in-flight goal setting through `session.autonomy.set` with a string `goal`; distinguish YOLO changes and null-goal stops.
+
 ## Design rules
 
 Read [`../../DESIGN.md`](../../DESIGN.md) and [`DESIGN.md`](./DESIGN.md) before changing web UI; their approved rules bind. `src/styles/design-md.test.ts` fails when `DESIGN.md` token values drift from `src/styles/tokens.css`, and `src/styles/contrast.test.ts` holds color pairs, including every scrollbar thumb state, to their ratios.
@@ -21,6 +33,6 @@ YCODING_WEB_CHROME="$HOME/Library/Caches/ms-playwright/chromium_headless_shell-1
 
 ## Managed image reuse
 
-Bound resolved managed-image reuse to 32 sources and 8 MiB of data-URL text, evicting least-recently used sources without invalidating mounted previews or lightboxes. Coalesce pending reads independently of that resolved budget; never abort a pending read for cache eviction. Preserve MIME validation, explicit retry, and selection/connection teardown. Evicted sources may be fetched again.
+Read managed images through `session.attachment.read` and transfer completed raw bytes with `takeAsset`. Bound resolved Blob reuse to 32 sources and 8 MiB, evicting least-recently used sources without invalidating mounted previews or lightboxes. Coalesce pending reads independently of that budget; never abort a pending read for cache eviction. Release each consumer's object URL on unmount or replacement and all object URLs on selection/connection teardown. Preserve MIME validation and explicit retry. Evicted sources may be fetched again.
 
 Run `bun test test/remote-image.test.ts src/remote/image-cache.test.ts` and the configured-Chrome `bun test verify/image-cache.integration.test.ts` after changing this cache or its ownership.

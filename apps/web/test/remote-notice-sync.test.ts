@@ -1,6 +1,9 @@
 import { Database } from "bun:sqlite"
 import { beforeAll, describe, expect, test } from "bun:test"
-import { parseClientMessage, parseRelayToAgentMessage, serializeResponse, serializeStatus, type RemoteNotice, type RemoteRequest, type RemoteStatus } from "@ycoding-ai/remote"
+import type { RemoteNotice } from "@ycoding-ai/remote"
+import type { RelayRequestView } from "../src/remote/wire-views"
+import { createAgentPeer, binaryData, binaryOperation, startAgent } from "./core-peer"
+import { fixtureSession } from "./wire-peer"
 import type { PushEvent, PushOutcome } from "../../../infra/cloudflare/src/push/send"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
 import { createNoticeStore } from "../../../infra/cloudflare/src/relay/notice-store"
@@ -10,15 +13,21 @@ import { createNotificationDelivery, type DesktopAlert } from "../src/remote/not
 import { normalizeNotificationPreferences } from "../src/remote/preferences"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
-import { waitFor } from "./relay-double"
+import { fixtureResult, waitFor } from "./relay-double"
 
 type PushServiceAnswer = "accepted" | "rejected" | "expired" | "unreachable"
 type BrowserSession = { readonly token: string; readonly sessionID: string }
 type PushServer = {
   readonly accountID: string
   readonly signIn: () => Promise<BrowserSession>
-  readonly receiver: (endpoint: string) => Promise<{ readonly endpoint: string; readonly p256dh: Uint8Array; readonly auth: Uint8Array }>
-  readonly route: (token: string, path: string, init: { readonly method: string; readonly body?: string }) => Promise<Response>
+  readonly receiver: (
+    endpoint: string,
+  ) => Promise<{ readonly endpoint: string; readonly p256dh: Uint8Array; readonly auth: Uint8Array }>
+  readonly route: (
+    token: string,
+    path: string,
+    init: { readonly method: string; readonly body?: string },
+  ) => Promise<Response>
   readonly notify: (accountID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
   readonly owners: () => Promise<readonly (readonly [string, string])[]>
   readonly close: () => void
@@ -29,7 +38,9 @@ const encode = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url")
 
 const workerListeners = new Map<string, (event: unknown) => void>()
 beforeAll(async () => {
-  Reflect.set(globalThis, "addEventListener", (name: string, listener: (event: unknown) => void) => workerListeners.set(name, listener))
+  Reflect.set(globalThis, "addEventListener", (name: string, listener: (event: unknown) => void) =>
+    workerListeners.set(name, listener),
+  )
   Reflect.set(globalThis, "location", { origin: "http://127.0.0.1" })
   const worker = "../src/service-worker?notice-owner"
   await import(worker)
@@ -46,90 +57,139 @@ async function relayHarness() {
     if (target === undefined || target.answer === "unreachable") return 0
     if (target.answer === "accepted") {
       const event = await payload()
-      Reflect.set(globalThis, "registration", { showNotification: async (_title: string, options: { readonly tag?: string } = {}) => { target.shown.push(options.tag ?? "") } })
+      Reflect.set(globalThis, "registration", {
+        showNotification: async (_title: string, options: { readonly tag?: string } = {}) => {
+          target.shown.push(options.tag ?? "")
+        },
+      })
       let pending: Promise<unknown> | undefined
-      workerListeners.get("push")?.({ data: { json: () => event }, waitUntil: (promise: Promise<unknown>) => { pending = promise } })
+      workerListeners.get("push")?.({
+        data: { json: () => event },
+        waitUntil: (promise: Promise<unknown>) => {
+          pending = promise
+        },
+      })
       await pending
     }
     return target.answer === "accepted" ? 201 : target.answer === "rejected" ? 403 : 410
   })
-  const agentRequests: RemoteRequest[] = []
-  let storedStatus: RemoteStatus | undefined
+  const agentRequests: RelayRequestView[] = []
   const database = new Database(":memory:")
   const baseNotices = createNoticeStore(createNoticeStorage(database))
   let appendFailure = false
-  const notices = { ...baseNotices, append: (events: Parameters<typeof baseNotices.append>[0]) => {
-    if (appendFailure) throw new Error("database or disk is full: SQLITE_FULL")
-    return baseNotices.append(events)
-  }, complete: (...input: Parameters<typeof baseNotices.complete>) => {
-    if (appendFailure) throw new Error("database or disk is full: SQLITE_FULL")
-    return baseNotices.complete(...input)
-  } }
+  const notices = {
+    ...baseNotices,
+    append: (events: Parameters<typeof baseNotices.append>[0]) => {
+      if (appendFailure) throw new Error("database or disk is full: SQLITE_FULL")
+      return baseNotices.append(events)
+    },
+    complete: (...input: Parameters<typeof baseNotices.complete>) => {
+      if (appendFailure) throw new Error("database or disk is full: SQLITE_FULL")
+      return baseNotices.complete(...input)
+    },
+  }
   const holds: { readonly match: (operation: string) => boolean; readonly release: Promise<void> }[] = []
   const subscribed = new Set<string>()
+  const agent = createAgentPeer(
+    () => performance.now(),
+    (request, dispatch, peer) => {
+      agentRequests.push(request)
+      const value =
+        request.operation === "session.status"
+          ? { running: [], attention: [] }
+          : request.operation === "workspace.list"
+            ? { data: [{ id: "wsp_a", projectID: "prj_a", directory: "/work/a" }] }
+            : request.operation === "session.list"
+              ? { data: [{ ...fixtureSession("ses_a"), title: "Alpha session", time: { created: 1, updated: 2 } }] }
+              : request.operation === "session.get"
+                ? {
+                    data: {
+                      ...fixtureSession(request.sessionID!),
+                      title: `Detail of ${request.sessionID}`,
+                      time: { created: 1, updated: 2 },
+                    },
+                  }
+                : request.operation === "telemetry.consent.get"
+                  ? { data: { noticeVersion: 1 } }
+                  : { data: [] }
+      peer.result(dispatch, fixtureResult(request.operation, value))
+    },
+  )
+  const deliveries: Promise<void>[] = []
+  const flush = async () => {
+    while (deliveries.length) await Promise.all(deliveries.splice(0))
+  }
   const relay = createRelay({
     now: Date.now,
+    monotonic: () => performance.now(),
     newID: () => crypto.randomUUID().replaceAll("-", ""),
-    send: (connectionID, raw) => {
-      if (connectionID !== "agent") {
-        sockets.get(connectionID)?.send(raw)
-        return
-      }
-      const parsed = parseRelayToAgentMessage(raw)
-      if (!parsed.ok) throw new Error(parsed.error.message)
-      if (parsed.value.type !== "request") return
-      const request = parsed.value
-      agentRequests.push(request)
-      const value = request.operation === "session.status" ? { running: [], attention: [] }
-        : request.operation === "workspace.list" ? { data: [{ id: "wsp_a", projectID: "prj_a", directory: "/work/a" }] }
-        : request.operation === "session.list" ? { data: [{ id: "ses_a", title: "Alpha session", time: { created: 1, updated: 2 } }] }
-        : request.operation === "session.get" ? { data: { id: request.sessionID, title: `Detail of ${request.sessionID}`, time: { created: 1, updated: 2 } } }
-        : { data: [] }
-      void relay.handleAgentMessage("agent", serializeResponse({ type: "response", id: request.id, ok: true, value }))
-    },
+    send: (connectionID, raw) =>
+      connectionID === "agent" ? agent.receive(raw.slice().buffer) : sockets.get(connectionID)?.send(raw),
     close: (connectionID, code, reason) => sockets.get(connectionID)?.close(code, reason),
-    saveSubscriptions: () => {},
-    savePending: () => {},
-    loadStatus: async () => storedStatus,
-    saveStatus: async (status) => { storedStatus = status },
     loadOfflineCheck: async () => undefined,
     saveOfflineCheck: async () => undefined,
     notices,
-    saveNoticeSubscription: (connectionID, value) => { if (value) subscribed.add(connectionID) },
-    savePriority: () => {},
-    authorizeClientCommand: async () => ({ ok: true }),
-    authorizeAgentCommand: async () => ({ ok: true }),
-    authorityTtlMs: 5_000,
+    authorizeClientCommand: async () => ({ ok: true, ownerID: pushServer.accountID }),
+    authorizeAgentCommand: async () => ({ ok: true, ownerID: pushServer.accountID }),
     notifyPush: async (accountID, event) => {
       await pushGate
       return pushServer.notify(accountID, event)
     },
   })
-  const connection = { ownerID: pushServer.accountID, deviceID: "dev_test", browserSessionID: "browser_test", credentialExpiresAt: Date.now() + 600_000, subscriptions: [], noticesSubscribed: false, pending: [] }
+  const connection = {
+    ownerID: pushServer.accountID,
+    deviceID: "dev_test",
+    browserSessionID: "browser_test",
+    credentialExpiresAt: Date.now() + 600_000,
+    subscriptions: [],
+    noticesSubscribed: false,
+    pending: [],
+  }
   await relay.attach({ ...connection, connectionID: "agent", role: "agent" })
-  await relay.handleAgentMessage("agent", JSON.stringify({ type: "completions", data: [], more: false }))
+  agent.message = (raw) => {
+    deliveries.push(Promise.resolve().then(() => relay.handleAgentMessage("agent", raw)))
+  }
+  startAgent(agent)
+  await flush()
+  agent.control({ case: "completions", value: { items: [], more: false } })
+  await flush()
   const server = Bun.serve<{ id: string; browser: string }>({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, server) {
-      if (new URL(request.url).pathname === "/api/me") return Response.json({
-        user: { id: connection.ownerID },
-        session: { expiresAt: connection.credentialExpiresAt },
-        devices: [{ id: connection.deviceID, name: "Test machine", status: "active", online: true, createdAt: 1 }],
-      })
-      if (server.upgrade(request, { data: { id: crypto.randomUUID(), browser: new URL(request.url).searchParams.get("browser") ?? "browser_test" } })) return undefined
+      if (new URL(request.url).pathname === "/api/me")
+        return Response.json({
+          user: { id: connection.ownerID },
+          session: { expiresAt: connection.credentialExpiresAt },
+          devices: [{ id: connection.deviceID, name: "Test machine", status: "active", online: true, createdAt: 1 }],
+        })
+      if (
+        server.upgrade(request, {
+          data: {
+            id: crypto.randomUUID(),
+            browser: new URL(request.url).searchParams.get("browser") ?? "browser_test",
+          },
+        })
+      )
+        return undefined
       return new Response("WebSocket required", { status: 426 })
     },
     websocket: {
       async open(socket) {
         sockets.set(socket.data.id, socket)
-        await relay.attach({ ...connection, browserSessionID: socket.data.browser, connectionID: socket.data.id, role: "client" })
+        await relay.attach({
+          ...connection,
+          browserSessionID: socket.data.browser,
+          connectionID: socket.data.id,
+          role: "client",
+        })
       },
       async message(socket, raw) {
-        const parsed = parseClientMessage(String(raw))
-        const held = parsed.ok && parsed.value.type === "request" ? holds.find((hold) => hold.match(parsed.value.type === "request" ? parsed.value.operation : "")) : undefined
+        const operation = binaryOperation(raw)
+        const held = operation === undefined ? undefined : holds.find((hold) => hold.match(operation))
         if (held !== undefined) await held.release
-        return relay.handleClientMessage(socket.data.id, String(raw))
+        await relay.handleClientMessage(socket.data.id, binaryData(raw))
+        if (operation === "notice.subscribe") subscribed.add(socket.data.id)
       },
       close(socket) {
         sockets.delete(socket.data.id)
@@ -137,21 +197,33 @@ async function relayHarness() {
       },
     },
   })
-  const browser = async (waitForSubscription = true, options: { readonly session?: BrowserSession; readonly created?: (store: RemoteStore) => void } = {}) => {
+  const browser = async (
+    waitForSubscription = true,
+    options: { readonly session?: BrowserSession; readonly created?: (store: RemoteStore) => void } = {},
+  ) => {
     const alerts: DesktopAlert[] = []
-    const session = options.session ?? await pushServer.signIn()
+    const session = options.session ?? (await pushServer.signIn())
     const store = createRemoteStore({
       http: createRemoteHttp({ baseURL: `http://127.0.0.1:${server.port}` }),
-      createTransport: (_deviceID, handlers) => createRemoteTransport({ url: `ws://127.0.0.1:${server.port}/?browser=${session.sessionID}`, handlers }),
+      createTransport: (_deviceID, handlers) =>
+        createRemoteTransport({ url: `ws://127.0.0.1:${server.port}/?browser=${session.sessionID}`, handlers }),
       notificationDelivery: createNotificationDelivery({
         preferences: () => normalizeNotificationPreferences(undefined),
-        desktop: { show: (alert) => { alerts.push(alert) }, dispose: () => {} },
+        desktop: {
+          show: (alert) => {
+            alerts.push(alert)
+          },
+          dispose: () => {},
+        },
       }),
     })
     options.created?.(store)
     const before = subscribed.size
     await store.load()
-    await waitFor(() => store.state().transport.kind === "open" && (!waitForSubscription || subscribed.size > before), 5_000)
+    await waitFor(
+      () => store.state().transport.kind === "open" && (!waitForSubscription || subscribed.size > before),
+      5_000,
+    )
     if (waitForSubscription) await waitFor(() => store.state().sessionStatus !== undefined, 5_000)
     return { store, alerts, session }
   }
@@ -163,21 +235,45 @@ async function relayHarness() {
   }
   const enablePush = async (session: BrowserSession, name: string, answer: PushServiceAnswer = "accepted") => {
     const registered = await register(session, name, answer)
-    const response = await pushServer.route(session.token, "/api/push/subscriptions", { method: "POST", body: JSON.stringify({ endpoint: registered.receiver.endpoint,
-      keys: { p256dh: encode(registered.receiver.p256dh), auth: encode(registered.receiver.auth) }, categories: allOn }) })
+    const response = await pushServer.route(session.token, "/api/push/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({
+        endpoint: registered.receiver.endpoint,
+        keys: { p256dh: encode(registered.receiver.p256dh), auth: encode(registered.receiver.auth) },
+        categories: allOn,
+      }),
+    })
     if (!response.ok) throw new Error(`Push registration failed with ${response.status}`)
     return registered.shown
   }
-  const renewPush = async (session: BrowserSession, replaced: string, name: string, options: { readonly windows?: number; readonly during?: () => Promise<void> } = {}) => {
+  const renewPush = async (
+    session: BrowserSession,
+    replaced: string,
+    name: string,
+    options: { readonly windows?: number; readonly during?: () => Promise<void> } = {},
+  ) => {
     const next = await register(session, name, "accepted")
     const posted: unknown[] = []
     const statuses: number[] = []
-    Reflect.set(globalThis, "clients", { matchAll: async () => Array.from({ length: options.windows ?? 0 }, () => ({
-      url: "http://127.0.0.1/remote", visibilityState: "hidden", focused: false, focus: async () => undefined, postMessage: (message: unknown) => { posted.push(message) } })) })
+    Reflect.set(globalThis, "clients", {
+      matchAll: async () =>
+        Array.from({ length: options.windows ?? 0 }, () => ({
+          url: "http://127.0.0.1/remote",
+          visibilityState: "hidden",
+          focused: false,
+          focus: async () => undefined,
+          postMessage: (message: unknown) => {
+            posted.push(message)
+          },
+        })),
+    })
     const original = globalThis.fetch
     Reflect.set(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url) !== "/api/push/subscriptions") return original(url, init)
-      const response = await pushServer.route(session.token, "/api/push/subscriptions", { method: init?.method ?? "GET", body: typeof init?.body === "string" ? init.body : undefined })
+      const response = await pushServer.route(session.token, "/api/push/subscriptions", {
+        method: init?.method ?? "GET",
+        body: typeof init?.body === "string" ? init.body : undefined,
+      })
       statuses.push(response.status)
       await options.during?.()
       return response
@@ -186,8 +282,13 @@ async function relayHarness() {
       let pending: Promise<unknown> | undefined
       workerListeners.get("pushsubscriptionchange")?.({
         oldSubscription: { endpoint: endpointFor(replaced) },
-        newSubscription: { endpoint: next.receiver.endpoint, getKey: (key: string) => (key === "p256dh" ? next.receiver.p256dh : next.receiver.auth).slice().buffer },
-        waitUntil: (promise: Promise<unknown>) => { pending = promise },
+        newSubscription: {
+          endpoint: next.receiver.endpoint,
+          getKey: (key: string) => (key === "p256dh" ? next.receiver.p256dh : next.receiver.auth).slice().buffer,
+        },
+        waitUntil: (promise: Promise<unknown>) => {
+          pending = promise
+        },
       })
       await pending
     } finally {
@@ -197,36 +298,85 @@ async function relayHarness() {
     if (old !== undefined) old.answer = "expired"
     return { shown: next.shown, posted, statuses }
   }
-  const status = (running: readonly string[], attention: readonly string[]) =>
-    relay.handleAgentMessage("agent", serializeStatus({ type: "status", running, attention }))
+  const status = async (running: readonly string[], attention: readonly string[]) => {
+    agent.control({ case: "status", value: { running: [...running], attention: [...attention] } })
+    await flush()
+  }
   let completionSeq = 0
-  const complete = (sessionIDs: readonly string[]) => relay.handleAgentMessage("agent", JSON.stringify({ type: "completions", data: sessionIDs.map((sessionID) => ({ id: `evt_fixture_${++completionSeq}`, seq: completionSeq, created: Date.now(), sessionID })), more: false }))
+  const complete = async (sessionIDs: readonly string[]) => {
+    agent.control({
+      case: "completions",
+      value: {
+        items: sessionIDs.map((sessionID) => ({
+          id: `evt_fixture_${++completionSeq}`,
+          sequence: BigInt(completionSeq),
+          createdMs: BigInt(Date.now()),
+          sessionId: sessionID,
+        })),
+        more: false,
+      },
+    })
+    await flush()
+  }
   return {
-    browser, status, complete, agentRequests,
+    browser,
+    status,
+    complete,
+    agentRequests,
     settleDeliveries: relay.settleDeliveries,
-    signIn: () => pushServer.signIn(), enablePush, renewPush, owners: () => pushServer.owners(),
-    answerPush: (name: string, answer: PushServiceAnswer) => { const target = endpoints.get(endpointFor(name)); if (target) target.answer = answer },
+    signIn: () => pushServer.signIn(),
+    enablePush,
+    renewPush,
+    owners: () => pushServer.owners(),
+    answerPush: (name: string, answer: PushServiceAnswer) => {
+      const target = endpoints.get(endpointFor(name))
+      if (target) target.answer = answer
+    },
     holdPush: () => {
       let release: () => void = () => {}
-      pushGate = new Promise<void>((resolve) => { release = resolve })
-      return () => { pushGate = undefined; release() }
+      pushGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return () => {
+        pushGate = undefined
+        release()
+      }
     },
-    stored: () => (database.query("SELECT seq, category, session_id, created_at FROM notice ORDER BY seq").all() as { seq: number; category: RemoteNotice["category"]; session_id: string; created_at: number }[])
-      .map((row) => ({ id: `ntc_${row.seq}`, category: row.category, sessionID: row.session_id, createdAt: row.created_at })),
-    failAppends: (value: boolean) => { appendFailure = value },
+    stored: () =>
+      (
+        database.query("SELECT seq, category, session_id, created_at FROM notice ORDER BY seq").all() as {
+          seq: number
+          category: RemoteNotice["category"]
+          session_id: string
+          created_at: number
+        }[]
+      ).map((row) => ({
+        id: `ntc_${row.seq}`,
+        category: row.category,
+        sessionID: row.session_id,
+        createdAt: row.created_at,
+      })),
+    failAppends: (value: boolean) => {
+      appendFailure = value
+    },
     rawRequest: async (operation: string, input?: unknown) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${server.port}`)
-      const replies: string[] = []
-      socket.addEventListener("message", (message) => { replies.push(String(message.data)) })
-      await waitFor(() => socket.readyState === WebSocket.OPEN, 5_000)
-      socket.send(JSON.stringify({ type: "request", id: "raw", operation, ...(input === undefined ? {} : { input }) }))
-      await waitFor(() => replies.some((reply) => reply.includes('"id":"raw"')), 5_000)
-      socket.close()
-      return JSON.parse(replies.find((reply) => reply.includes('"id":"raw"')) ?? "null") as { ok: boolean }
+      const transport = createRemoteTransport({ url: `ws://127.0.0.1:${server.port}` })
+      transport.connect()
+      try {
+        await waitFor(() => transport.status().kind === "open", 5_000)
+        const outcome = await transport.request(operation, {
+          ...(input === undefined ? {} : { input: input as Readonly<Record<string, unknown>> }),
+        })
+        return { ok: outcome.status === "ok" }
+      } finally {
+        transport.close()
+      }
     },
     hold: (operation: string) => {
       let release: () => void = () => {}
-      const promise = new Promise<void>((resolve) => { release = resolve })
+      const promise = new Promise<void>((resolve) => {
+        release = resolve
+      })
       holds.push({ match: (candidate) => candidate === operation, release: promise })
       return () => {
         holds.length = 0
@@ -241,12 +391,20 @@ async function relayHarness() {
   }
 }
 
-const rows = (store: { readonly state: () => { readonly notifications: readonly { readonly category: string; readonly sessionID?: string }[] } }) =>
-  store.state().notifications.map((entry) => [entry.category, entry.sessionID])
+const rows = (store: {
+  readonly state: () => {
+    readonly notifications: readonly { readonly category: string; readonly sessionID?: string }[]
+  }
+}) => store.state().notifications.map((entry) => [entry.category, entry.sessionID])
 
 const attention = (count: number, prefix = "ses_n") => Array.from({ length: count }, (_, index) => `${prefix}${index}`)
-const entryIDs = (store: { readonly state: () => { readonly notifications: readonly { readonly id: string; readonly synced: boolean }[] } }) =>
-  store.state().notifications.filter((entry) => entry.synced).map((entry) => entry.id)
+const entryIDs = (store: {
+  readonly state: () => { readonly notifications: readonly { readonly id: string; readonly synced: boolean }[] }
+}) =>
+  store
+    .state()
+    .notifications.filter((entry) => entry.synced)
+    .map((entry) => entry.id)
 
 describe("device-synced notices through the real relay core", () => {
   test("two browsers see the same live list, and each raises the alert and toast mark only for additions it watched", async () => {
@@ -257,16 +415,25 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status(["ses_a"], [])
       await harness.complete(["ses_a"])
       await harness.status([], ["ses_b"])
-      await waitFor(() => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2)
-      expect(rows(first.store)).toEqual([["approval-requested", "ses_b"], ["agent-completed", "ses_a"]])
+      await waitFor(
+        () => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2,
+      )
+      expect(rows(first.store)).toEqual([
+        ["approval-requested", "ses_b"],
+        ["agent-completed", "ses_a"],
+      ])
       expect(rows(second.store)).toEqual(rows(first.store))
-      expect(first.store.state().notifications.map((entry) => entry.id)).toEqual(second.store.state().notifications.map((entry) => entry.id))
+      expect(first.store.state().notifications.map((entry) => entry.id)).toEqual(
+        second.store.state().notifications.map((entry) => entry.id),
+      )
       expect(first.store.state().notifications.every((entry) => entry.synced && entry.live)).toBe(true)
       expect(first.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
       expect(second.alerts).toHaveLength(2)
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a browser that connects later receives the list silently, and it survives a reload", async () => {
@@ -280,11 +447,16 @@ describe("device-synced notices through the real relay core", () => {
       first.store.dispose()
       const reloaded = await harness.browser()
       await waitFor(() => reloaded.store.state().notifications.length === 2)
-      expect(rows(reloaded.store)).toEqual([["approval-requested", "ses_b"], ["agent-completed", "ses_a"]])
+      expect(rows(reloaded.store)).toEqual([
+        ["approval-requested", "ses_b"],
+        ["agent-completed", "ses_a"],
+      ])
       expect(reloaded.store.state().notifications.some((entry) => entry.live)).toBe(false)
       expect(reloaded.alerts).toEqual([])
       reloaded.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("status frames alone raise no work notice; an explicit completion receipt adds one synced notice", async () => {
@@ -301,7 +473,9 @@ describe("device-synced notices through the real relay core", () => {
       expect(browser.alerts).toHaveLength(1)
       expect(harness.stored()).toHaveLength(1)
       browser.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("reading one notice removes it for every browser and from the relay, leaving the rest", async () => {
@@ -312,15 +486,21 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status(["ses_a"], [])
       await harness.complete(["ses_a"])
       await harness.status([], ["ses_b"])
-      await waitFor(() => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2)
+      await waitFor(
+        () => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2,
+      )
       const completed = second.store.state().notifications.find((entry) => entry.category === "agent-completed")
       await second.store.readNotification(completed?.id ?? "")
-      await waitFor(() => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1)
+      await waitFor(
+        () => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1,
+      )
       expect(rows(first.store)).toEqual([["approval-requested", "ses_b"]])
       expect(harness.stored().map((notice) => notice.sessionID)).toEqual(["ses_b"])
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("read all clears every browser and the relay, and a later transition still notifies", async () => {
@@ -331,18 +511,26 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status(["ses_a"], [])
       await harness.complete(["ses_a"])
       await harness.status([], ["ses_b"])
-      await waitFor(() => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2)
+      await waitFor(
+        () => first.store.state().notifications.length === 2 && second.store.state().notifications.length === 2,
+      )
       await first.store.readAllNotifications()
-      await waitFor(() => first.store.state().notifications.length === 0 && second.store.state().notifications.length === 0)
+      await waitFor(
+        () => first.store.state().notifications.length === 0 && second.store.state().notifications.length === 0,
+      )
       expect(harness.stored()).toEqual([])
       await harness.status(["ses_c"], [])
       await harness.complete(["ses_c"])
       await harness.status([], [])
-      await waitFor(() => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1)
+      await waitFor(
+        () => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1,
+      )
       expect(rows(second.store)).toEqual([["agent-completed", "ses_c"]])
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("nothing is read until a browser reads: loading, reconnecting, and a snapshot leave every notice in place", async () => {
@@ -360,7 +548,9 @@ describe("device-synced notices through the real relay core", () => {
       expect(harness.agentRequests.some((request) => String(request.operation).startsWith("notice."))).toBe(false)
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("titles resolve on the browser from the Session list or one detail read, and the relay never stores them", async () => {
@@ -371,15 +561,31 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status(["ses_a", "ses_far"], [])
       await harness.complete(["ses_a", "ses_far"])
       await harness.status([], [])
-      await waitFor(() => browser.store.state().notifications.length === 2 && browser.store.state().notifications.every((entry) => entry.sessionTitle !== undefined))
-      expect(browser.store.state().notifications.map((entry) => [entry.sessionID, entry.sessionTitle]).sort()).toEqual([
-        ["ses_a", "Alpha session"], ["ses_far", "Detail of ses_far"],
+      await waitFor(
+        () =>
+          browser.store.state().notifications.length === 2 &&
+          browser.store.state().notifications.every((entry) => entry.sessionTitle !== undefined),
+      )
+      expect(
+        browser.store
+          .state()
+          .notifications.map((entry) => [entry.sessionID, entry.sessionTitle])
+          .sort(),
+      ).toEqual([
+        ["ses_a", "Alpha session"],
+        ["ses_far", "Detail of ses_far"],
       ])
       expect(harness.stored().every((notice) => !("title" in notice) && !("sessionTitle" in notice))).toBe(true)
-      expect(harness.agentRequests.filter((request) => request.operation === "session.get").map((request) => request.sessionID)).toEqual(["ses_far"])
+      expect(
+        harness.agentRequests
+          .filter((request) => request.operation === "session.get")
+          .map((request) => request.sessionID),
+      ).toEqual(["ses_far"])
       expect(browser.alerts.every((alert) => !alert.body.includes("Detail of"))).toBe(true)
       browser.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a page with more unresolved Sessions than the detail-read budget eventually resolves every visible title", async () => {
@@ -388,28 +594,46 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status([], [])
       await harness.status([], attention(12, "ses_far_"))
       const browser = await harness.browser()
-      await waitFor(() => browser.store.state().notifications.length === 12 &&
-        browser.store.state().notifications.every((entry) => entry.sessionTitle !== undefined), 15_000)
+      await waitFor(
+        () =>
+          browser.store.state().notifications.length === 12 &&
+          browser.store.state().notifications.every((entry) => entry.sessionTitle !== undefined),
+        15_000,
+      )
       expect(harness.agentRequests.filter((request) => request.operation === "session.get")).toHaveLength(12)
       browser.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   }, 20_000)
 
   test("a browser that never opts in receives no notice frame from the relay", async () => {
     const harness = await relayHarness()
     try {
-      const frames: string[] = []
-      const socket = new WebSocket(harness.wsURL)
-      socket.addEventListener("message", (message) => { frames.push(String(message.data)) })
-      await waitFor(() => frames.length > 0)
+      const frames: unknown[] = []
+      let statuses = 0
+      const transport = createRemoteTransport({
+        url: harness.wsURL,
+        handlers: {
+          onNotices: (frame) => frames.push(frame),
+          onSessionStatus: () => {
+            statuses++
+          },
+        },
+      })
+      transport.connect()
+      await waitFor(() => transport.status().kind === "open")
       await harness.status(["ses_a"], [])
       await harness.complete(["ses_a"])
       await harness.status([], [])
       await waitFor(() => harness.stored().length === 1)
-      await Bun.sleep(50)
-      expect(frames.some((frame) => frame.includes("notice."))).toBe(false)
-      socket.close()
-    } finally { await harness.stop() }
+      await harness.settleDeliveries()
+      await waitFor(() => statuses === 2)
+      expect(frames).toEqual([])
+      transport.close()
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a browser pages every stored notice past the old cap through Load more until the relay total is loaded", async () => {
@@ -424,10 +648,17 @@ describe("device-synced notices through the real relay core", () => {
       expect(browser.store.state().noticeSync).toMatchObject({ total: 130, loaded: 100 })
       await browser.store.loadMoreNotifications()
       expect(browser.store.state().noticeSync).toMatchObject({ total: 130, loaded: 130, loadingMore: false })
-      expect(entryIDs(browser.store)).toEqual(harness.stored().map((notice) => notice.id).reverse())
+      expect(entryIDs(browser.store)).toEqual(
+        harness
+          .stored()
+          .map((notice) => notice.id)
+          .reverse(),
+      )
       expect(browser.alerts).toEqual([])
       browser.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   }, 30_000)
 
   test("an initial page held while other browsers add, read, and read all lists exactly the final relay state", async () => {
@@ -443,7 +674,10 @@ describe("device-synced notices through the real relay core", () => {
       await harness.status([], [...attention(3), "ses_x", "ses_y"])
       expect(harness.stored()).toHaveLength(2)
       release()
-      await waitFor(() => late.store.state().noticeSync.status === "ready" && other.store.state().noticeSync.status === "ready", 5_000)
+      await waitFor(
+        () => late.store.state().noticeSync.status === "ready" && other.store.state().noticeSync.status === "ready",
+        5_000,
+      )
       for (const browser of [late, other]) {
         expect(entryIDs(browser.store)).toEqual(["ntc_5", "ntc_4"])
         expect(browser.store.state().noticeSync).toMatchObject({ total: 2, loaded: 2 })
@@ -453,7 +687,9 @@ describe("device-synced notices through the real relay core", () => {
       await waitFor(() => late.store.state().noticeSync.total === 0 && entryIDs(late.store).length === 0)
       late.store.dispose()
       other.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   }, 30_000)
 
   test("a Load more held while other clients read older notices and add new ones neither resurrects nor loses a notice", async () => {
@@ -480,10 +716,13 @@ describe("device-synced notices through the real relay core", () => {
       expect(browser.store.state().noticeSync.total).toBe(server.length)
       const oldest = Number(held.at(-1)?.slice(4))
       expect(server.filter((id) => Number(id.slice(4)) >= oldest).sort()).toEqual([...held].sort())
-      while (browser.store.state().noticeSync.loaded < browser.store.state().noticeSync.total) await browser.store.loadMoreNotifications()
+      while (browser.store.state().noticeSync.loaded < browser.store.state().noticeSync.total)
+        await browser.store.loadMoreNotifications()
       expect(entryIDs(browser.store)).toEqual([...server].reverse())
       browser.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   }, 30_000)
 
   test("a relay storage failure is shown to every browser, keeps the stored notices, and read all recovers sync", async () => {
@@ -499,22 +738,27 @@ describe("device-synced notices through the real relay core", () => {
       await harness.complete(["ses_b"])
       await harness.status([], [])
       await waitFor(() => first.store.state().noticeSync.status === "error")
-      expect(first.store.state().noticeSync.message).toBe("Some notifications could not be saved. Stored unread notifications remain available.")
+      expect(first.store.state().noticeSync.message).toBe(
+        "Some notifications could not be saved. Stored unread notifications remain available.",
+      )
       expect(harness.stored()).toHaveLength(1)
       const second = await harness.browser()
       expect(second.store.state().noticeSync).toMatchObject({ status: "error", total: 1 })
       expect(entryIDs(second.store)).toEqual(["ntc_1"])
       harness.failAppends(false)
       await first.store.readAllNotifications()
-      await waitFor(() => first.store.state().noticeSync.status === "ready" && second.store.state().noticeSync.status === "ready")
+      await waitFor(
+        () => first.store.state().noticeSync.status === "ready" && second.store.state().noticeSync.status === "ready",
+      )
       expect(entryIDs(first.store)).toEqual([])
       expect(harness.stored()).toEqual([])
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 })
-
 
 describe("one System alert per notice and browser through the real router, push store, sender, and relay core", () => {
   const tags = (alerts: readonly DesktopAlert[]) => alerts.map((alert) => alert.tag)
@@ -534,7 +778,9 @@ describe("one System alert per notice and browser through the real router, push 
       }
       await harness.settleDeliveries()
       await harness.status(["ses_marker"], [])
-      await waitFor(() => [first, second].every((browser) => browser.store.state().sessionStatus?.running.has("ses_marker")))
+      await waitFor(() =>
+        [first, second].every((browser) => browser.store.state().sessionStatus?.running.has("ses_marker")),
+      )
       expect(harness.stored()).toHaveLength(1)
       for (const browser of [first, second]) {
         expect(entryIDs(browser.store)).toEqual(["ntc_1"])
@@ -554,7 +800,9 @@ describe("one System alert per notice and browser through the real router, push 
       expect(tags(second.alerts)).toEqual(shown)
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a browser whose push the service accepted shows each notice once from its service worker and never from the open page", async () => {
@@ -569,7 +817,9 @@ describe("one System alert per notice and browser through the real router, push 
       expect(tab.alerts).toEqual([])
       expect([...shown].sort()).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2", "ycoding-dev_test-ntc_3"])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("an open page presents what its browser's push did not confirm, including when delivery is unknown", async () => {
@@ -593,9 +843,16 @@ describe("one System alert per notice and browser through the real router, push 
       await harness.status([], ["ses_d"])
       await waitFor(() => tab.alerts.length === 4)
       await Bun.sleep(100)
-      expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2", "ycoding-dev_test-ntc_3", "ycoding-dev_test-ntc_4"])
+      expect(tags(tab.alerts)).toEqual([
+        "ycoding-dev_test-ntc_1",
+        "ycoding-dev_test-ntc_2",
+        "ycoding-dev_test-ntc_3",
+        "ycoding-dev_test-ntc_4",
+      ])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("two browsers on one account are judged by their own subscriptions: the rejected one's page shows exactly one, the accepted one's page none", async () => {
@@ -614,7 +871,9 @@ describe("one System alert per notice and browser through the real router, push 
       expect(phoneShown).toEqual(["ycoding-dev_test-ntc_1"])
       laptop.store.dispose()
       phone.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("of several open tabs in one browser without push exactly one presents, while another browser presents its own", async () => {
@@ -628,10 +887,15 @@ describe("one System alert per notice and browser through the real router, push 
       await waitFor(() => [first, second, phone].every((tab) => tab.store.state().notifications.length === 2))
       await waitFor(() => first.alerts.length + second.alerts.length === 2 && phone.alerts.length === 2)
       await Bun.sleep(100)
-      expect([...tags(first.alerts), ...tags(second.alerts)].sort()).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
+      expect([...tags(first.alerts), ...tags(second.alerts)].sort()).toEqual([
+        "ycoding-dev_test-ntc_1",
+        "ycoding-dev_test-ntc_2",
+      ])
       expect(tags(phone.alerts)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
       for (const tab of [first, second, phone]) tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 })
 
@@ -653,7 +917,9 @@ describe("the relay's presentation choice across page lifetimes", () => {
       expect(tags(tab.alerts)).toEqual(["ycoding-dev_test-ntc_1"])
       expect(shown).toEqual(["ycoding-dev_test-ntc_2"])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a push failure settled after its page closed goes to the browser's open tab, and a tab opened later never replays it", async () => {
@@ -665,7 +931,9 @@ describe("the relay's presentation choice across page lifetimes", () => {
       await harness.enablePush(first.session, "laptop", "rejected")
       const release = harness.holdPush()
       await harness.status([], ["ses_a"])
-      await waitFor(() => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1)
+      await waitFor(
+        () => first.store.state().notifications.length === 1 && second.store.state().notifications.length === 1,
+      )
       first.store.dispose()
       await Bun.sleep(50)
       release()
@@ -677,7 +945,9 @@ describe("the relay's presentation choice across page lifetimes", () => {
       expect(late.alerts).toEqual([])
       second.store.dispose()
       late.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 })
 
@@ -689,10 +959,13 @@ describe("a service worker renewal of this browser's push subscription", () => {
       const first = await harness.browser()
       const second = await harness.browser(true, { session: first.session })
       await harness.enablePush(first.session, "old")
-      const renewal = await harness.renewPush(first.session, "old", "new", { windows: 2, during: async () => {
-        await harness.status([], ["ses_a"])
-        await Bun.sleep(100)
-      } })
+      const renewal = await harness.renewPush(first.session, "old", "new", {
+        windows: 2,
+        during: async () => {
+          await harness.status([], ["ses_a"])
+          await Bun.sleep(100)
+        },
+      })
       expect(renewal.statuses).toEqual([200])
       expect(await harness.owners()).toEqual([[endpointFor("new"), first.session.sessionID]])
       await harness.status([], [])
@@ -704,7 +977,9 @@ describe("a service worker renewal of this browser's push subscription", () => {
       expect(renewal.posted).toEqual([])
       first.store.dispose()
       second.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a notice admitted before the renewal whose push is sent after it is shown once by the service worker", async () => {
@@ -723,7 +998,9 @@ describe("a service worker renewal of this browser's push subscription", () => {
       expect(renewal.shown).toEqual(["ycoding-dev_test-ntc_1"])
       expect(tab.alerts).toEqual([])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("after the service worker finishes a renewal, a push the new endpoint rejects is shown exactly once by the page", async () => {
@@ -739,7 +1016,9 @@ describe("a service worker renewal of this browser's push subscription", () => {
       await Bun.sleep(100)
       expect(tab.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_test-ntc_1"])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 
   test("a renewal the relay refused leaves the page presenting what the browser's dropped subscription no longer receives", async () => {
@@ -759,6 +1038,8 @@ describe("a service worker renewal of this browser's push subscription", () => {
       expect(tab.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_test-ntc_1", "ycoding-dev_test-ntc_2"])
       expect(renewal.shown).toEqual([])
       tab.store.dispose()
-    } finally { await harness.stop() }
+    } finally {
+      await harness.stop()
+    }
   })
 })

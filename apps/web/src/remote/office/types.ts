@@ -1,6 +1,15 @@
 export type OfficeStatus =
-  | "unknown" | "idle" | "working" | "thinking" | "tool"
-  | "attention" | "compacting" | "interrupted" | "failed" | "offline" | "reconnecting"
+  | "unknown"
+  | "idle"
+  | "working"
+  | "thinking"
+  | "tool"
+  | "attention"
+  | "compacting"
+  | "interrupted"
+  | "failed"
+  | "offline"
+  | "reconnecting"
 
 export type OfficePreferences = {
   readonly version: 1
@@ -49,7 +58,12 @@ export type TeamMember = {
 
 type TeamCueInput =
   | { readonly id: string; readonly kind: "delegated"; readonly childID: string }
-  | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" }
+  | {
+      readonly id: string
+      readonly kind: "reported"
+      readonly childID: string
+      readonly outcome: "completed" | "failed" | "cancelled" | "lost"
+    }
 
 export type TeamInput = {
   readonly rootID: string
@@ -68,7 +82,10 @@ export type OfficeInput = {
   readonly sessions: readonly SessionSummary[]
   readonly selected?: SelectedSession
   readonly team?: TeamInput
-  readonly familyActivity?: { readonly status: "loading" | "ready" | "unsupported" | "error"; readonly members: readonly RemoteFamilyActivity[] }
+  readonly familyActivity?: {
+    readonly status: "loading" | "ready" | "unsupported" | "error"
+    readonly members: readonly FamilyActivityView[]
+  }
 }
 
 export type OfficeActor = {
@@ -116,7 +133,12 @@ export type OfficeSnapshot = {
 
 export type Point = { readonly x: number; readonly y: number }
 
-export type OfficeSpot = { readonly cell: Point; readonly facing: Direction; readonly pose: "sit" | "stand" | "play"; readonly leisure?: "pantry" | "rest" | "table" }
+export type OfficeSpot = {
+  readonly cell: Point
+  readonly facing: Direction
+  readonly pose: "sit" | "stand" | "play"
+  readonly leisure?: "pantry" | "rest" | "table"
+}
 
 export type OfficeLayout = {
   readonly columns: number
@@ -124,7 +146,13 @@ export type OfficeLayout = {
   readonly tileSize: number
   readonly walkable: (x: number, y: number) => boolean
   readonly door: Point
-  readonly pods: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number; readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>> }[]
+  readonly pods: readonly {
+    readonly left: number
+    readonly right: number
+    readonly top: number
+    readonly bottom: number
+    readonly spots: Readonly<Record<"implement" | "research" | "verify" | "coordinate", OfficeSpot>>
+  }[]
   readonly lounge: readonly OfficeSpot[]
   readonly gathering: readonly OfficeSpot[]
   readonly roomAt: (cell: Point) => OfficeRoomID | undefined
@@ -146,4 +174,4 @@ export type ActorFrame = {
   readonly leaving: boolean
   readonly opacity: number
 }
-import type { RemoteFamilyActivity } from "@ycoding-ai/remote"
+import type { FamilyActivityView } from "../wire-views"

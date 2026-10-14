@@ -20,7 +20,11 @@ export type ModelOption = {
   readonly name: string
   readonly variants: readonly string[]
   readonly enabled?: boolean
-  readonly profiles?: readonly { readonly name: string; readonly active: boolean; readonly variants?: readonly string[] }[]
+  readonly profiles?: readonly {
+    readonly name: string
+    readonly active: boolean
+    readonly variants?: readonly string[]
+  }[]
 }
 
 type CommandOption = { readonly name: string; readonly description?: string }
@@ -68,7 +72,10 @@ export function catalogKey(target: CatalogTarget): string {
 export function modelDisplayLabel(model: ModelRefView, models: readonly ModelOption[] = []): string {
   const option = models.find((item) => item.providerID === model.providerID && item.id === model.id)
   const name = option?.name ?? model.id.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
-  const profile = model.profile === undefined ? "" : ` · profile ${option?.profiles?.some((item) => item.name === model.profile) ? model.profile : `unavailable: ${model.profile}`}`
+  const profile =
+    model.profile === undefined
+      ? ""
+      : ` · profile ${option?.profiles?.some((item) => item.name === model.profile) ? model.profile : `unavailable: ${model.profile}`}`
   return `${model.providerID}/${name}${profile}`
 }
 
@@ -82,34 +89,71 @@ export function readCatalog(value: unknown): CatalogView | undefined {
   const references = Array.isArray(catalog.references) ? catalog.references : undefined
   const resourceItems = Array.isArray(catalog.resources) ? catalog.resources : undefined
   if (!agents || !models || !commands || !skills || !references || !resourceItems) return undefined
-  const text = (value: unknown) => typeof value === "string" && value.length > 0 ? value : undefined
-  const optional = (value: unknown) => text(value) === undefined ? {} : { description: text(value) }
-  const resources = (items: readonly unknown[]) => items.flatMap((item) => {
-    const entry = record(item)
-    return entry && text(entry.name) && text(entry.uri) ? [{ name: text(entry.name)!, uri: text(entry.uri)!, ...optional(entry.description) }] : []
-  })
+  const text = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined)
+  const optional = (value: unknown) => (text(value) === undefined ? {} : { description: text(value) })
+  const resources = (items: readonly unknown[]) =>
+    items.flatMap((item) => {
+      const entry = record(item)
+      return entry && text(entry.name) && text(entry.uri)
+        ? [{ name: text(entry.name)!, uri: text(entry.uri)!, ...optional(entry.description) }]
+        : []
+    })
   return {
     status: "ready",
     agents: agents.flatMap((item) => {
       const entry = record(item)
-      if (!entry || !text(entry.id) || !text(entry.name) || (entry.mode !== "primary" && entry.mode !== "subagent" && entry.mode !== "all") || typeof entry.hidden !== "boolean") return []
-      return [{ id: text(entry.id)!, name: text(entry.name)!, mode: entry.mode, hidden: entry.hidden,
-        ...optional(entry.description), ...(readModelRef(entry.model) === undefined ? {} : { model: readModelRef(entry.model) }) }]
+      if (
+        !entry ||
+        !text(entry.id) ||
+        !text(entry.name) ||
+        (entry.mode !== "primary" && entry.mode !== "subagent" && entry.mode !== "all") ||
+        typeof entry.hidden !== "boolean"
+      )
+        return []
+      return [
+        {
+          id: text(entry.id)!,
+          name: text(entry.name)!,
+          mode: entry.mode,
+          hidden: entry.hidden,
+          ...optional(entry.description),
+          ...(readModelRef(entry.model) === undefined ? {} : { model: readModelRef(entry.model) }),
+        },
+      ]
     }),
     models: models.flatMap((item) => {
       const entry = record(item)
-      if (!entry || !text(entry.providerID) || !text(entry.id) || !text(entry.name) || !Array.isArray(entry.variants) || !entry.variants.every((variant) => typeof variant === "string")) return []
+      if (
+        !entry ||
+        !text(entry.providerID) ||
+        !text(entry.id) ||
+        !text(entry.name) ||
+        !Array.isArray(entry.variants) ||
+        !entry.variants.every((variant) => typeof variant === "string")
+      )
+        return []
       if ("enabled" in entry && typeof entry.enabled !== "boolean") return []
-      const profiles = Array.isArray(entry.profiles) ? entry.profiles.flatMap((profile) => {
-        const item = record(profile)
-        if (!item || !text(item.name) || typeof item.active !== "boolean") return []
-        const variants = Array.isArray(item.variants) ? item.variants.filter((variant): variant is string => typeof variant === "string" && variant.length > 0) : undefined
-        return [{ name: text(item.name)!, active: item.active, ...(variants === undefined ? {} : { variants }) }]
-      }) : undefined
-      return [{ providerID: text(entry.providerID)!, id: text(entry.id)!, name: text(entry.name)!, variants: entry.variants,
-        ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
-        ...(profiles === undefined ? {} : { profiles }),
-        ...(text(entry.providerName) === undefined ? {} : { providerName: text(entry.providerName) }) }]
+      const profiles = Array.isArray(entry.profiles)
+        ? entry.profiles.flatMap((profile) => {
+            const item = record(profile)
+            if (!item || !text(item.name) || typeof item.active !== "boolean") return []
+            const variants = Array.isArray(item.variants)
+              ? item.variants.filter((variant): variant is string => typeof variant === "string" && variant.length > 0)
+              : undefined
+            return [{ name: text(item.name)!, active: item.active, ...(variants === undefined ? {} : { variants }) }]
+          })
+        : undefined
+      return [
+        {
+          providerID: text(entry.providerID)!,
+          id: text(entry.id)!,
+          name: text(entry.name)!,
+          variants: entry.variants,
+          ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
+          ...(profiles === undefined ? {} : { profiles }),
+          ...(text(entry.providerName) === undefined ? {} : { providerName: text(entry.providerName) }),
+        },
+      ]
     }),
     commands: commands.flatMap((item) => {
       const entry = record(item)
@@ -118,7 +162,8 @@ export function readCatalog(value: unknown): CatalogView | undefined {
     skills: skills.flatMap((item) => {
       const entry = record(item)
       return entry && text(entry.id) && text(entry.name) && typeof entry.slash === "boolean"
-        ? [{ id: text(entry.id)!, name: text(entry.name)!, slash: entry.slash, ...optional(entry.description) }] : []
+        ? [{ id: text(entry.id)!, name: text(entry.name)!, slash: entry.slash, ...optional(entry.description) }]
+        : []
     }),
     references: resources(references),
     resources: resources(resourceItems),
@@ -128,14 +173,20 @@ export function readCatalog(value: unknown): CatalogView | undefined {
 
 export function readFileFind(value: unknown): readonly FileOption[] | undefined {
   const data = record(value)
-  if (!data || !Array.isArray(data.files)) return undefined
-  return data.files.flatMap((item: unknown) => {
+  if (!data || !Array.isArray(data.data)) return undefined
+  return data.data.flatMap((item: unknown) => {
     const entry = record(item)
-    return entry && typeof entry.path === "string" && typeof entry.uri === "string" && (entry.kind === "file" || entry.kind === "directory")
-      ? [{ path: entry.path, uri: entry.uri, kind: entry.kind }] : []
+    return entry &&
+      typeof entry.path === "string" &&
+      typeof entry.uri === "string" &&
+      (entry.type === "file" || entry.type === "directory")
+      ? [{ path: entry.path, uri: entry.uri, kind: entry.type }]
+      : []
   })
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : undefined
 }

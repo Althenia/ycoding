@@ -1,7 +1,7 @@
 import { createMutation } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
 import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
-import type { RemoteLatencySample } from "@ycoding-ai/remote"
+import type { LatencySampleView } from "../wire-views"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -16,7 +16,16 @@ import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
 import { createPushHttp, createRemoteHttp } from "../http"
-import { browserPushPlatform, disablePush, enablePush, pushStatusView, savePushCategories, syncPushState, type PushPlatform, type PushStatus } from "../push"
+import {
+  browserPushPlatform,
+  disablePush,
+  enablePush,
+  pushStatusView,
+  savePushCategories,
+  syncPushState,
+  type PushPlatform,
+  type PushStatus,
+} from "../push"
 import type { OfficeSettingsStore, WorkspacePresentation } from "../office/storage"
 import type { OfficePreferences } from "../office/types"
 import {
@@ -56,79 +65,161 @@ export function MachineSettings(): JSX.Element {
   const selectedDevice = () => state().devices.find((device) => device.id === state().activeDeviceID)
   createEffect(() => {
     const deviceID = state().activeDeviceID
-    setDraft(deviceID === undefined ? "" : remote.deviceAliases()[deviceID] ?? "")
+    setDraft(deviceID === undefined ? "" : (remote.deviceAliases()[deviceID] ?? ""))
   })
-  const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
-  const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), reachable()))
+  const reachable = () =>
+    state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
+  const keepAwake = createRemoteQuery(remote.store.queryClient, () =>
+    remote.queries.keepAwake(remote.scope(), reachable()),
+  )
   const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
   const awake = () => keepAwakeView({ keepAwake: keepAwakeState(keepAwake()), reachable: reachable() })
-  const availability = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length, {
-    devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })), activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
-    unreachable: state().connection.kind === "offline",
-  })
+  const availability = () =>
+    deviceAvailabilityView(
+      accountReadState({ connection: state().connection, owner: state().owner }),
+      state().devices.length,
+      {
+        devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })),
+        activeDeviceID: state().activeDeviceID,
+        sessionCount: state().sessions.length,
+        unreachable: state().connection.kind === "offline",
+      },
+    )
   const saveAlias = (value: string) => {
     const deviceID = state().activeDeviceID
     if (deviceID === undefined) return
     remote.setDeviceAlias(deviceID, value)
     setDraft(remote.deviceAliases()[deviceID] ?? "")
   }
-  return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
-    <CustomSelect class="remote-device__select" surfaceClass="remote-device__surface" label="Machine"
-      sheetTitle="Select Active Machine" sheetSubtitle="Online machines you can connect to"
-      value={state().activeDeviceID} placeholder={availability().placeholder} disabled={!availability().selectable}
-      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: remote.deviceName(device), badge: "Online" }))}
-      onChange={(deviceID) => remote.store.connect(deviceID)}
-      footer={devicePickerNote(state().devices)} />
-    <Show when={selectedDevice()}>
-      {(device) => <form class="defs__row device-alias" onSubmit={(event) => { event.preventDefault(); saveAlias(draft()) }}>
-        <label class="defs__key" for="device-display-name">Display name</label>
+  return (
+    <Section
+      id="machine-settings"
+      category="Machine"
+      title="Machine"
+      hint="Choose an online machine to access its Sessions."
+    >
+      <CustomSelect
+        class="remote-device__select"
+        surfaceClass="remote-device__surface"
+        label="Machine"
+        sheetTitle="Select Active Machine"
+        sheetSubtitle="Online machines you can connect to"
+        value={state().activeDeviceID}
+        placeholder={availability().placeholder}
+        disabled={!availability().selectable}
+        options={state()
+          .devices.filter((device) => device.status === "active" && device.online)
+          .map((device) => ({ value: device.id, label: remote.deviceName(device), badge: "Online" }))}
+        onChange={(deviceID) => remote.store.connect(deviceID)}
+        footer={devicePickerNote(state().devices)}
+      />
+      <Show when={selectedDevice()}>
+        {(device) => (
+          <form
+            class="defs__row device-alias"
+            onSubmit={(event) => {
+              event.preventDefault()
+              saveAlias(draft())
+            }}
+          >
+            <label class="defs__key" for="device-display-name">
+              Display name
+            </label>
+            <span class="defs__value">
+              <span id="device-display-name-hint" class="field__hint">
+                Only this browser; the machine keeps its hostname {device().name}
+              </span>
+              <input
+                id="device-display-name"
+                class="input"
+                aria-describedby="device-display-name-hint"
+                value={draft()}
+                maxLength={deviceAliasLimit}
+                onInput={(event) => setDraft(event.currentTarget.value)}
+              />
+              <span class="device-alias__actions">
+                <button type="submit" class="button button--secondary">
+                  Save
+                </button>
+                <button type="button" class="button button--ghost" onClick={() => saveAlias("")}>
+                  Clear
+                </button>
+              </span>
+            </span>
+          </form>
+        )}
+      </Show>
+      <div class="defs__row" aria-busy={awake().busy}>
+        <span class="defs__key" id="machine-awake-label">
+          Keep machine awake
+        </span>
         <span class="defs__value">
-          <span id="device-display-name-hint" class="field__hint">Only this browser; the machine keeps its hostname {device().name}</span>
-          <input id="device-display-name" class="input" aria-describedby="device-display-name-hint" value={draft()} maxLength={deviceAliasLimit}
-            onInput={(event) => setDraft(event.currentTarget.value)} />
-          <span class="device-alias__actions">
-            <button type="submit" class="button button--secondary">Save</button>
-            <button type="button" class="button button--ghost" onClick={() => saveAlias("")}>Clear</button>
+          <label class="switch">
+            <input
+              type="checkbox"
+              aria-labelledby="machine-awake-label"
+              aria-describedby="machine-awake-status machine-awake-caveat"
+              checked={awake().checked}
+              disabled={awake().disabled}
+              onChange={(event) => {
+                setKeepAwake.mutate(event.currentTarget.checked)
+                event.currentTarget.checked = awake().checked
+              }}
+            />
+            <span>{awake().label}</span>
+          </label>
+          <Show when={awake().retry}>
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              aria-label="Retry Keep machine awake"
+              onClick={() => void keepAwake().refetch()}
+            >
+              Retry
+            </button>
+          </Show>
+          <span
+            id="machine-awake-status"
+            class="field__hint machine-awake__status"
+            data-tone={awake().tone}
+            role="status"
+            aria-live="polite"
+          >
+            {awake().detail}
+          </span>
+          <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">
+            {awake().caveat}
           </span>
         </span>
-      </form>}
-    </Show>
-    <div class="defs__row" aria-busy={awake().busy}>
-      <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
-      <span class="defs__value">
-        <label class="switch">
-          <input type="checkbox" aria-labelledby="machine-awake-label" aria-describedby="machine-awake-status machine-awake-caveat"
-            checked={awake().checked} disabled={awake().disabled}
-            onChange={(event) => {
-              setKeepAwake.mutate(event.currentTarget.checked)
-              event.currentTarget.checked = awake().checked
-            }} />
-          <span>{awake().label}</span>
-        </label>
-        <Show when={awake().retry}>
-          <button type="button" class="button button--secondary button--small" aria-label="Retry Keep machine awake"
-            onClick={() => void keepAwake().refetch()}>Retry</button>
-        </Show>
-        <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
-        <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
-      </span>
-    </div>
-  </Section>
+      </div>
+    </Section>
+  )
 }
 
 export function AppSettings(): JSX.Element {
-  return <Section id="app-settings" category="App" title="App" hint="Install the remote workspace for a separate app window.">
-    <div class="defs__row">
-      <span class="defs__key">Mode</span>
-      <span class="defs__value" role="status">{pwaInstall.isInstalled() ? "Installed app" : "Browser"}</span>
-    </div>
-    <Show when={pwaInstall.canInstall()}>
+  return (
+    <Section
+      id="app-settings"
+      category="App"
+      title="App"
+      hint="Install the remote workspace for a separate app window."
+    >
       <div class="defs__row">
-        <span class="defs__key">Install</span>
-        <span class="defs__value"><InstallPWAButton /></span>
+        <span class="defs__key">Mode</span>
+        <span class="defs__value" role="status">
+          {pwaInstall.isInstalled() ? "Installed app" : "Browser"}
+        </span>
       </div>
-    </Show>
-  </Section>
+      <Show when={pwaInstall.canInstall()}>
+        <div class="defs__row">
+          <span class="defs__key">Install</span>
+          <span class="defs__value">
+            <InstallPWAButton />
+          </span>
+        </div>
+      </Show>
+    </Section>
+  )
 }
 
 export function LatencySettings(): JSX.Element {
@@ -138,7 +229,7 @@ export function LatencySettings(): JSX.Element {
   const [copyStatus, setCopyStatus] = createSignal("")
   const [saved, setSaved] = createSignal<{
     readonly status: "idle" | "loading" | "ready" | "unavailable" | "unsupported" | "unknown" | "failed"
-    readonly data: readonly { readonly receivedAt: number; readonly sample: RemoteLatencySample }[]
+    readonly data: readonly { readonly receivedAt: number; readonly sample: LatencySampleView }[]
     readonly next?: string
   }>({ status: "idle", data: [] })
   let field: HTMLTextAreaElement | undefined
@@ -164,7 +255,8 @@ export function LatencySettings(): JSX.Element {
     })
   })
   const text = () => JSON.stringify({ version: 1, ...report() }, null, 2)
-  const savedText = () => JSON.stringify({ data: saved().data, cursor: saved().next === undefined ? {} : { next: saved().next } }, null, 2)
+  const savedText = () =>
+    JSON.stringify({ data: saved().data, cursor: saved().next === undefined ? {} : { next: saved().next } }, null, 2)
   const readSaved = async (before?: string) => {
     if (saved().status === "loading") return
     const generation = remote.state().generation
@@ -185,65 +277,211 @@ export function LatencySettings(): JSX.Element {
     }
     void navigator.clipboard.writeText(text()).then(
       () => setCopyStatus("Copied latency report."),
-      () => { field?.select(); setCopyStatus("Copy unavailable. Select and copy the report text.") },
+      () => {
+        field?.select()
+        setCopyStatus("Copy unavailable. Select and copy the report text.")
+      },
     )
   }
-  return <Section id="latency-settings" category="Diagnostics" title="Web latency" hint="Fixed, anonymous timings are sent through the relay to the selected machine's SQLite, never stored by the relay.">
-    <div class="defs">
-      <div class="defs__row" aria-busy={remote.state().telemetryConsent.status === "loading"}>
-        <span class="defs__key" id="telemetry-consent-label">Save telemetry on this machine</span>
-        <span class="defs__value">
-          <label class="switch">
-            <input type="checkbox" aria-labelledby="telemetry-consent-label" aria-describedby="telemetry-consent-help telemetry-consent-status"
-              checked={remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled"} disabled={remote.state().transport.kind !== "open" || ["loading", "unsupported", "failed"].includes(remote.state().telemetryConsent.status)}
-              onChange={(event) => { void remote.store.setTelemetryConsent(event.currentTarget.checked) }} />
-            <span>{remote.state().telemetryConsent.consent?.enabled ?? remote.state().telemetryConsent.status === "enabled" ? "On" : remote.state().telemetryConsent.status === "disabled" || remote.state().telemetryConsent.consent?.enabled === false ? "Off" : remote.state().telemetryConsent.status === "undecided" ? "Not decided" : "Unavailable"}</span>
+  return (
+    <Section
+      id="latency-settings"
+      category="Diagnostics"
+      title="Web latency"
+      hint="Fixed, anonymous timings are sent through the relay to the selected machine's SQLite, never stored by the relay."
+    >
+      <div class="defs">
+        <div class="defs__row" aria-busy={remote.state().telemetryConsent.status === "loading"}>
+          <span class="defs__key" id="telemetry-consent-label">
+            Save telemetry on this machine
+          </span>
+          <span class="defs__value">
+            <label class="switch">
+              <input
+                type="checkbox"
+                aria-labelledby="telemetry-consent-label"
+                aria-describedby="telemetry-consent-help telemetry-consent-status"
+                checked={
+                  remote.state().telemetryConsent.consent?.enabled ??
+                  remote.state().telemetryConsent.status === "enabled"
+                }
+                disabled={
+                  remote.state().transport.kind !== "open" ||
+                  ["loading", "unsupported", "failed"].includes(remote.state().telemetryConsent.status)
+                }
+                onChange={(event) => {
+                  void remote.store.setTelemetryConsent(event.currentTarget.checked)
+                }}
+              />
+              <span>
+                {(remote.state().telemetryConsent.consent?.enabled ??
+                remote.state().telemetryConsent.status === "enabled")
+                  ? "On"
+                  : remote.state().telemetryConsent.status === "disabled" ||
+                      remote.state().telemetryConsent.consent?.enabled === false
+                    ? "Off"
+                    : remote.state().telemetryConsent.status === "undecided"
+                      ? "Not decided"
+                      : "Unavailable"}
+              </span>
+            </label>
+            <span class="field__hint" id="telemetry-consent-help">
+              Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves
+              your machine.
+            </span>
+            <span class="field__hint" id="telemetry-consent-status" role="status" aria-live="polite">
+              {remote.state().telemetryConsent.error ??
+                (remote.state().telemetryConsent.status === "unsupported"
+                  ? "Update YCoding on this machine to manage telemetry consent."
+                  : remote.state().telemetryConsent.status === "failed"
+                    ? "Could not confirm the telemetry setting."
+                    : "")}
+            </span>
+          </span>
+        </div>
+        <div class="defs__row">
+          <span class="defs__key">Measurements</span>
+          <span class="defs__value">
+            Queue time is local pacing. Settlement time includes network, relay, machine, response assembly, or time
+            until a timeout or disconnect; it does not isolate model time or screen paint.
+            {report().longTasksSupported
+              ? " Browser long tasks show main-thread blocks of at least 50 ms."
+              : " Browser long tasks are unreported here."}
+          </span>
+        </div>
+        <div class="defs__row">
+          <label class="defs__key" for="latency-report">
+            Report
           </label>
-          <span class="field__hint" id="telemetry-consent-help">Save usage, speed, and latency for each provider, model, and profile on this machine only. Nothing leaves your machine.</span>
-          <span class="field__hint" id="telemetry-consent-status" role="status" aria-live="polite">{remote.state().telemetryConsent.error ?? (remote.state().telemetryConsent.status === "unsupported" ? "Update YCoding on this machine to manage telemetry consent." : remote.state().telemetryConsent.status === "failed" ? "Could not confirm the telemetry setting." : "")}</span>
-        </span>
+          <span class="defs__value">
+            <span class="field__hint">
+              {report().samples.length === 0
+                ? "No samples yet."
+                : `Latest ${report().samples.length} samples (up to 60).`}{" "}
+              Cleared on machine switch, sign-out, or reload. Clearing this tab does not delete saved machine samples.
+            </span>
+            <textarea
+              ref={field}
+              id="latency-report"
+              class="textarea latency-settings__report"
+              aria-label="Web latency report"
+              readOnly
+              value={text()}
+              rows={8}
+            />
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              aria-label="Copy latency report"
+              onClick={copy}
+            >
+              Copy report
+            </button>
+            <button
+              type="button"
+              class="button button--ghost button--small"
+              aria-label="Clear latency report"
+              disabled={report().samples.length === 0}
+              onClick={() => {
+                remote.store.latency.clear()
+                setReport(remote.store.latency.snapshot())
+                setCopyStatus("Cleared this tab; saved machine samples remain.")
+              }}
+            >
+              Clear this tab
+            </button>
+            <span class="field__hint" role="status" aria-live="polite">
+              {copyStatus()}
+            </span>
+          </span>
+        </div>
+        <div class="defs__row">
+          <span class="defs__key">Machine save</span>
+          <span class="defs__value" role="status">
+            {remote.state().telemetryConsent.status !== "enabled"
+              ? "Saving requires this consent."
+              : (
+                  {
+                    idle: "Waiting for samples.",
+                    saving: "Saving on this machine…",
+                    saved: "Latest batch saved on this machine.",
+                    waiting: "Waiting for this machine to reconnect.",
+                    unsupported: "Update YCoding on this machine to save Web latency.",
+                    unknown: "Last save was not confirmed; it will not be replayed.",
+                    failed: "Machine save failed; inspect this tab's report.",
+                  } as const
+                )[remote.state().latencySync]}
+          </span>
+        </div>
+        <div class="defs__row">
+          <span class="defs__key">Saved on machine</span>
+          <span class="defs__value">
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              aria-label="Read saved latency"
+              disabled={remote.state().transport.kind !== "open" || saved().status === "loading"}
+              onClick={() => void readSaved()}
+            >
+              Read saved report
+            </button>
+            <span class="field__hint" role="status" aria-live="polite">
+              {
+                (
+                  {
+                    idle: "Read this machine's recent samples when connected.",
+                    loading: "Reading saved samples…",
+                    ready:
+                      saved().data.length === 0
+                        ? "No saved samples on this machine."
+                        : `${saved().data.length} saved samples on this page.`,
+                    unavailable: "Reconnect to read this machine's samples.",
+                    unsupported: "Update YCoding on this machine to read saved samples.",
+                    unknown: "Could not confirm this read; retry when connected.",
+                    failed: "Saved samples could not be read; try again.",
+                  } as const
+                )[saved().status]
+              }
+            </span>
+            <Show when={saved().status === "ready" || saved().data.length > 0}>
+              <textarea
+                class="textarea latency-settings__report"
+                aria-label="Machine latency report"
+                readOnly
+                value={savedText()}
+                rows={8}
+              />
+              <Show when={saved().next}>
+                {(next) => (
+                  <button
+                    type="button"
+                    class="button button--secondary button--small"
+                    aria-label="Load older latency"
+                    onClick={() => void readSaved(next())}
+                  >
+                    Load older
+                  </button>
+                )}
+              </Show>
+            </Show>
+          </span>
+        </div>
       </div>
-      <div class="defs__row">
-        <span class="defs__key">Measurements</span>
-        <span class="defs__value">Queue time is local pacing. Settlement time includes network, relay, machine, response assembly, or time until a timeout or disconnect; it does not isolate model time or screen paint.
-          {report().longTasksSupported ? " Browser long tasks show main-thread blocks of at least 50 ms." : " Browser long tasks are unreported here."}</span>
-      </div>
-      <div class="defs__row">
-        <label class="defs__key" for="latency-report">Report</label>
-        <span class="defs__value">
-          <span class="field__hint">{report().samples.length === 0 ? "No samples yet." : `Latest ${report().samples.length} samples (up to 60).`} Cleared on machine switch, sign-out, or reload. Clearing this tab does not delete saved machine samples.</span>
-          <textarea ref={field} id="latency-report" class="textarea latency-settings__report" aria-label="Web latency report" readOnly value={text()} rows={8} />
-          <button type="button" class="button button--secondary button--small" aria-label="Copy latency report" onClick={copy}>Copy report</button>
-          <button type="button" class="button button--ghost button--small" aria-label="Clear latency report" disabled={report().samples.length === 0}
-            onClick={() => { remote.store.latency.clear(); setReport(remote.store.latency.snapshot()); setCopyStatus("Cleared this tab; saved machine samples remain.") }}>Clear this tab</button>
-          <span class="field__hint" role="status" aria-live="polite">{copyStatus()}</span>
-        </span>
-      </div>
-      <div class="defs__row">
-        <span class="defs__key">Machine save</span>
-        <span class="defs__value" role="status">{remote.state().telemetryConsent.status !== "enabled" ? "Saving requires this consent." : ({ idle: "Waiting for samples.", saving: "Saving on this machine…", saved: "Latest batch saved on this machine.", waiting: "Waiting for this machine to reconnect.", unsupported: "Update YCoding on this machine to save Web latency.", unknown: "Last save was not confirmed; it will not be replayed.", failed: "Machine save failed; inspect this tab's report." } as const)[remote.state().latencySync]}</span>
-      </div>
-      <div class="defs__row">
-        <span class="defs__key">Saved on machine</span>
-        <span class="defs__value">
-          <button type="button" class="button button--secondary button--small" aria-label="Read saved latency"
-            disabled={remote.state().transport.kind !== "open" || saved().status === "loading"}
-            onClick={() => void readSaved()}>Read saved report</button>
-          <span class="field__hint" role="status" aria-live="polite">{({ idle: "Read this machine's recent samples when connected.", loading: "Reading saved samples…", ready: saved().data.length === 0 ? "No saved samples on this machine." : `${saved().data.length} saved samples on this page.`, unavailable: "Reconnect to read this machine's samples.", unsupported: "Update YCoding on this machine to read saved samples.", unknown: "Could not confirm this read; retry when connected.", failed: "Saved samples could not be read; try again." } as const)[saved().status]}</span>
-          <Show when={saved().status === "ready" || saved().data.length > 0}>
-            <textarea class="textarea latency-settings__report" aria-label="Machine latency report" readOnly value={savedText()} rows={8} />
-            <Show when={saved().next}>{(next) => <button type="button" class="button button--secondary button--small" aria-label="Load older latency" onClick={() => void readSaved(next())}>Load older</button>}</Show>
-          </Show>
-        </span>
-      </div>
-    </div>
-  </Section>
+    </Section>
+  )
 }
 
 export function moveRadio(event: KeyboardEvent, index: number, count: number, select: (next: number) => void) {
-  const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % count
-    : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index - 1 + count) % count
-    : event.key === "Home" ? 0 : event.key === "End" ? count - 1 : undefined
+  const next =
+    event.key === "ArrowRight" || event.key === "ArrowDown"
+      ? (index + 1) % count
+      : event.key === "ArrowLeft" || event.key === "ArrowUp"
+        ? (index - 1 + count) % count
+        : event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? count - 1
+            : undefined
   if (next === undefined) return
   event.preventDefault()
   select(next)
@@ -306,7 +544,9 @@ export function AccountSettings(): JSX.Element {
           <span class="defs__key">Account</span>
           <span class="defs__value">
             <strong>{signedIn() ? state().owner?.id : detail()}</strong>
-            <Show when={signedIn()}><span class="chip">Signed in</span></Show>
+            <Show when={signedIn()}>
+              <span class="chip">Signed in</span>
+            </Show>
           </span>
         </div>
         <Show when={expiry()}>
@@ -321,7 +561,11 @@ export function AccountSettings(): JSX.Element {
           <span class="defs__key">Actions</span>
           <span class="defs__value">
             <Show when={signedIn()}>
-              <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.logout()}>
+              <button
+                type="button"
+                class="button button--secondary button--small"
+                onClick={() => void remote.store.logout()}
+              >
                 Sign out
               </button>
               <button type="button" class="button button--ghost button--small" onClick={() => void remote.store.load()}>
@@ -330,7 +574,11 @@ export function AccountSettings(): JSX.Element {
               </button>
             </Show>
             <Show when={actions().includes("retry")}>
-              <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.load()}>
+              <button
+                type="button"
+                class="button button--secondary button--small"
+                onClick={() => void remote.store.load()}
+              >
                 Retry account check
               </button>
             </Show>
@@ -351,11 +599,19 @@ export function DeviceSettings(): JSX.Element {
   const http = createRemoteHttp()
   const [enrollment, setEnrollment] = createSignal<EnrollmentInstructions | undefined>(undefined)
   const [error, setError] = createSignal<string | undefined>(undefined)
-  const [removal, setRemoval] = createSignal<{ readonly id?: string; readonly name: string; readonly trigger: HTMLButtonElement }>()
+  const [removal, setRemoval] = createSignal<{
+    readonly id?: string
+    readonly name: string
+    readonly trigger: HTMLButtonElement
+  }>()
   const [removing, setRemoving] = createSignal(false)
   const [removalError, setRemovalError] = createSignal<string>()
   const state = () => remote.state()
-  const devices = () => deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length)
+  const devices = () =>
+    deviceAvailabilityView(
+      accountReadState({ connection: state().connection, owner: state().owner }),
+      state().devices.length,
+    )
   const remove = async (dismiss: () => void) => {
     const selected = removal()
     if (!selected || removing()) return
@@ -370,8 +626,12 @@ export function DeviceSettings(): JSX.Element {
     setRemoving(false)
     setRemovalError(undefined)
     dismiss()
-    queueMicrotask(() => (document.querySelector<HTMLButtonElement>('button[aria-label="Remove all revoked devices"]') ??
-      document.querySelector<HTMLButtonElement>('.settings__section[aria-labelledby="device-settings"] .defs button'))?.focus())
+    queueMicrotask(() =>
+      (
+        document.querySelector<HTMLButtonElement>('button[aria-label="Remove all revoked devices"]') ??
+        document.querySelector<HTMLButtonElement>('.settings__section[aria-labelledby="device-settings"] .defs button')
+      )?.focus(),
+    )
   }
   return (
     <Section
@@ -401,12 +661,21 @@ export function DeviceSettings(): JSX.Element {
             {(device) => (
               <div class="device" role="row">
                 <div class="device__body" role="cell">
-                  <span class="device__name" title={device.name}>{remote.deviceName(device)}</span>
-                  <Show when={remote.deviceName(device) !== device.name}><span class="device__hostname">{device.name}</span></Show>
+                  <span class="device__name" title={device.name}>
+                    {remote.deviceName(device)}
+                  </span>
+                  <Show when={remote.deviceName(device) !== device.name}>
+                    <span class="device__hostname">{device.name}</span>
+                  </Show>
                 </div>
-                <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
+                <span class="device__registration" role="cell">
+                  {device.status === "revoked" ? "Revoked" : "Enrolled"}
+                </span>
                 <span class="device__connection" role="cell">
-                  <span class={`status-dot status-dot--${device.status === "active" && device.online ? "online" : "offline"}`} aria-hidden="true" />
+                  <span
+                    class={`status-dot status-dot--${device.status === "active" && device.online ? "online" : "offline"}`}
+                    aria-hidden="true"
+                  />
                   {device.status === "revoked" ? "Disconnected" : device.online ? "Online" : "Offline"}
                 </span>
                 <span class="device__last-seen" role="cell">
@@ -425,8 +694,16 @@ export function DeviceSettings(): JSX.Element {
                 </Show>
                 <Show when={device.status === "revoked"}>
                   <span class="device__action" role="cell">
-                    <button type="button" class="button button--secondary button--small" aria-label={`Remove ${device.name}`}
-                      disabled={removing()} onClick={(event) => { setRemovalError(undefined); setRemoval({ id: device.id, name: device.name, trigger: event.currentTarget }) }}>
+                    <button
+                      type="button"
+                      class="button button--secondary button--small"
+                      aria-label={`Remove ${device.name}`}
+                      disabled={removing()}
+                      onClick={(event) => {
+                        setRemovalError(undefined)
+                        setRemoval({ id: device.id, name: device.name, trigger: event.currentTarget })
+                      }}
+                    >
                       Remove
                     </button>
                   </span>
@@ -438,29 +715,64 @@ export function DeviceSettings(): JSX.Element {
       </Show>
       <Show when={state().devices.some((device) => device.status === "revoked")}>
         <div class="device-cleanup-actions">
-          <button type="button" class="button button--secondary button--small" aria-label="Remove all revoked devices"
-            disabled={removing()} onClick={(event) => { setRemovalError(undefined); setRemoval({ name: "all revoked devices", trigger: event.currentTarget }) }}>
+          <button
+            type="button"
+            class="button button--secondary button--small"
+            aria-label="Remove all revoked devices"
+            disabled={removing()}
+            onClick={(event) => {
+              setRemovalError(undefined)
+              setRemoval({ name: "all revoked devices", trigger: event.currentTarget })
+            }}
+          >
             Remove all revoked devices
           </button>
         </div>
       </Show>
-      <Show when={removalError() && removal() === undefined}><p class="settings__hint" role="alert">{removalError()}</p></Show>
+      <Show when={removalError() && removal() === undefined}>
+        <p class="settings__hint" role="alert">
+          {removalError()}
+        </p>
+      </Show>
       <Show when={removal()} keyed>
         {(selected) => {
           let close: (() => void) | undefined
-          return <Modal class="overlay--confirm" label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
-            returnFocus={selected.trigger} onClose={() => setRemoval(undefined)} requestClose={(handoff) => { close = handoff }}>
-            <p>{selected.id === undefined
-              ? "Remove all revoked machines from this account? Enrolled machines stay registered."
-              : `Remove ${selected.name} from this account? This cannot be undone.`}</p>
-            <Show when={removalError()}><p class="settings__hint" role="alert">{removalError()}</p></Show>
-            <div class="device-cleanup-actions">
-              <button type="button" class="button button--secondary" onClick={() => close?.()}>Cancel</button>
-              <button type="button" class="button button--danger" data-confirm-remove disabled={removing()} onClick={() => void remove(() => close?.())}>
-                {removing() ? "Removing…" : selected.id === undefined ? "Remove revoked devices" : "Remove device"}
-              </button>
-            </div>
-          </Modal>
+          return (
+            <Modal
+              class="overlay--confirm"
+              label={selected.id === undefined ? "Remove all revoked devices" : "Remove revoked device"}
+              returnFocus={selected.trigger}
+              onClose={() => setRemoval(undefined)}
+              requestClose={(handoff) => {
+                close = handoff
+              }}
+            >
+              <p>
+                {selected.id === undefined
+                  ? "Remove all revoked machines from this account? Enrolled machines stay registered."
+                  : `Remove ${selected.name} from this account? This cannot be undone.`}
+              </p>
+              <Show when={removalError()}>
+                <p class="settings__hint" role="alert">
+                  {removalError()}
+                </p>
+              </Show>
+              <div class="device-cleanup-actions">
+                <button type="button" class="button button--secondary" onClick={() => close?.()}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="button button--danger"
+                  data-confirm-remove
+                  disabled={removing()}
+                  onClick={() => void remove(() => close?.())}
+                >
+                  {removing() ? "Removing…" : selected.id === undefined ? "Remove revoked devices" : "Remove device"}
+                </button>
+              </div>
+            </Modal>
+          )
         }}
       </Show>
       <div class="defs">
@@ -533,15 +845,19 @@ export function DeviceSettings(): JSX.Element {
               <div class="defs__row">
                 <span class="defs__key">Handoff</span>
                 <span class="defs__value">
-                  <button type="button" class="button button--ghost button--small" onClick={() => setEnrollment(undefined)}>
+                  <button
+                    type="button"
+                    class="button button--ghost button--small"
+                    onClick={() => setEnrollment(undefined)}
+                  >
                     Hide
                   </button>
                 </span>
               </div>
             </div>
             <p class="settings__hint">
-              Enter this code at the command's hidden prompt before {new Date(handoff().expiresAt).toLocaleTimeString()}. The
-              command never carries it, and the code cannot be displayed again.
+              Enter this code at the command's hidden prompt before {new Date(handoff().expiresAt).toLocaleTimeString()}
+              . The command never carries it, and the code cannot be displayed again.
             </p>
           </>
         )}
@@ -580,10 +896,12 @@ export function AppearanceSettings(): JSX.Element {
                   tabIndex={theme.preference() === option.id ? 0 : -1}
                   class={`filters__option${theme.preference() === option.id ? " filters__option--active" : ""}`}
                   onClick={() => theme.setPreference(option.id)}
-                  onKeyDown={(event) => moveRadio(event, index(), themeOptions.length, (next) => {
-                    const selected = themeOptions[next]
-                    if (selected) theme.setPreference(selected.id)
-                  })}
+                  onKeyDown={(event) =>
+                    moveRadio(event, index(), themeOptions.length, (next) => {
+                      const selected = themeOptions[next]
+                      if (selected) theme.setPreference(selected.id)
+                    })
+                  }
                 >
                   <Icon name={option.id === "system" ? "monitor" : option.id === "light" ? "sun" : "moon"} size={16} />
                   {option.label}
@@ -595,9 +913,7 @@ export function AppearanceSettings(): JSX.Element {
       </div>
       <div class="list">
         <div class="list__row">
-          <span class="list__label">
-            Color scheme
-          </span>
+          <span class="list__label">Color scheme</span>
           <span class="list__control">
             <CustomSelect
               class="scheme-select"
@@ -649,16 +965,60 @@ export function OfficeSettings(props: { readonly office: OfficeSettingsStore }):
       hint="Presentation choices for the Office view, stored in this browser. They never change Sessions, drafts, requests, or your account."
     >
       <div class="list office-settings">
-        <ChoiceRow id="office-view" label="Workspace view" detail="Conversation stays the default. Office shows the same Session, requests, and composer." options={presentationOptions} value={props.office.presentation()} onChange={props.office.present} />
-        <ChoiceRow id="office-motion" label="Motion" detail="Your system's reduced-motion setting always applies." options={motionOptions} value={preferences().motion} onChange={(motion) => props.office.update({ motion })} />
-        <ChoiceRow id="office-bubbles" label="Bubbles" detail="Status describes reported activity. Completed text shows short excerpts of finished replies above characters." options={bubbleOptions} value={preferences().bubbles} onChange={(bubbles) => props.office.update({ bubbles })} />
-        <ChoiceRow id="office-labels" label="Character labels" detail="The office session list always stays labelled." options={switchOptions} value={preferences().labels} onChange={(labels) => props.office.update({ labels })} />
-        <ChoiceRow id="office-follow" label="Follow selected character" detail="Panning pauses following until you select a character again." options={switchOptions} value={preferences().followSelected} onChange={(followSelected) => props.office.update({ followSelected })} />
-        <ChoiceRow id="office-quality" label="Rendering quality" detail="Changing quality restarts only the office renderer, not the connection." options={qualityOptions} value={preferences().quality} onChange={(quality) => props.office.update({ quality })} />
+        <ChoiceRow
+          id="office-view"
+          label="Workspace view"
+          detail="Conversation stays the default. Office shows the same Session, requests, and composer."
+          options={presentationOptions}
+          value={props.office.presentation()}
+          onChange={props.office.present}
+        />
+        <ChoiceRow
+          id="office-motion"
+          label="Motion"
+          detail="Your system's reduced-motion setting always applies."
+          options={motionOptions}
+          value={preferences().motion}
+          onChange={(motion) => props.office.update({ motion })}
+        />
+        <ChoiceRow
+          id="office-bubbles"
+          label="Bubbles"
+          detail="Status describes reported activity. Completed text shows short excerpts of finished replies above characters."
+          options={bubbleOptions}
+          value={preferences().bubbles}
+          onChange={(bubbles) => props.office.update({ bubbles })}
+        />
+        <ChoiceRow
+          id="office-labels"
+          label="Character labels"
+          detail="The office session list always stays labelled."
+          options={switchOptions}
+          value={preferences().labels}
+          onChange={(labels) => props.office.update({ labels })}
+        />
+        <ChoiceRow
+          id="office-follow"
+          label="Follow selected character"
+          detail="Panning pauses following until you select a character again."
+          options={switchOptions}
+          value={preferences().followSelected}
+          onChange={(followSelected) => props.office.update({ followSelected })}
+        />
+        <ChoiceRow
+          id="office-quality"
+          label="Rendering quality"
+          detail="Changing quality restarts only the office renderer, not the connection."
+          options={qualityOptions}
+          value={preferences().quality}
+          onChange={(quality) => props.office.update({ quality })}
+        />
         <div class="list__row">
           <span class="list__label" id="office-reset">
             Reset office appearance
-            <span class="list__detail" id="office-reset-detail">Restores these defaults and recenters the office. Sessions, drafts, and your account stay unchanged.</span>
+            <span class="list__detail" id="office-reset-detail">
+              Restores these defaults and recenters the office. Sessions, drafts, and your account stay unchanged.
+            </span>
           </span>
           <span class="list__control">
             <button
@@ -676,7 +1036,9 @@ export function OfficeSettings(props: { readonly office: OfficeSettingsStore }):
         </div>
       </div>
       <Show when={reset()}>
-        <p class="settings__hint" role="status">Office appearance reset.</p>
+        <p class="settings__hint" role="status">
+          Office appearance reset.
+        </p>
       </Show>
     </Section>
   )
@@ -694,9 +1056,16 @@ function ChoiceRow<Value extends string | boolean>(props: {
     <div class="list__row">
       <span class="list__label">
         <span id={`${props.id}-label`}>{props.label}</span>
-        <span class="list__detail" id={`${props.id}-detail`}>{props.detail}</span>
+        <span class="list__detail" id={`${props.id}-detail`}>
+          {props.detail}
+        </span>
       </span>
-      <span class="list__control filters" role="radiogroup" aria-labelledby={`${props.id}-label`} aria-describedby={`${props.id}-detail`}>
+      <span
+        class="list__control filters"
+        role="radiogroup"
+        aria-labelledby={`${props.id}-label`}
+        aria-describedby={`${props.id}-detail`}
+      >
         <For each={props.options}>
           {(option, index) => (
             <button
@@ -706,10 +1075,12 @@ function ChoiceRow<Value extends string | boolean>(props: {
               tabIndex={props.value === option.id ? 0 : -1}
               class={`filters__option${props.value === option.id ? " filters__option--active" : ""}`}
               onClick={() => props.onChange(option.id)}
-              onKeyDown={(event) => moveRadio(event, index(), props.options.length, (next) => {
-                const selected = props.options[next]
-                if (selected) props.onChange(selected.id)
-              })}
+              onKeyDown={(event) =>
+                moveRadio(event, index(), props.options.length, (next) => {
+                  const selected = props.options[next]
+                  if (selected) props.onChange(selected.id)
+                })
+              }
             >
               {option.label}
             </button>
@@ -729,7 +1100,9 @@ function ChoiceRow<Value extends string | boolean>(props: {
 export function NotificationSettings(): JSX.Element {
   const notificationPreferences = createNotificationPreferences()
   const preferences = useStore(notificationPreferences.store)
-  const [permission, setPermission] = createSignal(typeof Notification === "undefined" ? undefined : Notification.permission)
+  const [permission, setPermission] = createSignal(
+    typeof Notification === "undefined" ? undefined : Notification.permission,
+  )
   const [pushStatus, setPushStatus] = createSignal<PushStatus>("unsupported")
   const [pushBusy, setPushBusy] = createSignal(true)
   const [pushError, setPushError] = createSignal("")
@@ -760,7 +1133,10 @@ export function NotificationSettings(): JSX.Element {
   const togglePush = async () => {
     if (!pushPlatform || pushBusy()) return
     setPushBusy(true)
-    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp, storedCategories)
+    const result =
+      pushStatus() === "on"
+        ? await disablePush(pushPlatform, pushHttp)
+        : await enablePush(pushPlatform, pushHttp, storedCategories)
     if (!active) return
     setPushStatus(result.status)
     setPushError(result.message ?? "")
@@ -825,24 +1201,38 @@ export function NotificationSettings(): JSX.Element {
         <div class="defs__row">
           <span class="defs__key">Push to this device</span>
           <span class="defs__value">
-            <button type="button" class="button button--secondary button--small"
-              aria-label="Push to this device" aria-describedby="push-device-status"
-              aria-pressed={pushView().pressed} disabled={pushBusy() || pushView().disabled}
-              onClick={() => void togglePush()}>{pushBusy() ? "Checking…" : pushView().label}</button>
-            <span id="push-device-status" class="field__hint" role="status" aria-live="polite">{pushError() || pushView().detail}</span>
+            <button
+              type="button"
+              class="button button--secondary button--small"
+              aria-label="Push to this device"
+              aria-describedby="push-device-status"
+              aria-pressed={pushView().pressed}
+              disabled={pushBusy() || pushView().disabled}
+              onClick={() => void togglePush()}
+            >
+              {pushBusy() ? "Checking…" : pushView().label}
+            </button>
+            <span id="push-device-status" class="field__hint" role="status" aria-live="polite">
+              {pushError() || pushView().detail}
+            </span>
           </span>
         </div>
         <div class="defs__row">
           <span class="defs__key">System alerts</span>
           <span class="defs__value">
             <Show when={permission() === "default"}>
-              <button type="button" class="button button--secondary button--small"
-                onClick={() => void Notification.requestPermission().then(setPermission)}>
+              <button
+                type="button"
+                class="button button--secondary button--small"
+                onClick={() => void Notification.requestPermission().then(setPermission)}
+              >
                 <Icon name="bell" size={16} />
                 Request browser permission
               </button>
             </Show>
-            <span class="field__hint" role="status" aria-live="polite">{describeNotificationPermission(permission())}</span>
+            <span class="field__hint" role="status" aria-live="polite">
+              {describeNotificationPermission(permission())}
+            </span>
           </span>
         </div>
       </div>

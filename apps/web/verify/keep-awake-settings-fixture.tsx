@@ -59,11 +59,11 @@ const store = createRemoteStore({
       status: () => ({ kind: "open" }),
       request: async (operation, request) => {
         calls.push({ operation, deviceID, request })
-        if (operation === "machine.keepAwake.get")
+        if (operation === "keepAwake.get")
           return readMode === "held"
             ? new Promise<RemoteRequestOutcome>((resolve) => heldReads.push(resolve))
             : answer(readMode)
-        if (operation === "machine.keepAwake.set")
+        if (operation === "keepAwake.set")
           return mutationMode === "held"
             ? new Promise<RemoteRequestOutcome>((resolve) => heldSets.push(resolve))
             : answer(mutationMode)
