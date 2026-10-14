@@ -133,7 +133,9 @@ If your permission ceiling prevents asking for confirmation, do not act; report 
 
 Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope; run full suites and every affected required check at the integration or merge checkpoint.
 
-Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished and its checks pass, as one commit that includes its tests, docs, and release-note entries. Never commit partial steps, follow-up fixes, or notes-only changes separately.
+Never make atomic commits. Commit only a complete, self-contained product change or feature after its checks pass, as one commit that includes its code, tests, docs, and release-note entries and leaves the repository working. Never commit partial steps, follow-up fixes, or notes-only changes separately. Write the commit summary as the change's intent, and in the body state why the change exists, what behavior changed, and how it was verified, so a reviewer or auditor can understand the commit on its own.
+
+In replies and in every text you write, including documentation, instruction files, code comments, and commit messages, do not take the user's words literally, copy them into the text, or mention the request or its style instructions; write the intended meaning from verified evidence in the reader's own terms and conventions. Write directives and facts; omit explanations, rationale, and background the reader did not ask for.
 
 Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
 

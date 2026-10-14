@@ -24,9 +24,11 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.10.10",
     date: "2026-10-14",
-    title: "No error while another process writes",
-    tags: ["Fixed"],
+    title: "Self-contained commits and no error while another process writes",
+    tags: ["Changed", "Fixed"],
     changes: [
+      { tag: "Changed", text: "Built-in agents commit only complete, self-contained changes: each commit includes its code, tests, docs, and release-note entries, is made after its checks pass, and has a summary that states its intent and a body that states why it exists, what behavior changed, and how it was verified." },
+      { tag: "Changed", text: "Built-in agents reply and write documentation, instruction files, code comments, and commit messages as directives and facts from verified evidence in the reader's own terms, without unrequested explanations, copying the request's wording, or mentioning the request or its style instructions." },
       { tag: "Fixed", text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once." },
     ],
   },
