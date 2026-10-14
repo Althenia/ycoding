@@ -1,4 +1,8 @@
 use ycoding_core::resources::config::decode_document;
+use ycoding_core::resources::config::{
+    Entry,
+    capabilities::{ConfigCapabilities, InstructionSource},
+};
 use ycoding_schema::{JsonValue, parse_json, stringify_json};
 
 fn recover(input: &str, expected: &str, paths: &[&str]) {
@@ -19,6 +23,178 @@ fn recover(input: &str, expected: &str, paths: &[&str]) {
             .iter()
             .all(|item| item.path.as_str() == Some("fixture.jsonc"))
     );
+}
+
+#[test]
+fn capability_schema_accepts_every_selector_and_retired_plugin_selection() {
+    let input = r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["*/AGENTS.md",""]},"builtin_instructions":{"enabled":true,"allow":["environment","date","subagent-reuse","shell-memory","project-artifact-authoring","git-worktree","git-attribution","human-input","decision-use","task-completion","memory"],"deny":[]},"skills":{"enabled":false,"allow":[],"deny":["secret-*"]},"tools":{"enabled":true,"allow":["read"],"deny":["shell"]},"mcp":{"allow":["docs"],"deny":["private"]},"plugins":{"enabled":false,"allow":["plugin.*"],"deny":[]},"project_artifacts":false,"home_roots":false,"websearch_provider":"parallel"},"extensions":[]}"#;
+    recover(input, input, &[]);
+    recover(
+        r#"{"capabilities":{"websearch_provider":"exa"}}"#,
+        r#"{"capabilities":{"websearch_provider":"exa"}}"#,
+        &[],
+    );
+    let obsolete = decode_document(
+        r#"{"capabilities":{"plugins":{"enabled":false}},"plugins":["file:///plugin.ts"]}"#,
+        "fixture.jsonc",
+    );
+    assert!(obsolete.info.is_none());
+    assert_eq!(obsolete.diagnostics.len(), 1);
+    assert_eq!(obsolete.diagnostics[0].fail_closed, Some(true));
+    assert_eq!(
+        obsolete.diagnostics[0].json_path.as_ref().unwrap().as_str(),
+        Some("$.plugins")
+    );
+}
+
+#[test]
+fn capability_schema_recovers_invalid_leaves_with_precise_diagnostics() {
+    recover(
+        r#"{"shell":"kept","capabilities":{"instructions":{"global":0,"project":false,"exclude":["kept",42]},"builtin_instructions":{"allow":["date","unknown","*"]},"skills":{"enabled":"off","deny":["kept",null]},"tools":{"allow":false},"mcp":false,"plugins":{"deny":[42]},"project_artifacts":"off","home_roots":0,"websearch_provider":"other","typo":true}}"#,
+        r#"{"shell":"kept","capabilities":{"instructions":{"project":false,"exclude":["kept"]},"builtin_instructions":{"allow":["date"]},"skills":{"deny":["kept"]},"tools":{},"plugins":{"deny":[]}}}"#,
+        &[
+            "$.capabilities.instructions.global",
+            "$.capabilities.instructions.exclude[1]",
+            "$.capabilities.builtin_instructions.allow[1]",
+            "$.capabilities.builtin_instructions.allow[2]",
+            "$.capabilities.skills.enabled",
+            "$.capabilities.skills.deny[1]",
+            "$.capabilities.tools.allow",
+            "$.capabilities.mcp",
+            "$.capabilities.plugins.deny[0]",
+            "$.capabilities.project_artifacts",
+            "$.capabilities.home_roots",
+            "$.capabilities.websearch_provider",
+            "$.capabilities.typo",
+        ],
+    );
+    recover(
+        r#"{"capabilities":false,"shell":"kept"}"#,
+        r#"{"shell":"kept"}"#,
+        &["$.capabilities"],
+    );
+    for key in ["builtin_instructions", "skills", "tools", "mcp", "plugins"] {
+        recover(
+            &format!(r#"{{"capabilities":{{"{key}":{{"typo":true,"enabled":false}}}}}}"#),
+            &format!(r#"{{"capabilities":{{"{key}":{{"enabled":false}}}}}}"#),
+            &[&format!("$.capabilities.{key}.typo")],
+        );
+    }
+}
+
+#[test]
+fn capability_selection_deny_empty_allow_and_closed_builtins() {
+    for (selection, name, expected) in [
+        ("{}", "read", true),
+        (r#"{"enabled":true}"#, "read", true),
+        (r#"{"enabled":false,"allow":["*"]}"#, "read", false),
+        (r#"{"allow":[]}"#, "read", false),
+        (r#"{"allow":["read"],"deny":["read"]}"#, "read", false),
+        (r#"{"deny":["shell"]}"#, "read", true),
+        (r#"{"allow":["mcp_?ocs_*"]}"#, "mcp_docs_lookup", true),
+        (r#"{"allow":["mcp_?ocs_*"]}"#, "mcp_docs", false),
+        (r#"{"deny":["mcp_*"]}"#, "mcp_docs_lookup", false),
+        (r#"{"allow":["read.*"]}"#, "read.file", true),
+        (r#"{"allow":["read.*"]}"#, "readXfile", false),
+        (r#"{"allow":["dir/*"]}"#, "dir\\file", true),
+        (r#"{"allow":["line?*"]}"#, "line\nrest", true),
+        (r#"{"allow":["shell *"]}"#, "shell", true),
+        (r#"{"allow":["shell *"]}"#, "shell command", true),
+        (r#"{"allow":["Read"]}"#, "read", cfg!(windows)),
+    ] {
+        for key in ["skills", "tools", "mcp", "plugins"] {
+            let decoded = decode_document(
+                &format!(r#"{{"capabilities":{{"{key}":{selection}}}}}"#),
+                "fixture.jsonc",
+            );
+            assert!(decoded.diagnostics.is_empty());
+            let policy = ConfigCapabilities::resolve(&[Entry::Document {
+                path: None,
+                info: decoded.info.unwrap(),
+            }]);
+            let selected = match key {
+                "skills" => policy.skills,
+                "tools" => policy.tools,
+                "mcp" => policy.mcp,
+                "plugins" => policy.plugins,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                selected.allows(&name.into()),
+                expected,
+                "{key}/{selection}/{name}"
+            );
+        }
+    }
+    for name in [
+        "environment",
+        "date",
+        "subagent-reuse",
+        "shell-memory",
+        "project-artifact-authoring",
+        "git-worktree",
+        "git-attribution",
+        "human-input",
+        "decision-use",
+        "task-completion",
+        "memory",
+    ] {
+        let decoded = decode_document(
+            &format!(
+                r#"{{"capabilities":{{"builtin_instructions":{{"allow":["{name}"],"deny":["date"]}}}}}}"#
+            ),
+            "fixture.jsonc",
+        );
+        assert!(decoded.diagnostics.is_empty(), "{name}");
+        let policy = ConfigCapabilities::resolve(&[Entry::Document {
+            path: None,
+            info: decoded.info.unwrap(),
+        }]);
+        assert_eq!(
+            policy.builtin_instructions.allows(&name.into()),
+            name != "date"
+        );
+        assert!(!policy.builtin_instructions.allows(&"unknown".into()));
+    }
+    let decoded = decode_document(
+        r#"{"capabilities":{"skills":{"allow":["\ud800?"]}}}"#,
+        "fixture.jsonc",
+    );
+    assert!(decoded.diagnostics.is_empty());
+    let policy = ConfigCapabilities::resolve(&[Entry::Document {
+        path: None,
+        info: decoded.info.unwrap(),
+    }]);
+    assert!(
+        policy
+            .skills
+            .allows(&ycoding_schema::LosslessString::from_utf16(vec![
+                0xd800, 0x61
+            ]))
+    );
+    assert!(!policy.skills.allows(&"\u{fffd}a".into()));
+}
+
+#[test]
+fn instruction_selection_preserves_source_switches_and_absolute_path_exclusions() {
+    let decoded = decode_document(
+        r#"{"capabilities":{"instructions":{"global":false,"exclude":["*/secret?/AGENTS.md"]}}}"#,
+        "fixture.jsonc",
+    );
+    let policy = ConfigCapabilities::resolve(&[Entry::Document {
+        path: None,
+        info: decoded.info.unwrap(),
+    }]);
+    assert!(!policy.allows_instruction(&"/global/AGENTS.md".into(), InstructionSource::Global));
+    assert!(policy.allows_instruction(&"/project/AGENTS.md".into(), InstructionSource::Project));
+    assert!(!policy.allows_instruction(
+        &"/project/secret1/AGENTS.md".into(),
+        InstructionSource::Project
+    ));
+    assert!(policy.allows_instruction(
+        &"/project/secret/AGENTS.md".into(),
+        InstructionSource::Project
+    ));
 }
 
 #[test]

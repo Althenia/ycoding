@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+use ycoding_core::resources::config::capabilities::{ConfigCapabilities, WebsearchProvider};
 use ycoding_core::resources::config::{
     Configuration, Entry, LoadOptions, MissingFile, ParseSource, Roots, substitute,
 };
@@ -229,6 +230,66 @@ fn project_opt_out_global_location_missing_files_and_legacy_names() {
 }
 
 #[test]
+fn home_roots_false_excludes_exact_home_roots_even_from_ancestors() {
+    let fixture = Fixture::new();
+    let global = fixture.write(
+        "global/ycoding/ycoding.json",
+        r#"{"shell":"global","capabilities":{"home_roots":false}}"#,
+    );
+    for directory in [
+        "home/.claude",
+        "home/.agents",
+        "home/repo/.claude",
+        "home/repo/.agents",
+        "home/repo/app/.agents",
+    ] {
+        fs::create_dir_all(fixture.0.join(directory)).unwrap();
+    }
+    let ecosystem = |config: &Configuration| {
+        config
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::AgentsDirectory(path) | Entry::ClaudeDirectory(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut options = fixture.options("home/repo/app");
+    options.roots.home = fixture.0.join("home/repo/..");
+    let mut config = Configuration::load(options).unwrap();
+    assert_eq!(
+        ecosystem(&config),
+        [
+            fixture.0.join("home/repo/.claude"),
+            fixture.0.join("home/repo/app/.agents"),
+            fixture.0.join("home/repo/.agents"),
+        ]
+    );
+    assert_eq!(strings(&config, "shell"), ["global"]);
+    assert!(config.diagnostics.is_empty());
+    assert_eq!(
+        fs::read_to_string(&global).unwrap(),
+        r#"{"shell":"global","capabilities":{"home_roots":false}}"#
+    );
+    fixture.write(
+        "home/repo/app/ycoding.json",
+        r#"{"capabilities":{"home_roots":true}}"#,
+    );
+    config.reload().unwrap();
+    assert_eq!(ecosystem(&config).len(), 7);
+    assert_eq!(strings(&config, "shell"), ["global"]);
+    fs::write(&global, r#"{"shell":"global"}"#).unwrap();
+    fs::write(
+        fixture.0.join("home/repo/app/ycoding.json"),
+        r#"{"capabilities":{"home_roots":false}}"#,
+    )
+    .unwrap();
+    config.reload().unwrap();
+    assert_eq!(ecosystem(&config).len(), 3);
+}
+
+#[test]
 fn latest_is_a_whole_defined_field_and_ordered_documents_preserve_merge_inputs() {
     let fixture = Fixture::new();
     fixture.write("global/ycoding/ycoding.json", r#"{"shell":"global","providers":{"base":{"name":"base"}},"permissions":[{"action":"read","resource":"*","effect":"ask"}]}"#);
@@ -251,6 +312,121 @@ fn latest_is_a_whole_defined_field_and_ordered_documents_preserve_merge_inputs()
         ]
     );
     assert_eq!(config.values("providers").count(), 2);
+}
+
+#[test]
+fn capabilities_merge_each_leaf_and_replace_lists() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "global/ycoding/ycoding.json",
+        r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["global"]},"builtin_instructions":{"enabled":false,"allow":["date"],"deny":["memory"]},"skills":{"enabled":false,"allow":["global"],"deny":["private"]},"tools":{"deny":["shell"],"allow":["shell"]},"mcp":{"enabled":false,"allow":["global"],"deny":["private"]},"plugins":{"enabled":false,"allow":["global"],"deny":["private"]},"home_roots":false,"project_artifacts":false,"websearch_provider":"exa"}}"#,
+    );
+    fixture.write(
+        "explicit.json",
+        r#"{"capabilities":{"instructions":{"exclude":["explicit"]},"skills":{"allow":["explicit"]},"tools":{"allow":["explicit"]},"plugins":{"allow":[]}}}"#,
+    );
+    fixture.write(
+        "repo/ycoding.json",
+        r#"{"capabilities":{"instructions":{"project":false},"builtin_instructions":{"enabled":true,"allow":["environment","date"]},"skills":{"allow":["project"]},"mcp":{"allow":["project"]}}}"#,
+    );
+    fixture.write(
+        "repo/app/.ycoding/ycoding.json",
+        r#"{"capabilities":{"tools":{"enabled":false},"plugins":{"deny":[]}}}"#,
+    );
+    fixture.write(
+        "repo/app/.agents/ycoding.json",
+        r#"{"capabilities":{"home_roots":true,"tools":{"deny":["*"]}}}"#,
+    );
+    let mut options = fixture.options("repo/app");
+    options.file = Some(fixture.0.join("explicit.json"));
+    options.content = Some(r#"{"capabilities":{"instructions":{"global":true,"exclude":[]},"skills":{"enabled":true},"tools":{"enabled":true,"allow":["read"]},"mcp":{"deny":[]},"websearch_provider":"parallel"}}"#.into());
+    let mut config = Configuration::load(options).unwrap();
+    assert!(config.diagnostics.is_empty());
+    assert_eq!(config.values("capabilities").count(), 5);
+    assert_eq!(config.capabilities.instructions.global, Some(true));
+    assert_eq!(config.capabilities.instructions.project, Some(false));
+    assert_eq!(config.capabilities.instructions.exclude, Some(vec![]));
+    assert_eq!(config.capabilities.builtin_instructions.enabled, Some(true));
+    assert_eq!(
+        config.capabilities.builtin_instructions.allow,
+        Some(vec!["environment".into(), "date".into()])
+    );
+    assert_eq!(
+        config.capabilities.builtin_instructions.deny,
+        Some(vec!["memory".into()])
+    );
+    assert_eq!(config.capabilities.skills.enabled, Some(true));
+    assert_eq!(
+        config.capabilities.skills.allow,
+        Some(vec!["project".into()])
+    );
+    assert_eq!(
+        config.capabilities.skills.deny,
+        Some(vec!["private".into()])
+    );
+    assert_eq!(config.capabilities.tools.enabled, Some(true));
+    assert_eq!(config.capabilities.tools.allow, Some(vec!["read".into()]));
+    assert_eq!(config.capabilities.tools.deny, Some(vec!["shell".into()]));
+    assert_eq!(config.capabilities.mcp.enabled, Some(false));
+    assert_eq!(config.capabilities.mcp.allow, Some(vec!["project".into()]));
+    assert_eq!(config.capabilities.mcp.deny, Some(vec![]));
+    assert_eq!(config.capabilities.plugins.enabled, Some(false));
+    assert_eq!(config.capabilities.plugins.allow, Some(vec![]));
+    assert_eq!(config.capabilities.plugins.deny, Some(vec![]));
+    assert_eq!(config.capabilities.home_roots, Some(false));
+    assert_eq!(config.capabilities.project_artifacts, Some(false));
+    assert_eq!(
+        config.capabilities.websearch_provider,
+        Some(WebsearchProvider::Parallel)
+    );
+    assert_eq!(
+        ConfigCapabilities::resolve(&config.entries),
+        config.capabilities
+    );
+    fixture.write(
+        "global/ycoding/ycoding.json",
+        r#"{"capabilities":{"tools":{"deny":["edit"]},"websearch_provider":"exa"}}"#,
+    );
+    config.reload().unwrap();
+    assert_eq!(config.capabilities.tools.deny, Some(vec!["edit".into()]));
+    assert_eq!(config.capabilities.tools.allow, Some(vec!["read".into()]));
+    assert_eq!(config.capabilities.home_roots, None);
+    assert_eq!(config.capabilities.project_artifacts, None);
+    assert_eq!(config.capabilities.plugins.enabled, None);
+    assert_eq!(
+        config.capabilities.websearch_provider,
+        Some(WebsearchProvider::Parallel)
+    );
+}
+
+#[test]
+fn absent_capabilities_are_permissive_and_failed_reload_preserves_policy() {
+    let fixture = Fixture::new();
+    let source = fixture.write("project/ycoding.json", r#"{"shell":"kept"}"#);
+    let mut config = Configuration::load(fixture.options("project")).unwrap();
+    assert_eq!(config.capabilities, ConfigCapabilities::default());
+    for selection in [
+        &config.capabilities.builtin_instructions,
+        &config.capabilities.skills,
+        &config.capabilities.tools,
+        &config.capabilities.mcp,
+        &config.capabilities.plugins,
+    ] {
+        assert!(selection.allows(&"anything".into()));
+    }
+    assert!(config.capabilities.allows_tool(&"skill".into()));
+    assert!(config.capabilities.allows_tool(&"project_artifact".into()));
+    fs::write(&source, r#"{"capabilities":{"tools":{"enabled":false}}}"#).unwrap();
+    config.reload().unwrap();
+    assert_eq!(config.capabilities.tools.enabled, Some(false));
+    fs::write(
+        &source,
+        r#"{"username":"{file:missing.txt}","capabilities":{"tools":{"enabled":true}}}"#,
+    )
+    .unwrap();
+    assert!(config.reload().is_err());
+    assert_eq!(config.capabilities.tools.enabled, Some(false));
+    assert!(!config.capabilities.allows_tool(&"read".into()));
 }
 
 #[test]

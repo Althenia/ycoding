@@ -5,6 +5,7 @@ use std::{
 };
 use ycoding_schema::{JsonValue, config::Diagnostic};
 
+pub mod capabilities;
 mod jsonc;
 mod operations;
 mod roots;
@@ -43,6 +44,7 @@ pub struct Configuration {
     pub event_source: crate::event_feed::EventSource,
     pub entries: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
+    pub capabilities: capabilities::ConfigCapabilities,
     options: LoadOptions,
     mutation_policy: Option<MutationPolicy>,
 }
@@ -53,19 +55,21 @@ impl Configuration {
         if let Some(file) = &options.file {
             options.file = Some(roots::absolute(file)?);
         }
-        let (entries, diagnostics) = discover(&options)?;
+        let (entries, diagnostics, capabilities) = discover(&options)?;
         Ok(Self {
             entries,
             event_source: Default::default(),
             diagnostics,
+            capabilities,
             options,
             mutation_policy: None,
         })
     }
     pub fn reload(&mut self) -> Result<(), Error> {
-        let (entries, diagnostics) = discover(&self.options)?;
+        let (entries, diagnostics, capabilities) = discover(&self.options)?;
         self.entries = entries;
         self.diagnostics = diagnostics;
+        self.capabilities = capabilities;
         if self
             .event_source
             .emit(crate::event_feed::Data::ConfigUpdated(Box::new(
@@ -170,7 +174,16 @@ pub fn decode_document(text: &str, target: &str) -> DecodedDocument {
     }
 }
 
-fn discover(options: &LoadOptions) -> Result<(Vec<Entry>, Vec<Diagnostic>), Error> {
+fn discover(
+    options: &LoadOptions,
+) -> Result<
+    (
+        Vec<Entry>,
+        Vec<Diagnostic>,
+        capabilities::ConfigCapabilities,
+    ),
+    Error,
+> {
     options.roots.validate()?;
     options.roots.check(&options.directory)?;
     if let Some(file) = &options.file {
@@ -208,7 +221,7 @@ fn discover(options: &LoadOptions) -> Result<(Vec<Entry>, Vec<Diagnostic>), Erro
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     for (name, claude) in [(".claude", true), (".agents", false)] {
-        let global = options.roots.home.join(name);
+        let global = roots::absolute(&options.roots.home.join(name))?;
         options.roots.check(&global)?;
         if global.is_dir() {
             entries.push(if claude {
@@ -282,7 +295,16 @@ fn discover(options: &LoadOptions) -> Result<(Vec<Entry>, Vec<Diagnostic>), Erro
             entries.push(Entry::Document { path: None, info });
         }
     }
-    Ok((entries, diagnostics))
+    let capabilities = capabilities::ConfigCapabilities::resolve(&entries);
+    if capabilities.home_roots == Some(false) {
+        let home = roots::absolute(&options.roots.home)?;
+        entries.retain(|entry| match entry {
+            Entry::ClaudeDirectory(path) => *path != home.join(".claude"),
+            Entry::AgentsDirectory(path) => *path != home.join(".agents"),
+            _ => true,
+        });
+    }
+    Ok((entries, diagnostics, capabilities))
 }
 
 fn load_directory(

@@ -55,6 +55,42 @@ const POSITIVE: Shape = Shape::Int(1.0, 9_007_199_254_740_991.0);
 const NONNEGATIVE: Shape = Shape::Int(0.0, 9_007_199_254_740_991.0);
 const INTEGER: Shape = Shape::Int(-9_007_199_254_740_991.0, 9_007_199_254_740_991.0);
 const STRINGS: Shape = Shape::Array(&Shape::String);
+const CAPABILITY_SELECTION: Shape = Shape::Object(&[
+    optional("enabled", Shape::Bool),
+    optional("allow", STRINGS),
+    optional("deny", STRINGS),
+]);
+const CAPABILITIES: Shape = Shape::Object(&[
+    optional(
+        "instructions",
+        Shape::Object(&[
+            optional("global", Shape::Bool),
+            optional("project", Shape::Bool),
+            optional("exclude", STRINGS),
+        ]),
+    ),
+    optional(
+        "builtin_instructions",
+        Shape::Object(&[
+            optional("enabled", Shape::Bool),
+            optional(
+                "allow",
+                Shape::Array(&Shape::Enum(super::capabilities::BUILTIN_INSTRUCTIONS)),
+            ),
+            optional(
+                "deny",
+                Shape::Array(&Shape::Enum(super::capabilities::BUILTIN_INSTRUCTIONS)),
+            ),
+        ]),
+    ),
+    optional("skills", CAPABILITY_SELECTION),
+    optional("tools", CAPABILITY_SELECTION),
+    optional("mcp", CAPABILITY_SELECTION),
+    optional("plugins", CAPABILITY_SELECTION),
+    optional("project_artifacts", Shape::Bool),
+    optional("home_roots", Shape::Bool),
+    optional("websearch_provider", Shape::Enum(&["exa", "parallel"])),
+]);
 const HEADERS: Shape = Shape::Record(&Shape::String);
 const JSON_RECORD: Shape = Shape::Record(&Shape::Json);
 const REQUEST: Shape =
@@ -222,6 +258,7 @@ const ADVISORY: Shape = Shape::Union(&[
     ]),
 ]);
 const ROOT: Shape = Shape::Object(&[
+    optional("capabilities", CAPABILITIES),
     optional("extensions", Shape::Array(&Shape::Unknown)),
     optional("$schema", Shape::String),
     optional("shell", Shape::String),

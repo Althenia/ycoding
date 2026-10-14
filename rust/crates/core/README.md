@@ -1,5 +1,31 @@
 # YCoding Core
 
+## Capability configuration
+
+`resources::config::Configuration.capabilities` holds the resolved
+`ConfigCapabilities` policy for its current loaded snapshot. Only ordered
+configuration documents contribute: each defined leaf replaces the previous
+leaf, and lists replace rather than concatenate. Reload replaces the policy
+alongside entries and diagnostics; a failed reload retains the complete snapshot.
+
+Selectors for builtin instructions, skills, tools, MCP servers and external
+plugins accept `enabled`, `allow` and `deny`. Unset selectors permit all names;
+`enabled: false` disables all, deny wins, and an empty allow list permits none.
+String selectors use the same lossless `*`/`?` wildcard matching as tool policy.
+Builtin selectors accept exactly the eleven stable names in
+`capabilities::BUILTIN_INSTRUCTIONS`. Instruction policy has separate global and
+project switches plus absolute-path exclusions. The policy narrows visibility
+and never grants permissions. The `execute` wrapper ignores the tool allow list
+but respects tool disable/deny selections.
+
+`home_roots: false` excludes the exact absolute `~/.claude` and `~/.agents`
+ecosystem roots, including copies discovered by upward traversal. Project
+descendants with those names and the ordinary global YCoding configuration stay
+eligible. `project_artifacts` is a boolean selector; `websearch_provider` accepts
+`exa` or `parallel`. External-plugin selection is accepted and validated but
+matches no executable plugin in the beta: executable JS/TS/npm declarations
+remain rejected, and plugin IDs are not process-extension identities.
+
 ## Supported providers
 
 The native catalog includes OpenAI API and Codex/ChatGPT subscriptions; Anthropic API and Claude Code subscriptions; OpenRouter; native Cursor; Meta Muse and Llama API; Cline `cline-pass`; Z.ai (`zai`, `zai-coding-plan`, `zhipuai`, `zhipuai-coding-plan`); MiniMax (`minimax`, `minimax-cn`, `minimax-coding-plan`, `minimax-cn-coding-plan`); and Kimi (`moonshotai`, `moonshotai-cn`, `kimi-code-plan-global`, `kimi-code-plan-cn`). Custom OpenAI-compatible Chat/Responses and Anthropic-compatible Messages endpoints accept explicit remote or localhost base URLs without requiring credentials.
