@@ -11,6 +11,106 @@ use ycoding_schema::{schema::AbsolutePath, skill::Info};
 
 #[derive(Default)]
 struct Instructions(std::sync::Mutex<Vec<std::path::PathBuf>>);
+
+#[tokio::test]
+async fn all_skill_sources_and_explicit_active_resource_loads_obey_selection() {
+    use served::*;
+    use ycoding_core::resources::{config::Entry, mcp::skills as mcp_skills};
+    use ycoding_schema::skill::{EmbeddedSource, Source};
+    let fixture = ToolFixture::new();
+    let info = effect_info(&fixture);
+    let mcp_id = mcp_skills::id(&"loopback".into(), &"skill://a/SKILL.md".into());
+    for capabilities in [
+        serde_json::json!({"skills":{"enabled":false}}),
+        serde_json::json!({"skills":{"allow":["effect","report",mcp_id],"deny":["effect"]}}),
+    ] {
+        let entries = [Entry::Document {
+            path: None,
+            info: parse_json(
+                &serde_json::json!({"skills":[fixture.root],"capabilities":capabilities})
+                    .to_string(),
+            )
+            .unwrap(),
+        }];
+        let mut catalog = Catalog::from_entries(
+            &entries,
+            &fixture.root,
+            &fixture.root,
+            &fixture.root.join("cache"),
+        )
+        .unwrap();
+        for id in ["effect", "ycoding", "report", &mcp_id] {
+            let mut embedded = info.clone();
+            embedded.id = id.into();
+            embedded.name = format!("embedded {id}").into();
+            catalog.source(Source::Embedded(EmbeddedSource { skill: embedded }));
+        }
+        let actual = catalog.list().await.unwrap();
+        assert_eq!(
+            actual
+                .iter()
+                .map(|skill| skill.id.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            if capabilities["skills"]["enabled"] == false {
+                vec![]
+            } else {
+                vec!["report", mcp_id.as_str()]
+            }
+        );
+    }
+    let server = Loopback::start().await;
+    let tool = tool(
+        &fixture,
+        catalog(&fixture, vec![info.clone()]),
+        server.service(fixture.root.clone()),
+        None,
+    );
+    let sessions = Sessions::new(fixture.authority.store.client());
+    let first = call(&tool, fixture.context(), serde_json::json!({"id":"effect"}))
+        .await
+        .unwrap();
+    record(&sessions, "first", 100, "effect", &first.structured).await;
+    let mcp = call(&tool, fixture.context(), serde_json::json!({"id":mcp_id}))
+        .await
+        .unwrap();
+    record(&sessions, "mcp", 101, &mcp_id, &mcp.structured).await;
+    let before = sessions.transcript(&fixture.context().session_id).unwrap();
+    let mcp_entries = tool.mcp.skill_catalog().await.unwrap();
+    assert_eq!(mcp_entries.len(), 1);
+    assert_eq!(tool.skills.lock().await.mcp(mcp_entries.clone()).len(), 1);
+    let hidden = [Entry::Document {
+        path: None,
+        info: parse_json(r#"{"capabilities":{"skills":{"allow":[]}}}"#).unwrap(),
+    }];
+    let mut selected = Catalog::from_entries(
+        &hidden,
+        &fixture.root,
+        &fixture.root,
+        &fixture.root.join("cache"),
+    )
+    .unwrap();
+    selected.source(Source::Embedded(EmbeddedSource { skill: info }));
+    assert!(selected.mcp(mcp_entries).is_empty());
+    *tool.skills.lock().await = selected;
+    for id in ["effect", mcp_id.as_str()] {
+        for resource in [None, Some("SKILL.md")] {
+            let mut input = serde_json::json!({"id":id});
+            if let Some(resource) = resource {
+                input["resource"] = resource.into();
+            }
+            assert_eq!(
+                failure(call(&tool, fixture.context(), input).await),
+                format!("Unable to load skill {id}")
+            );
+        }
+    }
+    assert_eq!(
+        sessions.transcript(&fixture.context().session_id).unwrap(),
+        before
+    );
+    tool.mcp.shutdown().await.unwrap();
+    fixture.cleanup();
+}
 impl ReadInstructions for Instructions {
     fn load(&self, _: Context, paths: Vec<std::path::PathBuf>) -> ConsumerFuture<'_, ()> {
         Box::pin(async move {

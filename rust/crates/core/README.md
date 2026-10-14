@@ -47,6 +47,19 @@ Successful local read-tool calls load nearby `AGENTS.md` files into Session
 history as durable synthetic instructions. The Location-scoped loader deduplicates
 concurrent and repeated reads, respects the current `instruction_max_bytes`
 limit, and skips missing files, external reads, and the Location-root file.
+Nested reads enforce the resolved project instruction switch and path exclusions
+before claiming or reading instruction files. Ambient preparation uses
+`session::instruction_sources::ambient_with_capabilities(options, policy)`;
+disabled and excluded paths are filtered before content reads, and an empty
+selection observes the existing ambient key as Removed. Explicit durable
+instruction entries are independent of these ambient switches.
+
+Skill catalogs initialized from configuration entries retain the resolved skill
+selection and filter IDs after source precedence, including embedded, directory,
+managed and normalized MCP IDs. The model-callable skill tool enforces the same
+selection before active-skill, resource and MCP handling, so catalog exclusion
+also prevents explicit loads. Builtin `ycoding` and `report` IDs participate in
+selection like other skills.
 
 ## Session movement
 

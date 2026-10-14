@@ -21,6 +21,7 @@ pub struct Service {
     cache: PathBuf,
     pulled: BTreeMap<LosslessString, Vec<PathBuf>>,
     diagnostics: Vec<Diagnostic>,
+    capabilities: super::config::capabilities::ConfigCapabilities,
 }
 impl Service {
     pub fn new(cache: &Path) -> Self {
@@ -31,6 +32,7 @@ impl Service {
             cache: cache.into(),
             pulled: BTreeMap::new(),
             diagnostics: Vec::new(),
+            capabilities: Default::default(),
         }
     }
     pub fn from_entries(
@@ -40,6 +42,7 @@ impl Service {
         cache: &Path,
     ) -> Result<Self, Error> {
         let mut service = Self::new(cache);
+        service.capabilities = super::config::capabilities::ConfigCapabilities::resolve(entries);
         for ecosystem in [true, false] {
             for entry in entries {
                 let path = match entry {
@@ -110,7 +113,7 @@ impl Service {
         self.sources
             .iter()
             .filter_map(|s| match s {
-                Source::Embedded(s) => Some(&s.skill),
+                Source::Embedded(s) if self.allows(&s.skill.id) => Some(&s.skill),
                 _ => None,
             })
             .collect()
@@ -233,7 +236,20 @@ impl Service {
                 }
             }
         }
+        skills.retain(|skill| self.allows(&skill.id));
         Ok(skills)
+    }
+    pub fn allows(&self, id: &ycoding_schema::skill::Id) -> bool {
+        self.capabilities.skills.allows(id)
+    }
+    pub fn mcp(
+        &self,
+        entries: Vec<ycoding_schema::mcp_skill::Entry>,
+    ) -> Vec<ycoding_schema::mcp_skill::Entry> {
+        entries
+            .into_iter()
+            .filter(|entry| self.allows(&super::mcp::skills::id(&entry.server, &entry.uri).into()))
+            .collect()
     }
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics

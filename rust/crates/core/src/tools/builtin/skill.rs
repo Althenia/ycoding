@@ -79,6 +79,9 @@ impl SkillTool {
         resource: Option<LosslessString>,
         context: Context,
     ) -> Result<Output, Failure> {
+        if !self.skills.lock().await.allows(&id) {
+            return Err(unable(&id));
+        }
         let messages = self
             .sessions
             .transcript(&context.session_id)

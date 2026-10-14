@@ -41,6 +41,15 @@ impl Service {
         session_id: &session::Id,
         paths: Vec<PathBuf>,
     ) -> Result<(), ycoding_store::Error> {
+        let paths = paths
+            .into_iter()
+            .filter(|path| {
+                self.configuration.capabilities.allows_instruction(
+                    &path.to_string_lossy().as_ref().into(),
+                    crate::resources::config::capabilities::InstructionSource::Project,
+                )
+            })
+            .collect::<Vec<_>>();
         let claimed = {
             let mut all = self
                 .claimed

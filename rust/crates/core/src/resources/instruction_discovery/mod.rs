@@ -1,3 +1,4 @@
+use super::config::capabilities::{ConfigCapabilities, InstructionSource};
 use super::discovery::{self, Diagnostic, Error};
 use std::path::PathBuf;
 pub const KEY: &str = "core/instructions";
@@ -33,8 +34,16 @@ pub struct RenderedContent {
     pub omitted: bool,
 }
 pub fn observe(options: &Options) -> Observation {
-    match discover(options) {
-        Ok(paths) => read(&paths),
+    observe_with_capabilities(options, &ConfigCapabilities::default())
+}
+pub fn observe_with_capabilities(
+    options: &Options,
+    capabilities: &ConfigCapabilities,
+) -> Observation {
+    let mut options = options.clone();
+    options.project &= capabilities.instructions.project != Some(false);
+    match discover(&options) {
+        Ok(paths) => read_with_capabilities(&paths, capabilities),
         Err(e) => unavailable(&options.directory, e),
     }
 }
@@ -68,9 +77,25 @@ pub fn discover(options: &Options) -> Result<Paths, Error> {
     Ok(paths)
 }
 pub fn read(paths: &Paths) -> Observation {
+    read_with_capabilities(paths, &ConfigCapabilities::default())
+}
+fn read_with_capabilities(paths: &Paths, capabilities: &ConfigCapabilities) -> Observation {
     let mut files = Vec::new();
     let mut seen = Vec::new();
-    for path in std::iter::once(&paths.global).chain(paths.project.iter()) {
+    for path in std::iter::once(&paths.global)
+        .filter(|path| {
+            capabilities.allows_instruction(
+                &path.to_string_lossy().as_ref().into(),
+                InstructionSource::Global,
+            )
+        })
+        .chain(paths.project.iter().filter(|path| {
+            capabilities.allows_instruction(
+                &path.to_string_lossy().as_ref().into(),
+                InstructionSource::Project,
+            )
+        }))
+    {
         if seen.contains(&path) {
             continue;
         }

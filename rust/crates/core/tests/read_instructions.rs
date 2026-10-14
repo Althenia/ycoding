@@ -16,6 +16,111 @@ use ycoding_store::session::{Message, MessageTable, Sequence, SequenceTable};
 
 #[path = "session_support/mod.rs"]
 mod support;
+include!("tool_fixture.rs");
+
+#[tokio::test]
+async fn capabilities_filter_global_upward_and_nested_agents_paths() {
+    use ycoding_core::{
+        resources::instruction_discovery,
+        tools::{builtin::read::Read, registry::Tool},
+    };
+    let fixture = ToolFixture::new();
+    for (path, text) in [
+        ("AGENTS.md", "root"),
+        ("nested/AGENTS.md", "kept"),
+        ("nested/deep/AGENTS.md", "excluded"),
+        ("nested/deep/file.txt", "file"),
+        ("global/AGENTS.md", "global"),
+    ] {
+        fs::create_dir_all(fixture.root.join(path).parent().unwrap()).unwrap();
+        fs::write(fixture.root.join(path), text).unwrap();
+    }
+    let options = instruction_discovery::Options {
+        directory: fixture.root.join("nested/deep"),
+        project_root: fixture.root.clone(),
+        global_config: fixture.root.join("global"),
+        project: true,
+        max_bytes: None,
+    };
+    for (content, expected) in [
+        (
+            r#"{"capabilities":{"instructions":{"global":false,"project":false}}}"#,
+            vec![],
+        ),
+        (
+            r#"{"capabilities":{"instructions":{"global":false,"exclude":["*/deep/AGENTS.md"]}}}"#,
+            vec!["nested/AGENTS.md"],
+        ),
+    ] {
+        let configuration = Arc::new(
+            Configuration::load(LoadOptions {
+                directory: fixture.root.clone(),
+                roots: Roots::development(&fixture.root).unwrap(),
+                project: false,
+                file: None,
+                content: Some(content.into()),
+                env: BTreeMap::new(),
+            })
+            .unwrap(),
+        );
+        let reader = Read {
+            paths: fixture.paths(),
+            policy: fixture.policy.clone(),
+            instructions: Arc::new(Service::new(
+                SessionStore::new(fixture.authority.store.client()),
+                fixture.root.clone(),
+                configuration.clone(),
+            )),
+            collator: Arc::new(|left, right| left.cmp(right)),
+        };
+        reader
+            .settle(
+                ycoding_schema::parse_json(r#"{"path":"nested/deep/file.txt"}"#).unwrap(),
+                fixture.context(),
+            )
+            .await
+            .unwrap();
+        let messages = SessionStore::new(fixture.authority.store.client())
+            .context(&fixture.context().session_id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|message| match message {
+                session_message::Info::Synthetic(message) => Some(message),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), usize::from(!expected.is_empty()));
+        if let Some(message) = messages.last() {
+            assert_eq!(
+                message.text.as_str(),
+                Some(
+                    format!(
+                        "Instructions from: {}\nkept",
+                        fixture.root.join(expected[0]).display()
+                    )
+                    .as_str()
+                )
+            );
+        }
+        let observation =
+            instruction_discovery::observe_with_capabilities(&options, &configuration.capabilities);
+        if expected.is_empty() {
+            assert_eq!(observation, instruction_discovery::Observation::Removed);
+        }
+        if !expected.is_empty() {
+            assert_eq!(
+                observation
+                    .value(None)
+                    .unwrap()
+                    .iter()
+                    .map(|file| file.content.as_str())
+                    .collect::<Vec<_>>(),
+                ["kept", "root"]
+            );
+        }
+    }
+    fixture.cleanup();
+}
 
 struct TempDir(PathBuf);
 
