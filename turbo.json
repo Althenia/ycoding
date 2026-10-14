@@ -30,6 +30,7 @@
       "dependsOn": ["^typecheck-inputs"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/client/src/v5/generated/domain.ts",
         "$TURBO_ROOT$/infra/cloudflare/src/**",
         "$TURBO_ROOT$/infra/cloudflare/test/**",
         "$TURBO_ROOT$/infra/cloudflare/worker-configuration.d.ts"

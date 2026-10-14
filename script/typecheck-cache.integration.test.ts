@@ -217,6 +217,41 @@ test("declared workspace source changes invalidate only consuming typechecks wit
   }
 }, 90_000)
 
+test("external Client domain changes invalidate only the consuming web typecheck and recheck a warmed cache", async () => {
+  const f = await fixture()
+  try {
+    const file = "packages/client/src/v5/generated/domain.ts"
+    const content =
+      'export const enumLabels = { mode: { 0: "normal" } }\nexport const unionLiterals = [0, 1] as const\n'
+    await f.write(file, content)
+    await f.write(
+      "apps/web/src/wire.ts",
+      'import { enumLabels, unionLiterals } from "../../../packages/client/src/v5/generated/domain"\nexport const label: string = enumLabels.mode[0]\nexport const level: number = unionLiterals[0]\n',
+    )
+    const before = plan(f.directory)
+    await f.write(file, content.replace('"normal"', '"goal"'))
+    const changed = plan(f.directory)
+    expect(task(changed, web).hash).not.toBe(task(before, web).hash)
+    for (const owner of [cli, "@ycoding-ai/remote#typecheck"])
+      expect(task(changed, owner).hash).toBe(task(before, owner).hash)
+    expect(task(changed, web).dependencies.some((id) => id.endsWith("#typecheck"))).toBe(false)
+    await f.write(file, content)
+    const command = [turbo, "run", "typecheck", "--filter=@ycoding-ai/web", "--cache=local:rw"]
+    const first = run(command, f.directory)
+    expect(first.code, first.stdout + first.stderr).toBe(0)
+    const cached = run(command, f.directory)
+    expect(cached.code, cached.stdout + cached.stderr).toBe(0)
+    expect(cached.stdout).toContain("cache hit")
+    await f.write(file, content.replace('"normal"', "42"))
+    const broken = run(command, f.directory)
+    expect(broken.code, broken.stdout + broken.stderr).toBeGreaterThan(0)
+    expect(broken.stdout + broken.stderr).toContain("not assignable to type 'string'")
+    expect(task(plan(root), web).inputs.some((input) => input.endsWith(file))).toBe(true)
+  } finally {
+    await f.close()
+  }
+}, 90_000)
+
 test("live Worker-importing typechecks declare their external inputs without charging the comment-only remote package", () => {
   const live = plan(root)
   for (const owner of [cli, web]) {
