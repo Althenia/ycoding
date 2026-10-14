@@ -4,13 +4,14 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists v0.10.10 self-contained commits and waiting for another database writer first", () => {
+  test("lists v0.10.10 shell command queue, self-contained commits, and waiting for another database writer first", () => {
     expect(RELEASES[0]).toEqual({
       version: "0.10.10",
       date: "2026-10-14",
-      title: "Self-contained commits and no error while another process writes",
-      tags: ["Changed", "Fixed"],
+      title: "Shell command queue and self-contained commits",
+      tags: ["Added", "Changed", "Fixed"],
       changes: [
+        { tag: "Added", text: "The shell tool has a queue channel for expensive commands such as typechecks, builds, and package-wide test suites. Queued commands from every YCoding process on the machine share running limits (two at once and one per Session by default), wait for enough free memory and a low enough CPU load, and report completion like background commands. Set the limits under shell_queue; the TUI and the web Team view show queued commands and their position." },
         { tag: "Changed", text: "Built-in agents commit only complete, self-contained changes: each commit includes its code, tests, docs, and release-note entries, is made after its checks pass, and has a summary that states its intent and a body that states why it exists, what behavior changed, and how it was verified." },
         { tag: "Changed", text: "Built-in agents reply and write documentation, instruction files, code comments, and commit messages as directives and facts from verified evidence in the reader's own terms, without unrequested explanations, copying the request's wording, or mentioning the request or its style instructions." },
         { tag: "Fixed", text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once." },

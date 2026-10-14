@@ -4,13 +4,15 @@ import path from "path"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
-import { Effect, Fiber, Schedule, Schema, Scope } from "effect"
+import { Effect, Fiber, Schedule, Schema, Scope, Stream } from "effect"
 import { ConfigShell } from "../config/shell"
+import { EventRuntime } from "../event"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { NonNegativeInt } from "../schema"
+import { SessionEvent } from "../session/event"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
 import { Shell } from "../shell"
@@ -23,6 +25,9 @@ export const DEFAULT_TIMEOUT_MS = 10 * 60 * 1_000
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 
 const BACKGROUND_STARTED = "The command was moved to the background."
+const QUEUED_STARTED = "The command was added to the machine-wide shell queue"
+const QUEUED_INSTRUCTION =
+  "It starts when the queue admits it, and its timeout counts from that start. You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress."
 const BACKGROUND_INSTRUCTION =
   "You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress."
 const AUTO_BACKGROUND_STEER =
@@ -46,6 +51,10 @@ export const Input = Schema.Struct({
     description:
       "Run the command in the background and return immediately. You will be notified when it completes. DO NOT poll its progress.",
   }),
+  channel: Schema.Literals(["normal", "queue"]).pipe(Schema.optional).annotate({
+    description:
+      "normal (default) runs the command now. queue admits it to a bounded machine-wide queue shared by every YCoding process and returns immediately; it starts when resources allow and completion is delivered automatically. Use queue for typechecks, builds, and package-wide test suites.",
+  }),
 })
 
 const StructuredOutput = Schema.Struct({
@@ -59,7 +68,8 @@ const StructuredOutput = Schema.Struct({
 const Output = Schema.Struct({
   ...StructuredOutput.fields,
   output: Schema.String,
-  status: Schema.Literals(["completed", "running"]).pipe(Schema.optional),
+  status: Schema.Literals(["completed", "running", "queued"]).pipe(Schema.optional),
+  queuePosition: Schema.Number.pipe(Schema.optional),
   warnings: Schema.Array(Schema.String).pipe(Schema.optional),
 })
 
@@ -70,6 +80,7 @@ const modelOutput = (output: Output): string | undefined => {
     ? `\n\nWarnings:\n${output.warnings.map((warning) => `- ${warning}`).join("\n")}`
     : ""
   if (output.status === "running") return `${warnings.trimStart()}${warnings ? "\n\n" : ""}${BACKGROUND_INSTRUCTION}`
+  if (output.status === "queued") return `${warnings.trimStart()}${warnings ? "\n\n" : ""}${QUEUED_INSTRUCTION}`
   if (output.timeout) return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command timed out before completion.`
   if (output.memoryLimit)
     return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command exceeded its memory limit before completion.`
@@ -119,6 +130,37 @@ export const Plugin = {
     const shell = yield* Shell.Service
     const permission = yield* Permission.Service
     const guardrail = yield* SessionGuardrail.Service
+    const events = yield* EventRuntime.Service
+    // Queued commands cancelled because their Session was interrupted or deleted; their completion
+    // notices are admitted without waking the Session the user just stopped.
+    const quiet = new Set<string>()
+
+    yield* events.subscribe([SessionEvent.Execution.Interrupted, SessionEvent.Deleted]).pipe(
+      Stream.runForEach((event) =>
+        event.type === SessionEvent.Execution.Interrupted.type && event.data.reason !== "user"
+          ? Effect.void
+          : shell.list().pipe(
+              Effect.flatMap((shells) =>
+                Effect.forEach(
+                  shells.filter(
+                    (info) =>
+                      info.status === "queued" &&
+                      info.toolCallID !== undefined &&
+                      info.metadata.sessionID === event.data.sessionID,
+                  ),
+                  (info) =>
+                    Effect.gen(function* () {
+                      // Marked first because the cancellation notice may be sent before this returns.
+                      quiet.add(info.id)
+                      if (!(yield* shell.cancelQueued(info.id))) quiet.delete(info.id)
+                    }),
+                  { discard: true },
+                ),
+              ),
+            ),
+      ),
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(function* (
       sessionID: SessionSchema.ID,
@@ -149,6 +191,7 @@ export const Plugin = {
             text: `<shell id="${callID}" state="${state}" command="${command}">\n${text}\n</shell>`,
             description: command,
             metadata: { source: "shell", state },
+            ...(quiet.delete(shellID) ? { resume: false } : {}),
           }).pipe(Effect.andThen(runtime.job.noticeAdmitted(callID)), Effect.andThen(shell.noticeAdmitted(shellID)))
         }),
         Effect.forkIn(scope, { startImmediately: true }),
@@ -160,7 +203,7 @@ export const Plugin = {
         draft.add(
           name,
           Tool.make({
-            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds, up to ${MAX_TIMEOUT_MS}; zero or omission uses the ${DEFAULT_TIMEOUT_MS} ms default. memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
+            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds, up to ${MAX_TIMEOUT_MS}; zero or omission uses the ${DEFAULT_TIMEOUT_MS} ms default. memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes. channel=queue admits the command to a bounded machine-wide queue shared by every YCoding process on this machine and returns immediately with its shell ID and queue position; it starts when a slot, its Session's running cap, available memory (memory_limit_mb or the configured reserve), and CPU load allow, its timeout counts from that start, and completion is delivered automatically like a background command. Use channel=queue for typechecks, builds, and package-wide test suites so expensive commands never run concurrently beyond safe limits; use the default channel=normal for ordinary commands.`,
             input: Input,
             output: Output,
             structured: StructuredOutput,
@@ -246,7 +289,13 @@ export const Plugin = {
                         : new ToolFailure({ message: `Session guardrail rejected shell command: ${input.command}`, error }),
                     ),
                   )
-                const info = yield* shell.create(prepared).pipe(Effect.onError(() => reservation.release))
+                const queued = input.channel === "queue"
+                const start: Effect.Effect<ShellSchema.Info, ToolFailure | Shell.SpawnError> = queued
+                  ? shell
+                      .enqueue(prepared, context.sessionID)
+                      .pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error })))
+                  : shell.create(prepared)
+                const info = yield* start.pipe(Effect.onError(() => reservation.release))
 
                 const captureShell = Effect.fn("ShellTool.captureShell")(function* () {
                   const page = yield* shell.output(info.id, { limit: MAX_CAPTURE_BYTES })
@@ -260,6 +309,8 @@ export const Plugin = {
 
                 const settleShell = Effect.fn("ShellTool.settleShell")(function* () {
                   const final = yield* shell.wait(info.id)
+
+                  if (final.status === "killed") return yield* Effect.interrupt
 
                   if (final.status === "timeout") {
                     return {
@@ -307,6 +358,19 @@ export const Plugin = {
                       shell.remove(info.id).pipe(Effect.ignore, Effect.andThen(reservation.release)),
                     ),
                   )
+
+                if (queued) {
+                  yield* runtime.job.background(job.id)
+                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, input.command)
+                  return {
+                    output: `${QUEUED_STARTED}${info.queuePosition === undefined ? "" : ` at position ${info.queuePosition}`}.`,
+                    shellID: info.id,
+                    truncated: false,
+                    status: "queued" as const,
+                    ...(info.queuePosition === undefined ? {} : { queuePosition: info.queuePosition }),
+                    ...(warnings.length ? { warnings } : {}),
+                  }
+                }
 
                 if (input.background === true) {
                   yield* runtime.job.background(job.id)

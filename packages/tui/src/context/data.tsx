@@ -1150,7 +1150,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ),
         ...Object.values(store.location).flatMap((location) =>
           Object.values(location.shell ?? {}).flatMap((shell) =>
-            shell.status === "running" && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
+            (shell.status === "running" || shell.status === "queued") && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
           ),
         ),
         ...submissions
@@ -1908,6 +1908,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           break
         case "shell.created":
+        case "shell.updated":
           setStore("location", locationKey(event.location ?? defaultLocation()), (data) => ({
             ...data,
             shell: { ...data?.shell, [event.data.info.id]: event.data.info },

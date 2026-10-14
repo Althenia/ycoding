@@ -56,7 +56,7 @@ export function ShellOutput() {
 
   createEffect(() => {
     const s = shell()
-    if (!s || s.status !== "running") return
+    if (!s || (s.status !== "running" && s.status !== "queued")) return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })

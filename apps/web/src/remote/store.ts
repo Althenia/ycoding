@@ -150,7 +150,7 @@ type TeamView = {
   readonly next?: string
   readonly pageLoading: boolean
   readonly refreshing?: boolean
-  readonly shells: readonly { readonly id: string; readonly ownerID: string; readonly command: string; readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"; readonly startedAt: number; readonly completedAt?: number }[]
+  readonly shells: readonly { readonly id: string; readonly ownerID: string; readonly command: string; readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"; readonly queuePosition?: number; readonly startedAt: number; readonly completedAt?: number }[]
   readonly shellTruncated?: boolean
   readonly shellStatus: "loading" | "ready" | "unsupported" | "error"
   readonly sideChats: readonly { readonly id: string; readonly title: string; readonly updatedAt: number }[]
@@ -2993,8 +2993,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     killTeamShell: async (shellID) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && shell.status === "running"))
-        return { status: "failed", message: "Shell is not running in this family." }
+      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && (shell.status === "running" || shell.status === "queued")))
+        return { status: "failed", message: "Shell is not running or queued in this family." }
       const rootID = team.rootID
       const token = selectionToken
       const outcome = await owner.request("session.team.shell.kill", { sessionID: rootID, input: { shellID }, timeoutMs: 10_000 })
@@ -3798,9 +3798,11 @@ function readTeamShell(value: unknown): TeamView["shells"][number] | undefined {
   const status = Reflect.get(value, "status")
   const startedAt = Reflect.get(value, "startedAt")
   const completedAt = Reflect.get(value, "completedAt")
+  const queuePosition = Reflect.get(value, "queuePosition")
   if (typeof id !== "string" || typeof ownerID !== "string" || typeof command !== "string" ||
-    !["running", "exited", "timeout", "memory-limit", "killed"].includes(status) || typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined
+    !["queued", "running", "exited", "timeout", "memory-limit", "killed"].includes(status) || typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined
   return { id, ownerID, command, status,
+    ...(status === "queued" && typeof queuePosition === "number" && Number.isInteger(queuePosition) && queuePosition > 0 ? { queuePosition } : {}),
     startedAt, ...(typeof completedAt === "number" && Number.isFinite(completedAt) ? { completedAt } : {}) } as TeamView["shells"][number]
 }
 

@@ -134,6 +134,36 @@ test("captures the Shell tab owner rows with populated groups", async () => {
   }
 }, 120_000)
 
+test("shows a queued shell's queue position and waiting time instead of a PID", async () => {
+  const queued = { ...shell("sh_queued", parentID, "bun run typecheck", "queued", now - 12_000), queuePosition: 3 }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts directory={directory}>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider>
+              <ShellRows groups={[{ owner: { label: "Main chat" }, shells: [queued, shells[0]] }]} now={now} selected={undefined} onSelect={() => {}} designLabels />
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    DESIGN_VIEWPORT_WIDE,
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("bun run typecheck"))
+    const lines = app.captureCharFrame().split("\n")
+    const row = lines.find((line) => line.includes("bun run typecheck")) ?? ""
+    expect(row).toMatch(/^queued #3\s+bun run typecheck/)
+    expect(row).toContain("waiting · 12s")
+    expect(row).not.toContain("pid")
+    expect(lines.find((line) => line.includes("bun test provider"))).toContain("pid 48213")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 function shellGroups() {
   return [
     { owner: { label: "Main chat" }, shells: shells.slice(0, 2) },
@@ -147,5 +177,5 @@ function session(id: string, title: string, agent: string) {
 }
 
 function shell(id: string, sessionID: string | undefined, command: string, status: ShellInfo["status"], started: number, pid?: number, cwd = directory) {
-  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" ? { started } : { started, completed: now } }
+  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" || status === "queued" ? { started } : { started, completed: now } }
 }

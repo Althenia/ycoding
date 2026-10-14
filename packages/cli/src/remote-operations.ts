@@ -768,17 +768,18 @@ async function run(input: OperationInput) {
       const locations = await familyLocations(input, verified)
       const shells = (await Promise.all(locations.map(async (memberLocation) => ({ location: memberLocation, items: await input.local.shellList(memberLocation) })))).flatMap((entry) => entry.items.map((item) => ({ item, location: entry.location })))
       const owners = new Map<string, SessionInfo>()
-      const visible: { id: string; ownerID: string; command: string; status: string; startedAt: number; completedAt?: number }[] = []
+      const visible: { id: string; ownerID: string; command: string; status: string; queuePosition?: number; startedAt: number; completedAt?: number }[] = []
       for (const { item, location: shellLocation } of shells) {
         if (!item || typeof item !== "object" || !("metadata" in item) || !("id" in item)) continue
-        const shell = item as { id: unknown; command?: unknown; status?: unknown; metadata: unknown; time?: { started?: number; completed?: number } }
+        const shell = item as { id: unknown; command?: unknown; status?: unknown; queuePosition?: number; metadata: unknown; time?: { started?: number; completed?: number } }
         const ownerID = shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
         if (typeof ownerID !== "string" || typeof shell.id !== "string") continue
         const owner = owners.get(ownerID) ?? await input.sessions.verify(ownerID)
         if (!owner || owner.id !== verified.id && owner.parentID !== verified.id || JSON.stringify(locationInfo(owner)) !== JSON.stringify(shellLocation)) continue
         owners.set(ownerID, owner)
         if (visible.length === 50) return { data: visible, truncated: true }
-        visible.push({ id: shell.id, ownerID, command: typeof shell.command === "string" ? shell.command.slice(0, 256) : "", status: typeof shell.status === "string" ? shell.status : "exited", startedAt: shell.time?.started ?? 0,
+        visible.push({ id: shell.id, ownerID, command: typeof shell.command === "string" ? shell.command.slice(0, 256) : "", status: typeof shell.status === "string" ? shell.status : "exited",
+          ...(shell.status === "queued" && shell.queuePosition !== undefined ? { queuePosition: shell.queuePosition } : {}), startedAt: shell.time?.started ?? 0,
           ...(shell.time?.completed === undefined ? {} : { completedAt: shell.time.completed }) })
       }
       return { data: visible, truncated: false }

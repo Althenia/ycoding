@@ -74,6 +74,18 @@ describe("public docs allowlist", () => {
 })
 
 describe("documentation index", () => {
+  test("documents slot-index bounds and immediate acknowledgment for the shell queue", () => {
+    const resource = findDocPage("configuration/tools")?.sections.find((section) => section.heading === "Resource limits")
+    const text = resource?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
+    expect(text).toContain("identical shell queue limits")
+    expect(text).toContain("slot indices below its own limits")
+    expect(text).toContain("largest recorded corresponding limit")
+    expect(text).toContain("without waiting for resource sampling or admission")
+    const rows = resource?.blocks.flatMap((block) => block.kind === "table" ? block.rows : []) ?? []
+    for (const field of ["max_running", "max_running_per_session", "max_queued_per_session"])
+      expect(rows.find((row) => row[0] === `\`shell_queue.${field}\``)?.[3]).toContain("slot range")
+  })
+
   test("describes release installation without claiming a signature", () => {
     const install = DOC_INDEX.sections.flatMap((section) =>
       section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),

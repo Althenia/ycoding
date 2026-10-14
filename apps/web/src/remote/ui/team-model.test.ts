@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
+import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, shellStatusLabel, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -63,7 +63,7 @@ test("Team activity includes only live shells, distinguishes unreported and trun
   expect(teamActivityLabel({ ...data, activeTotal: undefined, next: "next" })).toBe("At least 1 active")
   expect(teamActiveCount({ ...data, shellStatus: "loading", shells: [] })).toBeUndefined()
   expect(teamActiveCount({ ...data, shellStatus: "error" })).toBeUndefined()
-  for (const status of ["exited", "timeout", "memory-limit", "killed"] as const) expect(teamActiveCount({ ...data, shells: [{ ...data.shells[0]!, status }] })).toBe(0)
+  for (const status of ["queued", "exited", "timeout", "memory-limit", "killed"] as const) expect(teamActiveCount({ ...data, shells: [{ ...data.shells[0]!, status }] })).toBe(0)
 })
 
 test("progress on a running task never reshuffles its section, while a state change still moves it", () => {
@@ -109,4 +109,11 @@ test("usage always yields the same four slots and never turns an unreported valu
   expect(noLimit?.meter).toBeUndefined()
   expect(usageSlots({ ...reported, cost: 0, tokens: 0 }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
   expect(usageSlots({ ...reported, contextTotal: 5_000, contextLimit: 2_000 }, {})[2]?.meter).toBe(1)
+})
+
+test("queued shells show their queue position and other statuses show their own word", () => {
+  expect(shellStatusLabel({ status: "queued", queuePosition: 2 })).toBe("queued #2")
+  expect(shellStatusLabel({ status: "queued" })).toBe("queued")
+  expect(shellStatusLabel({ status: "running" })).toBe("running")
+  expect(shellStatusLabel({ status: "killed", queuePosition: 2 })).toBe("killed")
 })

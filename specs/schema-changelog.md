@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-14: Add Queued Shell Commands
+
+- Add `queued` to `Shell.Status`, optional 1-based `Shell.Info.queuePosition`, and optional `Shell.Time.queued` (enqueue time of a queue-channel command once it starts).
+- Add the ephemeral `shell.updated` event carrying `{ info: Shell.Info }` for a queue-position change and the transition from `queued` to `running`.
+- `shell.list` lists queued and running shells. Add the `shell_queue` configuration object and the shell tool's `channel` input (`normal` or `queue`).
+
+Compatibility:
+
+- The status value, fields, event, and configuration are additive and require no stored-data migration. Promise and Effect clients are regenerated; consumers that switch over `Shell.Status` must handle `queued`.
+
 ## 2026-10-11: Add Session Compaction History Read
 
 - Add `SessionCompaction.HistoryJob` (`jobID`, `trigger`, `status`, `created`, optional `metrics` on completed jobs, optional `code` on failed jobs) and `SessionCompaction.History` (`data`, `truncated`, `completedBefore`, `completedCount`, `totalSavedTokens`).

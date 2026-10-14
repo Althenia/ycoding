@@ -11,6 +11,7 @@ import { useRoute } from "../../../context/route"
 import type { SessionShellGroup } from "../../../util/session"
 import { formatDuration } from "../../../util/format"
 import { abbreviateHome } from "../../../util/path-format"
+import { shellStatusLabel, statusColor } from "../../shell-output/util"
 import { useComposerTab } from "./index"
 
 type ShellEntry = {
@@ -19,7 +20,7 @@ type ShellEntry = {
 }
 
 export function formatShellElapsed(shell: ShellInfo, now: number) {
-  const completed = shell.status === "running" ? undefined : shell.time.completed
+  const completed = shell.status === "running" || shell.status === "queued" ? undefined : shell.time.completed
   const duration = Math.max(0, (completed ?? now) - shell.time.started)
   return formatDuration(duration / 1_000)
 }
@@ -60,7 +61,7 @@ export function ShellRows(props: {
                     >
                       <box width={16} flexShrink={0}>
                         <text fg={active() ? theme.text.action.primary.focused : statusColor(shell.status, theme)} wrapMode="none">
-                          {shell.status}
+                          {shellStatusLabel(shell)}
                         </text>
                       </box>
                       <text fg={color()} attributes={active() ? TextAttributes.BOLD : undefined} wrapMode="none">
@@ -73,9 +74,11 @@ export function ShellRows(props: {
                         </text>
                         <box flexGrow={1} />
                         <text fg={active() ? theme.text.action.primary.focused : theme.text.subdued} wrapMode="none">
-                          {shell.status === "running" && shell.pid !== undefined
-                            ? `pid ${shell.pid} · ${formatShellElapsed(shell, props.now)}`
-                            : `exit — · ${formatShellElapsed(shell, props.now)}`}
+                          {shell.status === "queued"
+                            ? `waiting · ${formatShellElapsed(shell, props.now)}`
+                            : shell.status === "running" && shell.pid !== undefined
+                              ? `pid ${shell.pid} · ${formatShellElapsed(shell, props.now)}`
+                              : `exit — · ${formatShellElapsed(shell, props.now)}`}
                         </text>
                       </Show>
                     </box>
@@ -120,7 +123,7 @@ export function ShellTab(props: { sessionID: string }) {
   })
 
   createEffect(() => {
-    if (!entries().some((entry) => entry.shell.status === "running")) return
+    if (!entries().some((entry) => entry.shell.status === "running" || entry.shell.status === "queued")) return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -276,11 +279,4 @@ function shellOwnerLabel(label: string) {
   if (label === "Main chat") return "MAIN CHAT · THIS SESSION"
   if (label === "Unknown session") return "UNKNOWN SESSION"
   return `SUBAGENT · ${label.toUpperCase()}`
-}
-
-function statusColor(status: ShellInfo["status"], theme: ReturnType<typeof useTheme>["theme"]) {
-  if (status === "running") return theme.text.feedback.success.default
-  if (status === "exited") return theme.text.feedback.success.default
-  if (status === "timeout") return theme.text.feedback.warning.default
-  return theme.text.feedback.error.default
 }

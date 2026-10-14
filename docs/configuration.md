@@ -328,6 +328,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `shell`                 | string                                | Preferred shell for terminal and shell execution.                                           |
 | `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                     |
 | `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.          |
+| `shell_queue`           | object                                | Limits of the machine-wide queue for queue-channel shell commands.                          |
 | `model`                 | model selector                        | Default model.                                                                              |
 | `default_agent`         | string                                | Default selectable primary agent.                                                           |
 | `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.          |
@@ -370,6 +371,32 @@ A finite limit supplies `GOMEMLIMIT=<limit>MiB` to Go runtimes, including compat
 
 On macOS and Linux, YCoding samples aggregate resident memory for the detached shell process group every 250 milliseconds and terminates the group with status `memory-limit` after a sample exceeds the limit. Sampling can overshoot between checks, shared pages can be counted more than once, and a command that deliberately creates a new process group can escape aggregate accounting. This is resource control, not a security boundary or a kernel hard limit. Windows rejects a finite shell memory limit because the current process abstraction cannot assign the command to a Job Object before it starts.
 
+### Shell queue
+
+`shell_queue` bounds the machine-wide queue that admits shell commands sent with the shell tool's `channel: "queue"` input. Every YCoding process of the user on the machine (the background service, each TUI, and each `ycoding run`) shares the queue through files under YCoding's global state directory. Each command records its Location's limits when queued and claims slot indices below its own limits. Use identical values everywhere for exact machine-wide and per-Session caps. With different values, counts are bounded by the largest recorded corresponding limit, while each command uses an index below its own limit; a smaller limit does not constrain commands using higher indices. Enqueue publishes and acknowledges without waiting for resource sampling or admission. Admission uses lock-free snapshots, with turn order and sampled resource thresholds subject to a one-admission race deviation; there is no machine-wide critical section. Processes re-evaluate on entry file changes and on a fixed 2-second backstop only while entries wait. Heartbeats run every second while commands wait or run, and five missed owner intervals trigger stall detection. These intervals are not configurable. See [Shell channels and the machine-wide queue](./runtime.md#shell-channels-and-the-machine-wide-queue) for reclaim, file-loss recovery, and the stopped-claimant exception.
+
+```jsonc
+{
+  "shell_queue": {
+    "max_running": 2,
+    "max_running_per_session": 1,
+    "max_queued_per_session": 16,
+    "memory_reserve_mb": 2048,
+    "max_load": 1
+  }
+}
+```
+
+| Field                     | Type                                | Default | Meaning                                                                                                                                       |
+| ------------------------- | ----------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max_running`             | integer `1`–`64`                    | `2`     | Global running indices available to each command; the exact machine-wide cap when uniform.                                                    |
+| `max_running_per_session` | integer `1`–`64`                    | `1`     | Per-Session running indices available to each command; the exact per-Session cap when uniform.                                                 |
+| `max_queued_per_session`  | integer `1`–`1000`                  | `16`    | Per-Session waiting indices available to each command; reject when its range is full. Running commands release their waiting indices.        |
+| `memory_reserve_mb`       | integer `0`–`1048576`               | `2048`  | Available memory in MiB required to start a command without a memory limit. A command with a finite memory limit requires that limit instead. |
+| `max_load`                | number greater than `0`, up to `64` | `1`     | A command starts only while the 1-minute load average divided by the CPU count is below this value.                                         |
+
+Available memory is memory the kernel can provide without compressing or swapping: on macOS it is the free, inactive, and speculative pages reported by `vm_stat`, because `os.freemem()` there reports only unused pages; purgeable pages already sit on the active or inactive queues and are not added again. On Linux it is `MemAvailable` from `/proc/meminfo`; elsewhere, or when that source cannot be read, it is `os.freemem()`. A sample that takes longer than 1 second counts as unmet for that evaluation. Windows reports no load average, so the load threshold never blocks there. When no queue-channel command is running anywhere on the machine, the head of the queue starts even if memory or load thresholds are not met, so a persistently loaded machine still makes progress. A queued command's tool call holds one guardrail `max_concurrent_shells` slot from the moment it is queued until it settles, so waiting queued commands count toward that Session-family cap; a queue-channel call over the cap waits `shell_wait_seconds` for a slot and then fails like any other shell call.
+
 ### Field defaults and nested Schema contract
 
 The field reference below expands the overview. `unset` means the field is optional in Schema and has no default specified here.
@@ -380,6 +407,10 @@ The field reference below expands the overview. `unset` means the field is optio
 | `shell`                                           | string                                                                         | unset           | Shell executable or command selector.                                                            |
 | `shell_sandbox`                                   | `disabled` \| `optional` \| `required`                                         | unset           | Shell isolation policy.                                                                          |
 | `shell_memory_limit_mb`                           | non-negative integer `<= 1048576`                                              | unset           | Default sampled resident-memory limit in MiB; zero means unlimited.                              |
+| `shell_queue.max_running`, `.max_running_per_session` | integer `1`–`64`                                                      | `2`, `1`        | Global and per-Session running slot ranges; exact caps when values are uniform.                  |
+| `shell_queue.max_queued_per_session`              | integer `1`–`1000`                                                             | `16`            | Per-Session waiting slot range; reject a call when its range is full.                            |
+| `shell_queue.memory_reserve_mb`                   | integer `0`–`1048576`                                                          | `2048`          | Available memory required to start a queued command without a memory limit.                     |
+| `shell_queue.max_load`                            | number `> 0` and `<= 64`                                                       | `1`             | Start threshold for the 1-minute load average divided by the CPU count.                          |
 | `model`                                           | model selector                                                                 | unset           | Session/agent model fallback.                                                                    |
 | `default_agent`, `username`                       | string                                                                         | unset           | Primary agent ID and display identity.                                                           |
 | `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Notice-only checks; `false` disables them.                                                       |

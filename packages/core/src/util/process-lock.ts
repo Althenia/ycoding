@@ -1,5 +1,5 @@
 import { lockDarwin, lockLinux, type LockResult } from "#process-lock-ffi"
-import { closeSync, mkdirSync, openSync } from "node:fs"
+import fs from "node:fs"
 import { connect, createServer, type Server, type Socket } from "node:net"
 import path from "node:path"
 import { Effect, Schema } from "effect"
@@ -29,8 +29,8 @@ export namespace ProcessLock {
   const acquirePosix = Effect.fnUntraced(function* (file: string) {
     const fd = yield* Effect.try({
       try: () => {
-        mkdirSync(path.dirname(file), { recursive: true })
-        return openSync(file, "a+", 0o600)
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        return fs.openSync(file, "a+", 0o600)
       },
       catch: (cause) =>
         new SystemError({
@@ -50,14 +50,14 @@ export namespace ProcessLock {
     }).pipe(
       Effect.tapError(() =>
         Effect.sync(() => {
-          closeSync(fd)
+          fs.closeSync(fd)
         }),
       ),
     )
     if (result.acquired) {
       return fd
     }
-    closeSync(fd)
+    fs.closeSync(fd)
     return yield* result.held
       ? new HeldError({ file })
       : new SystemError({ file, operation: "acquire", code: String(result.code) })
@@ -70,10 +70,75 @@ export namespace ProcessLock {
     }
     yield* Effect.acquireRelease(acquirePosix(file), (fd) =>
       Effect.sync(() => {
-        closeSync(fd)
+        fs.closeSync(fd)
       }),
     )
   })
+
+  // Claims `file` as a slot: the claim holds the lock of the file the path names while the file
+  // exists. Release removes the file before unlocking it, so an existing file whose lock can be
+  // taken was left by a dead holder, and taking that lock claims it.
+  export const claim = Effect.fn("ProcessLock.claim")(function* (file: string) {
+    if (process.platform === "win32") {
+      yield* Effect.acquireRelease(
+        acquireWindows(file).pipe(
+          Effect.tap((server) =>
+            Effect.try({
+              try: () => {
+                fs.mkdirSync(path.dirname(file), { recursive: true })
+                fs.closeSync(fs.openSync(file, "a", 0o600))
+              },
+              catch: (cause) =>
+                new SystemError({
+                  file,
+                  operation: "open",
+                  code: cause instanceof Error ? cause.message : String(cause),
+                }),
+            }).pipe(Effect.tapError(() => closeWindows(server))),
+          ),
+        ),
+        (server) => removeFile(file).pipe(Effect.andThen(closeWindows(server))),
+      )
+      return
+    }
+    yield* Effect.acquireRelease(
+      acquirePosix(file).pipe(
+        Effect.flatMap((fd) =>
+          Effect.try({
+            try: () => names(file, fd),
+            catch: (cause) =>
+              new SystemError({
+                file,
+                operation: "acquire",
+                code: cause instanceof Error ? cause.message : String(cause),
+              }),
+          }).pipe(
+            Effect.flatMap((matches) => (matches ? Effect.succeed(fd) : Effect.fail(new HeldError({ file })))),
+            Effect.tapError(() => Effect.sync(() => fs.closeSync(fd))),
+          ),
+        ),
+      ),
+      (fd) =>
+        Effect.suspend(() => (names(file, fd) ? removeFile(file) : Effect.void)).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              fs.closeSync(fd)
+            }),
+          ),
+        ),
+    )
+  })
+}
+
+// A lock taken on a file that another process already removed or replaced does not hold the path.
+function names(file: string, fd: number) {
+  const locked = fs.fstatSync(fd)
+  const current = fs.statSync(file, { throwIfNoEntry: false })
+  return current !== undefined && current.dev === locked.dev && current.ino === locked.ino
+}
+
+function removeFile(file: string) {
+  return Effect.try(() => fs.unlinkSync(file)).pipe(Effect.ignore)
 }
 
 function lock(fd: number): LockResult {

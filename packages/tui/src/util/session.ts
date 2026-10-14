@@ -83,7 +83,7 @@ export function groupSessionShells(
   const descendantIDs = childSessionIDs(sessions, currentSessionID)
   const ownerIDs = new Set([currentSessionID, ...descendantIDs])
   const visible = shells.filter((shell) => {
-    if (shell.status !== "running") return false
+    if (shell.status !== "running" && shell.status !== "queued") return false
     const sessionID = shell.metadata.sessionID
     if (typeof sessionID !== "string") return true
     const owner = sessions.find((session) => session.id === sessionID)

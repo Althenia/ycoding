@@ -10,34 +10,38 @@ const LOCK_NB = 4
 const DARWIN_EWOULDBLOCK = 35
 const LINUX_EWOULDBLOCK = 11
 
-export function lockDarwin(fd: number): LockResult {
-  const library = dlopen("/usr/lib/libSystem.B.dylib", {
+// libc stays loaded for the process lifetime, so each library is opened once and reused.
+let darwin: ReturnType<typeof openDarwin> | undefined
+let linux: ReturnType<typeof openLinux> | undefined
+
+function openDarwin() {
+  return dlopen("/usr/lib/libSystem.B.dylib", {
     flock: { arguments: ["int32", "int32"], return: "int32" },
     __error: { arguments: [], return: "pointer" },
   })
-  try {
-    const result = library.functions.flock(fd, LOCK_EX | LOCK_NB)
-    const code = result === 0 ? 0 : getInt32(library.functions.__error(), 0)
-    if (result === 0) return { acquired: true }
-    if (code === DARWIN_EWOULDBLOCK) return { acquired: false, held: true }
-    return { acquired: false, held: false, code }
-  } finally {
-    library.lib.close()
-  }
 }
 
-export function lockLinux(fd: number): LockResult {
-  const library = dlopen("libc.so.6", {
+function openLinux() {
+  return dlopen("libc.so.6", {
     flock: { arguments: ["int32", "int32"], return: "int32" },
     __errno_location: { arguments: [], return: "pointer" },
   })
-  try {
-    const result = library.functions.flock(fd, LOCK_EX | LOCK_NB)
-    const code = result === 0 ? 0 : getInt32(library.functions.__errno_location(), 0)
-    if (result === 0) return { acquired: true }
-    if (code === LINUX_EWOULDBLOCK) return { acquired: false, held: true }
-    return { acquired: false, held: false, code }
-  } finally {
-    library.lib.close()
-  }
+}
+
+export function lockDarwin(fd: number): LockResult {
+  darwin ??= openDarwin()
+  const result = darwin.functions.flock(fd, LOCK_EX | LOCK_NB)
+  if (result === 0) return { acquired: true }
+  const code = getInt32(darwin.functions.__error(), 0)
+  if (code === DARWIN_EWOULDBLOCK) return { acquired: false, held: true }
+  return { acquired: false, held: false, code }
+}
+
+export function lockLinux(fd: number): LockResult {
+  linux ??= openLinux()
+  const result = linux.functions.flock(fd, LOCK_EX | LOCK_NB)
+  if (result === 0) return { acquired: true }
+  const code = getInt32(linux.functions.__errno_location(), 0)
+  if (code === LINUX_EWOULDBLOCK) return { acquired: false, held: true }
+  return { acquired: false, held: false, code }
 }

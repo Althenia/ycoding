@@ -2,7 +2,7 @@ import { Show } from "solid-js"
 import type { ShellInfo } from "@ycoding-ai/client"
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../../context/theme"
-import { statusColor } from "./util"
+import { shellStatusLabel, statusColor } from "./util"
 import { formatShellElapsed } from "../session/composer/shell-tab"
 
 export function ShellOutputHeader(props: { shell: ShellInfo; owner: string; now: number }) {
@@ -25,7 +25,7 @@ export function ShellOutputHeader(props: { shell: ShellInfo; owner: string; now:
       </text>
       <box flexGrow={1} />
       <text wrapMode="none" fg={statusColor(props.shell.status, theme)}>
-        {props.shell.status} {formatShellElapsed(props.shell, props.now)}
+        {shellStatusLabel(props.shell)} {formatShellElapsed(props.shell, props.now)}
       </text>
     </box>
   )

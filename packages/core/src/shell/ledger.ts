@@ -74,6 +74,7 @@ export const record = Effect.fn("ShellLedger.record")(function* (
       owner_started: input.owner.started,
       time_created: yield* Clock.currentTimeMillis,
     })
+    .onConflictDoUpdate({ target: ShellTable.id, set: { pid: input.pid, process_started: input.started } })
     .run()
     .pipe(Effect.orDie)
 })
@@ -170,6 +171,8 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
 })
 
 function survivors(row: Row, snapshot: readonly Process[]) {
+  // A queued command records pid 0 until it starts and has no process group to signal.
+  if (row.pid <= 0) return false
   const leader = snapshot.find((item) => item.pid === row.pid)
   if (leader) return row.process_started !== null && leader.started === row.process_started
   return snapshot.some((item) => item.pgid === row.pid)

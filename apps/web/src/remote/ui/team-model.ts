@@ -10,7 +10,8 @@ export type TeamShell = {
   readonly id: string
   readonly ownerID: string
   readonly command: string
-  readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  readonly queuePosition?: number
   readonly startedAt: number
   readonly completedAt?: number
 }
@@ -71,6 +72,11 @@ export function teamActivityLabel(data: Pick<TeamPanelData, "status" | "activeTo
   const count = teamActiveCount(data)
   if (count === undefined) return "Activity unreported"
   return `${data.shellTruncated || data.activeTotal === undefined && data.next !== undefined ? "At least " : ""}${count} active`
+}
+
+export function shellStatusLabel(shell: Pick<TeamShell, "status" | "queuePosition">): string {
+  if (shell.status !== "queued") return shell.status
+  return shell.queuePosition === undefined ? "queued" : `queued #${shell.queuePosition}`
 }
 
 export function isActiveSubagent(state: TeamSubagent["state"]): boolean {

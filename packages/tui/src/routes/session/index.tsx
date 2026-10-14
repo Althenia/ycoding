@@ -139,6 +139,7 @@ import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { isCompactionCheckpoint } from "../../util/session"
+import { shellStatusLabel } from "../shell-output/util"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
@@ -3472,9 +3473,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
     const commandFailed =
       command !== undefined && ("errors" in command.result ? command.result.errors > 0 : command.result.fail > 0)
     const shellID = stringValue(toolprops.metadata.shellID)
+    const liveShell = display() === "shell" && shellID !== undefined ? data.shell.get(shellID) : undefined
     const background =
-      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) ||
-      (display() === "shell" && shellID !== undefined && data.shell.get(shellID) !== undefined)
+      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) || liveShell !== undefined
     const tool =
       display() === "shell"
         ? (command?.command ?? safeToolDetailText(stringValue(input.command) ?? "shell"))
@@ -3510,7 +3511,14 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
       lifecycle: toolLifecycle(props.part, {
         status: background ? "running" : state.status,
         failed: commandFailed,
-        summary: background ? "background" : command ? commandStatus(command.result) : undefined,
+        queued: liveShell?.status === "queued",
+        summary: background
+          ? liveShell?.status === "queued"
+            ? shellStatusLabel(liveShell)
+            : "background"
+          : command
+            ? commandStatus(command.result)
+            : undefined,
       }),
       details: {
         request: boundedToolDetailLines(state.input),
@@ -3769,6 +3777,7 @@ function toolLifecycle(
     status?: ToolLifecycleInput["status"]
     failed?: boolean
     cancelled?: boolean
+    queued?: boolean
     summary?: string
   } = {},
 ): ToolLifecycleInput {
@@ -3778,6 +3787,7 @@ function toolLifecycle(
     ...(part.state.status === "error" ? { error: part.state.error } : {}),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
     ...(options.cancelled === undefined ? {} : { cancelled: options.cancelled }),
+    ...(options.queued ? { queued: true } : {}),
     ...(options.summary === undefined ? {} : { summary: options.summary }),
   }
 }
@@ -4404,9 +4414,14 @@ function Shell(props: ToolProps) {
   })
   const color = createMemo(() => (permission() ? theme.text.feedback.warning.default : theme.text.default))
   const shellID = createMemo(() => stringValue(props.metadata.shellID))
-  const backgroundRunning = createMemo(() => {
+  const liveShell = createMemo(() => {
     const id = shellID()
-    return Boolean(id && data.shell.get(id))
+    return id ? data.shell.get(id) : undefined
+  })
+  const backgroundRunning = createMemo(() => Boolean(liveShell()))
+  const badge = createMemo(() => {
+    const shell = liveShell()
+    return shell?.status === "queued" ? shellStatusLabel(shell) : "Background"
   })
   const isRunning = createMemo(() => props.part.state.status === "running" || backgroundRunning())
   const command = createMemo(() => stringValue(props.input.command))
@@ -4484,7 +4499,9 @@ function Shell(props: ToolProps) {
           </Show>
         </Show>
         <Show when={shellID()}>
-          <StatusBadge>Background</StatusBadge>
+          <StatusBadge color={liveShell()?.status === "queued" ? theme.text.feedback.info.default : undefined}>
+            {badge()}
+          </StatusBadge>
         </Show>
       </box>
     </BlockTool>

@@ -175,7 +175,7 @@ export type SessionMessageShell = {
   type: "shell"
   shellID: string
   command: string
-  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
   exit?: number | "Infinity" | "-Infinity" | "NaN"
   output?: { output: string; cursor: number; size: number; truncated: boolean }
 }
@@ -303,7 +303,7 @@ export type SessionOrchestrationAnswer = { questionID: string; text?: string; da
 
 export type ShellInfo = {
   id: string
-  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -312,7 +312,8 @@ export type ShellInfo = {
   exit?: number
   metadata: { [x: string]: any }
   toolCallID?: string
-  time: { started: number; completed?: number }
+  queuePosition?: number
+  time: { started: number; queued?: number; completed?: number }
 }
 
 export type SessionMessageProviderState3 = { [x: string]: any }
@@ -552,7 +553,7 @@ export type PtyTicketConnectToken = {
 
 export type ShellInfo1 = {
   id: string
-  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -561,7 +562,8 @@ export type ShellInfo1 = {
   exit?: number
   metadata: { [x: string]: JsonValue }
   toolCallID?: string
-  time: { started: number; completed?: number }
+  queuePosition?: number
+  time: { started: number; queued?: number; completed?: number }
 }
 
 export type ReferenceLocalSource = { type: "local"; path: string; description?: string; hidden?: boolean }
@@ -1201,7 +1203,7 @@ export type ShellExited = {
   sourceEpoch?: string
   type: "shell.exited"
   location?: LocationRef
-  data: { id: string; exit?: number; status: "running" | "exited" | "timeout" | "memory-limit" | "killed" }
+  data: { id: string; exit?: number; status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed" }
 }
 
 export type ShellDeleted = {
@@ -1751,6 +1753,16 @@ export type ShellCreated = {
   metadata?: { [x: string]: any }
   sourceEpoch?: string
   type: "shell.created"
+  location?: LocationRef
+  data: { info: ShellInfo }
+}
+
+export type ShellUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "shell.updated"
   location?: LocationRef
   data: { info: ShellInfo }
 }
@@ -3788,6 +3800,7 @@ export type ServerEvent =
   | PtyExited
   | PtyDeleted
   | ShellCreated
+  | ShellUpdated
   | ShellExited
   | ShellDeleted
   | QuestionAsked

@@ -11,37 +11,41 @@ const LOCK_NB = 4
 const DARWIN_EWOULDBLOCK = 35
 const LINUX_EWOULDBLOCK = 11
 
-export function lockDarwin(fd: number): LockResult {
-  const library = dlopen("/usr/lib/libSystem.B.dylib", {
+// libc stays loaded for the process lifetime, so each library is opened once and reused.
+let darwin: ReturnType<typeof openDarwin> | undefined
+let linux: ReturnType<typeof openLinux> | undefined
+
+function openDarwin() {
+  return dlopen("/usr/lib/libSystem.B.dylib", {
     flock: { args: ["i32", "i32"], returns: "i32" },
     __error: { args: [], returns: "ptr" },
   })
-  try {
-    const result = library.symbols.flock(fd, LOCK_EX | LOCK_NB)
-    const code = result === 0 ? 0 : errorCode(library.symbols.__error())
-    if (result === 0) return { acquired: true }
-    if (code === DARWIN_EWOULDBLOCK) return { acquired: false, held: true }
-    return { acquired: false, held: false, code }
-  } finally {
-    library.close()
-  }
 }
 
-export function lockLinux(fd: number): LockResult {
+function openLinux() {
   const musl = `/lib/libc.musl-${process.arch === "arm64" ? "aarch64" : "x86_64"}.so.1`
-  const library = dlopen(existsSync(musl) ? musl : "libc.so.6", {
+  return dlopen(existsSync(musl) ? musl : "libc.so.6", {
     flock: { args: ["i32", "i32"], returns: "i32" },
     __errno_location: { args: [], returns: "ptr" },
   })
-  try {
-    const result = library.symbols.flock(fd, LOCK_EX | LOCK_NB)
-    const code = result === 0 ? 0 : errorCode(library.symbols.__errno_location())
-    if (result === 0) return { acquired: true }
-    if (code === LINUX_EWOULDBLOCK) return { acquired: false, held: true }
-    return { acquired: false, held: false, code }
-  } finally {
-    library.close()
-  }
+}
+
+export function lockDarwin(fd: number): LockResult {
+  darwin ??= openDarwin()
+  const result = darwin.symbols.flock(fd, LOCK_EX | LOCK_NB)
+  if (result === 0) return { acquired: true }
+  const code = errorCode(darwin.symbols.__error())
+  if (code === DARWIN_EWOULDBLOCK) return { acquired: false, held: true }
+  return { acquired: false, held: false, code }
+}
+
+export function lockLinux(fd: number): LockResult {
+  linux ??= openLinux()
+  const result = linux.symbols.flock(fd, LOCK_EX | LOCK_NB)
+  if (result === 0) return { acquired: true }
+  const code = errorCode(linux.symbols.__errno_location())
+  if (code === LINUX_EWOULDBLOCK) return { acquired: false, held: true }
+  return { acquired: false, held: false, code }
 }
 
 function errorCode(pointer: Pointer | null) {
