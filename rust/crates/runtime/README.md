@@ -161,6 +161,31 @@ Each new union interest advertises the backend process source epoch with `Resync
 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test connector --test connector_events --test connector_relay --test remote_derived --test remote_enroll
 ```
 
+## Remote request placement
+
+Remote dispatch resolves placement from backend state, independently of local
+Location scopes. Session scopes use the recorded Session Location and reject
+deleted or unavailable placements. Form scopes name the owning real Session,
+not a Form ID or the local global sentinel. Advertised workspace scopes use the
+current workspace inventory and revalidate its Project before dispatch.
+Machine-scoped provider quota reads use the backend process working directory
+with no workspace identity, matching the TypeScript server's default request
+placement.
+
+Remote `fs.find`, `shell.output`, `providerUsage.list`, and `session.create`
+reject caller-supplied Location fields, including empty Location wrappers.
+Filesystem search accepts Session or advertised workspace scope and returns
+relative paths with file URIs and no local Location result. Shell output accepts
+only its recorded Session owner and omits the local Location result. Provider
+quota reads retain the canonical resolved `Location_Info`. Session creation
+requires a stable root ID and advertised workspace; reuse must match that
+workspace's current placement. Local scopes, path selection, result Locations,
+and filesystem entries remain unchanged.
+
+`tests/remote_placement.rs` exercises these boundaries with the real Session
+store, Location services, filesystem search, shell and quota services through
+authenticated connector dispatch.
+
 ## Session ingress
 
 `session.autonomy.set` accepts YOLO 0–3 by the selected double's value,

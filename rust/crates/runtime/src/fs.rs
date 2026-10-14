@@ -60,6 +60,15 @@ pub async fn find(
     invocation: Invocation,
     request: v5::FsFindRequest,
 ) -> Result<v5::FsFindResult, Failure> {
+    if invocation.remote
+        && (convert::domain(&request.query.query)?.code_units().count() > 200
+            || request
+                .query
+                .limit
+                .is_some_and(|limit| !(1..=50).contains(&limit)))
+    {
+        return Err(Failure::Invalid("Invalid remote file search bounds".into()));
+    }
     let q = request.query.location.as_ref();
     let (location, services) = platform_services::resolve(
         &invocation,
@@ -80,6 +89,7 @@ pub async fn find(
         limit: request
             .query
             .limit
+            .or(invocation.remote.then_some(20))
             .map(|value| PositiveInt::new(value as i64))
             .transpose()
             .map_err(|error| Failure::Invalid(error.to_string()))?,
@@ -89,9 +99,45 @@ pub async fn find(
         .map_err(|error| Failure::Unavailable(error.to_string()))?
         .map_err(platform_services::io)?;
     Ok(v5::FsFindResult {
-        location: Some(convert::location_info(&location)),
+        location: (!invocation.remote).then(|| convert::location_info(&location)),
         data: v5::FsFindResultData {
-            items: entries.iter().map(entry).collect(),
+            items: entries
+                .iter()
+                .map(|found| {
+                    let mut item = entry(found);
+                    if invocation.remote {
+                        let root = std::path::PathBuf::from(convert::readable(
+                            location.directory.as_lossless(),
+                        ));
+                        let relative =
+                            std::path::PathBuf::from(convert::readable(found.path.as_lossless()));
+                        if relative.components().any(|part| {
+                            !matches!(
+                                part,
+                                std::path::Component::Normal(_) | std::path::Component::CurDir
+                            )
+                        }) {
+                            return Err(Failure::Invalid(
+                                "File search returned an invalid relative path".into(),
+                            ));
+                        }
+                        let target = root.join(relative);
+                        if target == root || !target.starts_with(&root) {
+                            return Err(Failure::Invalid(
+                                "File search returned an invalid relative path".into(),
+                            ));
+                        }
+                        item.uri = Some(convert::text(
+                            url::Url::from_file_path(target)
+                                .map_err(|_| {
+                                    Failure::Invalid("File search returned an invalid path".into())
+                                })?
+                                .as_str(),
+                        ));
+                    }
+                    Ok(item)
+                })
+                .collect::<Result<_, Failure>>()?,
         },
     })
 }

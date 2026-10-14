@@ -185,23 +185,50 @@ pub async fn output(
     invocation: Invocation,
     request: v5::ShellOutputRequest,
 ) -> Result<v5::ShellOutputResult, Failure> {
+    if invocation.remote
+        && request
+            .query
+            .limit
+            .is_some_and(|limit| !(1..=65536).contains(&limit))
+    {
+        return Err(Failure::Invalid("Invalid remote shell output limit".into()));
+    }
     let q = request.query.location.as_ref();
     let (location, services) = platform_services::resolve(
         &invocation,
         q.and_then(|q| q.directory.as_ref()),
         q.and_then(|q| q.workspace.as_ref()),
     )?;
+    let id = convert::identifier(&request.params.id)?;
+    if invocation.remote {
+        let info = services
+            .shell
+            .get(&id)
+            .await
+            .map_err(|error| failure(&request.params.id, error))?;
+        let Some(JsonValue::String(owner)) = info.metadata.get(&"sessionID".into()) else {
+            return Err(Failure::Forbidden(
+                "Shell has no verified Session owner".into(),
+            ));
+        };
+        if !matches!(&invocation.scope.target, Some(v5::scope::Target::Session(id)) if owner.as_str() == Some(id.as_str()))
+        {
+            return Err(Failure::Forbidden(
+                "Shell belongs to another Session".into(),
+            ));
+        }
+    }
     let page = services
         .shell
         .output(
-            &convert::identifier(&request.params.id)?,
+            &id,
             request.query.cursor.unwrap_or(0) as usize,
             request.query.limit.unwrap_or(65536) as usize,
         )
         .await
         .map_err(|error| failure(&request.params.id, error))?;
     Ok(v5::ShellOutputResult {
-        location: Some(convert::location_info(&location)),
+        location: (!invocation.remote).then(|| convert::location_info(&location)),
         data: v5::ShellOutputResultData {
             output: convert::text(&page.output),
             cursor: page.cursor as u64,

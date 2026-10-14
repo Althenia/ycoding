@@ -25,6 +25,19 @@ pub async fn create(
             .map_err(|_| Failure::Unavailable("Session ID generation failed".into()))?,
     };
     if let Some(recorded) = core.sessions.get(&id).map_err(store)? {
+        if invocation.remote {
+            crate::remote_derived::target::verify(core, &id)?;
+            let services = invocation.location(None)?;
+            if recorded.parent_id.is_some()
+                || recorded.project_id != services.info.project.id
+                || recorded.location.directory != services.info.directory
+                || recorded.location.workspace_id != services.info.workspace_id
+            {
+                return Err(Failure::Invalid(
+                    "Session ID belongs to another workspace".into(),
+                ));
+            }
+        }
         return result(&recorded);
     }
     let agent = payload.agent.as_ref().map(convert::domain).transpose()?;

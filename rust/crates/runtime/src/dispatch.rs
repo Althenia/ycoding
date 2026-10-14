@@ -29,6 +29,9 @@ impl Invocation {
         &self,
         requested: Option<&v5::LocationQueryLocation>,
     ) -> Result<Arc<LocationServices>, Failure> {
+        if self.remote {
+            return self.remote_location(requested);
+        }
         let core = self.core()?;
         let (directory, workspace) = self.location_key(requested)?;
         core.locations.location(&directory, workspace.as_ref())
@@ -38,6 +41,17 @@ impl Invocation {
         &self,
         requested: Option<&v5::LocationQueryLocation>,
     ) -> Result<(LosslessString, Option<LosslessString>), Failure> {
+        if self.remote {
+            let location = self.remote_location(requested)?;
+            return Ok((
+                location.info.directory.as_lossless().clone(),
+                location
+                    .info
+                    .workspace_id
+                    .as_ref()
+                    .map(|id| id.as_lossless().clone()),
+            ));
+        }
         let Some(v5::scope::Target::Location(scoped)) = &self.scope.target else {
             return Err(Failure::Invalid("request has no Location scope".into()));
         };
@@ -54,6 +68,43 @@ impl Invocation {
             .map(convert::domain)
             .transpose()?;
         Ok((directory, workspace))
+    }
+
+    fn remote_location(
+        &self,
+        requested: Option<&v5::LocationQueryLocation>,
+    ) -> Result<Arc<LocationServices>, Failure> {
+        if requested.is_some_and(|query| query.directory.is_some() || query.workspace.is_some()) {
+            return Err(Failure::Forbidden(
+                "Remote input cannot select a Location".into(),
+            ));
+        }
+        let core = self.core()?;
+        match &self.scope.target {
+            Some(v5::scope::Target::Session(id)) => {
+                let id = self.session(&convert::text(id))?;
+                Ok(crate::remote_derived::target::verify(core, &id)?.1)
+            }
+            Some(v5::scope::Target::Form(owner)) => {
+                let id = self.form_session(&convert::text(owner))?;
+                Ok(crate::remote_derived::target::verify(core, &id)?.1)
+            }
+            Some(v5::scope::Target::Workspace(id)) => {
+                crate::remote_derived::target::workspace(core, &id.as_str().into())
+            }
+            Some(v5::scope::Target::Machine(_)) => {
+                let directory = std::env::current_dir().map_err(|_| {
+                    Failure::Unavailable("Default machine placement unavailable".into())
+                })?;
+                let directory = directory.to_str().ok_or_else(|| {
+                    Failure::Unavailable("Default machine placement unavailable".into())
+                })?;
+                core.locations.location(&directory.into(), None)
+            }
+            _ => Err(Failure::Forbidden(
+                "Remote placement requires a backend scope".into(),
+            )),
+        }
     }
 
     pub fn form_session(&self, id: &v5::LosslessString) -> Result<session::Id, Failure> {

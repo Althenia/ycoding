@@ -26,6 +26,39 @@ pub(crate) fn authorize(
     descriptor: &v5::OperationDescriptor,
     request: &v5::Request,
 ) -> Result<(), Failure> {
+    let caller_location = match descriptor.diagnostic_name.as_str() {
+        "fs.find" => decode_strict::<v5::FsFindRequest>(&request.payload)
+            .map_err(|_| Failure::Invalid("Invalid file search".into()))?
+            .query
+            .location
+            .is_some(),
+        "shell.output" => decode_strict::<v5::ShellOutputRequest>(&request.payload)
+            .map_err(|_| Failure::Invalid("Invalid shell output read".into()))?
+            .query
+            .location
+            .is_some(),
+        "providerUsage.list" => decode_strict::<v5::ProviderUsageListRequest>(&request.payload)
+            .map_err(|_| Failure::Invalid("Invalid provider usage read".into()))?
+            .query
+            .location
+            .is_some(),
+        "session.create" => {
+            let query = decode_strict::<v5::SessionCreateRequest>(&request.payload)
+                .map_err(|_| Failure::Invalid("Invalid Session creation".into()))?;
+            if query.payload.id.is_none() || query.payload.parent_id.is_some() {
+                return Err(Failure::Invalid(
+                    "Remote creation requires a stable root Session ID".into(),
+                ));
+            }
+            query.payload.location.is_some()
+        }
+        _ => false,
+    };
+    if caller_location {
+        return Err(Failure::Forbidden(
+            "Remote input cannot select a Location".into(),
+        ));
+    }
     let scope = match &request.scope.target {
         Some(v5::scope::Target::Machine(_)) => v5::ScopeKind::Machine,
         Some(v5::scope::Target::Location(_)) => v5::ScopeKind::Location,
@@ -98,14 +131,16 @@ pub(crate) fn authorize(
         .as_ref()
         .ok_or_else(|| Failure::Unavailable("Core is not ready".into()))?;
     let id = session::Id::new(id).map_err(|_| Failure::Invalid("Invalid Session ID".into()))?;
-    let (info, _) = core.locations.session(&id)?;
-    if !std::fs::metadata(convert::readable(info.location.directory.as_lossless()))
-        .is_ok_and(|metadata| metadata.is_dir())
-    {
-        return Err(Failure::SessionNotFound(convert::readable(
-            id.as_lossless(),
-        )));
-    }
+    let (info, _) =
+        crate::remote_derived::target::verify(core, &id).map_err(|error| match error {
+            Failure::Connector { code: 5, .. } => {
+                Failure::SessionNotFound(convert::readable(id.as_lossless()))
+            }
+            Failure::Connector { code: 10, .. } => {
+                Failure::Unavailable("Session Location is unavailable".into())
+            }
+            error => error,
+        })?;
     let managed = info.parent_id.is_some()
         && info
             .agent
@@ -138,7 +173,7 @@ pub(crate) fn authorize(
         ));
     }
     if let Some(parent) = &info.parent_id {
-        core.locations.session(parent)?;
+        crate::remote_derived::target::verify(core, parent)?;
     }
     Ok(())
 }
