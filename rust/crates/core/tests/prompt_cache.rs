@@ -2,6 +2,80 @@ use ycoding_core::session::prompt_cache::{self, Namespace};
 use ycoding_schema::{DomainDecode, JsonValue, parse_json};
 
 #[test]
+fn kept_cache_policies_and_usage_reporting_follow_route_and_model_contracts() {
+    let settings = prompt_cache::Settings::default();
+    for (route, provider, model, ttl) in [
+        (
+            "anthropic-messages",
+            "anthropic",
+            "claude-sonnet-5-5",
+            Some(3600.0),
+        ),
+        (
+            "openrouter",
+            "openrouter",
+            "anthropic/claude-opus-5",
+            Some(3600.0),
+        ),
+        (
+            "openrouter-responses",
+            "openrouter",
+            "anthropic/claude-opus-5",
+            Some(3600.0),
+        ),
+        ("openrouter", "openrouter", "google/gemini-3-pro", None),
+        ("openai-compatible-chat", "local", "custom", None),
+    ] {
+        let options = prompt_cache::provider_options(&prompt_cache::OptionsInput {
+            route_id: route,
+            api_model_id: model,
+            session_id: &"session".into(),
+            project_id: &"project".into(),
+            provider_id: &provider.into(),
+            baseline_key: "stable",
+            interactive: true,
+            settings: &settings,
+        });
+        assert_eq!(
+            options.cache,
+            ttl.map(|ttl| ycoding_ai::cache::Policy::Explicit {
+                tools: true,
+                system: true,
+                messages: Some(ycoding_ai::cache::MessageStrategy::Tail(2)),
+                ttl_seconds: Some(ttl),
+            })
+        );
+    }
+    for (route, provider, mechanism) in [
+        ("anthropic-messages", "anthropic", "anthropic-cache-control"),
+        ("openrouter", "openrouter", "openrouter-cache-control"),
+        (
+            "openrouter-responses",
+            "openrouter",
+            "openrouter-cache-control",
+        ),
+        ("openai-chat", "openai", "openai-prefix-cache"),
+        ("openai-responses", "openai", "openai-prefix-cache"),
+        ("openai-compatible-chat", "local", "openai-prefix-cache"),
+    ] {
+        let absent = ycoding_core::session::cache_diagnostics::reported(route, provider, None);
+        assert_eq!(absent.mechanism, mechanism);
+        assert!(!absent.read);
+        assert!(!absent.write);
+        let usage = ycoding_ai::llm::Usage {
+            cache_read_input_tokens: Some(0.0),
+            cache_write_input_tokens: Some(0.0),
+            ..Default::default()
+        };
+        let zero =
+            ycoding_core::session::cache_diagnostics::reported(route, provider, Some(&usage));
+        assert_eq!(zero.mechanism, mechanism);
+        assert!(zero.read);
+        assert!(zero.write);
+    }
+}
+
+#[test]
 fn canonical_keys_compare_code_points_without_losing_unmatched_utf16_units() {
     let expected = r#"{"10":"ten","2":"two","a":"prefix","a\ud800":"suffix","\ud800":1,"\ud801":2,"\udfff":3,"":"bmp","𐀀":"astral"}"#;
     for input in [

@@ -22,11 +22,10 @@ pub fn gpt56(model: &LosslessString) -> bool {
     cache::supports_prompt_cache_breakpoints("openai-responses", model.as_str().unwrap_or(""))
 }
 pub fn breakpoints(request: &Request) -> bool {
-    !["github-copilot-chat", "github-copilot-responses"].contains(&request.model.route.id.as_str())
-        && cache::supports_prompt_cache_breakpoints(
-            &request.model.route.id,
-            request.model.id.as_str().unwrap_or(""),
-        )
+    cache::supports_prompt_cache_breakpoints(
+        &request.model.route.id,
+        request.model.id.as_str().unwrap_or(""),
+    )
 }
 pub fn previous_response_id(request: &Request) -> Option<&LosslessString> {
     text(request, "previousResponseId").filter(|value| !value.is_empty())

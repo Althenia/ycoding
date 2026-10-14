@@ -166,8 +166,6 @@ pub fn supports_prompt_cache_breakpoints(route: &str, model: &str) -> bool {
         "openai-chat",
         "openai-responses",
         "openai-responses-websocket",
-        "github-copilot-chat",
-        "github-copilot-responses",
         "openrouter",
         "openrouter-responses",
     ]
@@ -262,27 +260,15 @@ fn markable(part: &Part, gpt: bool) -> bool {
 }
 pub fn apply(request: &mut Request) {
     let route = &request.model.route;
-    let copilot = ["github-copilot-chat", "github-copilot-responses"].contains(&route.id.as_str());
-    let gpt = !copilot
-        && supports_prompt_cache_breakpoints(&route.id, request.model.id.as_str().unwrap_or(""));
-    let inline = ["anthropic-messages", "bedrock-converse"].contains(&route.protocol.id())
+    let gpt = supports_prompt_cache_breakpoints(&route.id, request.model.id.as_str().unwrap_or(""));
+    let inline = route.protocol.id() == "anthropic-messages"
         || [
             "ai-sdk:@ai-sdk/anthropic",
-            "ai-sdk:@ai-sdk/google-vertex/anthropic",
             "ai-sdk:@openrouter/ai-sdk-provider",
-            "ai-sdk:@ai-sdk/amazon-bedrock",
             "openrouter-responses",
             "ai-sdk:@openrouter/ai-sdk-provider:responses",
         ]
         .contains(&route.id.as_str())
-        || (route.id == "ai-sdk:@ai-sdk/github-copilot"
-            && request
-                .model
-                .id
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains("claude"))
         || (gpt && gpt_options(request).is_some());
     if !inline {
         return;
@@ -408,8 +394,7 @@ pub fn apply(request: &mut Request) {
     } else {
         usize::MAX
     };
-    let assistant_allowed =
-        !gpt || ["openai-chat", "github-copilot-chat"].contains(&request.model.route.id.as_str());
+    let assistant_allowed = !gpt || request.model.route.id == "openai-chat";
     let candidates: Vec<_> = request
         .messages
         .iter()

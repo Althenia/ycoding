@@ -135,6 +135,68 @@ fn externally_registered_upstream_provider_retains_small_model_selection() {
     );
 }
 
+#[test]
+fn external_records_retain_normalized_variants_and_small_model_policy() {
+    for (package, expected) in [
+        (
+            "@ai-sdk/google-vertex",
+            r#"{"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"high"}}"#,
+        ),
+        (
+            "@ai-sdk/openai-compatible",
+            r#"{"reasoningEffort":"high","thinking":{"type":"enabled"}}"#,
+        ),
+    ] {
+        let mut source: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+        ))
+        .unwrap();
+        source["openai"]["id"] = "external".into();
+        source["openai"]["npm"] = package.into();
+        source["openai"]["models"]["gpt-reasoning"]["id"] = "deepseek-mini".into();
+        let snapshot = models_dev::normalize(&parse_json(&source.to_string()).unwrap())
+            .unwrap()
+            .into_iter()
+            .find(|snapshot| snapshot.info.id.0 == "external".into())
+            .unwrap();
+        let mut catalog = Catalog::default();
+        catalog
+            .providers
+            .push(ycoding_core::resources::catalog::ProviderRecord {
+                provider: snapshot.info,
+                models: snapshot.models,
+                environment: snapshot.environment,
+            });
+        let model = catalog
+            .get(
+                &provider::Id("external".into()),
+                &"deepseek-mini".into(),
+                None,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            model
+                .variants
+                .iter()
+                .find(|variant| variant.id == "high".into())
+                .unwrap()
+                .settings
+                .as_ref()
+                .unwrap()
+                .0,
+            provider::Settings::decode(&parse_json(expected).unwrap())
+                .unwrap()
+                .0
+        );
+        catalog.providers[0].provider.id = provider::Id("azure".into());
+        for model in &mut catalog.providers[0].models {
+            model.provider_id = provider::Id("azure".into());
+        }
+        assert!(catalog.small(&provider::Id("azure".into()), 0.0).is_none());
+    }
+}
+
 #[tokio::test]
 async fn muse_retained_owner_seeds_rebuilt_catalog_and_reconciles_on_timer() {
     let body = serde_json::json!({"data":[row("muse-fixture")]}).to_string();

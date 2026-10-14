@@ -274,15 +274,7 @@ fn compaction(value: &JsonValue) -> bool {
         && get(value, "id").is_none_or(|value| matches!(value, JsonValue::String(_)))
 }
 pub fn prune_messages(request: &Request) -> Vec<Message> {
-    let copilot = request
-        .provider_options
-        .as_ref()
-        .and_then(|value| get(value, "copilot"))
-        .and_then(|value| get(value, "store"))
-        .and_then(json::boolean);
-    if openai_options::store(request) != Some(false)
-        && !(request.model.route.id == "ai-sdk:@ai-sdk/github-copilot" && copilot == Some(false))
-    {
+    if openai_options::store(request) != Some(false) {
         return request.messages.clone();
     }
     let boundaries = request
@@ -411,12 +403,8 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
         if message.role == Role::System {
             let native = ["openai-codex-responses", "openai-codex-websocket-responses"]
                 .contains(&request.model.route.id.as_str())
-                || [
-                    "openai-responses",
-                    "openai-responses-websocket",
-                    "github-copilot-responses",
-                ]
-                .contains(&request.model.route.id.as_str())
+                || ["openai-responses", "openai-responses-websocket"]
+                    .contains(&request.model.route.id.as_str())
                     && openai_options::gpt56(&request.model.id);
             if native {
                 let content=message.content.iter().map(|part|if let Part::Text(part)=part {Ok(text_block(part.text.clone(),false))}else {Err(Error::invalid("OpenAI Responses system messages only support text content for now"))}).collect::<Result<Vec<_>,_>>()?;

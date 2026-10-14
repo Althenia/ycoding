@@ -338,11 +338,7 @@ pub fn provider_options(input: &OptionsInput) -> Options {
     let anthropic_route = matches!(
         route,
         "anthropic-messages"
-            | "google-vertex-messages"
             | "ai-sdk:@ai-sdk/anthropic"
-            | "ai-sdk:@ai-sdk/google-vertex/anthropic"
-            | "ai-sdk:@ai-sdk/amazon-bedrock"
-            | "bedrock-converse"
             | "openrouter"
             | "openrouter-responses"
             | "ai-sdk:@openrouter/ai-sdk-provider"

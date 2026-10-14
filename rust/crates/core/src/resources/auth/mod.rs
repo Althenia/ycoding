@@ -789,11 +789,7 @@ impl BrowserAttempt {
                     .query_pairs()
                     .any(|(name, _)| matches!(name.as_ref(), "error" | "error_description"));
             let response = if valid { "200 OK" } else { "400 Bad Request" };
-            let provider = if self.code.provider == "openai" {
-                "ChatGPT"
-            } else {
-                "xAI"
-            };
+            let provider = "ChatGPT";
             let html = if valid {
                 page::success(Some(provider), true)
             } else {

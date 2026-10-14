@@ -139,6 +139,38 @@ fn profiles_model_gating_and_defaults() {
     }
     assert!(cache::profile("unknown").is_none());
     assert!(!cache::profile("llama-4-maverick").unwrap().extended_ttl);
+    for (model, minimum) in [
+        ("google/gemini-2.5-pro", 4096),
+        ("google/gemini-2.5-flash", 1024),
+        ("google/gemini-3-pro", 4096),
+        ("google/gemini-3-flash", 1024),
+    ] {
+        let mut request = Request::new(ycoding_ai::providers::openrouter(
+            model,
+            ycoding_ai::providers::OpenRouterConfig {
+                common: ycoding_ai::providers::Config::new(Auth::None),
+                reasoning: None,
+            },
+        ));
+        request.system = vec!["fixed".into()];
+        request.messages = vec![Message::user("tail")];
+        assert_eq!(
+            cache::profile(model),
+            Some(cache::Profile {
+                minimum_tokens: minimum,
+                extended_ttl: false,
+            })
+        );
+        assert!(
+            !request
+                .model
+                .route
+                .prepare(&request)
+                .unwrap()
+                .encoded_body
+                .contains("\"ttl\":\"1h\"")
+        );
+    }
     for (model, adaptive, native) in [
         ("claude-opus-5", true, true),
         ("claude-fable-5-1", true, true),

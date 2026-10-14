@@ -223,6 +223,34 @@ fn reasoning_parts_group_for_stateless_replay_and_compaction_prunes_history() {
 }
 
 #[test]
+fn imported_compaction_metadata_still_bounds_stateless_openai_history() {
+    let mut request = Request::new(Route::openai_responses().model("gpt-5.6"));
+    let compaction = Part::Reasoning(Reasoning {
+        text: "".into(),
+        encrypted: None,
+        provider_metadata: Some(parse_json(r#"{"copilot":{"opaqueCompactionItem":{"type":"compaction","id":"compact","encrypted_content":"opaque"}}}"#).unwrap()),
+    });
+    request.messages = vec![
+        Message::user("discard"),
+        Message::assistant(vec![
+            Part::Text("discard assistant".into()),
+            compaction.clone(),
+        ]),
+        Message::user("keep"),
+    ];
+    request.provider_options = Some(parse_json(r#"{"openai":{"store":false}}"#).unwrap());
+    assert_eq!(
+        ycoding_ai::openai_responses::prune_messages(&request),
+        vec![Message::assistant(vec![compaction]), Message::user("keep"),]
+    );
+    request.provider_options = Some(parse_json(r#"{"openai":{"store":true}}"#).unwrap());
+    assert_eq!(
+        ycoding_ai::openai_responses::prune_messages(&request),
+        request.messages
+    );
+}
+
+#[test]
 fn chat_think_markers_and_reasoning_details_are_lossless_across_splits() {
     let request = Request::new(Route::openai_chat().model("fixture"));
     let text = "<think>ไทย</think>answer";

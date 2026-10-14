@@ -216,6 +216,55 @@ fn reports_provider_cache_mechanism_hit_ratio_and_minimum() {
 }
 
 #[test]
+fn imported_history_retains_provider_mechanisms_and_explicit_public_literals() {
+    for (provider, expected) in [
+        ("azure", "openai-prefix-cache"),
+        ("amazon-bedrock", "bedrock-cache-point"),
+        ("google", "gemini-prefix-cache"),
+        ("google-vertex", "gemini-prefix-cache"),
+    ] {
+        let (store, service) = setup();
+        put(
+            &store,
+            "msg_historical",
+            "assistant",
+            0,
+            &assistant(&measured(10, None, None), provider, "historical"),
+        );
+        let info = service.diagnostics(&id("ses_one"), None).unwrap().unwrap();
+        assert_eq!(info.cache.mechanism.0.as_str(), Some(expected));
+        assert_eq!(info.cache.eligible.get(), 17);
+        assert!(info.cache.read_reported);
+        assert!(info.cache.write_reported);
+    }
+    for mechanism in ["bedrock-cache-point", "gemini-prefix-cache"] {
+        let (store, service) = setup();
+        put(
+            &store,
+            "msg_explicit",
+            "assistant",
+            0,
+            &assistant(
+                &measured(
+                    10,
+                    None,
+                    Some(&format!(
+                        r#"{{"providerCache":{{"mechanism":"{mechanism}","readReported":false,"writeReported":true}}}}"#
+                    )),
+                ),
+                "custom",
+                "historical",
+            ),
+        );
+        let info = service.diagnostics(&id("ses_one"), None).unwrap().unwrap();
+        assert_eq!(info.cache.mechanism.0.as_str(), Some(mechanism));
+        assert!(!info.cache.read_reported);
+        assert!(info.cache.write_reported);
+        assert!(info.cache.hit_ratio.is_none());
+    }
+}
+
+#[test]
 fn claude_55_cache_minimum_distinguishes_511_from_512_tokens() {
     for model in ["claude-sonnet-5-5", "claude-haiku-5-5"] {
         for (input, below) in [(511, true), (512, false)] {

@@ -197,34 +197,6 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
     }
     for message in &request.messages {
         if message.role == Role::System {
-            if request.model.route.id == "github-copilot-chat"
-                && openai_options::gpt56(&request.model.id)
-            {
-                if !images.is_empty() {
-                    messages.push(json::object([
-                        ("role", s("user")),
-                        ("content", JsonValue::Array(std::mem::take(&mut images))),
-                    ]));
-                }
-                let text = message
-                    .content
-                    .iter()
-                    .map(|part| {
-                        if let Part::Text(part) = part {
-                            Ok(part.text.clone())
-                        } else {
-                            Err(Error::invalid(
-                                "OpenAI Chat system messages only support text content for now",
-                            ))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                messages.push(json::object([
-                    ("role", s("system")),
-                    ("content", s(join(text, "\n"))),
-                ]));
-                continue;
-            }
             let text = openai_shared::wrapped_system(message, "OpenAI Chat")?;
             if !images.is_empty() {
                 images.push(json::object([("type", s("text")), ("text", s(text))]));

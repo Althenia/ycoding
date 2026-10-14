@@ -30,14 +30,10 @@ pub fn provider_cache(route_id: &str, provider_id: &str, usage: Option<&llm::Usa
 
 fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
     match route_id {
-        "anthropic-messages"
-        | "google-vertex-messages"
-        | "ai-sdk:@ai-sdk/anthropic"
-        | "ai-sdk:@ai-sdk/google-vertex/anthropic" => "anthropic-cache-control",
+        "anthropic-messages" | "ai-sdk:@ai-sdk/anthropic" => "anthropic-cache-control",
         "openrouter" | "openrouter-responses" | "ai-sdk:@openrouter/ai-sdk-provider" => {
             "openrouter-cache-control"
         }
-        "bedrock-converse" | "ai-sdk:@ai-sdk/amazon-bedrock" => "bedrock-cache-point",
         "openai-chat"
         | "muse-responses"
         | "openai-responses"
@@ -46,25 +42,12 @@ fn mechanism(route_id: &str, provider_id: &str, cached: bool) -> &'static str {
         | "openai-codex-websocket-responses"
         | "openai-compatible-chat"
         | "openai-compatible-responses"
-        | "azure-openai-chat"
-        | "azure-openai-responses"
-        | "google-vertex-chat"
-        | "google-vertex-responses"
-        | "cloudflare-ai-gateway"
-        | "cloudflare-workers-ai"
-        | "ai-sdk:@ai-sdk/openai"
-        | "ai-sdk:@ai-sdk/azure" => "openai-prefix-cache",
-        "gemini"
-        | "google-vertex-gemini"
-        | "ai-sdk:@ai-sdk/google"
-        | "ai-sdk:@ai-sdk/google-vertex" => "gemini-prefix-cache",
-        "ai-sdk:cursor-opencode-provider" | "runpod-ollama" | "runpod-vllm" => "provider-reported",
+        | "ai-sdk:@ai-sdk/openai" => "openai-prefix-cache",
+        "ai-sdk:cursor-opencode-provider" => "provider-reported",
         "unknown" => match provider_id {
-            "openai" | "azure" | "ycoding" | "meta" => "openai-prefix-cache",
+            "openai" | "ycoding" | "meta" => "openai-prefix-cache",
             "openrouter" => "openrouter-cache-control",
             "anthropic" => "anthropic-cache-control",
-            "amazon-bedrock" => "bedrock-cache-point",
-            "google" | "google-vertex" => "gemini-prefix-cache",
             "cursor" => "provider-reported",
             _ => observed(cached),
         },
