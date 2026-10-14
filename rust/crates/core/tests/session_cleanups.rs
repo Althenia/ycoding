@@ -534,7 +534,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
     let store = store();
     seed(&store, "ses_startup", OLD);
     let fixture = Fixture::new();
-    let sweeping = Arc::new(tokio::sync::Notify::new());
+    let sweeping = Arc::new(tokio::sync::Semaphore::new(0));
     let enabled = Arc::new(AtomicBool::new(false));
     let signal = sweeping.clone();
     let flag = enabled.clone();
@@ -544,7 +544,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
         fixture.clock.clone(),
         Arc::new(move || {
             if flag.load(Ordering::SeqCst) {
-                signal.notify_one();
+                signal.add_permits(1);
             }
             Vec::new()
         }),
@@ -589,13 +589,16 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
     blocked.recv().unwrap();
     enabled.store(true, Ordering::SeqCst);
     fixture.clock.tick.send_modify(|tick| *tick += 1);
-    sweeping.notified().await;
-    let closing = tokio::spawn(async move { owner.close().await });
-    tokio::task::yield_now().await;
-    assert!(!closing.is_finished());
+    sweeping.acquire_many(3).await.unwrap().forget();
+    let mut closing = Box::pin(owner.close());
+    std::future::poll_fn(|context| {
+        assert!(closing.as_mut().poll(context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     release.send(()).unwrap();
     blocked_write.await.unwrap();
-    closing.await.unwrap().unwrap();
+    closing.await.unwrap();
     assert_eq!(count::<tables::FileChangeTable>(&store), 0);
     fixture.clock.tick.send_modify(|tick| *tick += 1);
     let mut next = Maintenance::start(fixture.cleanup(store.client()))
