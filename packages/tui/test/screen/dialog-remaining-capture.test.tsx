@@ -621,7 +621,7 @@ test("Connect shows every kept provider and the custom endpoint action without d
       ])
         expect(frame).toContain(name)
       expect(frame).toContain("Configure an OpenAI-compatible provider")
-      expect(frame).not.toMatch(/OpenCode|YCoding Go|Copilot|Google|Gemini|Runpod|Bedrock|302\.AI|Kiro/)
+      expect(frame).not.toMatch(/OpenCode|YCoding Go|Copilot|Google|Gemini|Runpod|Bedrock|302\.AI|Kiro/) // YCODING_EXTERNAL_OPENCODE: dropped providers must not render
     } finally {
       app.renderer.destroy()
     }
@@ -647,7 +647,7 @@ test("kept API-key and subscription methods remain visible", async () => {
       await app.waitForFrame((frame) => labels.every((label) => frame.includes(label)))
       const frame = app.captureCharFrame()
       for (const label of labels) expect(frame).toContain(label)
-      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Runpod|Bedrock|Kiro/)
+      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Runpod|Bedrock|Kiro/) // YCODING_EXTERNAL_OPENCODE: dropped providers must not render
     } finally {
       app.renderer.destroy()
     }
@@ -687,7 +687,7 @@ test("model dialogs show every kept provider and a backend-defined local endpoin
       const frame = app.captureCharFrame()
       expect(frame).toContain(name)
       if (providerID === "openrouter") expect(frame).toContain("Unavailable")
-      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Gemini|Runpod|Bedrock|Kiro/)
+      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Gemini|Runpod|Bedrock|Kiro/) // YCODING_EXTERNAL_OPENCODE: dropped providers must not render
     } finally {
       app.renderer.destroy()
     }
