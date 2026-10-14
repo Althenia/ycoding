@@ -89,7 +89,8 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
         .nth(3)
         .unwrap()
         .to_path_buf();
-    let scratch = root.join(format!(".connector-v5-relay-{}", std::process::id()));
+    let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!(".connector-v5-relay-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let mut child = Command::new("bun")
         .arg(root.join("rust/crates/runtime/tests/connector_relay_support.ts"))
