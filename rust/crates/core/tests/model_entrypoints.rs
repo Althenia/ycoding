@@ -30,13 +30,6 @@ fn native_entrypoints_choose_their_own_api_and_api_model_identity() {
             "@ycoding-ai/ai/providers/openai/responses",
             "openai-responses",
         ),
-        ("@ycoding-ai/ai/providers/azure", "azure-openai-responses"),
-        (
-            "@ycoding-ai/ai/providers/azure/responses",
-            "azure-openai-responses",
-        ),
-        ("@ycoding-ai/ai/providers/azure/chat", "azure-openai-chat"),
-        ("@ycoding-ai/ai/providers/xai", "openai-responses"),
         (
             "@ycoding-ai/ai/providers/openai-compatible",
             "openai-compatible-chat",
@@ -50,7 +43,6 @@ fn native_entrypoints_choose_their_own_api_and_api_model_identity() {
             "@ycoding-ai/ai/providers/anthropic-compatible",
             "anthropic-messages",
         ),
-        ("@ycoding-ai/ai/providers/google", "gemini"),
         (
             "@ycoding-ai/ai/providers/openrouter",
             "openrouter-responses",
@@ -68,14 +60,23 @@ fn native_entrypoints_choose_their_own_api_and_api_model_identity() {
         assert_eq!(model.id, "gpt-5.6".into());
         assert_eq!(model.provider.0, "fixture".into());
     }
-    assert!(matches!(
-        from_catalog_model(&info("@ycoding-ai/ai/providers/openai/chat", "{}"), None),
-        Err(Error::UnsupportedPackage)
-    ));
+    for package in [
+        "@ycoding-ai/ai/providers/openai/chat",
+        "@ycoding-ai/ai/providers/azure",
+        "@ycoding-ai/ai/providers/azure/responses",
+        "@ycoding-ai/ai/providers/azure/chat",
+        "@ycoding-ai/ai/providers/xai",
+        "@ycoding-ai/ai/providers/google",
+    ] {
+        assert!(matches!(
+            from_catalog_model(&info(package, "{}"), None),
+            Err(Error::UnsupportedPackage)
+        ));
+    }
 }
 
 #[test]
-fn native_provider_options_query_and_transport_defaults_reach_prepared_wire() {
+fn native_provider_options_and_transport_defaults_reach_prepared_wire() {
     let native = from_catalog_model(&info("@ycoding-ai/ai/providers/openai",r#"{"apiKey":"fixture","providerOptions":{"openai":{"reasoningEffort":"high"}},"transport":"websocket"}"#),None).unwrap();
     assert_eq!(native.route.id, "openai-responses-websocket");
     let prepared = native
@@ -83,20 +84,6 @@ fn native_provider_options_query_and_transport_defaults_reach_prepared_wire() {
         .prepare(&ycoding_ai::llm::Request::new(native.clone()))
         .unwrap();
     assert!(ycoding_schema::stringify_json(&prepared.wire_body).contains("\"effort\":\"high\""));
-    let azure = from_catalog_model(&info("@ycoding-ai/ai/providers/azure/chat",r#"{"apiKey":"fixture","baseURL":"http://127.0.0.1:1","apiVersion":"custom","queryParams":{"api-version":"override","extra":"retained"}}"#),None).unwrap();
-    assert_eq!(
-        azure
-            .route
-            .endpoint
-            .query
-            .get("api-version")
-            .map(String::as_str),
-        Some("override")
-    );
-    assert_eq!(
-        azure.route.endpoint.query.get("extra").map(String::as_str),
-        Some("retained")
-    );
     assert!(
         from_catalog_model(
             &info(

@@ -414,7 +414,16 @@ test("a partial child history keeps the incomplete label and omits the earlier-c
     expect(screen.frame()).not.toContain("Child membership unavailable")
     screen.input.pressKey("p", { ctrl: true })
     await text(screen, "Commands")
+    await screen.mouse.click(
+      35,
+      screen.lines().findIndex((line) => line.includes("Search")),
+    )
+    await screen.input.typeText("fork")
     await text(screen, "Fork session")
+    for (let index = 0; index < "fork".length; index++) screen.input.pressBackspace()
+    await text(screen, "Search")
+    await screen.input.typeText("Load earlier child")
+    await text(screen, "No results found")
     expect(screen.frame()).not.toContain("Load earlier child changes")
   } finally {
     await screen.dispose()

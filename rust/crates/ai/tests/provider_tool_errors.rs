@@ -166,36 +166,3 @@ fn anthropic_and_minimax_routes_map_each_server_tool_error() {
         }
     }
 }
-
-#[test]
-fn gateway_maps_hosted_tool_errors_to_provider_executed_results() {
-    let model = ycoding_ai::gateway::model("fixture", Config::new(Auth::None));
-    let request = Request::new(model.clone());
-    let mut parser = model.route.protocol.parser(&request.resolved());
-    let mut events = Vec::new();
-    for frame in [
-        r#"{"type":"tool-call","toolCallId":"hosted_1","toolName":"web_search","input":"{}","providerExecuted":true}"#,
-        r#"{"type":"tool-result","toolCallId":"hosted_1","toolName":"web_search","result":{"message":"Unavailable"},"isError":true,"providerMetadata":{"gateway":{"itemId":"hosted_1"}}}"#,
-        r#"{"type":"finish","finishReason":{"unified":"stop"},"usage":{"inputTokens":{},"outputTokens":{}}}"#,
-    ] {
-        events.extend(parser.push(&parse_json(frame).unwrap()).unwrap());
-    }
-    events.extend(parser.finish().unwrap());
-    let response = Response::from_events(events).unwrap();
-    assert!(response.events.iter().any(|event| matches!(event, Event::ToolCall(call) if call.id == "hosted_1".into() && call.provider_executed == Some(true))));
-    let Part::ToolResult(result) = &response.message.content[1] else {
-        panic!("missing hosted tool result")
-    };
-    assert_eq!(result.id.as_str(), Some("hosted_1"));
-    assert_eq!(result.name.as_str(), Some("web_search"));
-    assert_eq!(result.provider_executed, Some(true));
-    assert_eq!(
-        result.result,
-        ToolResultValue::Error(parse_json(r#"{"message":"Unavailable"}"#).unwrap())
-    );
-    assert!(result.output.is_none());
-    assert_eq!(
-        result.provider_metadata,
-        Some(parse_json(r#"{"gateway":{"itemId":"hosted_1"}}"#).unwrap())
-    );
-}

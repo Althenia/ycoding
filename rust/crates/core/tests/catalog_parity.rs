@@ -116,14 +116,9 @@ fn native_registry_hides_only_provider_specific_chat_aliases() {
         .unwrap();
     let mut alias = openai.models[0].clone();
     alias.id = "gpt-5-chat-latest".into();
-    openai.models.push(alias.clone());
-    let mut custom = openai.clone();
-    custom.info.id = provider::Id("custom".into());
-    custom.info.package = "aisdk:@ai-sdk/openai-compatible".into();
-    custom.models = vec![alias];
-    custom.models[0].provider_id = custom.info.id.clone();
-    snapshots.push(custom);
-    let catalog = Catalog::new(snapshots);
+    openai.models.push(alias);
+    let mut catalog = Catalog::new(snapshots);
+    catalog.configure(&[parse_json(r#"{"providers":{"custom":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:1234/v1"},"models":{"gpt-5-chat-latest":{}}}}}"#).unwrap()]).unwrap();
     assert!(
         !catalog
             .get(
