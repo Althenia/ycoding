@@ -1,0 +1,8 @@
+{
+  "extends": "../packages/script/tsconfig.json",
+  "compilerOptions": {
+    "typeRoots": ["../packages/script/node_modules/@types"],
+    "paths": { "vite": ["../apps/web/node_modules/vite"] }
+  },
+  "include": ["ycoding-workspace.ts", "ycoding-workspace.test.ts", "frontend-build-graph.ts"]
+}

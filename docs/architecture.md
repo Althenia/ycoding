@@ -43,8 +43,8 @@ combines Core and Protocol. See the [process-extension contract](../specs/proces
 ```text
 schema ───────────────┐
                       ├─> core ───────┐
-schema ─> protocol ───┘               ├─> server ─> client ─> cli ─> tui
-                                      │
+schema ─> protocol ───┘               ├─> server
+             └─> client ─> cli ─> tui │
 ai / plugin / database support ───────┘
 ```
 
@@ -59,7 +59,11 @@ Rules:
 - Remote owns the closed relay envelopes and device-authentication request shapes shared by the CLI, browser, and edge relay. It does not redefine local Session semantics.
 - Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code. The remote browser store is a TanStack Store that owns event-sourced Session state, selection, subscriptions, notices, Team state, and mutations; connection-scoped read resources (provider usage, keep-awake, workspace lists) are TanStack Query resources keyed by device and connection generation, and one Query client discards them when the connection ends. Views read those resources through a non-suspending observer (`apps/web/src/remote/query.ts`) because a Solid Query resource read reaches the router's Suspense boundary and would detach the shell; route loaders preload a view's reads on link intent, and the shell warms the Usage, keep-awake, and workspace reads once after the selected Session settles. Browser-persisted notification preferences are a TanStack Store persisted through browser storage.
 
-Client, TUI, and Web code must not import Core or Server implementation modules to mutate durable state.
+Frontend production graphs are backend-free. `bun run check:ycoding-workspace` checks CLI, TUI, web, client, optional SDK, and extension presentation roots, including type imports, dynamic imports, re-exports, workspace package exports, and aliases. Core, Server, AI, Store, Code Mode, and backend SQLite packages are forbidden source owners and runtime manifest dependencies. Schema, Protocol, and client contracts are permitted; Plugin and Simulation entries must pass the same transitive graph check. Tests and build fixtures are excluded as roots, not when imported by production code.
+
+Nonliteral imports fail unless the enclosing function and file declare a presentation extension loader in the check's explicit list. The TUI `loadPlugin` function loads user-configured presentation plugins outside the shipped graph; its own static dependencies remain checked. Every run prints declared loaders and rejects stale declarations. The source gate does not certify backend logic written without imports or user-supplied extension code.
+
+`bun script/frontend-build-graph.ts --frontend=<cli|tui|web> --outdir=<fresh-directory>` instruments the owning production build without replacing its build configuration. CLI and TUI retain the native build and packaging from `packages/cli/script/build.ts`; web retains its Vite build. The check records contributing modules and external imports with their importers from real output graphs in `graph.json` and rejects backend, SQLite, drizzle, and node-pty inclusions. The declared TUI Zed editor-context reader accesses Zed's own database, not the YCoding store; its Bun and Node adapters must match their owning `editor-zed.ts` module and actual SQLite import sites. Every run prints these declarations and rejects stale declarations; any other SQLite inclusion fails. Existing graph evidence can also be checked with `bun run check:ycoding-workspace --bundle-graph=<graph.json>`. Source checking includes erased type imports; shipped checking covers emitted modules and backend externals, including third-party modules.
 
 ### Rust backend
 

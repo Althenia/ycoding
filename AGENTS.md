@@ -62,6 +62,7 @@ Update documentation in the same change when behavior changes.
 - Do not edit generated client output directly.
 - Keep runtime dependencies directed from Schema to Core and Protocol, then from Core and Protocol to Server.
 - Client runtime code may depend on Schema and Protocol but never Core or Server; SDK composition may combine public client-facing packages without making Client depend on Server.
+- Keep frontend production graphs backend-free, including type imports and transitive workspace exports/aliases: reject Core, Server, AI, Store, Code Mode, and backend SQLite owners with `bun run check:ycoding-workspace`. Permit Plugin and Simulation entries only when their reachable graph passes. Report nonliteral imports; permit only declared presentation extension loaders, print every declaration, and reject stale declarations. Verify actual shipped CLI, TUI, and web graphs with `bun script/frontend-build-graph.ts --frontend=<cli|tui|web> --outdir=<fresh-directory>`; reject backend, SQLite, drizzle, and node-pty inclusions except the explicitly declared Zed editor-context reader, whose importer evidence must match its owning module.
 - Use the owning tool or documented regeneration path for generated, vendor, lock, cache, migration-generated, and tool-managed content.
 - In `src/config`, follow the existing self-export pattern at the top of the file, for example `export * as ConfigAgent from "./agent"`, when adding a config module.
 
