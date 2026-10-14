@@ -1,3 +1,4 @@
+mod connector_status_support;
 mod support;
 
 use std::{
@@ -10,7 +11,9 @@ use support::{services, world};
 use ycoding_core::{
     event_feed::{Data, Feed, ephemeral::Fragment},
     remote::Enrollment,
-    ycoding_schema::{JsonValue, parse_json, schema::NonNegativeInt, session, session_message},
+    ycoding_schema::{
+        DomainDecode, JsonValue, form, parse_json, schema::NonNegativeInt, session, session_message,
+    },
 };
 use ycoding_runtime::{
     Environment, LocalAuth, Subscriptions,
@@ -119,7 +122,7 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
         .await
         .unwrap();
     support::insert_session("ses_real_connector", scratch.to_str().unwrap(), None).await;
-    let feed = Feed::attach(&world().store);
+    let feed = world().core.events.clone();
     let mut services = services(LocalAuth::disabled(), true);
     services.core.as_mut().unwrap().events = feed.clone();
     let environment = Arc::new(Environment {
@@ -174,6 +177,18 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     harness.send("{}");
     harness.phase("released-all");
     assert_eq!(feed.subscribers(), 1);
+    harness.send("{}");
+    harness.phase("notifications-ready");
+    let root = session::Id::new("ses_real_connector").unwrap();
+    let (_, location) = world().core.locations.session(&root).unwrap();
+    let form = form::Info::decode(&parse_json(r#"{"id":"frm_connector_status","sessionID":"ses_real_connector","title":"Runtime approval","fields":[{"key":"approve","type":"boolean"}]}"#).unwrap()).unwrap();
+    location.forms.create(form.clone()).unwrap();
+    harness.send("{}");
+    harness.phase("attention-notified");
+    location.forms.cancel(&form.id).unwrap();
+    connector_status_support::complete(&world().store, &world().core, &root).await;
+    harness.send("{}");
+    harness.phase("completion-pushed");
     harness.send("{}");
     harness.child.stdin.take();
     assert!(

@@ -28,6 +28,8 @@ use ycoding_protocol::{
 
 #[path = "events.rs"]
 mod events;
+#[path = "notifications.rs"]
+mod notifications;
 
 pub struct Settings {
     pub credentials: Arc<dyn Credentials>,
@@ -233,6 +235,7 @@ struct Driver {
     next_transfer: u64,
     established: bool,
     events: events::Interests,
+    notifications: notifications::Notifications,
 }
 
 impl Drop for Driver {
@@ -340,18 +343,11 @@ async fn connect(
         next_transfer: 1,
         established: false,
         events: events::Interests::new(environment.clone()),
+        notifications: notifications::Notifications::new(),
     };
     let subscriber = core
         .events
-        .subscribe_types(
-            Scope::Global,
-            &[
-                "session.created.2",
-                "session.deleted.2",
-                "session.updated.1",
-            ],
-            || {},
-        )
+        .subscribe_types(Scope::Global, notifications::TYPES, || {})
         .map_err(|_| Error::Transport)?;
     driver.machine.start(0).map_err(|_| Error::Incompatible)?;
     let (completed, mut results) =
@@ -373,6 +369,7 @@ async fn connect(
         reap(&mut tasks.jobs).await?;
         if driver.established {
             while let Some(item) = subscriber.next().map_err(|_| Error::Transport)? {
+                driver.notification_event(core, &item)?;
                 let body = v5::frame::Body::Control(v5::Control {
                     kind: Some(v5::control::Kind::InventoryInvalidated(
                         v5::InventoryInvalidated {},
@@ -390,6 +387,10 @@ async fn connect(
                         .map_err(protocol_error)?;
                 }
             }
+        }
+        driver.feed_notifications(core)?;
+        if !control.current(intent.generation) {
+            return Err(Error::Transport);
         }
         driver.feed_transfers()?;
         driver.feed_events()?;
@@ -409,6 +410,9 @@ async fn connect(
             .await
             .map_err(|_| Error::Transport)?
             .map_err(|_| Error::Transport)?;
+            if !control.current(intent.generation) {
+                return Err(Error::Transport);
+            }
             let decisions = driver
                 .machine
                 .handoff(prepared, length, driver.now())

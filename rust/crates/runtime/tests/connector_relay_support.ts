@@ -9,6 +9,7 @@ import {
   ScopeSchema,
   PeerRole,
   LedgerClass,
+  EmptySchema,
   event_subscribe_RequestSchema,
   event_subscribe_ResultSchema,
   event_unsubscribe_RequestSchema,
@@ -17,7 +18,9 @@ import {
   Connector_ErrorSchema,
 } from "../../../../packages/protocol/src/v5"
 import { TestPeer } from "../../../../packages/remote/test/peer"
-import { sha256Hex, randomToken } from "../../../../infra/cloudflare/src/auth/crypto"
+import { sha256Hex, randomToken, base64UrlEncode } from "../../../../infra/cloudflare/src/auth/crypto"
+import { generateVapidKeys } from "../../../../infra/cloudflare/script/vapid-keys"
+import { deriveWebPushKeys } from "../../../../infra/cloudflare/src/push/crypto"
 
 const root = path.resolve(import.meta.dir, "../../../..")
 const scratch = process.argv[2]!
@@ -29,6 +32,49 @@ let worker: ReturnType<typeof spawn> | undefined
 let workerOutput: Promise<string> | undefined
 const standin = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ keys: [] }) })
 const reservation = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("reserved") })
+const receiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+const pushAuth = crypto.getRandomValues(new Uint8Array(16))
+const pushReceiver = new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))
+const pushes: { category: string; sessionID: string }[] = []
+const pushStub = Bun.serve({
+  port: 0,
+  hostname: "127.0.0.1",
+  fetch: async (request) => {
+    if (new URL(request.url).pathname !== "/push") return new Response(null, { status: 204 })
+    expect(request.headers.get("content-encoding") === "aes128gcm", "Push is not encrypted")
+    const body = new Uint8Array(await request.arrayBuffer())
+    expect(body.length > 86, "Encrypted push record is incomplete")
+    const sender = body.slice(21, 86)
+    const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
+    const shared = new Uint8Array(
+      await crypto.subtle.deriveBits({ name: "ECDH", public: publicSender }, receiver.privateKey, 256),
+    )
+    const { cek, nonce } = await deriveWebPushKeys(shared, pushAuth, pushReceiver, sender, body.slice(0, 16))
+    const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["decrypt"])
+    const clear = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, body.slice(86)))
+    expect(clear.at(-1) === 2, "Push record is not final")
+    const payload: unknown = JSON.parse(new TextDecoder().decode(clear.slice(0, -1)))
+    expect(
+      typeof payload === "object" &&
+        payload !== null &&
+        "category" in payload &&
+        typeof payload.category === "string" &&
+        "sessionID" in payload &&
+        typeof payload.sessionID === "string",
+      "Push payload is not a Session notification",
+    )
+    pushes.push({ category: payload.category, sessionID: payload.sessionID })
+    return new Response(null, { status: 201 })
+  },
+})
+const vapid = await generateVapidKeys()
+async function untilPush(category: string) {
+  const deadline = Date.now() + 30_000
+  while (!pushes.some((push) => push.category === category && push.sessionID === "ses_real_connector")) {
+    if (Date.now() > deadline) throw new Error(`Missing decrypted ${category} push`)
+    await Bun.sleep(25)
+  }
+}
 const origin = `http://127.0.0.1:${reservation.port}`
 reservation.stop(true)
 const cookie = randomToken(32)
@@ -122,7 +168,7 @@ try {
     configPath,
     JSON.stringify({
       ...config,
-      main: path.join(root, "infra/cloudflare/src/index.ts"),
+      main: path.join(root, "infra/cloudflare/test/integration/push-stub-worker.ts"),
       routes: [],
       assets: { ...config.assets, directory: path.join(scratch, "assets") },
       d1_databases: config.d1_databases.map(
@@ -180,6 +226,14 @@ try {
       `GOOGLE_TOKEN_ENDPOINT:http://127.0.0.1:${standin.port}/token`,
       "--var",
       `GOOGLE_JWKS_URI:http://127.0.0.1:${standin.port}/certs`,
+      "--define",
+      `PUSH_STUB_PORT:${pushStub.port}`,
+      "--var",
+      `VAPID_PUBLIC_KEY:${vapid.VAPID_PUBLIC_KEY}`,
+      "--var",
+      `VAPID_PRIVATE_KEY:${vapid.VAPID_PRIVATE_KEY}`,
+      "--var",
+      "VAPID_SUBJECT:mailto:local-test@example.invalid",
     ],
     { cwd: root, stdout: "pipe", stderr: "inherit" },
   )
@@ -218,7 +272,13 @@ try {
         PeerRole.REMOTE_CLIENT,
       ),
     )
-  await Promise.all(peers.map((peer) => peer.ready))
+  await Promise.all(
+    peers.map((peer) =>
+      peer.ready.catch(async (cause: unknown) => {
+        throw new Error(`REMOTE_CLIENT handshake closed: ${JSON.stringify(await peer.closed)}`, { cause })
+      }),
+    ),
+  )
   const accepted = await subscribe(peers[0]!, owner.sourceEpoch)
   expect(
     (await subscribe(peers[1]!, owner.sourceEpoch)) === accepted,
@@ -268,6 +328,46 @@ try {
   expect((await peers[1]!.next("settled", fence)).status === "success", "Release fence failed")
   console.log(JSON.stringify({ phase: "released-all" }))
   await command()
+  const pushKeys = {
+    p256dh: base64UrlEncode(pushReceiver),
+    auth: base64UrlEncode(pushAuth),
+  }
+  const registration = await fetch(`${origin}/api/push/subscriptions`, {
+    method: "POST",
+    headers: { cookie: `yc_session=${cookie}`, origin, "content-type": "application/json" },
+    body: JSON.stringify({
+      endpoint: "https://fcm.googleapis.com/fcm/send/flow-local-only",
+      keys: pushKeys,
+      categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true },
+    }),
+  })
+  expect(registration.status === 200, "Push subscription was not registered")
+  const noticeID = peers[1]!.request(
+    "notice.subscribe",
+    create(ScopeSchema, { target: { case: "machine", value: {} } }),
+    encodeStrict(EmptySchema, create(EmptySchema)),
+  )
+  expect((await peers[1]!.next("settled", noticeID)).status === "success", "Notice subscription failed")
+  const noticed = (category: number) =>
+    peers[1]!.raw.some(
+      (frame) =>
+        frame.body.case === "control" &&
+        frame.body.value.kind.case === "notice" &&
+        frame.body.value.kind.value.kind.case === "added" &&
+        frame.body.value.kind.value.kind.value.notices.some(
+          (notice) => notice.sessionId === "ses_real_connector" && notice.category === category,
+        ),
+    )
+  console.log(JSON.stringify({ phase: "notifications-ready" }))
+  await command()
+  await peers[1]!.wait(() => noticed(1), 30_000)
+  await untilPush("approval-requested")
+  console.log(JSON.stringify({ phase: "attention-notified" }))
+  await command()
+  await peers[1]!.wait(() => noticed(2), 30_000)
+  await untilPush("agent-completed")
+  console.log(JSON.stringify({ phase: "completion-pushed" }))
+  await command()
   expect(
     peers.every((peer) => peer.failures.length === 0),
     "Remote client protocol failure",
@@ -282,4 +382,5 @@ try {
   if (worker) await worker.exited
   if (workerOutput) console.error(await workerOutput)
   standin.stop(true)
+  pushStub.stop(true)
 }

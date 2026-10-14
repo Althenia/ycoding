@@ -161,6 +161,14 @@ Each new union interest advertises the backend process source epoch with `Resync
 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test connector --test connector_events --test connector_relay --test remote_derived --test remote_enroll
 ```
 
+### Connector notifications
+
+Each connection publishes the v5 `Status` and `Completions` controls from fresh runtime state. Status derives running, outstanding, lost and failed root families from Core's outstanding read, coalesces changes at 250 ms, and suppresses unchanged frames. Permission, question, form and family guardrail reads use cached Locations and Locations marked by active Sessions or request events; unrelated idle Session directories are not resolved. Pending requests in cached Locations remain visible after reconnect even when their Sessions are idle. Request attention, failed roots and lost roots merge into the bounded attention set, with sanitized root titles and permission-before-question-before-review need precedence. Request and lost attention take precedence over the failed marker.
+
+Completion synchronization replays root-only pages of at most 200 durable receipts in Session-ID order, with `more` marking continuation. A receipt observed during the baseline restarts replay; after baseline settlement, live `session.work.completed.1` receipts are forwarded individually. Read and enqueue failures defer retry on the same connection. Reconnect replays the baseline and current status without replaying mutations.
+
+`tests/connector_status.rs` covers family aggregation, request precedence, failure attention and reconnect. `tests/connector_relay.rs` drives real request state and Core-validated completion receipts through the Rust connector and local workerd, verifies relay attention/completion notices, and decrypts intercepted Web Push records to assert both notification categories and their Session identity. The model/tool exchange is a durable-event fixture; the real Core completion validator owns receipt publication.
+
 ## Remote request placement
 
 Remote dispatch resolves placement from backend state, independently of local
