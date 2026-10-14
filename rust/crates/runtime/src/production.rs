@@ -1098,8 +1098,13 @@ impl Factory {
             prepared.disk.clone(),
             memory.clone(),
             &platform,
-            &isolated,
-            &computer,
+            tools::Handles {
+                isolated: &isolated,
+                computer: &computer,
+                skills: skills.clone(),
+                mcp: mcp.clone(),
+                artifacts: prepared.source.clone(),
+            },
         )?;
         let clock: Arc<dyn runner::Clock> = Arc::new(runner::WallClock);
         let instruction_clock = clock.clone();

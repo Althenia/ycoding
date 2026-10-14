@@ -331,6 +331,14 @@ async fn flow() {
         .await
         .unwrap()
         .unwrap();
+    assert!(
+        body.contains("\"name\":\"read\""),
+        "probe needs the tool list: {body}"
+    );
+    assert!(
+        body.contains("\"name\":\"skill\""),
+        "model-callable skill tool is not advertised"
+    );
     assert!(body.contains("Recent parent session history"), "{body}");
     assert!(body.contains("Parent task") && body.contains("Side question"));
     timeout(Duration::from_secs(30), core.execution.await_idle(&side))

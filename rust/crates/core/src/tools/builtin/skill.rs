@@ -1,15 +1,351 @@
-use super::{read::Read, read_filesystem};
+use super::{
+    read::Read,
+    read_filesystem,
+    session_action::{decode, invalid},
+};
 use crate::{
     platform::filesystem,
+    resources::{
+        discovery::{markdown, trim as trim_text},
+        mcp::skills as mcp_skills,
+    },
+    session::skill_status,
     tools::{
         context::{Context, consumers::ActiveSkill, policy::LeafPolicy},
-        registry::Failure,
+        registry::{Failure, Tool, ToolFuture},
     },
 };
-use std::{fs, path::Path};
+use std::{fs, path::Path, sync::Arc};
+use ycoding_ai::llm::{ToolDefinition, ToolOutput};
 use ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, mcp_skill, skill,
+    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder,
+    llm::{ToolContent, ToolTextContent},
+    mcp_skill, parse_json, session_message, session_skill_status, skill,
 };
+
+const FILE_LIMIT: usize = 10;
+const DESCRIPTION: &str = "Load a specialized skill when the task at hand matches one of the available skills in the instructions.\n\nUse this tool to inject the skill's instructions and resources into the current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc. in the same directory as the skill.\n\nThe skill ID must match one of the available skills in the instructions.";
+const INPUT_SCHEMA: &str = r#"{"type":"object","properties":{"id":{"type":"string","description":"The ID of the skill from the available skills list"},"resource":{"type":"string","description":"Supporting file path for an active skill. Relative paths resolve from its base directory; local skills also accept absolute paths inside that directory."}},"required":["id"],"additionalProperties":false}"#;
+const OUTPUT_SCHEMA: &str = r#"{"type":"object","properties":{"name":{"type":"string"},"directory":{"type":"string"},"output":{"type":"string"},"alreadyActive":{"type":"boolean"},"conflicts":{"type":"object","properties":{"skills":{"type":"array","items":{"type":"string"}},"instructions":{"type":"array","items":{"type":"string"}}},"required":["skills","instructions"],"additionalProperties":false},"entry":{"type":"object","properties":{"server":{"type":"string"},"uri":{"type":"string"},"frontmatter":{"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"}},"required":["name","description"]},"resources":{"anyOf":[{"type":"array","items":{"type":"object","properties":{"uri":{"type":"string"},"digest":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},"size":{"type":"integer","minimum":0}},"required":["uri","digest","size"],"additionalProperties":false}},{"const":"dynamic"}]}},"required":["server","uri","frontmatter","resources"],"additionalProperties":false}},"required":["name","directory","output"],"additionalProperties":false}"#;
+
+pub struct SkillTool {
+    pub skills: Arc<tokio::sync::Mutex<crate::resources::skill::Service>>,
+    pub mcp: Arc<crate::resources::mcp::Service>,
+    pub sessions: crate::session::store::Service,
+    pub reader: Read,
+    pub policy: Arc<LeafPolicy>,
+    pub artifacts: Option<crate::resources::project_artifact::source::Service>,
+}
+
+impl Tool for SkillTool {
+    fn definition(&self, name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: DESCRIPTION.into(),
+            input_schema: parse_json(INPUT_SCHEMA).expect("skill input schema parses"),
+            output_schema: Some(parse_json(OUTPUT_SCHEMA).expect("skill output schema parses")),
+            cache: None,
+            metadata: None,
+            native: None,
+        }
+    }
+    fn permission(&self) -> Option<&str> {
+        Some("skill")
+    }
+    fn settle(&self, input: JsonValue, context: Context) -> ToolFuture<'_> {
+        Box::pin(async move {
+            let input = decode(&input)?;
+            let id: skill::Id = input.field("id").map_err(invalid)?;
+            let resource: Option<LosslessString> = input.optional("resource").map_err(invalid)?;
+            let output = self.run(id, resource, context).await?;
+            Ok(ToolOutput {
+                structured: output.encode(),
+                content: vec![ToolContent::Text(ToolTextContent {
+                    text: output.output,
+                })],
+            })
+        })
+    }
+}
+
+impl SkillTool {
+    async fn run(
+        &self,
+        id: skill::Id,
+        resource: Option<LosslessString>,
+        context: Context,
+    ) -> Result<Output, Failure> {
+        let messages = self
+            .sessions
+            .transcript(&context.session_id)
+            .map_err(|_| unable(&id))?;
+        let active = skill_status::list(&messages, &[])
+            .into_iter()
+            .find(|status| status.id == id && status.state == session_skill_status::State::Active);
+        let origin = id.as_str().and_then(mcp_skills::origin);
+        if let Some(reference) = resource {
+            let active = active.ok_or_else(|| unable(&id))?;
+            if let Some((server, uri)) = origin {
+                return self
+                    .read_mcp_resource(&id, &reference, (&server, &uri), &messages, &context)
+                    .await;
+            }
+            let local = self.local(&id).await?;
+            let reference = reference
+                .as_str()
+                .ok_or_else(|| Failure::message("Skill resource is not Unicode"))?;
+            return read_local_resource(
+                &local,
+                &ActiveSkill {
+                    id,
+                    name: active.name,
+                    entry: None,
+                },
+                reference,
+                &self.reader,
+                context,
+            )
+            .await;
+        }
+        if let Some((server, uri)) = origin {
+            return self
+                .load_mcp(&id, (&server, &uri), &messages, &context)
+                .await;
+        }
+        if let Some(active) = active {
+            return Ok(already_active(&active.name));
+        }
+        let local = self.local(&id).await?;
+        load_local(&local, &self.policy, context, self.artifacts.as_ref()).await
+    }
+    async fn local(&self, id: &skill::Id) -> Result<skill::Info, Failure> {
+        self.skills
+            .lock()
+            .await
+            .list()
+            .await
+            .map_err(|_| unable(id))?
+            .into_iter()
+            .find(|info| &info.id == id)
+            .ok_or_else(|| unable(id))
+    }
+    async fn load_mcp(
+        &self,
+        id: &skill::Id,
+        (server, uri): (&LosslessString, &LosslessString),
+        messages: &[session_message::Info],
+        context: &Context,
+    ) -> Result<Output, Failure> {
+        let entry = self
+            .mcp
+            .get_skill(&text(server), &text(uri))
+            .await
+            .map_err(|_| unable(id))?;
+        if entry.resources == mcp_skill::Resources::Dynamic {
+            return Err(unable(id));
+        }
+        let manifest = identity(&entry);
+        if let Some(activation) = skill_status::mcp_activation(messages, id)
+            && identity(&activation.entry) == manifest
+        {
+            return Ok(already_active(&activation.status.name));
+        }
+        self.assert_mcp(id, &entry, &manifest, context)
+            .await
+            .map_err(|error| settled(error, || unable(id)))?;
+        let file = self
+            .mcp
+            .read_skill_resource(&text(&entry.server), &entry, &text(&entry.uri))
+            .await
+            .map_err(|_| unable(id))?;
+        let body = match &file {
+            mcp_skill::File::Text { text, .. } => text.as_str().map(str::to_owned),
+            mcp_skill::File::Blob { blob, .. } => blob
+                .as_str()
+                .and_then(|blob| String::from_utf8(mcp_skills::decode_base64(blob)).ok()),
+        }
+        .ok_or_else(|| unable(id))?;
+        let parsed = markdown::parse(&body).ok();
+        let frontmatter = parsed
+            .as_ref()
+            .and_then(|parsed| parsed.data.json().ok())
+            .unwrap_or(JsonValue::Null);
+        mcp_skills::frontmatter(&entry, &frontmatter).map_err(|_| unable(id))?;
+        let root = text(&entry.uri);
+        let root = root.strip_suffix("/SKILL.md").unwrap_or(&root);
+        let mut files = match &entry.resources {
+            mcp_skill::Resources::Entries(resources) => resources
+                .iter()
+                .filter(|resource| resource.uri != entry.uri)
+                .map(|resource| {
+                    let uri = text(&resource.uri);
+                    uri.strip_prefix(&format!("{root}/"))
+                        .unwrap_or(&uri)
+                        .to_owned()
+                })
+                .collect::<Vec<_>>(),
+            mcp_skill::Resources::Dynamic => Vec::new(),
+        };
+        files.sort_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
+        files.truncate(FILE_LIMIT);
+        let server = xml(&text(&entry.server));
+        let name = xml(&text(&entry.frontmatter.name));
+        let lines = [
+            format!("<skill_content name=\"{name}\" origin=\"{server}\">"),
+            format!("# Skill: {name}"),
+            String::new(),
+            trim_text(parsed.as_ref().map_or("", |parsed| &parsed.content)).to_owned(),
+            String::new(),
+            format!("Base directory for this skill: {}", xml(root)),
+            format!(
+                "This skill is served over MCP by \"{server}\". Relative paths in this skill (e.g., scripts/, reference/) are relative to the base directory above and are read with the skill tool's resource input."
+            ),
+            "Note: file list is sampled.".into(),
+            String::new(),
+            "<skill_files>".into(),
+        ];
+        let lines = lines
+            .into_iter()
+            .chain(
+                files
+                    .iter()
+                    .map(|file| format!("<file>{}</file>", xml(file))),
+            )
+            .chain(["</skill_files>".into(), "</skill_content>".into()])
+            .collect::<Vec<_>>();
+        Ok(Output {
+            name: entry.frontmatter.name.clone(),
+            directory: String::new(),
+            output: lines.join("\n").into(),
+            already_active: None,
+            conflicts: None,
+            entry: Some(entry),
+        })
+    }
+    async fn read_mcp_resource(
+        &self,
+        id: &skill::Id,
+        reference: &LosslessString,
+        (server, uri): (&LosslessString, &LosslessString),
+        messages: &[session_message::Info],
+        context: &Context,
+    ) -> Result<Output, Failure> {
+        let reference = text(reference);
+        let failure =
+            || Failure::message(format!("Unable to read {reference} for skill {}", text(id)));
+        let activation = skill_status::mcp_activation(messages, id)
+            .filter(|activation| &activation.entry.server == server && &activation.entry.uri == uri)
+            .ok_or_else(|| unable(id))?;
+        let entry =
+            mcp_skills::entry(server, &activation.entry.encode()).map_err(|_| unable(id))?;
+        if entry.resources == mcp_skill::Resources::Dynamic {
+            return Err(unable(id));
+        }
+        let resource = mcp_skills::resolve(&entry, &reference).ok_or_else(failure)?;
+        self.assert_mcp(id, &entry, &identity(&entry), context)
+            .await
+            .map_err(|error| settled(error, failure))?;
+        let file = self
+            .mcp
+            .read_skill_resource(&text(server), &entry, &resource)
+            .await
+            .map_err(|_| failure())?;
+        Ok(Output {
+            name: activation.status.name,
+            directory: String::new(),
+            output: render_resource(&file),
+            already_active: Some(true),
+            conflicts: None,
+            entry: None,
+        })
+    }
+    async fn assert_mcp(
+        &self,
+        id: &skill::Id,
+        entry: &mcp_skill::Entry,
+        identity: &str,
+        context: &Context,
+    ) -> Result<(), Failure> {
+        let JsonValue::Object(metadata) = ObjectEncoder::new()
+            .field("server", &entry.server)
+            .field("uri", &entry.uri)
+            .field("manifest", &entry.resources)
+            .finish()
+        else {
+            return Err(Failure::Defect(
+                "MCP skill metadata is not an object".into(),
+            ));
+        };
+        let resources = vec![id.clone(), identity.into()];
+        self.policy
+            .assert(
+                context,
+                "skill",
+                resources.clone(),
+                resources,
+                Some(metadata),
+            )
+            .await
+    }
+}
+
+fn identity(entry: &mcp_skill::Entry) -> String {
+    mcp_skills::identity_by(entry, |left, right| left.cmp(right))
+}
+fn unable(id: &skill::Id) -> Failure {
+    Failure::message(format!("Unable to load skill {}", text(id)))
+}
+fn settled(error: Failure, otherwise: impl FnOnce() -> Failure) -> Failure {
+    match error {
+        Failure::Cancelled | Failure::Defect(_) => error,
+        _ => otherwise(),
+    }
+}
+fn already_active(name: &skill::Name) -> Output {
+    Output {
+        name: name.clone(),
+        directory: String::new(),
+        output: format!("Skill {} is already active for this session.", text(name)).into(),
+        already_active: Some(true),
+        conflicts: None,
+        entry: None,
+    }
+}
+fn render_resource(file: &mcp_skill::File) -> LosslessString {
+    let (uri, mime_type, body, encoded) = match file {
+        mcp_skill::File::Text {
+            uri,
+            mime_type,
+            text,
+            ..
+        } => (uri, mime_type, text, false),
+        mcp_skill::File::Blob {
+            uri,
+            mime_type,
+            blob,
+            ..
+        } => (uri, mime_type, blob, true),
+    };
+    let mime = mime_type
+        .as_ref()
+        .map(|mime| format!(" mime_type=\"{}\"", xml(&text(mime))))
+        .unwrap_or_default();
+    let encoding = if encoded { " encoding=\"base64\"" } else { "" };
+    format!(
+        "<skill_resource uri=\"{}\"{mime}{encoding}>\n{}\n</skill_resource>",
+        xml(&text(uri)),
+        text(body)
+    )
+    .into()
+}
+fn xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
 
 pub struct Output {
     pub name: skill::Name,

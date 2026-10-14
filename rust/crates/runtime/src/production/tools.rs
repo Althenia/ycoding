@@ -7,7 +7,10 @@ use ycoding_core::{
         shell,
     },
     process::guardrails::{CustomLayer, CustomLayers},
-    resources::{config, discovery::markdown, image, memory, tool_output_store},
+    resources::{
+        config, discovery::markdown, image, mcp, memory, project_artifact::source, skill,
+        tool_output_store,
+    },
     tools::{
         builtin::{
             edit::Edit,
@@ -18,6 +21,7 @@ use ycoding_core::{
             read::Read,
             search::{Kind, Search},
             shell::{AUTO_BACKGROUND, ShellTool},
+            skill::SkillTool,
             webfetch::WebFetch,
             websearch,
             worktree::Worktree,
@@ -30,14 +34,21 @@ use ycoding_core::{
     ycoding_schema::{DomainDecode, JsonValue, guardrail},
 };
 
+pub(super) struct Handles<'a> {
+    pub isolated: &'a Arc<ycoding_core::platform::browser::isolated::Service>,
+    pub computer: &'a Arc<ycoding_core::platform::computer::service::Service>,
+    pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
+    pub mcp: Arc<mcp::Service>,
+    pub artifacts: source::Service,
+}
+
 pub(super) fn compose(
     factory: &Factory,
     services: &ServiceSet,
     configuration: Arc<config::Configuration>,
     memory: Arc<memory::Service>,
     platform: &crate::services::PlatformServices,
-    isolated: &Arc<ycoding_core::platform::browser::isolated::Service>,
-    computer: &Arc<ycoding_core::platform::computer::service::Service>,
+    handles: Handles<'_>,
 ) -> Result<(Arc<Registry>, Registration), Failure> {
     let directory = std::fs::canonicalize(PathBuf::from(
         services
@@ -66,12 +77,26 @@ pub(super) fn compose(
         collator.clone(),
     ));
     let search = platform.search.clone();
+    let instructions = Arc::new(ycoding_core::session::read_instructions::Service::new(
+        ycoding_core::session::store::Service::new(factory.client.clone()),
+        std::fs::canonicalize(PathBuf::from(
+            services
+                .info
+                .project
+                .directory
+                .as_lossless()
+                .to_utf8()
+                .map_err(|_| unavailable("Project directory"))?,
+        ))
+        .map_err(|_| unavailable("Project directory"))?,
+        configuration.clone(),
+    ));
     let entries: Vec<(String, Arc<dyn Tool>)> = vec![
         (
             "browser".into(),
             Arc::new(ycoding_core::tools::builtin::browser::Browser {
                 paired: Arc::new(factory.globals.browser.clone()),
-                isolated: Some(Arc::new(isolated.clone())),
+                isolated: Some(Arc::new(handles.isolated.clone())),
                 paths: paths.clone(),
                 policy: policy.clone(),
             }),
@@ -79,7 +104,7 @@ pub(super) fn compose(
         (
             "computer".into(),
             Arc::new(ycoding_core::tools::builtin::computer::Computer {
-                service: computer.clone(),
+                service: handles.computer.clone(),
                 paths: paths.clone(),
                 policy: policy.clone(),
             }),
@@ -99,21 +124,24 @@ pub(super) fn compose(
             Arc::new(Read {
                 paths: paths.clone(),
                 policy: policy.clone(),
-                instructions: Arc::new(ycoding_core::session::read_instructions::Service::new(
-                    ycoding_core::session::store::Service::new(factory.client.clone()),
-                    std::fs::canonicalize(PathBuf::from(
-                        services
-                            .info
-                            .project
-                            .directory
-                            .as_lossless()
-                            .to_utf8()
-                            .map_err(|_| unavailable("Project directory"))?,
-                    ))
-                    .map_err(|_| unavailable("Project directory"))?,
-                    configuration.clone(),
-                )),
-                collator,
+                instructions: instructions.clone(),
+                collator: collator.clone(),
+            }),
+        ),
+        (
+            "skill".into(),
+            Arc::new(SkillTool {
+                skills: handles.skills,
+                mcp: handles.mcp,
+                sessions: ycoding_core::session::store::Service::new(factory.client.clone()),
+                reader: Read {
+                    paths: paths.clone(),
+                    policy: policy.clone(),
+                    instructions,
+                    collator,
+                },
+                policy: policy.clone(),
+                artifacts: Some(handles.artifacts),
             }),
         ),
         (
