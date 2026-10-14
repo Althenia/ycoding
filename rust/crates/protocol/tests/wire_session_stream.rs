@@ -96,6 +96,42 @@ fn stream_end_negatives_retain_their_specific_rejection_reasons() {
 }
 
 #[test]
+fn test_026_stream_terminal_table_rejects_eof_and_foreign_frames() {
+    let full = bytes();
+    for cut in [0, 5, 12, full.len() - 1] {
+        assert!(
+            decode_strict::<v5::Frame>(&full[..cut]).is_err(),
+            "premature EOF at {cut}"
+        );
+    }
+    let mut connection = WireConnection::default();
+    for (name, role) in [
+        ("hello", v5::PeerRole::LocalClient),
+        ("ready", v5::PeerRole::Server),
+        ("request", v5::PeerRole::LocalClient),
+    ] {
+        connection.observe(&vector(name), role, 0).unwrap();
+    }
+    assert!(connection.observe(&full, v5::PeerRole::Server, 0).is_ok());
+    assert_eq!(
+        connection
+            .observe(&full, v5::PeerRole::LocalClient, 0)
+            .unwrap_err(),
+        WireError("direction"),
+        "foreign client cannot terminate a server stream"
+    );
+    let mut connection =
+        WireConnection::new(v5::PeerRole::RemoteClient, v5::PeerRole::Relay).unwrap();
+    assert_eq!(
+        connection
+            .observe(&full, v5::PeerRole::RemoteClient, 0)
+            .unwrap_err(),
+        WireError("direction"),
+        "foreign remote client cannot terminate a relay stream"
+    );
+}
+
+#[test]
 fn stream_end_sender_set_is_exactly_server_agent_and_relay() {
     for (client, server, sender) in [
         (

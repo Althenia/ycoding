@@ -705,3 +705,207 @@ fn early_class_budgets_and_bulk_headers() {
         );
     }
 }
+
+#[test]
+fn test_024_version_digest_role_epoch_and_deadline_matrix() {
+    for revision in [4, 6] {
+        let mut hello = frame("hello");
+        hello.revision = revision;
+        assert!(
+            WireConnection::default()
+                .observe(&hello.encode_to_vec(), v5::PeerRole::LocalClient, 0)
+                .is_err(),
+            "revision {revision}"
+        );
+    }
+    let mut hello = frame("hello");
+    if let Some(v5::frame::Body::Hello(body)) = &mut hello.body {
+        body.contract_digest[0] ^= 1;
+    }
+    assert!(
+        WireConnection::default()
+            .observe(&hello.encode_to_vec(), v5::PeerRole::LocalClient, 0)
+            .is_err(),
+        "digest"
+    );
+    let mut hello = frame("hello");
+    hello.connection_epoch = Some("fabricated".into());
+    assert!(
+        WireConnection::default()
+            .observe(&hello.encode_to_vec(), v5::PeerRole::LocalClient, 0)
+            .is_err(),
+        "fabricated hello epoch"
+    );
+    assert!(
+        WireConnection::default()
+            .observe(&vector("request"), v5::PeerRole::LocalClient, 0)
+            .is_err(),
+        "pre-Ready request"
+    );
+    let mut concatenated = vector("hello");
+    concatenated.extend_from_slice(&vector("ping"));
+    assert!(
+        WireConnection::default()
+            .observe(&concatenated, v5::PeerRole::LocalClient, 0)
+            .is_err(),
+        "concatenated frames"
+    );
+    for (client, server) in [
+        (v5::PeerRole::LocalClient, v5::PeerRole::Server),
+        (v5::PeerRole::RemoteClient, v5::PeerRole::Relay),
+        (v5::PeerRole::Agent, v5::PeerRole::Relay),
+    ] {
+        assert!(
+            WireConnection::new(client, server).is_ok(),
+            "{client:?}/{server:?}"
+        );
+        connected(client, server);
+    }
+    for (client, server) in [
+        (v5::PeerRole::LocalClient, v5::PeerRole::Relay),
+        (v5::PeerRole::RemoteClient, v5::PeerRole::Server),
+        (v5::PeerRole::Agent, v5::PeerRole::Server),
+        (v5::PeerRole::Server, v5::PeerRole::LocalClient),
+        (v5::PeerRole::Relay, v5::PeerRole::RemoteClient),
+        (v5::PeerRole::RemoteClient, v5::PeerRole::Agent),
+    ] {
+        assert!(
+            WireConnection::new(client, server).is_err(),
+            "{client:?}/{server:?}"
+        );
+    }
+    let mut mismatched = frame("hello");
+    if let Some(v5::frame::Body::Hello(body)) = &mut mismatched.body {
+        body.role = v5::PeerRole::Server as i32;
+    }
+    assert!(
+        WireConnection::default()
+            .observe(&mismatched.encode_to_vec(), v5::PeerRole::LocalClient, 0)
+            .is_err(),
+        "hello role does not match sender"
+    );
+    let mut state = WireConnection::default();
+    state
+        .observe(&vector("hello"), v5::PeerRole::LocalClient, 0)
+        .unwrap();
+    state
+        .observe(&vector("ready"), v5::PeerRole::Server, 4999)
+        .unwrap();
+    assert!(
+        state
+            .observe(&vector("ping"), v5::PeerRole::LocalClient, 9998)
+            .is_ok()
+    );
+    let mut state = WireConnection::default();
+    state
+        .observe(&vector("hello"), v5::PeerRole::LocalClient, 0)
+        .unwrap();
+    state
+        .observe(&vector("ready"), v5::PeerRole::Server, 4999)
+        .unwrap();
+    assert_eq!(
+        state
+            .observe(&vector("ping"), v5::PeerRole::LocalClient, 9999)
+            .unwrap_err()
+            .0,
+        "handshake timeout"
+    );
+}
+
+#[test]
+fn test_029_depth_field_frame_and_event_count_n_minus1_n_n_plus1() {
+    for (depth, accepted) in [(63, true), (64, true), (65, false)] {
+        let mut value = v5::Value {
+            kind: Some(v5::value::Kind::Null(v5::Empty {})),
+        };
+        for _ in 1..depth {
+            value = v5::Value {
+                kind: Some(v5::value::Kind::List(v5::ValueList { items: vec![value] })),
+            };
+        }
+        assert_eq!(
+            decode_strict::<v5::Value>(&value.encode_to_vec()).is_ok(),
+            accepted,
+            "depth {depth}"
+        );
+    }
+    for (count, accepted) in [(32767, true), (32768, true), (32769, false)] {
+        let list = v5::ValueList {
+            items: vec![
+                v5::Value {
+                    kind: Some(v5::value::Kind::Null(v5::Empty {}))
+                };
+                count
+            ],
+        };
+        assert_eq!(
+            decode_strict::<v5::ValueList>(&list.encode_to_vec()).is_ok(),
+            accepted,
+            "fields {count}"
+        );
+    }
+    let mut connection = connected(v5::PeerRole::LocalClient, v5::PeerRole::Server);
+    for (count, accepted) in [(63, true), (64, true), (65, false)] {
+        let mut events = frame("events");
+        if let Some(v5::frame::Body::EventBatch(body)) = &mut events.body {
+            body.events = vec![body.events[0].clone(); count];
+        }
+        assert_eq!(
+            connection
+                .observe(&events.encode_to_vec(), v5::PeerRole::Server, 3)
+                .is_ok(),
+            accepted,
+            "events {count}"
+        );
+    }
+    assert_ne!(
+        connection
+            .observe(
+                &vec![0; limits::CLIENT_FRAME_BYTES as usize],
+                v5::PeerRole::LocalClient,
+                3
+            )
+            .unwrap_err()
+            .0,
+        "frame byte limit"
+    );
+    assert_eq!(
+        connection
+            .observe(
+                &vec![0; limits::CLIENT_FRAME_BYTES as usize + 1],
+                v5::PeerRole::LocalClient,
+                3
+            )
+            .unwrap_err()
+            .0,
+        "frame byte limit"
+    );
+}
+
+#[test]
+fn test_026_bulk_frames_in_order_and_truncated_final_is_premature_eof() {
+    let mut connection = connected(v5::PeerRole::LocalClient, v5::PeerRole::Server);
+    let start = frame("bulk-start");
+    assert!(
+        connection
+            .observe(&start.encode_to_vec(), v5::PeerRole::Server, 3)
+            .is_ok()
+    );
+    let piece = frame("bulk-piece");
+    assert!(
+        connection
+            .observe(&piece.encode_to_vec(), v5::PeerRole::Server, 3)
+            .is_ok()
+    );
+    let end = frame("bulk-end");
+    assert!(
+        connection
+            .observe(&end.encode_to_vec(), v5::PeerRole::Server, 3)
+            .is_ok()
+    );
+    let truncated = &vector("bulk-end")[..3];
+    assert!(
+        decode_strict::<v5::Frame>(truncated).is_err(),
+        "premature EOF at codec level"
+    );
+}

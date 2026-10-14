@@ -265,6 +265,60 @@ fn exact_units_in_values_and_dynamic_keys() {
 }
 
 #[test]
+fn test_028_value_key_presence_and_numeric_partitions() {
+    for (input, expected) in [
+        ("0.1", "0.1"),
+        ("0.30000000000000004", "0.30000000000000004"),
+        ("123456789.123456789", "123456789.12345679"),
+        ("9007199254740991", "9007199254740991"),
+        ("-9007199254740991", "-9007199254740991"),
+        ("1e21", "1e+21"),
+        ("0.000001", "0.000001"),
+        ("0.0000001", "1e-7"),
+        ("5e-324", "5e-324"),
+    ] {
+        assert_eq!(
+            stringify_json(&parse_json(input).unwrap()),
+            expected,
+            "{input}"
+        );
+    }
+    assert_eq!(
+        stringify_json(&parse_json(r#"{"":0,"a":[],"b":{},"c":"","d":false,"e":null}"#).unwrap()),
+        r#"{"":0,"a":[],"b":{},"c":"","d":false,"e":null}"#
+    );
+    let JsonValue::Object(object) = parse_json(r#"{"nested":{"present":0}}"#).unwrap() else {
+        panic!()
+    };
+    let Some(JsonValue::Object(nested)) = object.get(&"nested".into()) else {
+        panic!()
+    };
+    assert_eq!(nested.get(&"present".into()), Some(&JsonValue::Number(0.0)));
+    assert_eq!(nested.get(&"absent".into()), None);
+    for (input, kind) in [
+        ("", JsonErrorKind::UnexpectedEnd),
+        ("nul", JsonErrorKind::UnexpectedToken),
+        ("[1,]", JsonErrorKind::UnexpectedToken),
+        ("{\"a\":1}extra", JsonErrorKind::TrailingInput),
+        (r#""bad\q""#, JsonErrorKind::InvalidEscape),
+        ("01", JsonErrorKind::TrailingInput),
+    ] {
+        assert_eq!(parse_json(input).unwrap_err().kind, kind, "{input}");
+    }
+    for units in [vec![0xd83d, 0xde00], vec![0xd800, 0x61], vec![0x61, 0xdc00]] {
+        let text = LosslessString::from_utf16(units.clone());
+        let mut object = JsonObject::new();
+        object.insert(text.clone(), JsonValue::String(text));
+        let json = stringify_json(&JsonValue::Object(object));
+        let JsonValue::Object(parsed) = parse_json(&json).unwrap() else {
+            panic!()
+        };
+        let (key, _) = parsed.iter().next().unwrap();
+        assert_eq!(key.code_units().collect::<Vec<_>>(), units);
+    }
+}
+
+#[test]
 fn absence_null_and_empty_remain_distinct() {
     let JsonValue::Object(object) =
         parse_json(r#"{"null":null,"false":false,"zero":0,"empty":"","array":[],"object":{}}"#)

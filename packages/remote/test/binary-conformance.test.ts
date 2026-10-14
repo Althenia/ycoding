@@ -29,6 +29,9 @@ import {
   AlertDetailSchema,
   BlockedSchema,
   CompletionSchema,
+  operations,
+  operationIDsByRole,
+  publicEvents,
 } from "@ycoding-ai/protocol/v5"
 
 test("canonical control collection metadata enforces each current RemoteLimits N/N+1", () => {
@@ -359,13 +362,126 @@ test("handshake, tiny control, event bytes, bulk announcement/end and all frame 
   if (event.body.case !== "eventBatch") throw new Error("fixture")
   const payload = event.body.value.events[0]?.event
   if (!payload) throw new Error("missing fixture event payload")
-  for (const size of [WireLimit.EVENT_BATCH_BYTES - 1, WireLimit.EVENT_BATCH_BYTES, WireLimit.EVENT_BATCH_BYTES + 1]) {
+  for (const delta of [-1, 0, 1]) {
+    const size = WireLimit.EVENT_BATCH_BYTES + delta
     payload.payload = new Uint8Array(size - 128)
     payload.payload = new Uint8Array(payload.payload.length + size - toBinary(FrameSchema, event).length)
     const encoded = toBinary(FrameSchema, event)
     expect(encoded.length).toBe(size)
-    if (size <= WireLimit.EVENT_BATCH_BYTES) expect(state.observe(encoded, PeerRole.SERVER, 3).revision).toBe(5)
-    if (size > WireLimit.EVENT_BATCH_BYTES)
-      expect(() => state.observe(encoded, PeerRole.SERVER, 3)).toThrow("event batch bounds")
+    if (delta <= 0) expect(state.observe(encoded, PeerRole.SERVER, 3).revision).toBe(5)
+    if (delta > 0) expect(() => state.observe(encoded, PeerRole.SERVER, 3)).toThrow("event batch bounds")
   }
 })
+
+test("TEST-027 descriptor membership is exhaustive for operations, fields, oneofs and events", () => {
+  expect(operations).toHaveLength(222)
+  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(222)
+  expect(new Set(operations.map((operation) => operation.diagnosticName)).size).toBe(222)
+  const typeNames = new Set(schemas.map((schema) => schema.typeName))
+  expect(typeNames.size).toBe(schemas.length)
+  for (const operation of operations) {
+    for (const type of [operation.requestType, operation.resultType, ...operation.errorTypes])
+      expect(typeNames.has(type), `${operation.diagnosticName} references missing schema ${type}`).toBe(true)
+    expect(operation.roles.length).toBeGreaterThan(0)
+  }
+  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(201)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
+  expect(operations.filter((operation) => operation.diagnosticName.startsWith("notice."))).toHaveLength(4)
+  for (const schema of schemas) {
+    const numbers = schema.fields.map((field) => field.number)
+    expect(new Set(numbers).size, `${schema.typeName} has a duplicate field number`).toBe(numbers.length)
+  }
+  const fieldSnapshot: Record<string, string[]> = {
+    "ycoding.v5.Frame": [
+      "1:revision",
+      "2:connection_epoch",
+      "3:ledger",
+      "4:delivery_ordinal",
+      "5:tiny_consumed_through",
+      "10:hello",
+      "11:ready",
+      "12:request",
+      "13:result",
+      "14:event_batch",
+      "15:control",
+      "16:bulk_start",
+      "17:bulk_piece",
+      "18:bulk_end",
+      "19:stream_end",
+    ],
+    "ycoding.v5.Request": ["1:request_id", "2:operation_id", "3:scope", "4:payload"],
+    "ycoding.v5.Result": ["1:request_id", "2:operation_id", "3:settlement", "4:success", "5:error", "6:asset_metadata"],
+    "ycoding.v5.EventBatch": ["1:subscription_id", "2:scope", "3:source_epoch", "4:events"],
+    "ycoding.v5.BulkStart": [
+      "1:request_id",
+      "2:transfer_id",
+      "3:operation_id",
+      "4:type_name",
+      "5:content_kind",
+      "6:byte_count",
+      "7:chunk_count",
+    ],
+    "ycoding.v5.Value": ["1:null", "2:boolean", "3:number", "4:string", "5:bytes", "6:list", "7:object"],
+    "ycoding.v5.Scope": ["1:machine", "2:location", "3:session", "4:form", "5:workspace", "6:global", "7:global_form"],
+    "ycoding.v5.Hello": ["1:revision", "2:contract_digest", "3:role", "4:receive_windows"],
+  }
+  for (const [typeName, expected] of Object.entries(fieldSnapshot)) {
+    const schema = schemas.find((candidate) => candidate.typeName === typeName)
+    if (!schema) throw new Error(`missing schema ${typeName}`)
+    expect(schema.fields.map((field) => `${field.number}:${field.name}`)).toEqual(expected)
+  }
+  const frame = schemas.find((candidate) => candidate.typeName === "ycoding.v5.Frame")
+  expect(frame?.oneofs.map((oneof) => oneof.name)).toEqual(["body"])
+  expect(new Set(publicEvents.map((event) => `${event.name}:${event.tag}`)).size).toBe(publicEvents.length)
+  const declaredEvents = new Set(publicEvents.map((event) => event.type))
+  for (const operation of operations)
+    for (const event of operation.eventTypes)
+      expect(
+        declaredEvents.has(event) || event === "ycoding.v5.PublicEvent" || event === "ycoding.v5.SessionLogItem",
+        `${operation.diagnosticName} references undeclared event ${event}`,
+      ).toBe(true)
+})
+
+test("TEST-030 TS generation twice in scratch copies is byte identical", async () => {
+  const { cp, mkdtemp, readdir, rm, symlink } = await import("node:fs/promises")
+  const { tmpdir } = await import("node:os")
+  const root = path.resolve(import.meta.dir, "../../..")
+  const runs: Record<string, string>[] = []
+  for (let run = 0; run < 2; run++) {
+    const scratch = await mkdtemp(path.join(tmpdir(), "ycoding-v5-generation-"))
+    try {
+      await cp(path.join(root, "protocol"), path.join(scratch, "protocol"), { recursive: true })
+      await cp(path.join(root, "packages/protocol/src"), path.join(scratch, "packages/protocol/src"), {
+        recursive: true,
+      })
+      await symlink(path.join(root, "node_modules"), path.join(scratch, "node_modules"), "dir")
+      await symlink(
+        path.join(root, "packages/protocol/node_modules"),
+        path.join(scratch, "packages/protocol/node_modules"),
+        "dir",
+      )
+      const generated = Bun.spawnSync(["bun", path.join(scratch, "packages/protocol/src/v5/generate.ts")], {
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      if (generated.exitCode !== 0) throw new Error(`generator failed: ${new TextDecoder().decode(generated.stderr)}`)
+      const output: Record<string, string> = {}
+      const collect = async (directory: string) => {
+        for (const entry of await readdir(directory, { withFileTypes: true })) {
+          const file = path.join(directory, entry.name)
+          if (entry.isDirectory()) await collect(file)
+          else
+            output[path.relative(path.join(scratch, "packages/protocol/src/generated/v5"), file)] =
+              new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex")
+        }
+      }
+      await collect(path.join(scratch, "packages/protocol/src/generated/v5"))
+      runs.push(output)
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+  }
+  expect(Object.keys(runs[0] ?? {}).length).toBeGreaterThan(0)
+  expect(runs[1]).toEqual(runs[0])
+}, 120_000)

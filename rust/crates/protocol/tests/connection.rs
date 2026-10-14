@@ -128,6 +128,89 @@ fn ac_wire_012_asset_metadata_exact_body_and_empty_asset_settle_once() {
     }
 }
 #[test]
+fn test_026_bulk_duplicate_final_and_post_final_piece_never_settle_twice() {
+    let (mut client, mut server, result, start) = asset_pair(1);
+    server.respond(result, 5).unwrap();
+    let header = send(server.poll(5));
+    client.receive(header.clone(), header.encoded_len() as u64, 5);
+    server
+        .queue_frame(v5::frame::Body::BulkStart(start), 6)
+        .unwrap();
+    let frame = send(server.poll(6));
+    client.receive(frame.clone(), frame.encoded_len() as u64, 6);
+    server
+        .queue_frame(
+            v5::frame::Body::BulkPiece(v5::BulkPiece {
+                transfer_id: "asset-1".into(),
+                index: 0,
+                offset: 0,
+                data: vec![255],
+            }),
+            7,
+        )
+        .unwrap();
+    let frame = send(server.poll(7));
+    client.receive(frame.clone(), frame.encoded_len() as u64, 7);
+    let end = v5::frame::Body::BulkEnd(v5::BulkEnd {
+        transfer_id: "asset-1".into(),
+        byte_count: 1,
+        outcome: Some(v5::bulk_end::Outcome::Success(v5::Empty {})),
+    });
+    server.queue_frame(end.clone(), 8).unwrap();
+    let frame = send(server.poll(8));
+    let terminal = client.receive(frame.clone(), frame.encoded_len() as u64, 8);
+    assert_eq!(
+        terminal
+            .iter()
+            .filter(|decision| matches!(decision, Decision::Settled { .. }))
+            .count(),
+        1,
+        "exactly one terminal settlement"
+    );
+    if server.queue_frame(end, 9).is_ok() {
+        let frame = send(server.poll(9));
+        let duplicate = client.receive(frame.clone(), frame.encoded_len() as u64, 9);
+        assert!(
+            !duplicate
+                .iter()
+                .any(|decision| matches!(decision, Decision::Settled { .. })),
+            "duplicate final must not settle again: {duplicate:?}"
+        );
+    }
+    let piece = v5::frame::Body::BulkPiece(v5::BulkPiece {
+        transfer_id: "asset-1".into(),
+        index: 1,
+        offset: 1,
+        data: vec![255],
+    });
+    if server.queue_frame(piece, 10).is_ok() {
+        let frame = send(server.poll(10));
+        let post_final = client.receive(frame.clone(), frame.encoded_len() as u64, 10);
+        assert!(
+            !post_final
+                .iter()
+                .any(|decision| matches!(decision, Decision::Settled { .. })),
+            "post-final piece must not settle: {post_final:?}"
+        );
+    }
+    let foreign = v5::frame::Body::Control(v5::Control {
+        kind: Some(v5::control::Kind::Cancel(v5::Cancel {
+            target: Some(v5::cancel::Target::RequestId("foreign-request".into())),
+        })),
+    });
+    if client.queue_frame(foreign, 11).is_ok() {
+        let frame = send(client.poll(11));
+        let decisions = server.receive(frame.clone(), frame.encoded_len() as u64, 11);
+        assert!(
+            !decisions
+                .iter()
+                .any(|decision| matches!(decision, Decision::Settled { .. })),
+            "foreign cancellation must not settle the completed transfer: {decisions:?}"
+        );
+    }
+}
+
+#[test]
 fn ac_wire_002_confirm_timeout_after_ready_handoff_is_1008_for_unestablished_producer() {
     let mut client = Binding::new(
         config(v5::PeerRole::LocalClient, v5::PeerRole::Server),

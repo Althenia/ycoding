@@ -167,6 +167,160 @@ operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL
 }
 
 #[test]
+fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
+    use std::collections::BTreeMap;
+    let operations = &*ycoding_protocol::OPERATIONS;
+    assert_eq!(operations.len(), 222);
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    let mut patterns: BTreeMap<Vec<i32>, usize> = BTreeMap::new();
+    for operation in operations {
+        assert!(
+            ids.insert(operation.operation_id),
+            "duplicate id {}",
+            operation.operation_id
+        );
+        assert!(
+            names.insert(operation.diagnostic_name.clone()),
+            "duplicate name {}",
+            operation.diagnostic_name
+        );
+        assert!(
+            !operation.roles.is_empty(),
+            "{} has no role",
+            operation.diagnostic_name
+        );
+        *patterns.entry(operation.roles.clone()).or_default() += 1;
+        for ty in [&operation.request_type, &operation.result_type] {
+            assert_ne!(
+                ycoding_protocol::validate_binary(ty, &[])
+                    .err()
+                    .map(|error| error.0),
+                Some("unknown type"),
+                "{} type {ty}",
+                operation.diagnostic_name
+            );
+        }
+        for ty in &operation.error_types {
+            assert_ne!(
+                ycoding_protocol::validate_binary(ty, &[])
+                    .err()
+                    .map(|error| error.0),
+                Some("unknown type"),
+                "{} error type {ty}",
+                operation.diagnostic_name
+            );
+        }
+        let public_types: HashSet<&str> = ycoding_protocol::PUBLIC_EVENTS
+            .iter()
+            .map(|(_, _, _, ty)| *ty)
+            .collect();
+        for event in &operation.event_types {
+            assert!(
+                public_types.contains(event.as_str())
+                    || event == "ycoding.v5.PublicEvent"
+                    || event == "ycoding.v5.SessionLogItem",
+                "{} event type {event} is not a declared public event",
+                operation.diagnostic_name
+            );
+        }
+    }
+    assert_eq!(
+        patterns,
+        BTreeMap::from([
+            (vec![1], 152),
+            (vec![1, 2, 3], 49),
+            (vec![2, 3], 17),
+            (vec![2], 4),
+        ]),
+        "a new operation role pattern or count needs an explicit assertion mapping"
+    );
+    for (role, ids_for_role) in ycoding_protocol::OPERATION_IDS_BY_ROLE {
+        let expected: Vec<u32> = operations
+            .iter()
+            .filter(|operation| operation.roles.contains(role))
+            .map(|operation| operation.operation_id)
+            .collect();
+        assert_eq!(*ids_for_role, expected, "role {role} allowlist");
+    }
+    let mut event_names = HashSet::new();
+    for (name, _, tag, _) in ycoding_protocol::PUBLIC_EVENTS {
+        assert!(event_names.insert(*name), "duplicate public event {name}");
+        assert!(*tag > 0, "public event {name} has no tag");
+    }
+}
+
+#[test]
+fn test_030_rust_generation_twice_in_scratch_is_byte_identical() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let protoc = std::env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into());
+    let types: HashSet<String> = ycoding_protocol::OPERATIONS
+        .iter()
+        .flat_map(|operation| {
+            operation
+                .error_types
+                .iter()
+                .cloned()
+                .chain(operation.event_types.iter().cloned())
+                .chain([
+                    operation.request_type.clone(),
+                    operation.result_type.clone(),
+                ])
+        })
+        .collect();
+    let mut outputs = Vec::new();
+    for run in 0..2 {
+        let dir =
+            std::env::temp_dir().join(format!("ycoding-generation-{}-{run}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("ycoding/v5")).unwrap();
+        let mut files = Vec::new();
+        for entry in fs::read_dir(root.join("protocol/ycoding/v5")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "proto") {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                fs::copy(&path, dir.join("ycoding/v5").join(&name)).unwrap();
+                files.push(format!("ycoding/v5/{name}"));
+            }
+        }
+        files.sort();
+        let result = Command::new(&protoc)
+            .arg(format!("--proto_path={}", dir.display()))
+            .arg("--include_imports")
+            .arg(format!(
+                "--descriptor_set_out={}/contract.bin",
+                dir.display()
+            ))
+            .args(&files)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let bytes = fs::read(dir.join("contract.bin")).unwrap();
+        let operations = operation_generation::read_operations(&bytes, &types).unwrap();
+        let roles =
+            operation_generation::read_role_allowlists(&operations, &[1, 2, 3, 4, 5]).unwrap();
+        let mut constraints: Vec<_> = operation_generation::read_constraints(&bytes)
+            .unwrap()
+            .into_iter()
+            .map(|(name, field)| (name, field.rule, field.obligations))
+            .collect();
+        constraints.sort();
+        let events = operation_generation::read_public_events(&bytes).unwrap();
+        outputs.push((bytes, operations, roles, constraints, events));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    assert_eq!(
+        outputs[0], outputs[1],
+        "descriptor and derived generation must be reproducible"
+    );
+    assert_eq!(outputs[0].1.len(), ycoding_protocol::OPERATIONS.len());
+}
+
+#[test]
 fn codec_name_gate_rejects_rust_and_nested_typescript_collisions() {
     let dir = std::env::temp_dir().join(format!("ycoding-codec-names-{}", std::process::id()));
     fs::create_dir_all(dir.join("ycoding/v5")).unwrap();
