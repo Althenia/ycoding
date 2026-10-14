@@ -193,11 +193,10 @@ impl Core {
         globals: Arc<globals::Globals>,
         started: &mut Started,
     ) -> Result<Self, Failure> {
-        let snapshots = globals
-            .catalog
-            .get()
-            .await
-            .map_err(|_| unavailable("model catalog"))?;
+        let snapshots = globals.catalog.get().await.map_err(|error| {
+            eprintln!("production composition diagnostic: stage=model catalog; category={error:?}");
+            Failure::Unavailable("model catalog unavailable".into())
+        })?;
         let feed = events.clone();
         let factory = Arc::new(Factory {
             options: production.configuration,
@@ -2050,6 +2049,7 @@ fn field<'a>(value: Option<&'a JsonValue>, key: &str) -> Option<&'a JsonValue> {
         _ => None,
     }
 }
-fn unavailable(service: &str) -> Failure {
+fn unavailable(service: &'static str) -> Failure {
+    eprintln!("production composition diagnostic: stage={service}; category=unavailable");
     Failure::Unavailable(format!("{service} unavailable"))
 }

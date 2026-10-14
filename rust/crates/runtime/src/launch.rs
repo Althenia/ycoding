@@ -17,6 +17,8 @@ use ycoding_core::ycoding_schema::{
 use ycoding_core::ycoding_store::{Metadata, Options, Store, import};
 use ycoding_protocol::connection::Budgets;
 
+include!(concat!(env!("OUT_DIR"), "/bundled_models.rs"));
+
 pub const BETA_NAMESPACE: &str = "ycoding-beta";
 pub(crate) const FRONTEND_EXECUTABLE_KEY: &str = "YCODING_FRONTEND_EXECUTABLE";
 
@@ -370,7 +372,9 @@ pub async fn build_production_services(
                     .environment
                     .get("YCODING_MODELS_PATH")
                     .map(PathBuf::from),
-                bundled: None,
+                bundled: Some(parse_json(BUNDLED_MODELS).map_err(|_| {
+                    LaunchError::Message("bundled model catalog is invalid".into())
+                })?),
                 fetch: !truthy(config.environment.get("YCODING_DISABLE_MODELS_FETCH")),
                 user_agent: format!("ycoding/{}", config.version),
             },
@@ -381,7 +385,19 @@ pub async fn build_production_services(
         },
     )
     .await
-    .map_err(|_| LaunchError::Message("production composition failed".into()))?;
+    .map_err(|failure| {
+        if !matches!(failure, crate::dispatch::Failure::Unavailable(_)) {
+            let category = match failure {
+                crate::dispatch::Failure::Invalid(_)
+                | crate::dispatch::Failure::InvalidField { .. } => "invalid",
+                crate::dispatch::Failure::Unknown { .. } => "unknown",
+                crate::dispatch::Failure::ServiceUnavailable { .. } => "unavailable",
+                _ => "other",
+            };
+            eprintln!("production composition diagnostic: stage=production; category={category}");
+        }
+        LaunchError::Message("production composition failed".into())
+    })?;
     Ok(Services {
         identity: Identity {
             version: config.version.clone(),

@@ -1,5 +1,7 @@
 # Configuration reference
 
+Native runtime builds embed the models.dev snapshot selected by `MODELS_DEV_API_JSON`, or the CLI's checked-in snapshot when unset. Model discovery reads the configured catalog file or cache first, then uses the bundled snapshot when disk data is unavailable. Catalog refresh remains best effort. Startup composition failures report their stage on stderr and retain the `production composition failed` startup error; stdout is reserved for the stdio readiness protocol.
+
 The Rust Core process-extension resolver accepts explicit `extensions` entries
 with executable/arguments, identity, and host-granted tool families/scopes. It
 validates declarations before launch and rejects obsolete executable plugin/npm
