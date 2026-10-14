@@ -19,6 +19,7 @@ pub const INTENT_LIMIT: usize = 4096;
 pub const INTENT_BYTES: usize = 8 * 1024 * 1024;
 pub const BATCH_SIZE: usize = 128;
 pub const REPORT_DEADLINE: Duration = Duration::from_secs(5);
+pub const REPORT_STACK_BYTES: usize = 8 * 1024 * 1024;
 pub const ROW_BYTES: usize = 64 * 1024;
 pub const REPORT_ROWS: usize = 4096;
 pub const REPORT_BYTES: usize = 8 * 1024 * 1024;
@@ -220,6 +221,7 @@ impl Engine {
         let root = root.as_ref().to_path_buf();
         let writer = match thread::Builder::new()
             .name("ycoding-analytics-writer".to_owned())
+            .stack_size(REPORT_STACK_BYTES)
             .spawn(move || worker::run(owned_store, root, sources, receiver))
         {
             Ok(writer) => writer,

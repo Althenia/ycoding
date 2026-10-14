@@ -1105,7 +1105,7 @@ fn native_resource_configuration_private_files_and_single_process_owner_are_boun
     assert_eq!(
         rows[0],
         vec![vec![
-            Value::BigInt(2),
+            Value::BigInt(1),
             Value::Text("256.0 MiB".to_owned()),
             Value::Text("256.0 MiB".to_owned()),
             Value::Boolean(false),

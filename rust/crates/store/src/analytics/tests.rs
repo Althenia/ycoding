@@ -394,7 +394,7 @@ fn native_configuration_locks_selected_bounds_and_rejects_one_past() {
         .unwrap();
     let connection = worker.connection.as_ref().unwrap();
     for (setting, selected, overflow) in [
-        ("threads", "2", "3"),
+        ("threads", "1", "2"),
         ("memory_limit", "256.0 MiB", "268435457B"),
         ("max_temp_directory_size", "256.0 MiB", "268435457B"),
         ("max_expression_depth", "1000", "1001"),

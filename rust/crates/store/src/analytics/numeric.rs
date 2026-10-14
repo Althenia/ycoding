@@ -43,7 +43,7 @@ pub(super) fn open(path: &Path, spill: &Path) -> Result<Native, Error> {
             "temp_directory",
             spill.to_str().ok_or(Error::Configuration)?,
         ),
-        ("threads", "2"),
+        ("threads", "1"),
         ("max_expression_depth", "1000"),
         ("max_memory", "256MiB"),
         ("max_temp_directory_size", "256MiB"),
