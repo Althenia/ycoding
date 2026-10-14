@@ -1687,7 +1687,8 @@ impl Owner {
         } else {
             self.process.control().terminate_now();
         }
-        let reaped = self.process.wait().await.is_ok();
+        let reaped = self.process.wait().await.is_ok()
+            && self.process.reap_group(self.options.shutdown).await.is_ok();
         for (_, active) in std::mem::take(&mut self.active) {
             let _ = active.reply.send(Err(if reaped {
                 active.cancellation.unwrap_or(Error::UnknownOutcome)

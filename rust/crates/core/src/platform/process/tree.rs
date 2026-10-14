@@ -49,21 +49,8 @@ pub(crate) async fn terminate(
         if !detached {
             return Ok(status);
         }
-        if group_alive(pid).await? {
-            signal(pid, libc::SIGKILL, true)?;
-        }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        loop {
-            if !group_alive(pid).await? {
-                return Ok(status);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(io::Error::other(
-                    "Process group remained alive after SIGKILL",
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        kill_group_remnants(pid).await?;
+        Ok(status)
     }
     #[cfg(windows)]
     {
@@ -79,6 +66,47 @@ pub(crate) async fn terminate(
             ));
         }
         child.wait().await
+    }
+}
+
+// Stops what a leader that already exited left in its process group: TERM, a bounded grace for
+// the group to disappear, then KILL. A group without live members is a normal outcome.
+pub(crate) async fn sweep(pid: u32, grace: std::time::Duration, detached: bool) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        if !detached || !group_alive(pid).await? {
+            return Ok(());
+        }
+        signal(pid, libc::SIGTERM, true)?;
+        let deadline = tokio::time::Instant::now() + grace;
+        while group_alive(pid).await? && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        kill_group_remnants(pid).await
+    }
+    #[cfg(windows)]
+    {
+        let _ = (pid, grace, detached);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+async fn kill_group_remnants(pid: u32) -> io::Result<()> {
+    if group_alive(pid).await? {
+        signal(pid, libc::SIGKILL, true)?;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if !group_alive(pid).await? {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(io::Error::other(
+                "Process group remained alive after SIGKILL",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

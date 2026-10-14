@@ -335,6 +335,10 @@ impl Process {
             Err(_) => Ok(None),
         }
     }
+    // Reaps descendants a leader left behind after it exited and was joined.
+    pub async fn reap_group(&self, grace: Duration) -> io::Result<()> {
+        tree::sweep(self.control.pid, grace, self.control.detached).await
+    }
     pub async fn release(mut self) -> io::Result<()> {
         if self.task.is_some() && !self.control.sender.is_closed() {
             let (send, receive) = oneshot::channel();

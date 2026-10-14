@@ -2133,4 +2133,61 @@ fn bundled_capability_ids_cover_exactly_the_planned_builtin_tool_inventory() {
     );
 }
 
+// RED (production defect): descendants outlive a stopped, dropped or crashed extension.
+#[tokio::test]
+async fn descendants_of_a_stopped_dropped_or_crashed_extension_are_reaped() {
+    let mut failures = Vec::new();
+    for scenario in ["graceful", "ignored_shutdown", "dropped", "crashed"] {
+        let fixture = ToolFixture::new();
+        let registry = fixture.registry();
+        let marker = fixture.root.join("effects");
+        let mut spec =
+            json!({"grandchild": true, "pidfile": fixture.root.join(format!("{scenario}.pids"))});
+        match scenario {
+            "ignored_shutdown" => spec["ignore_shutdown"] = true.into(),
+            "crashed" => {
+                spec["exec"] = "effect_crash".into();
+                spec["effects"] = json!(marker);
+            }
+            _ => {}
+        }
+        let extension = support::start(
+            &fixture.root,
+            scenario,
+            support::configuration(&fixture.root, scenario, spec, vec![]),
+            &registry,
+            fixture.policy.clone(),
+            Host::default(),
+            options(),
+        )
+        .await;
+        support::marker(&fixture.root, &format!("{scenario}.pids")).await;
+        let (child, descendant) = support::pids(&fixture.root, scenario);
+        let _reaped = support::Reaper(descendant);
+        match scenario {
+            "dropped" => {
+                drop(extension);
+                tokio::time::timeout(
+                    WATCHDOG,
+                    support::gone("dropped extension tree", &[child, descendant]),
+                )
+                .await
+                .unwrap();
+            }
+            "crashed" => {
+                let _ = invoke(&registry, fixture.context()).await;
+                tokio::time::timeout(WATCHDOG, extension.closed())
+                    .await
+                    .unwrap();
+            }
+            _ => tokio::time::timeout(WATCHDOG, extension.shutdown())
+                .await
+                .unwrap(),
+        }
+        failures.extend(tree_failures(scenario, child, Some(descendant)));
+        fixture.cleanup();
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 // END OF FLOWS
