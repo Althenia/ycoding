@@ -53,7 +53,7 @@ pub async fn complete(
         ("session.execution.started.1", r#"{}"#),
         (
             "session.step.started.1",
-            r#"{"assistantMessageID":"msg_connector_declare"}"#,
+            r#"{"assistantMessageID":"msg_connector_declare","agent":"build","model":{"providerID":"fixture","id":"model"}}"#,
         ),
         (
             "session.tool.input.started.1",
@@ -69,11 +69,11 @@ pub async fn complete(
         ),
         (
             "session.step.ended.1",
-            r#"{"assistantMessageID":"msg_connector_declare","finish":"tool-calls"}"#,
+            r#"{"assistantMessageID":"msg_connector_declare","finish":"tool-calls","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}"#,
         ),
         (
             "session.step.started.1",
-            r#"{"assistantMessageID":"msg_connector_final"}"#,
+            r#"{"assistantMessageID":"msg_connector_final","agent":"build","model":{"providerID":"fixture","id":"model"}}"#,
         ),
         (
             "session.text.ended.1",
@@ -81,7 +81,7 @@ pub async fn complete(
         ),
         (
             "session.step.ended.1",
-            r#"{"assistantMessageID":"msg_connector_final","finish":"stop"}"#,
+            r#"{"assistantMessageID":"msg_connector_final","finish":"stop","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}"#,
         ),
         ("session.execution.succeeded.1", r#"{}"#),
     ];

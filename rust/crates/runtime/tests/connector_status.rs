@@ -56,6 +56,23 @@ async fn status(relay: &mut Relay, generation: usize, attention: &[&str]) -> v5:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_fixture_preserves_typed_session_lifecycle_reads() {
+    let _serial = SERIAL.lock().await;
+    let id = session::Id::new("ses_status_lifecycle").unwrap();
+    support::insert_session(
+        "ses_status_lifecycle",
+        std::env::current_dir().unwrap().to_str().unwrap(),
+        None,
+    )
+    .await;
+    connector_status_support::complete(&world().store, &world().core, &id).await;
+    let page = world().core.sessions.log(&id, None, 512).unwrap();
+    assert!(page.events.iter().any(|entry| {
+        entry.event.0.event_type.as_str() == Some("session.work.completed") && entry.version == 1
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authoritative_family_requests_failures_and_reconnect_publish_status() {
     let _serial = SERIAL.lock().await;
     tokio::time::timeout(Duration::from_secs(60), async {
