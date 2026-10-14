@@ -1102,7 +1102,7 @@ impl Factory {
                 isolated: &isolated,
                 computer: &computer,
                 skills: skills.clone(),
-                mcp: mcp.clone(),
+                mcp: &mcp,
                 artifacts: prepared.source.clone(),
             },
         )?;

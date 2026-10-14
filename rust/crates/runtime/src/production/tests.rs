@@ -1903,6 +1903,54 @@ fn location_reload_and_close_reap_extension_processes() {
 }
 
 #[test]
+fn idle_skill_tool_generation_is_not_in_use_and_is_released_after_replacement() {
+    let f = fixture("{}", "{}");
+    let locations = f.locations();
+    let services = f.services(&locations);
+    let composed = services.production.as_ref().unwrap();
+    assert!(
+        composed
+            .tools
+            .materialize(&[])
+            .definitions
+            .iter()
+            .any(|tool| tool.name.as_str() == Some("skill"))
+    );
+    assert!(!composed.in_use());
+    let mcp = Arc::downgrade(&composed.mcp);
+    let info = services.info.clone();
+    drop(services);
+    locations.reload(&info).unwrap();
+    locations.evict_idle(Instant::now()).unwrap();
+    assert!(mcp.upgrade().is_none());
+    assert!(!f.services(&locations).production.as_ref().unwrap().in_use());
+    locations.close().unwrap();
+}
+
+#[test]
+fn external_mcp_holder_keeps_skill_tool_generation_in_use_until_released() {
+    let f = fixture("{}", "{}");
+    let locations = f.locations();
+    let services = f.services(&locations);
+    let composed = services.production.as_ref().unwrap();
+    let holder = composed.mcp.clone();
+    assert!(composed.in_use());
+    drop(holder);
+    assert!(!composed.in_use());
+    let holder = composed.mcp.clone();
+    let mcp = Arc::downgrade(&holder);
+    let info = services.info.clone();
+    drop(services);
+    locations.reload(&info).unwrap();
+    locations.evict_idle(Instant::now()).unwrap();
+    assert!(mcp.upgrade().is_some());
+    drop(holder);
+    locations.evict_idle(Instant::now()).unwrap();
+    assert!(mcp.upgrade().is_none());
+    locations.close().unwrap();
+}
+
+#[test]
 fn eviction_keeps_held_generation_alive_and_retired_sources_do_not_remove_the_replacement() {
     let f = fixture("{}", "{}");
     let locations = f.locations();

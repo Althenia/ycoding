@@ -15,7 +15,11 @@ use crate::{
         registry::{Failure, Tool, ToolFuture},
     },
 };
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::Path,
+    sync::{Arc, Weak},
+};
 use ycoding_ai::llm::{ToolDefinition, ToolOutput};
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder,
@@ -30,7 +34,7 @@ const OUTPUT_SCHEMA: &str = r#"{"type":"object","properties":{"name":{"type":"st
 
 pub struct SkillTool {
     pub skills: Arc<tokio::sync::Mutex<crate::resources::skill::Service>>,
-    pub mcp: Arc<crate::resources::mcp::Service>,
+    pub mcp: Weak<crate::resources::mcp::Service>,
     pub sessions: crate::session::store::Service,
     pub reader: Read,
     pub policy: Arc<LeafPolicy>,
@@ -136,8 +140,8 @@ impl SkillTool {
         messages: &[session_message::Info],
         context: &Context,
     ) -> Result<Output, Failure> {
-        let entry = self
-            .mcp
+        let mcp = self.mcp.upgrade().ok_or_else(|| unable(id))?;
+        let entry = mcp
             .get_skill(&text(server), &text(uri))
             .await
             .map_err(|_| unable(id))?;
@@ -153,8 +157,7 @@ impl SkillTool {
         self.assert_mcp(id, &entry, &manifest, context)
             .await
             .map_err(|error| settled(error, || unable(id)))?;
-        let file = self
-            .mcp
+        let file = mcp
             .read_skill_resource(&text(&entry.server), &entry, &text(&entry.uri))
             .await
             .map_err(|_| unable(id))?;
@@ -242,11 +245,11 @@ impl SkillTool {
             return Err(unable(id));
         }
         let resource = mcp_skills::resolve(&entry, &reference).ok_or_else(failure)?;
+        let mcp = self.mcp.upgrade().ok_or_else(failure)?;
         self.assert_mcp(id, &entry, &identity(&entry), context)
             .await
             .map_err(|error| settled(error, failure))?;
-        let file = self
-            .mcp
+        let file = mcp
             .read_skill_resource(&text(server), &entry, &resource)
             .await
             .map_err(|_| failure())?;

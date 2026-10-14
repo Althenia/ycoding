@@ -6,6 +6,8 @@ This document specifies the Rust-backend beta's runtime behavior. Exact types an
 
 Rust `launch` installs observability, resolves channel roots, imports/opens redb, composes production Core, binds the listener, and publishes authenticated readiness and owned registration. Production supplies the Session runner and helper generation, tools, MCP, configured process extensions, artifacts, native-control services, maintenance, and the opt-in remote connector. Each Location has a replaceable service generation; held calls retain their captured services through reload.
 
+The registered skill tool holds a non-owning MCP handle. MCP skill loads and resource reads retain the service through settlement; an idle skill tool does not keep a replaced generation alive. External service holders keep that generation in use until released.
+
 Canonical Session records, pending inputs, events, instruction blobs, autonomy, tasks, credentials, and artifacts live in the local Store. Usage and latency reports use derived DuckDB analytics. Neither a UI read model nor a report table owns canonical execution history. Store open fails closed for an unreadable or unsupported catalog/codec; startup does not reset or overwrite it.
 
 Beta uses `ycoding-beta` roots. First start imports stable Core SQLite through private scratch into a verified redb candidate; each Meeting Location has its own first-start history import when Meeting is enabled. Stable sources remain unchanged. Completion markers and provenance make retries restart-safe; later stable changes are not merged. Source absence is recorded as a completed no-import choice. See [global directories](./configuration.md#global-directories) and [Meeting capture](./configuration.md#meeting-capture).

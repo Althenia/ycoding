@@ -429,12 +429,12 @@ mod served {
     pub fn tool(
         fixture: &ToolFixture,
         catalog: Catalog,
-        mcp: Mcp,
+        mcp: &Arc<Mcp>,
         artifacts: Option<ycoding_core::resources::project_artifact::source::Service>,
     ) -> SkillTool {
         SkillTool {
             skills: Arc::new(tokio::sync::Mutex::new(catalog)),
-            mcp: Arc::new(mcp),
+            mcp: Arc::downgrade(mcp),
             sessions: Sessions::new(fixture.authority.store.client()),
             reader: Read {
                 paths: fixture.paths(),
@@ -584,16 +584,13 @@ async fn skill_tool_is_advertised_with_the_ts_contract_and_follows_the_permissio
     use served::*;
     let fixture = ToolFixture::new();
     let registry = fixture.registry();
+    let mcp = Arc::new(empty_mcp(&fixture));
     let _registration = registry
         .register(
             vec![(
                 "skill".into(),
-                Arc::new(tool(
-                    &fixture,
-                    catalog(&fixture, vec![]),
-                    empty_mcp(&fixture),
-                    None,
-                )) as Arc<dyn ycoding_core::tools::registry::Tool>,
+                Arc::new(tool(&fixture, catalog(&fixture, vec![]), &mcp, None))
+                    as Arc<dyn ycoding_core::tools::registry::Tool>,
             )],
             ycoding_core::tools::registry::Options::direct(),
         )
@@ -624,12 +621,8 @@ async fn skill_tool_loads_authorized_skills_and_rejects_denied_unknown_and_inact
     use served::*;
     let fixture = ToolFixture::new();
     let info = effect_info(&fixture);
-    let tool = tool(
-        &fixture,
-        catalog(&fixture, vec![info.clone()]),
-        empty_mcp(&fixture),
-        None,
-    );
+    let mcp = Arc::new(empty_mcp(&fixture));
+    let tool = tool(&fixture, catalog(&fixture, vec![info.clone()]), &mcp, None);
     let loaded = call(
         &tool,
         fixture.context(),
@@ -697,12 +690,8 @@ async fn skill_tool_reports_a_duplicate_load_as_already_active_without_a_new_act
     use ycoding_core::session::skill_status;
     let fixture = ToolFixture::new();
     let info = effect_info(&fixture);
-    let tool = tool(
-        &fixture,
-        catalog(&fixture, vec![info]),
-        empty_mcp(&fixture),
-        None,
-    );
+    let mcp = Arc::new(empty_mcp(&fixture));
+    let tool = tool(&fixture, catalog(&fixture, vec![info]), &mcp, None);
     let sessions = Sessions::new(fixture.authority.store.client());
     let first = call(
         &tool,
@@ -777,12 +766,8 @@ async fn skill_tool_loads_an_mcp_served_skill_under_a_content_bound_approval_and
     .unwrap();
     let id = mcp_skills::id(&"loopback".into(), &held.uri);
     let manifest = mcp_skills::identity_by(&held, |left, right| left.cmp(right));
-    let tool = tool(
-        &fixture,
-        catalog(&fixture, vec![]),
-        server.service(fixture.root.clone()),
-        None,
-    );
+    let mcp = Arc::new(server.service(fixture.root.clone()));
+    let tool = tool(&fixture, catalog(&fixture, vec![]), &mcp, None);
     let sessions = Sessions::new(fixture.authority.store.client());
     fixture.deny("skill", &manifest);
     assert_eq!(
@@ -871,6 +856,82 @@ async fn skill_tool_loads_an_mcp_served_skill_under_a_content_bound_approval_and
 }
 
 #[tokio::test]
+async fn mcp_skill_calls_retain_the_service_through_approval_and_release_it_on_settlement() {
+    use served::*;
+    use ycoding_core::tools::policy::permissions::Permissions;
+    for resource in [false, true] {
+        let fixture = ToolFixture::new();
+        let server = Loopback::start().await;
+        let mcp = Arc::new(server.service(fixture.root.clone()));
+        let id = ycoding_core::resources::mcp::skills::id(
+            &"loopback".into(),
+            &"skill://a/SKILL.md".into(),
+        );
+        let mut tool = tool(&fixture, catalog(&fixture, vec![]), &mcp, None);
+        assert_eq!(Arc::strong_count(&mcp), 1);
+        if resource {
+            let loaded = call(&tool, fixture.context(), serde_json::json!({"id": id}))
+                .await
+                .unwrap();
+            record(&tool.sessions, "mcp", 100, &id, &loaded.structured).await;
+        }
+        fixture.authority.session("ses_tool", None, 0, false, None);
+        fixture.authority.rules.lock().unwrap().clear();
+        let requested = Arc::new(tokio::sync::Notify::new());
+        let notify = requested.clone();
+        let publisher = fixture.authority.publisher();
+        let permissions = Permissions::new(
+            fixture.authority.authority(),
+            ycoding_schema::project_id::ProjectId::new("project").unwrap(),
+            Arc::new(move |event| {
+                publisher(event)?;
+                notify.notify_one();
+                Ok(())
+            }),
+        );
+        tool.policy = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
+            permissions: permissions.clone(),
+            guardrails: fixture.policy.guardrails.clone(),
+        });
+        let input = if resource {
+            serde_json::json!({"id": id, "resource": "SKILL.md"})
+        } else {
+            serde_json::json!({"id": id})
+        };
+        let held = Arc::downgrade(&mcp);
+        let mut pending = Box::pin(call(&tool, fixture.context(), input.clone()));
+        tokio::select! {
+            result = &mut pending => panic!("skill call settled before approval: {result:?}"),
+            _ = requested.notified() => {},
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => panic!("skill approval was not requested"),
+        }
+        drop(mcp);
+        assert!(held.upgrade().is_some());
+        permissions
+            .reply(
+                &permissions.list()[0].id,
+                ycoding_schema::permission::Reply("once".into()),
+                None,
+            )
+            .unwrap();
+        let output = pending.await.unwrap();
+        assert!(text(&output).contains("# Guide"));
+        assert_eq!(flag(&output, "alreadyActive"), resource.then_some(true));
+        assert!(held.upgrade().is_none());
+        let expected = if resource {
+            format!("Unable to read SKILL.md for skill {id}")
+        } else {
+            format!("Unable to load skill {id}")
+        };
+        assert_eq!(
+            failure(call(&tool, fixture.context(), input).await),
+            expected
+        );
+        fixture.cleanup();
+    }
+}
+
+#[tokio::test]
 async fn skill_tool_loads_a_managed_artifact_skill_and_records_its_skill_tool_activation() {
     use served::*;
     use ycoding_core::{
@@ -945,7 +1006,8 @@ async fn skill_tool_loads_a_managed_artifact_skill_and_records_its_skill_tool_ac
     }
     let feed = Feed::attach(&client);
     let governor = source.start(&feed).unwrap();
-    let tool = tool(&fixture, catalogs.skills, empty_mcp(&fixture), Some(source));
+    let mcp = Arc::new(empty_mcp(&fixture));
+    let tool = tool(&fixture, catalogs.skills, &mcp, Some(source));
     let loaded = call(
         &tool,
         fixture.context(),

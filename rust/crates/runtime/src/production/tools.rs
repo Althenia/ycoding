@@ -38,7 +38,7 @@ pub(super) struct Handles<'a> {
     pub isolated: &'a Arc<ycoding_core::platform::browser::isolated::Service>,
     pub computer: &'a Arc<ycoding_core::platform::computer::service::Service>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
-    pub mcp: Arc<mcp::Service>,
+    pub mcp: &'a Arc<mcp::Service>,
     pub artifacts: source::Service,
 }
 
@@ -132,7 +132,7 @@ pub(super) fn compose(
             "skill".into(),
             Arc::new(SkillTool {
                 skills: handles.skills,
-                mcp: handles.mcp,
+                mcp: Arc::downgrade(handles.mcp),
                 sessions: ycoding_core::session::store::Service::new(factory.client.clone()),
                 reader: Read {
                     paths: paths.clone(),
