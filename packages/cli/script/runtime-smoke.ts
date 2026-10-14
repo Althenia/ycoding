@@ -3,7 +3,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { YCoding } from "@ycoding-ai/client/v5"
+import { V5ClientError, YCoding } from "@ycoding-ai/client/v5"
 import { BUN_BINARY, platformBinary } from "../src/binary"
 
 const KEY = "runtime-smoke-openrouter-key"
@@ -18,6 +18,16 @@ const GOAL_STEER_START = "User-proxy steer: begin with the safest database defau
 const GOAL_STEER_CONTINUED = "User-proxy steer: finish the task on the user's behalf"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export function assertUnsentSubagentDescription(error: unknown) {
+  if (
+    !(error instanceof V5ClientError) ||
+    error.status !== "unsent" ||
+    error.operation !== "session.subagent.launch" ||
+    error.reason !== "Input cannot be represented by v5"
+  )
+    throw new Error("Oversized subagent description was not rejected by the v5 client before transmission")
+}
 
 function assertClose(actual: number | undefined, expected: number, label: string) {
   if (actual === undefined || Math.abs(actual - expected) > 1e-12)
@@ -803,13 +813,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         () => undefined,
         (error: unknown) => error,
       )
-    if (
-      typeof oversizedSubagent !== "object" ||
-      oversizedSubagent === null ||
-      !("_tag" in oversizedSubagent) ||
-      oversizedSubagent._tag !== "InvalidRequestError"
-    )
-      throw new Error("Oversized subagent payload did not return InvalidRequestError")
+    assertUnsentSubagentDescription(oversizedSubagent)
     if ((await client.session.subagent.list({ parentID: subagentParent.id })).data.length !== 0)
       throw new Error("Oversized subagent payload persisted a task")
 
@@ -818,10 +822,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       parentAssistantMessageID: "msg_runtime_smoke_parent",
       toolCallID: "call_runtime_smoke_child",
       agent: "reviewer",
-      description: "Runtime smoke child",
+      description: "d".repeat(4 * 1024),
       prompt: "runtime-smoke-subagent-block",
       background: true,
     })
+    if (launchedSubagent.description !== "d".repeat(4 * 1024))
+      throw new Error("The boundary-length subagent description was not preserved")
     await eventually(async () => {
       const task = (await client.session.subagent.list({ parentID: subagentParent.id })).data.find(
         (item) => item.sessionID === launchedSubagent.sessionID,
