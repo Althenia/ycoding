@@ -497,3 +497,82 @@ async fn source_epoch_replacement_resyncs_a_stale_snapshot_without_delivering_st
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_tui_view_reloads_a_wire_gap_and_preserves_live_text_received_during_reload() {
+    use std::{path::Path, process::Stdio};
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        process::Command,
+    };
+    use ycoding_core::{
+        event_feed::{Data, ephemeral::Fragment},
+        ycoding_schema::{parse_json, schema::NonNegativeInt, session, session_message},
+        ycoding_store::{KeyPart, session::MessageTable, tuple_key},
+    };
+
+    bounded(async {
+        let session = "ses_wire_view";
+        insert_session(session, "/project", None).await;
+        insert_message(session, "msg_wire_view", "assistant", 0, r#"{"agent":"build","model":{"providerID":"fixture","id":"fixture"},"content":[{"type":"text","text":"base"}],"time":{"created":1}}"#).await;
+        let server = start(services(LocalAuth::with_password("secret"), true), standard().unwrap()).await;
+        let mut publisher = open(server.address()).await;
+        rename(&mut publisher, session, "baseline").await;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let logs = root.join(".lane-logs/wire-view");
+        std::fs::create_dir_all(&logs).unwrap();
+        let mut child = Command::new("bun")
+            .arg("run")
+            .arg("test-integration/wire-gap-rust.tsx")
+            .current_dir(root.join("packages/tui"))
+            .env("YCODING_TEST_WIRE_ENDPOINT", format!("http://{}", server.address()))
+            .env("YCODING_TEST_HOME", logs.join("home"))
+            .env("XDG_CACHE_HOME", logs.join("cache"))
+            .env("XDG_CONFIG_HOME", logs.join("config"))
+            .env("XDG_DATA_HOME", logs.join("data"))
+            .env("XDG_STATE_HOME", logs.join("state"))
+            .env_remove("YCODING_CONFIG_DIR")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(std::fs::File::create(logs.join("stderr.log")).unwrap()))
+            .kill_on_drop(true)
+            .spawn().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut input = child.stdin.take().unwrap();
+        let mut log = std::fs::File::create(logs.join("stdout.log")).unwrap();
+        async fn signal(output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, log: &mut std::fs::File, expected: &str) {
+            use std::io::Write;
+            loop {
+                let line = output.next_line().await.unwrap().expect("view exited before its completion signal; inspect .lane-logs/wire-view/stderr.log");
+                writeln!(log, "{line}").unwrap();
+                if line.starts_with("WIRE_VIEW ") {
+                    assert_eq!(line, format!("WIRE_VIEW {expected}"));
+                    return;
+                }
+            }
+        }
+        signal(&mut output, &mut log, "hydrated").await;
+        world().store.submit(move |tx| {
+            let mut message = tx.get::<MessageTable>(&tuple_key(&[KeyPart::String(&"msg_wire_view".into())]))?.unwrap();
+            message.data = parse_json(r#"{"agent":"build","model":{"providerID":"fixture","id":"fixture"},"content":[{"type":"text","text":"base"},{"type":"text","text":"recovered missing part"}],"time":{"created":1}}"#).unwrap();
+            MessageTable::put(tx, &message)
+        }).unwrap().await.unwrap();
+        rename(&mut publisher, session, "lost gap event").await;
+        rename(&mut publisher, session, "gap triggers canonical reload").await;
+        signal(&mut output, &mut log, "reload-held").await;
+        world().core.events.emit(Data::SessionTextDelta(Box::new(Fragment {
+            session_id: session::Id::new(session).unwrap(),
+            assistant_message_id: session_message::Id::new("msg_wire_view").unwrap(),
+            ordinal: NonNegativeInt::new(0).unwrap(),
+            delta: " live".into(),
+        })), None).unwrap();
+        signal(&mut output, &mut log, "delta-seen").await;
+        input.write_all(b"release\n").await.unwrap();
+        signal(&mut output, &mut log, "done").await;
+        drop(input);
+        assert!(child.wait().await.unwrap().success(), "view acceptance assertions failed; inspect .lane-logs/wire-view/stderr.log");
+        assert!(world().core.sessions.pending_list(&session::Id::new(session).unwrap()).unwrap().is_empty());
+        assert!(script(session).requests().is_empty());
+        server.shutdown().await.unwrap();
+    }).await;
+}

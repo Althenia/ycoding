@@ -359,28 +359,36 @@ function reconcileCanonicalMessages(
       positions.set(message.id, insertAt)
       return
     }
-    messages[position] = message
+    if (message.type !== "assistant" || messages[position].type !== "assistant") messages[position] = message
   })
   return messages.map((message) => {
-    if (message.type !== "assistant" || message.time.completed !== undefined) return message
+    if (message.type !== "assistant") return message
     const resident = current.find((item) => item.id === message.id)
     if (resident?.type !== "assistant" || resident === message) return message
+    const preserve = touched.has(message.id) || active.has(message.id)
+    if (!preserve && message.time.completed !== undefined) return message
     const ordinal = { text: 0, reasoning: 0 }
+    const remaining = new Set(resident.content)
+    const content = message.content.map((part) => {
+      const live =
+        part.type === "tool"
+          ? resident.content.find((item) => item.type === "tool" && item.id === part.id)
+          : resident.content.filter((item) => item.type === part.type)[ordinal[part.type]++]
+      if (!live) return part
+      remaining.delete(live)
+      if (preserve) return live
+      if (part.type === "tool") {
+        if (part.state.status !== "streaming" || live.type !== "tool" || live.state.status !== "streaming") return part
+        return live.state.input.startsWith(part.state.input)
+          ? { ...part, state: { ...part.state, input: live.state.input } }
+          : part
+      }
+      if (live.type === "tool" || (part.type === "reasoning" && part.time?.completed)) return part
+      return live.text.startsWith(part.text) ? { ...part, text: live.text } : part
+    })
     return {
-      ...message,
-      content: message.content.map((part) => {
-        if (part.type === "tool") {
-          const live = resident.content.find((item) => item.type === "tool" && item.id === part.id)
-          if (part.state.status !== "streaming" || live?.type !== "tool" || live.state.status !== "streaming")
-            return part
-          return live.state.input.startsWith(part.state.input)
-            ? { ...part, state: { ...part.state, input: live.state.input } }
-            : part
-        }
-        const live = resident.content.filter((item) => item.type === part.type)[ordinal[part.type]++]
-        if (!live || live.type === "tool" || (part.type === "reasoning" && part.time?.completed)) return part
-        return live.text.startsWith(part.text) ? { ...part, text: live.text } : part
-      }),
+      ...(preserve ? resident : message),
+      content: preserve ? [...content, ...remaining] : content,
     }
   })
 }

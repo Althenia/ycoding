@@ -32,6 +32,12 @@ Global Form reply/cancel and attachment/asset reads require the client/protocol 
 
 The runtime event connection must forward ephemeral public events as well as durable Session events. The TUI depends on live text/reasoning/tool-input deltas, usage/diagnostics/prediction updates, permissions, questions, forms, guardrails, catalog/config/resource/MCP changes, shell/PTY changes, todo changes, and TUI controls. Snapshot and reconnect reconciliation remain canonical, but cannot substitute for absent live event delivery.
 
+## Transcript reload reconciliation
+
+The TUI reloads the canonical newest message window when a durable Session sequence gap is detected. Durable events at or below the snapshot watermark are discarded before store and row consumers. A reload remains read-only and never resumes provider execution.
+
+Reconcile assistant parts even when live events touch the resident message during the read. Match text and reasoning by type ordinal and tools by call ID. Preserve touched or active resident metadata and matching live parts, include recovered canonical-only parts, and retain resident-only live parts when the canonical part set shrinks. For untouched incomplete assistants, retain prefix-extending live text, reasoning, and streaming tool input over the canonical prefix. Each message and part identity appears once; rows reference only resident messages and parts.
+
 ## Regression boundary
 
 The fixture uses the real v5 client, handshake, binary codecs, request settlement, bulk results, event batches, cancellation, and reconnect ownership against a scripted protocol peer. Existing URL/Request/Response values are scenario notation for retained assertions, not an HTTP transport; the listening screen harness accepts only the v5 WebSocket upgrade. The peer uses the protocol package's connection state machine with one monotonic clock and unique bulk-transfer IDs.

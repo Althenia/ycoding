@@ -267,6 +267,69 @@ test("gap recovery restores missing parts without losing live text received duri
   }
 })
 
+test("a touched assistant retains live-only parts when the canonical part set shrinks", async () => {
+  const assistant = {
+    id: "msg_assistant",
+    type: "assistant" as const,
+    agent: "build",
+    model: { providerID: "fixture", id: "fixture" },
+    content: [
+      { type: "text" as const, text: "base" },
+      { type: "text" as const, text: "tail" },
+    ],
+    time: { created: 1 },
+  }
+  const requested = Promise.withResolvers<void>()
+  const response = Promise.withResolvers<Response>()
+  let reads = 0
+  const fixture = await mount((url) => {
+    if (!url.pathname.endsWith("/snapshot")) return undefined
+    reads++
+    if (reads === 1) return sessionSnapshot(sessionID, [assistant])
+    requested.resolve()
+    return response.promise
+  }, true)
+  try {
+    await fixture.data.session.message.sync(sessionID)
+    const rows = fixture
+      .rows()
+      .filter((row) => row.type === "part")
+      .map((row) => row.ref)
+    fixture.data.session.message.invalidate(sessionID)
+    const reload = fixture.data.session.message.sync(sessionID)
+    await requested.promise
+    await fixture.deliver({
+      id: "evt_tail_delta",
+      created: 2,
+      type: "session.text.delta",
+      data: { sessionID, assistantMessageID: assistant.id, ordinal: 1, delta: " live" },
+    })
+    response.resolve(sessionSnapshot(sessionID, [{ ...assistant, content: assistant.content.slice(0, 1) }]))
+    await reload
+    expect(reads).toBe(2)
+    expect(fixture.data.session.message.list(sessionID)).toHaveLength(1)
+    const message = fixture.data.session.message.get(sessionID, assistant.id)
+    expect(
+      message?.type === "assistant"
+        ? message.content.map((part) => (part.type === "text" ? part.text : part.type))
+        : undefined,
+    ).toEqual(["base", "tail live"])
+    expect(
+      fixture
+        .rows()
+        .filter((row) => row.type === "part")
+        .map((row) => row.ref),
+    ).toEqual(rows)
+    expect(rows).toEqual([
+      { messageID: assistant.id, partID: "text:0" },
+      { messageID: assistant.id, partID: "text:1" },
+    ])
+  } finally {
+    response.resolve(sessionSnapshot(sessionID, []))
+    fixture.destroy()
+  }
+})
+
 async function mount(handler: FetchHandler, withRows = false) {
   const events = createEventStream()
   const calls = createFetch(handler, events)
