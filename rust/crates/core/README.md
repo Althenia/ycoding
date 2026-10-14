@@ -18,6 +18,14 @@ project switches plus absolute-path exclusions. The policy narrows visibility
 and never grants permissions. The `execute` wrapper ignores the tool allow list
 but respects tool disable/deny selections.
 
+The tool registry receives the already resolved policy through its configuration
+snapshot. `Registry::available` and `Registry::materialize` use one selection
+filter for capabilities and wholly denied permission actions. Available names
+include CodeMode tools only when `execute` is reachable; the wrapper itself is
+not an available leaf name. Hidden direct calls return `tool.unknown`, and hidden
+CodeMode tools are absent from discovery and invocation. Disabling skills hides
+the `skill` tool; disabling project artifacts hides `project_artifact`.
+
 `home_roots: false` excludes the exact absolute `~/.claude` and `~/.agents`
 ecosystem roots, including copies discovered by upward traversal. Project
 descendants with those names and the ordinary global YCoding configuration stay

@@ -4,7 +4,7 @@ use super::{
 };
 use crate::resources::{config::Configuration, image, tool_output_store::Store};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex, Weak},
@@ -342,24 +342,8 @@ impl Registry {
         })
     }
     pub fn materialize(&self, permissions: &[permission::Rule]) -> Materialization {
-        let local = self.local.lock().unwrap_or_else(|error| error.into_inner());
-        let mut direct = BTreeMap::new();
-        let mut codemode = BTreeMap::new();
-        for (name, entries) in &local.1 {
-            let Some((_, entry)) = entries.last() else {
-                continue;
-            };
-            if wholly_disabled(entry.tool.permission().unwrap_or(name), permissions) {
-                continue;
-            }
-            if entry.codemode {
-                codemode.insert(name.clone(), entry.clone());
-            }
-            if entry.direct {
-                direct.insert(name.clone(), entry.clone());
-            }
-        }
-        if !codemode.is_empty() && !wholly_disabled("execute", permissions) {
+        let (mut direct, codemode) = self.select(permissions);
+        if !codemode.is_empty() {
             direct.insert(
                 "execute".into(),
                 Entry {
@@ -390,6 +374,45 @@ impl Registry {
             configuration: self.configuration.clone(),
             image_limits: self.image_limits,
         }
+    }
+    pub fn available(&self, permissions: &[permission::Rule]) -> BTreeSet<String> {
+        let (direct, codemode) = self.select(permissions);
+        direct.into_keys().chain(codemode.into_keys()).collect()
+    }
+    fn select(
+        &self,
+        permissions: &[permission::Rule],
+    ) -> (BTreeMap<String, Entry>, BTreeMap<String, Entry>) {
+        let local = self.local.lock().unwrap_or_else(|error| error.into_inner());
+        let capabilities = self
+            .configuration
+            .as_ref()
+            .map(|config| &config.capabilities);
+        let mut direct = BTreeMap::new();
+        let mut codemode = BTreeMap::new();
+        for (name, entries) in &local.1 {
+            let Some((_, entry)) = entries.last() else {
+                continue;
+            };
+            if wholly_disabled(entry.tool.permission().unwrap_or(name), permissions) {
+                continue;
+            }
+            if capabilities.is_some_and(|policy| !policy.allows_tool(&name.as_str().into())) {
+                continue;
+            }
+            if entry.codemode {
+                codemode.insert(name.clone(), entry.clone());
+            }
+            if entry.direct {
+                direct.insert(name.clone(), entry.clone());
+            }
+        }
+        if wholly_disabled("execute", permissions)
+            || capabilities.is_some_and(|policy| !policy.allows_tool(&"execute".into()))
+        {
+            codemode.clear();
+        }
+        (direct, codemode)
     }
 }
 
