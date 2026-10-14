@@ -206,10 +206,12 @@ export function make(input: MakeInput): Interface {
 
     const adapter = input.adapters[providerID]
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
-    if (!selected)
+    if (!selected) {
+      if (current) return current
       return providerID === "muse" && credentialID === undefined
         ? MuseUsage.unreported(now())
         : unavailable(providerID, "unsupported", "No supported credential is configured")
+    }
 
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
@@ -243,7 +245,12 @@ export function make(input: MakeInput): Interface {
         ),
       )
     const latest = observed()
-    if (latest && latest.updatedAt >= snapshot.updatedAt)
+    // A no-data unsupported snapshot (for example the Muse placeholder, whose timestamp is
+    // only its generation time) carries no quota, so it cannot supersede a stored observation.
+    if (
+      latest &&
+      (latest.updatedAt >= snapshot.updatedAt || (snapshot.status === "unsupported" && snapshot.windows.length === 0))
+    )
       return profileSource === undefined ? latest : yield* profiled(latest)
     return yield* profiled(snapshot)
   })

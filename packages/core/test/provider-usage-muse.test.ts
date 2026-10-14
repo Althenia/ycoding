@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
+import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { MuseUsage } from "@ycoding-ai/core/provider-usage/muse"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Provider } from "@ycoding-ai/core/provider"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { Effect } from "effect"
 
 const event = {
@@ -69,6 +71,109 @@ describe("MuseUsage", () => {
     test(`rejects malformed subscription metrics (${JSON.stringify(payload)})`, () => {
       expect(MuseUsage.normalize(payload, 100)).toBeUndefined()
     })
+
+  test("refresh returns the observed quota instead of the unsupported placeholder for a stored credential", async () => {
+    const providerID = Provider.ID.make("muse")
+    const credential = new Credential.Info({
+      id: Credential.ID.make("cred_muse_refresh"),
+      integrationID: Integration.ID.make("muse"),
+      label: "Muse",
+      value: Credential.Key.make({ type: "key", key: "fixture" }),
+    })
+    let now = 100
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([credential]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { muse: ProviderUsageRuntime.muse },
+      now: () => now,
+    })
+
+    expect(await Effect.runPromise(service.get({ providerID, refresh: true }))).toMatchObject({
+      status: "unsupported",
+      windows: [],
+    })
+
+    const snapshot = MuseUsage.normalize(
+      {
+        type: event.type,
+        subscription: {
+          weekly: { resets_at: 1792368000, used_percent: 10 },
+          window: { resets_at: 1791876076, used_percent: 42, window_duration_mins: 300 },
+        },
+      },
+      200,
+    )
+    if (!snapshot) throw new Error("expected Muse observation snapshot")
+    await Effect.runPromise(
+      service.observe(
+        new ProviderUsage.Observation({
+          providerID: snapshot.providerID,
+          label: snapshot.label,
+          source: snapshot.source,
+          stability: snapshot.stability,
+          observedAt: snapshot.updatedAt,
+          windows: snapshot.windows,
+        }),
+        SessionRunnerModel.accountIdentityDigest(credential),
+      ),
+    )
+
+    now = 300
+    const expected = {
+      providerID: "muse",
+      label: "Muse (Meta)",
+      status: "available",
+      source: "response_stream",
+      stability: "observed",
+      updatedAt: 200,
+      windows: [
+        { id: "window", label: "5-hour window", unit: "percent", used: 42 },
+        { id: "weekly", label: "Weekly", unit: "percent", used: 10 },
+      ],
+    }
+    expect(await Effect.runPromise(service.get({ providerID, refresh: true }))).toMatchObject(expected)
+    expect(await Effect.runPromise(service.list({ refresh: true }))).toMatchObject([expected])
+  })
+
+  test("refresh returns an unbound observed quota when no credential is selected", async () => {
+    const providerID = Provider.ID.make("muse")
+    let now = 100
+    const service = ProviderUsageRuntime.make({
+      credentials: { all: () => Effect.succeed([]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { muse: ProviderUsageRuntime.muse },
+      now: () => now,
+    })
+
+    expect(await Effect.runPromise(service.get({ providerID, refresh: true }))).toMatchObject({
+      status: "unsupported",
+      windows: [],
+    })
+
+    await Effect.runPromise(
+      service.observe(
+        new ProviderUsage.Observation({
+          providerID,
+          label: "Muse (Meta)",
+          source: "response_stream",
+          stability: "observed",
+          observedAt: 200,
+          windows: [new ProviderUsage.Window({ id: "window", label: "5-hour window", unit: "percent", used: 42 })],
+        }),
+      ),
+    )
+
+    now = 300
+    const expected = {
+      providerID: "muse",
+      status: "available",
+      source: "response_stream",
+      updatedAt: 200,
+      windows: [{ id: "window", used: 42 }],
+    }
+    expect(await Effect.runPromise(service.get({ providerID, refresh: true }))).toMatchObject(expected)
+    expect(await Effect.runPromise(service.list({ refresh: true }))).toMatchObject([expected])
+  })
 
   test("returns an explicit no-data snapshot without a network request", async () => {
     const providerID = Provider.ID.make("muse")
