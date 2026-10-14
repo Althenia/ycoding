@@ -59,10 +59,11 @@ async fn all_skill_sources_and_explicit_active_resource_loads_obey_selection() {
         );
     }
     let server = Loopback::start().await;
+    let service = Arc::new(server.service(fixture.root.clone()));
     let tool = tool(
         &fixture,
         catalog(&fixture, vec![info.clone()]),
-        server.service(fixture.root.clone()),
+        &service,
         None,
     );
     let sessions = Sessions::new(fixture.authority.store.client());
@@ -75,7 +76,7 @@ async fn all_skill_sources_and_explicit_active_resource_loads_obey_selection() {
         .unwrap();
     record(&sessions, "mcp", 101, &mcp_id, &mcp.structured).await;
     let before = sessions.transcript(&fixture.context().session_id).unwrap();
-    let mcp_entries = tool.mcp.skill_catalog().await.unwrap();
+    let mcp_entries = service.skill_catalog().await.unwrap();
     assert_eq!(mcp_entries.len(), 1);
     assert_eq!(tool.skills.lock().await.mcp(mcp_entries.clone()).len(), 1);
     let hidden = [Entry::Document {
@@ -108,7 +109,7 @@ async fn all_skill_sources_and_explicit_active_resource_loads_obey_selection() {
         sessions.transcript(&fixture.context().session_id).unwrap(),
         before
     );
-    tool.mcp.shutdown().await.unwrap();
+    service.shutdown().await.unwrap();
     fixture.cleanup();
 }
 impl ReadInstructions for Instructions {
