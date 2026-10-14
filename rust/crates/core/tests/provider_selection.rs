@@ -457,6 +457,11 @@ fn test_039_aisdk_compatible_chat_entrypoints() {
 }
 
 #[test]
+fn test_039_aisdk_compatible_responses_entrypoint() {
+    assert_aisdk_route("openai-compatible-responses");
+}
+
+#[test]
 fn test_039_aisdk_openrouter_entrypoints() {
     assert_aisdk_route("openrouter-responses");
 }
@@ -1442,7 +1447,7 @@ async fn test_041_runner_instruction_tool_permission_profile_variant_away_back_a
             .unwrap();
     }
     let replay = Replay::start(
-        (0..12)
+        (0..13)
             .map(|_| Reply::stream("/v1/chat/completions", support::chat("")))
             .collect(),
     )
@@ -1624,9 +1629,11 @@ async fn test_041_runner_instruction_tool_permission_profile_variant_away_back_a
     assert_eq!(settled.status.as_str(), Some("ended"));
     support::admit(&service, "ses_one", 11, "Post compaction").await;
     coordinator.run(&id).await.unwrap();
+    support::admit(&service, "ses_one", 12, "After the reset").await;
+    coordinator.run(&id).await.unwrap();
     let actual = replay.finish().await;
     let after = support::requests(&store, "ses_one");
-    assert_eq!(after.len(), 12);
+    assert_eq!(after.len(), 13);
     let body = |index: usize| parse_json(&actual[index].body).unwrap();
     for restored in [2, 4, 6, 8, 10] {
         assert_eq!(field(&body(restored), "tools"), field(&body(0), "tools"));
@@ -1663,10 +1670,106 @@ async fn test_041_runner_instruction_tool_permission_profile_variant_away_back_a
         "original message below checkpoint replayed"
     );
     assert!(actual[11].body.contains("Post compaction"));
+    let previous = after.last().unwrap();
+    let begin = ycoding_core::session::provider_request::Begin {
+        session: id.clone(),
+        model: previous.model.domain().unwrap(),
+        route_id: previous.route_id.to_utf8().unwrap(),
+        connection_identity_digest: previous
+            .connection_identity_digest
+            .as_ref()
+            .map(|value| value.to_utf8().unwrap()),
+        prompt_cache_key: previous.prompt_cache_key.to_utf8().unwrap(),
+        system_digest: previous.system_digest.to_utf8().unwrap(),
+        tool_digest: previous.tool_digest.to_utf8().unwrap(),
+    };
+    let ended = previous.time_created;
+    let completed = settled.clone();
+    store
+        .submit(move |tx| {
+            for index in 0..129 {
+                ycoding_store::session::JobTable::insert(
+                    tx,
+                    &ycoding_store::session::Job {
+                        id: format!("cmp_history_{index:03}").into(),
+                        time_ended: Some(ended),
+                        ..completed.clone()
+                    },
+                )?;
+            }
+            ycoding_store::session::JobTable::insert(
+                tx,
+                &ycoding_store::session::Job {
+                    id: "cmp_other_session".into(),
+                    session_id: "ses_two".into(),
+                    time_ended: Some(ended + 1),
+                    ..completed.clone()
+                },
+            )?;
+            for status in ["pending", "running", "failed"] {
+                ycoding_store::session::JobTable::insert(
+                    tx,
+                    &ycoding_store::session::Job {
+                        id: format!("cmp_{status}").into(),
+                        status: status.into(),
+                        manifest_digest: None,
+                        lease_owner: (status == "running").then(|| "fixture-owner".into()),
+                        lease_expires_at: (status == "running").then_some(ended + 30_000),
+                        time_started: (status != "pending").then_some(ended),
+                        time_ended: (status == "failed").then_some(ended + 1),
+                        error_code: (status == "failed").then(|| "cancelled".into()),
+                        ..completed.clone()
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        service
+            .begin_provider_request(&begin)
+            .await
+            .unwrap()
+            .default_invalidation,
+        "provider-not-reported"
+    );
+    let mut first = begin.clone();
+    first.session = session::Id::new("ses_two").unwrap();
+    assert_eq!(
+        service
+            .begin_provider_request(&first)
+            .await
+            .unwrap()
+            .default_invalidation,
+        "first-request"
+    );
+    let mut newest = settled;
+    newest.id = "cmp_zz_newer".into();
+    newest.time_ended = Some(ended + 1);
+    store
+        .submit(move |tx| ycoding_store::session::JobTable::insert(tx, &newest))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        service
+            .begin_provider_request(&begin)
+            .await
+            .unwrap()
+            .default_invalidation,
+        "compaction-reset"
+    );
     drop(registration);
     coordinator.shutdown().await.unwrap();
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
+    assert_eq!(after[11].invalidation.as_str(), Some("compaction-reset"));
+    assert_eq!(
+        after[12].invalidation.as_str(),
+        Some("provider-not-reported")
+    );
 }
 
 #[tokio::test]

@@ -4,6 +4,9 @@
 
 The native catalog includes OpenAI API and Codex/ChatGPT subscriptions; Anthropic API and Claude Code subscriptions; OpenRouter; native Cursor; Meta Muse and Llama API; Cline `cline-pass`; Z.ai (`zai`, `zai-coding-plan`, `zhipuai`, `zhipuai-coding-plan`); MiniMax (`minimax`, `minimax-cn`, `minimax-coding-plan`, `minimax-cn-coding-plan`); and Kimi (`moonshotai`, `moonshotai-cn`, `kimi-code-plan-global`, `kimi-code-plan-cn`). Custom OpenAI-compatible Chat/Responses and Anthropic-compatible Messages endpoints accept explicit remote or localhost base URLs without requiring credentials.
 
+Admitted Responses package entrypoints retain Responses routing with or without
+the optional `aisdk:` prefix.
+
 `resources/model/scope.rs` filters source/config providers. Configuration recovery excludes dropped declarations with nonfatal unsupported-provider diagnostics and retains the rest of the document. Dropped model packages exclude only their model. Executable npm/plugin declarations remain fatal even beside a dropped package. No provider code is dynamically loaded. Saved credentials are retained; dropped account identities do not run discovery or reintroduce catalog entries. DeepSeek models are not synthesized during normalization.
 
 Successful local read-tool calls load nearby `AGENTS.md` files into Session
@@ -1056,6 +1059,13 @@ interrupted Step records its request best effort after terminal failure. The
 account identity digest hashes the saved credential identity and account
 generation, or the configured API key material, endpoint and organization; it
 does not include OAuth, bearer-token or Vertex access-token material.
+
+Provider-request admission classifies `compaction-reset` when the previous request was a
+compaction helper or a completed same-Session compaction job ended strictly after
+the previous request's creation time. This includes compactions without provider
+requests. Pending, running, failed and other-Session jobs do not reset this
+classification; a subsequent request at or after the completed job's timestamp
+does not repeat its reset.
 
 The publisher stores each reasoning, tool-call and tool-result provider state and
 each text phase on the durable event with `opaqueCompactionItem` removed. The

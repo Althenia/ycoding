@@ -7,7 +7,7 @@ use ycoding_schema::{
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Snapshot, Write,
     resources::{Request, RequestTable, Usage, UsageTable},
-    session::Document,
+    session::{Document, JobTable},
     tuple_key,
 };
 
@@ -362,21 +362,68 @@ impl Service {
                     begin.session.as_lossless(),
                     previous.as_ref().map_or(0, |row| row.request),
                 )?;
+                let compacted_since_previous = previous
+                    .as_ref()
+                    .map(|previous| compaction_since_previous(tx, previous))
+                    .transpose()?
+                    .unwrap_or(false);
                 Ok(Pending {
                     id,
                     request,
-                    default_invalidation: default_invalidation(previous.as_ref(), &begin),
+                    default_invalidation: default_invalidation(
+                        previous.as_ref(),
+                        &begin,
+                        compacted_since_previous,
+                    ),
                 })
             })?
             .await
     }
 }
 
-fn default_invalidation(previous: Option<&Request>, begin: &Begin) -> &'static str {
+fn compaction_since_previous(tx: &mut Write<'_>, previous: &Request) -> Result<bool, Error> {
+    let prefix = tuple_key(&[
+        KeyPart::String(&"ended".into()),
+        KeyPart::Null,
+        KeyPart::String(&previous.session_id),
+    ]);
+    let mut after = None;
+    loop {
+        let page = tx.index_range::<JobTable>(
+            "session_compaction_job_recovery_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+                prefix: Some(&prefix),
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: 128,
+            },
+        )?;
+        if page.iter().any(|entry| {
+            entry
+                .record
+                .time_ended
+                .is_some_and(|time| time > previous.time_created)
+        }) {
+            return Ok(true);
+        }
+        let Some(last) = page.last() else {
+            return Ok(false);
+        };
+        after = Some(last.cursor.clone());
+    }
+}
+
+fn default_invalidation(
+    previous: Option<&Request>,
+    begin: &Begin,
+    compacted_since_previous: bool,
+) -> &'static str {
     let Some(previous) = previous else {
         return "first-request";
     };
-    if previous.source.as_str() == Some("compaction") {
+    if previous.source.as_str() == Some("compaction") || compacted_since_previous {
         return "compaction-reset";
     }
     if let Ok(model) = previous.model.domain() {

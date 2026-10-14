@@ -342,12 +342,14 @@ pub(crate) fn from_catalog_model_base(
         .and_then(text)
         .map(str::to_owned);
     common.defaults = defaults.clone();
-    let api = if native && family == ProviderFamily::Compatible {
-        if package.as_str() == Some("@ycoding-ai/ai/providers/openai-compatible/responses") {
-            Api::Responses
-        } else {
-            Api::Chat
-        }
+    let api = if package.as_str().is_some_and(|name| {
+        name.strip_prefix("aisdk:")
+            .unwrap_or(name)
+            .ends_with("/responses")
+    }) {
+        Api::Responses
+    } else if native && family == ProviderFamily::Compatible {
+        Api::Chat
     } else if info
         .api
         .as_ref()
