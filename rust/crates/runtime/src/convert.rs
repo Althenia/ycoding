@@ -38,26 +38,20 @@ pub fn yolo(level: autonomy::YoloLevel) -> v5::SessionAutonomyYolo {
     use v5::session_autonomy_yolo::Kind;
     let value = f64::from(level.get());
     v5::SessionAutonomyYolo {
-        kind: Some(match level.get() {
-            0 => Kind::Value1(value),
-            1 => Kind::Value2(value),
-            2 => Kind::Value3(value),
-            _ => Kind::Value4(value),
-        }),
+        kind: Some(Kind::Value1(value)),
     }
 }
 
 pub fn yolo_level(yolo: &v5::SessionAutonomyYolo) -> Result<autonomy::YoloLevel, Failure> {
     use v5::session_autonomy_yolo::Kind;
-    let (position, value) = match yolo.kind {
-        Some(Kind::Value1(value)) => (0, value),
-        Some(Kind::Value2(value)) => (1, value),
-        Some(Kind::Value3(value)) => (2, value),
-        Some(Kind::Value4(value)) => (3, value),
+    let value = match yolo.kind {
+        Some(
+            Kind::Value1(value) | Kind::Value2(value) | Kind::Value3(value) | Kind::Value4(value),
+        ) => value,
         None => return Err(Failure::Invalid("missing yolo level".into())),
     };
-    (value == f64::from(position))
-        .then(|| autonomy::YoloLevel::new(position))
+    (value.is_finite() && (0.0..=3.0).contains(&value) && value.fract() == 0.0)
+        .then(|| autonomy::YoloLevel::new(value as u8))
         .flatten()
         .ok_or_else(|| Failure::Invalid("invalid yolo level".into()))
 }
@@ -639,4 +633,40 @@ pub fn object_domain<'a>(
         object.insert(domain(key)?, value_to_json(value)?);
     }
     Ok(object)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{yolo, yolo_level};
+    use ycoding_protocol::v5::{SessionAutonomyYolo, session_autonomy_yolo::Kind};
+
+    #[test]
+    fn yolo_literals_follow_the_typescript_first_matching_branch_codec() {
+        for value in [0.0, 1.0, 2.0, 3.0] {
+            let canonical = SessionAutonomyYolo {
+                kind: Some(Kind::Value1(value)),
+            };
+            for kind in [
+                Kind::Value1(value),
+                Kind::Value2(value),
+                Kind::Value3(value),
+                Kind::Value4(value),
+            ] {
+                let level = yolo_level(&SessionAutonomyYolo { kind: Some(kind) }).unwrap();
+                assert_eq!(f64::from(level.get()), value);
+                assert_eq!(yolo(level), canonical);
+            }
+        }
+        assert!(yolo_level(&SessionAutonomyYolo { kind: None }).is_err());
+        for value in [-1.0, 0.5, 4.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for kind in [
+                Kind::Value1(value),
+                Kind::Value2(value),
+                Kind::Value3(value),
+                Kind::Value4(value),
+            ] {
+                assert!(yolo_level(&SessionAutonomyYolo { kind: Some(kind) }).is_err());
+            }
+        }
+    }
 }

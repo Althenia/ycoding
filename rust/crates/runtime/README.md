@@ -151,6 +151,28 @@ Relay refusal of a credential (401, 403 or 410) maps to `Unauthorized`, which st
 
 ## Session ingress
 
+`session.autonomy.set` accepts YOLO 0–3 by the selected double's value,
+independently of its v5 oneof branch, and emits the first matching branch
+(`value_1`) used by the shipped TypeScript domain codec. Literal values are
+validated in the runtime; oneof branch ordinals are not numeric literal values.
+
+A nonblank goal string is trimmed and sent to the Location's goal helper for
+synthesis and then a `start` user-proxy steer. Both generations must settle with
+nonempty normalized text before the autonomy revision-fenced write stores the
+raw request and synthesized objective. A concurrent stop or replacement wins
+over a late calculation. The start steer is admitted as a synthetic `steer`
+input with `Goal · steer` description and autonomy metadata, then execution
+wakes. Calculation failures return the v5 `UnknownError` with a bounded public
+message and error reference, model resolution failures identify unavailable
+goal configuration, and stale calculations return `ConflictError`. No raw
+provider failure is returned and no failed calculation replaces the goal or
+admits a steer. Null stops and true resumes retain their existing control paths.
+
+```sh
+cargo test --locked -p ycoding-runtime --test team --test goal_autonomy
+cargo test --locked -p ycoding-core --test session_goal
+```
+
 The standard dispatcher registers `session.command`, `session.shell`, `session.skill`, `session.skills`, `session.resolveSkillConflict`, `session.compact`, `session.generate`, `session.move`, `session.switchAgent`, `session.switchModel`, and `session.subagent.launch`. Each resolves the Session's backend Location, then `CatalogServices.session`:
 
 - `runner`: the Location's `session::runner::Local`. Its Location and `models` Arc must equal the catalog's.

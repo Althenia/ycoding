@@ -1618,8 +1618,8 @@ The provider resolves a Session's current Location to `goal::Environment`
 (serving Location, agent catalog, and shared `helper_generation::Generate`). A
 missing Session, Location environment, goal agent, or model returns `None`.
 `goal::agent()` supplies the hidden primary goal agent with the shipped system
-prompt and deny-all permissions. The adapter uses that system prompt with the
-configured goal agent's model selection: agent model, then
+prompt and deny-all permissions. The adapter uses the configured goal agent's
+system prompt and model selection: agent model, then
 `efficiency.helper_models.goal`, then Session model, then catalog default.
 An explicitly selected model that cannot resolve does not fall through to a
 different model.
@@ -1629,6 +1629,13 @@ Goal steering sends the newest twelve projected messages as labelled context
 and the trimmed latest assistant text (last 2,000 units). Omitted latest text
 reads the newest assistant from history. The shared helper path sends no tools
 and records provider-request and usage accounting under source `goal`.
+`Service::synthesize` sends `Goal synthesis request:` and the trimmed raw request
+after that same bounded context. `Service::start` sends the user-proxy steer with
+phase `start`. Both accept a cancellation token and return typed unavailable,
+calculation-failed, or interrupted outcomes; interruption records observed usage
+and provider-request accounting without returning partial text. The runtime
+stores raw and synthesized text only after both calls succeed and the captured
+autonomy revision still matches, then admits the start steer and wakes execution.
 Provider failure, missing settlement, or empty output returns `None`; a settled
 nonempty output is trimmed and whitespace-collapsed. Goal steering accepts a
 settled non-`stop` finish, while prediction, prompt generation and compaction

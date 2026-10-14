@@ -10,6 +10,7 @@ use ycoding_core::{
         autonomy::{Goal, Steer, SteerRequest},
         goal,
     },
+    tools::code_mode::Cancellation,
     tools::policy::helper::{ModelSelection, Role, Settings},
 };
 use ycoding_schema::{DomainDecode, JsonValue, model, parse_json, session};
@@ -82,7 +83,82 @@ fn message(f: &Fixture, index: usize) -> String {
 }
 
 #[tokio::test]
-async fn contextual_goal_steer_uses_the_shipped_system_and_records_accounting_without_mutating_history_or_goal()
+async fn synthesis_and_start_steer_match_ts_messages_and_leave_the_user_owned_state_unchanged() {
+    within(async {
+        let f = Fixture::new(Options { goal: true, user: Some("The project uses SQLite.".into()), ..Options::default() }).await;
+        f.provider.reply(Reply::Finish(" \u{feff}Repair\n the migration and verify the suite.\u{a0} ".into(), "length"));
+        let service = service(&f, Some(goal::agent()), None);
+        let cancellation = Cancellation::default();
+        let session = f.sessions.get(&f.id).unwrap().unwrap();
+        let before = f.sessions.context(&f.id).unwrap();
+        let autonomy = f.autonomy.snapshot(&f.id).unwrap();
+        let text = service.synthesize(&session, "Fix the migration", &cancellation).await.unwrap();
+        assert_eq!(text, "Repair the migration and verify the suite.");
+        assert_eq!(message(&f, 0), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nGoal synthesis request:\nFix the migration");
+        f.provider.reply(Reply::Text("Inspect the migration next.".into()));
+        assert_eq!(service.start(&session, &Goal::new(&text, Some("Fix the migration"), None), &cancellation).await.unwrap(), "Inspect the migration next.");
+        assert_eq!(message(&f, 1), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the suite.\nPhase: start\nCurrent iteration: 0\nLatest assistant response: The build is fixed.\nPreserve the active goal and produce only the next concise user-proxy steer.");
+        assert_eq!(f.sessions.context(&f.id).unwrap(), before);
+        assert_eq!(f.autonomy.snapshot(&f.id).unwrap(), autonomy);
+        assert_eq!(f.sessions.get(&f.id).unwrap().unwrap().tokens.input.get(), 20.0);
+        let records = ycoding_store::resources::requests(&f.store.snapshot().unwrap(), f.id.as_lossless(), ycoding_store::IndexOrder::Ascending, None, 10).unwrap();
+        assert!(records.iter().all(|entry| entry.record.input_id.as_ref() == Some(&"msg_user".into())));
+    }).await;
+}
+
+#[tokio::test]
+async fn synthesis_errors_and_cancellation_never_fall_back_to_the_raw_goal() {
+    within(async {
+        let f = Fixture::new(Options {
+            goal: true,
+            ..Options::default()
+        })
+        .await;
+        let service = service(&f, Some(goal::agent()), None);
+        let session = f.sessions.get(&f.id).unwrap().unwrap();
+        let before = f.autonomy.snapshot(&f.id).unwrap();
+        for reply in [
+            Reply::Rejected,
+            Reply::Missing,
+            Reply::Unsettled("Partial objective".into()),
+            Reply::Text(" \u{feff}\n\u{a0}".into()),
+        ] {
+            f.provider.reply(reply);
+            assert_eq!(
+                service
+                    .synthesize(&session, "Fix the migration", &Cancellation::default())
+                    .await,
+                Err(goal::Error::CalculationFailed)
+            );
+            assert_eq!(f.autonomy.snapshot(&f.id).unwrap(), before);
+            f.provider.started().await;
+        }
+        let cancellation = Cancellation::default();
+        let gate = f.provider.hold();
+        let (outcome, ()) = tokio::join!(
+            service.synthesize(&session, "Interrupted request", &cancellation),
+            async {
+                f.provider.started().await;
+                cancellation.cancel();
+            }
+        );
+        assert_eq!(outcome, Err(goal::Error::Interrupted));
+        f.provider.closed(1).await;
+        gate.notify_one();
+        assert_eq!(f.autonomy.snapshot(&f.id).unwrap(), before);
+        assert_eq!(f.ledger().len(), 5);
+        assert_eq!(
+            self::service(&f, None, None)
+                .synthesize(&session, "Fix the migration", &Cancellation::default())
+                .await,
+            Err(goal::Error::ModelUnavailable)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn contextual_goal_steer_uses_the_configured_system_and_records_accounting_without_mutating_history_or_goal()
  {
     within(async {
         let f = Fixture::new(Options { goal: true, user: Some("The project uses SQLite.".into()), ..Options::default() }).await;
@@ -98,7 +174,7 @@ async fn contextual_goal_steer_uses_the_shipped_system_and_records_accounting_wi
         assert_eq!(f.provider.seen().len(), 1);
         let sent = &f.provider.seen()[0];
         let JsonValue::Array(messages) = field(sent, "messages") else { panic!("messages") };
-        assert_eq!(text(&field(&messages[0], "content")), goal::SYSTEM);
+        assert_eq!(text(&field(&messages[0], "content")), "Other system");
         assert!(field(sent, "tools") == JsonValue::Null || field(sent, "tools") == JsonValue::Array(vec![]));
         assert_eq!(message(&f, 0), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the focused suite.\nPhase: continue\nCurrent iteration: 2\nLatest assistant response: Which migration should I inspect?\nPreserve the active goal and produce only the next concise user-proxy steer.");
         let records = ycoding_store::resources::requests(&f.store.snapshot().unwrap(), f.id.as_lossless(), ycoding_store::IndexOrder::Ascending, None, 10).unwrap();

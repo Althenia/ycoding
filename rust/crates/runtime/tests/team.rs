@@ -22,12 +22,7 @@ fn yolo(level: u8) -> v5::SessionAutonomyYolo {
     use v5::session_autonomy_yolo::Kind;
     let value = f64::from(level);
     v5::SessionAutonomyYolo {
-        kind: Some(match level {
-            0 => Kind::Value1(value),
-            1 => Kind::Value2(value),
-            2 => Kind::Value3(value),
-            _ => Kind::Value4(value),
-        }),
+        kind: Some(Kind::Value1(value)),
     }
 }
 
@@ -91,22 +86,24 @@ async fn autonomy_get_and_set_round_trip_the_durable_state() {
         assert_eq!(level(&initial.data.yolo), 0.0);
         assert!(initial.data.goal.is_none());
 
-        let set: v5::SessionAutonomySetResult = success(
-            client
-                .call(
-                    "session.autonomy.set",
-                    scope(),
-                    autonomy_set(
-                        "ses_auto",
-                        v5::session_autonomy_set::Kind::Value2(v5::SessionAutonomySetValue2 {
-                            yolo: yolo(2),
-                        }),
-                    ),
-                )
-                .await,
-        );
-        assert_eq!(level(&set.data.yolo), 2.0);
-        assert_eq!(core.autonomy.get(&id).unwrap().yolo.get(), 2);
+        for expected in [0, 1, 2, 3] {
+            let set: v5::SessionAutonomySetResult = success(
+                client
+                    .call(
+                        "session.autonomy.set",
+                        scope(),
+                        autonomy_set(
+                            "ses_auto",
+                            v5::session_autonomy_set::Kind::Value2(v5::SessionAutonomySetValue2 {
+                                yolo: yolo(expected),
+                            }),
+                        ),
+                    )
+                    .await,
+            );
+            assert_eq!(set.data.yolo, yolo(expected));
+            assert_eq!(core.autonomy.get(&id).unwrap().yolo.get(), expected);
+        }
 
         let descriptor = operation("session.autonomy.set");
         let no_goal = rejected(

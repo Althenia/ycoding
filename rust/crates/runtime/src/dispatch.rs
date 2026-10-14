@@ -172,6 +172,7 @@ pub enum Failure {
     AttachmentTooLarge,
     InvalidCursor(String),
     Conflict(String),
+    GoalStaleCalculation(String),
     InstructionEntryValueTooLarge {
         actual_bytes: i64,
         max_bytes: i64,
@@ -859,6 +860,18 @@ impl Failure {
                 })
             }
             Failure::Conflict(message) => invalid(&message, "conflict"),
+            Failure::GoalStaleCalculation(resource) if declared(v5::ConflictError::full_name()) => {
+                encoded(v5::ConflictError {
+                    tag: 1,
+                    message: convert::text(
+                        "Goal changed while calculation was running. Review the current goal before retrying.",
+                    ),
+                    resource: Some(convert::text(&resource)),
+                })
+            }
+            Failure::GoalStaleCalculation(_) => {
+                invalid("Goal changed while calculation was running", "conflict")
+            }
             Failure::InstructionEntryValueTooLarge {
                 actual_bytes,
                 max_bytes,

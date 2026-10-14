@@ -9,7 +9,10 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use ycoding_ai::llm;
-use ycoding_schema::{DomainEncode, JsonValue, permission, session};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, JsonValue, ObjectEncoder, permission, session, session_message,
+    token_usage,
+};
 
 pub(super) struct StreamInput<'a> {
     pub helper: &'a Helper,
@@ -37,6 +40,14 @@ impl Local {
         let helper = input.helper;
         let session = input.session;
         let info = services.store.get(session).ok()??;
+        let input_id = if input.source == "goal" {
+            match services.store.latest(session, "user").ok()? {
+                Some(session_message::Info::User(user)) => Some(user.id),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let mut request = llm::Request::new(helper.model.clone());
         let request_id = provider_request::new_id().ok()?;
         request.id = Some(request_id.as_lossless().clone());
@@ -100,7 +111,7 @@ impl Local {
             cancelled: false,
         };
         let mut length = 0;
-        let mut finish = None;
+        let mut finishes = Vec::new();
         let opened = match input.cancellation {
             Some(cancellation) => tokio::select! {
                 biased;
@@ -138,7 +149,7 @@ impl Local {
                     Ok(Some(llm::Event::ProviderError { .. })) => streamed.failed = true,
                     Ok(Some(llm::Event::StepFinish {
                         finish: settled, ..
-                    })) => finish = Some(settled),
+                    })) => finishes.push(settled),
                     Ok(Some(llm::Event::Finish(settled))) => {
                         streamed.settled = true;
                         if input.require_stop && settled.reason != llm::FinishReason::Stop {
@@ -154,19 +165,67 @@ impl Local {
                 }
             },
         }
-        let settled_usage = finish.as_ref().and_then(|settled| settled.usage.as_ref());
-        let tokens = usage::tokens(settled_usage);
-        let reported = cache_diagnostics::reported(
-            &request.model.route.id,
-            provider.as_str().unwrap_or_default(),
-            settled_usage,
-        );
-        let cache_read = settled_usage
-            .and_then(|usage| usage.cache_read_input_tokens)
-            .unwrap_or(0.0);
-        let invalidation = if finish.is_none() {
+        let mut totals = [0.0; 5];
+        let mut cost = None;
+        let mut cache_read_reported = false;
+        for finish in &finishes {
+            let reported = finish.usage.as_ref();
+            let tokens = usage::tokens(reported);
+            let normalized = token_usage::Info::decode(&tokens).ok()?;
+            for (total, value) in totals.iter_mut().zip([
+                normalized.input.get(),
+                normalized.output.get(),
+                normalized.reasoning.get(),
+                normalized.cache.read.get(),
+                normalized.cache.write.get(),
+            ]) {
+                *total += value;
+            }
+            if let Some(priced) = usage::estimated_cost(
+                &helper.costs,
+                &tokens,
+                usage::one_hour_cache_writes(reported),
+            ) {
+                cost = Some(cost.unwrap_or(0.0) + priced);
+            }
+            cache_read_reported |= cache_diagnostics::reported(
+                &request.model.route.id,
+                provider.as_str().unwrap_or_default(),
+                reported,
+            )
+            .read;
+        }
+        let tokens = ObjectEncoder::new()
+            .field("input", &totals[0])
+            .field("output", &totals[1])
+            .field("reasoning", &totals[2])
+            .field(
+                "cache",
+                &ObjectEncoder::new()
+                    .field("read", &totals[3])
+                    .field("write", &totals[4])
+                    .finish(),
+            )
+            .finish();
+        if input.source == "goal" && !finishes.is_empty() {
+            publish(
+                &services.store,
+                session,
+                None,
+                "session.usage.recorded",
+                ObjectEncoder::new()
+                    .field("source", input.source)
+                    .field("cost", &cost.unwrap_or(0.0))
+                    .field("tokens", &tokens)
+                    .finish(),
+                services.clock.now(),
+            )
+            .await
+            .ok()?;
+        }
+        let invalidation = if finishes.is_empty() {
             "provider-not-reported"
-        } else if cache_read > 0.0 {
+        } else if totals[3] > 0.0 {
             "stable-hit"
         } else {
             pending.default_invalidation
@@ -180,26 +239,26 @@ impl Local {
                 invalidation,
                 continuation: "full",
                 attempts: 1,
-                cache_read_reported: finish.as_ref().map(|_| reported.read),
-                timing: usage::timing(settled_usage),
-                cost: finish.as_ref().and_then(|_| {
-                    usage::estimated_cost(
-                        &helper.costs,
-                        &tokens,
-                        usage::one_hour_cache_writes(settled_usage),
-                    )
-                }),
+                cache_read_reported: (!finishes.is_empty()).then_some(cache_read_reported),
+                timing: usage::timing(finishes.last().and_then(|finish| finish.usage.as_ref())),
+                cost,
                 tokens: &tokens,
                 time: services.clock.now(),
             },
         )
         .ok()?;
+        let JsonValue::Object(mut fields) = fields else {
+            return None;
+        };
+        if let Some(input_id) = input_id {
+            fields.insert("inputID".into(), input_id.encode());
+        }
         publish(
             &services.store,
             session,
             None,
             "session.provider.request.recorded",
-            fields,
+            JsonValue::Object(fields),
             services.clock.now(),
         )
         .await
