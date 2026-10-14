@@ -106,6 +106,22 @@ and `session.moved` are separate subsequent publications. Movement projects the
 new Location, Project and subpath and clears the instruction epoch. Same-Project
 moves publish only movement; an unchanged Location is a no-op.
 
+## Retained canonical history
+
+`session::history_pruning::checkpoint` qualifies a Session's compaction checkpoint
+when its active context state holds a valid local summary (the boundary message is
+present with the same ID, sequence and payload digest) and an `ended` compaction
+job carries the active manifest digest. Failed, remote and unended compactions do
+not qualify. Retained history starts after the later of the completed legacy
+checkpoint and the qualifying summary boundary. `transcript`, snapshot windows,
+`latest`, `recent` and unsettled tool reads use that floor; `context` keeps the
+legacy floor. The transcript and the oldest snapshot page start with a synthetic
+`msg_compaction_<manifest>` message described as `Compaction checkpoint` with
+`metadata.compactionCheckpoint { manifestDigest, through }`; cursors at or below
+the floor return only that message or nothing and end paging. Instruction notices
+below the floor are omitted. A qualifying checkpoint or a copied checkpoint
+message disables the sole-first-user shortcut.
+
 ## Derived Session retention and maintenance ownership
 
 `session::cleanups::Cleanups` removes only derived context exclusions, file-change

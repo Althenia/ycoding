@@ -177,6 +177,98 @@ async fn snapshot_cursor_without_an_explicit_limit_is_rejected() {
     .await;
 }
 
+#[path = "../../core/tests/session_support/checkpoint.rs"]
+mod checkpoint;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_and_the_oldest_snapshot_page_start_at_the_compaction_checkpoint() {
+    bounded(async {
+        let world = world();
+        let scenario =
+            checkpoint::scenario(&world.store, &world.core.sessions, "ses_checkpoint", 50).await;
+        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let mut client = Client::open(server.address(), &[]).await.unwrap();
+        let scope = || session_scope("ses_checkpoint");
+        let id = |info: &v5::SessionMessageInfo| {
+            use v5::session_message_info::Kind;
+            match info.kind.as_ref().unwrap() {
+                Kind::Value1(message) => units(&message.id),
+                Kind::Value2(message) => units(&message.id),
+                Kind::Value3(message) => units(&message.id),
+                Kind::Value4(message) => units(&message.id),
+                Kind::Value5(message) => units(&message.id),
+                Kind::Value6(message) => units(&message.id),
+                Kind::Value7(message) => units(&message.id),
+                Kind::Value8(message) => units(&message.id),
+                Kind::Value9(message) => format!("{message:?}"),
+            }
+        };
+        let head = |info: &v5::SessionMessageInfo| {
+            let Some(v5::session_message_info::Kind::Value4(synthetic)) = &info.kind else {
+                panic!("expected the checkpoint synthetic message");
+            };
+            assert!(units(&synthetic.id).starts_with("msg_compaction_"));
+            assert_eq!(
+                units(synthetic.description.as_ref().unwrap()),
+                "Compaction checkpoint"
+            );
+            assert!(units(&synthetic.text).contains(checkpoint::SUMMARY));
+            let entries = &synthetic.metadata.as_ref().unwrap().entries;
+            assert_eq!(entries.len(), 1);
+            assert_eq!(units(&entries[0].key), "compactionCheckpoint");
+        };
+
+        let listed: v5::SessionMessagesResult = success(
+            client
+                .call(
+                    "session.messages",
+                    scope(),
+                    messages_request("ses_checkpoint"),
+                )
+                .await,
+        );
+        let listed = listed.data.data.items;
+        head(&listed[0]);
+        let retained = listed[1..].iter().map(id).collect::<Vec<_>>();
+        assert!(retained.contains(&scenario.ids.tail_user));
+        for covered in [
+            &scenario.ids.first_user,
+            &scenario.ids.fork_target,
+            &scenario.ids.boundary,
+        ] {
+            assert!(!retained.contains(covered));
+        }
+
+        let mut paged = Vec::new();
+        let mut before: Option<String> = None;
+        loop {
+            let page: v5::SessionSnapshotResult = success(
+                client
+                    .call(
+                        "session.snapshot",
+                        scope(),
+                        snapshot_request("ses_checkpoint", Some(3), before.as_deref()),
+                    )
+                    .await,
+            );
+            let mut items = page.data.messages.items;
+            items.extend(paged);
+            paged = items;
+            match page.data.before {
+                Some(cursor) => before = Some(units(&cursor)),
+                None => break,
+            }
+        }
+        head(&paged[0]);
+        assert_eq!(
+            paged.iter().map(id).collect::<Vec<_>>(),
+            listed.iter().map(id).collect::<Vec<_>>()
+        );
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
 fn messages_request(session: &str) -> Vec<u8> {
     v5::SessionMessagesRequest {
         params: v5::SessionMessagesRequestParams {

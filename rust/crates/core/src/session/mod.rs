@@ -26,6 +26,7 @@ pub mod generate;
 pub mod goal;
 pub mod helper_generation;
 pub mod history;
+pub mod history_pruning;
 pub mod image_analyzer;
 pub mod info;
 pub mod instruction_assembly;

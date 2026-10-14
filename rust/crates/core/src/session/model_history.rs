@@ -36,7 +36,10 @@ impl Service {
                 limit: 2,
             },
         )?;
-        if rows.len() != 1 {
+        if rows.len() != 1
+            || super::history_pruning::checkpoint(&snapshot, id)?.is_some()
+            || copied_checkpoint(&snapshot, id)?
+        {
             return Ok(None);
         }
         match rows[0].record.info() {
@@ -44,6 +47,35 @@ impl Service {
             Ok(_) | Err(Error::Record(_)) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+}
+
+fn copied_checkpoint(snapshot: &Snapshot, id: &session::Id) -> Result<bool, Error> {
+    let mut after = None;
+    loop {
+        let rows = history::type_rows(
+            snapshot,
+            id,
+            "synthetic",
+            Bound::Unbounded,
+            Bound::Unbounded,
+            IndexOrder::Ascending,
+            after.as_ref(),
+            128,
+        )?;
+        if rows.iter().any(|row| {
+            matches!(
+                field(&row.record.data, "metadata")
+                    .and_then(|metadata| field(metadata, "compactionCheckpoint")),
+                Some(JsonValue::Object(_))
+            )
+        }) {
+            return Ok(true);
+        }
+        let Some(last) = rows.last() else {
+            return Ok(false);
+        };
+        after = Some(last.cursor.clone());
     }
 }
 
@@ -87,11 +119,11 @@ pub(crate) struct Plan {
     exclusions: Option<Exclusions>,
 }
 
-struct Summary {
-    sequence: i64,
-    text: ycoding_schema::LosslessString,
-    digest: ycoding_schema::LosslessString,
-    activated: i64,
+pub(crate) struct Summary {
+    pub(crate) sequence: i64,
+    pub(crate) text: ycoding_schema::LosslessString,
+    pub(crate) digest: ycoding_schema::LosslessString,
+    pub(crate) activated: i64,
 }
 
 struct Exclusions {
@@ -269,7 +301,7 @@ fn boundary(
     }
 }
 
-fn summary(
+pub(crate) fn summary(
     snapshot: &Snapshot,
     id: &session::Id,
     state: &ycoding_store::session::ContextState,

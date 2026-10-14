@@ -1,4 +1,4 @@
-use ycoding_core::session::{history::Source, store::Service};
+use ycoding_core::session::{history::Source, history_pruning, store::Service};
 use ycoding_schema::{
     DomainEncode, JsonValue, parse_json, session, session_message, session_skill_status::State,
 };
@@ -408,4 +408,296 @@ fn skill_projection_folds_paged_activations_tool_snapshots_duplicates_and_explic
         Some("msg_tool_skill")
     );
     assert_eq!(tool_skill.state, State::Active);
+}
+
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
+fn retained_rows(store: &Store, session: &str, through: i64) -> Vec<String> {
+    ycoding_store::session::messages(
+        &store.snapshot().unwrap(),
+        &session.into(),
+        std::ops::Bound::Excluded(through),
+        std::ops::Bound::Unbounded,
+        ycoding_store::IndexOrder::Ascending,
+        None,
+        1000,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|row| row.record.id.to_utf8().unwrap())
+    .collect()
+}
+
+fn checkpoint_head(
+    message: &session_message::Info,
+    checkpoint: &history_pruning::Checkpoint,
+) -> bool {
+    let session_message::Info::Synthetic(synthetic) = message else {
+        return false;
+    };
+    let digest = checkpoint.manifest_digest.to_utf8().unwrap();
+    let marker = synthetic
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(&"compactionCheckpoint".into()));
+    synthetic.id.as_lossless().as_str() == Some(format!("msg_compaction_{digest}").as_str())
+        && synthetic
+            .description
+            .as_ref()
+            .and_then(|value| value.as_str())
+            == Some("Compaction checkpoint")
+        && synthetic
+            .text
+            .to_utf8()
+            .unwrap()
+            .contains(checkpoint::SUMMARY)
+        && marker
+            == Some(
+                &parse_json(&format!(
+                    r#"{{"manifestDigest":"{digest}","through":{}}}"#,
+                    checkpoint.through
+                ))
+                .unwrap(),
+            )
+}
+
+fn paged(service: &Service, session: &session::Id, limit: usize) -> Vec<session_message::Info> {
+    let mut pages = Vec::new();
+    let mut before = None;
+    loop {
+        let page = service.snapshot(session, limit, before.as_deref()).unwrap();
+        pages.insert(0, page.messages);
+        match page.before {
+            Some(cursor) => before = Some(cursor),
+            None => return pages.into_iter().flatten().collect(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn ended_local_checkpoint_defines_canonical_retained_floor() {
+    let store = support::store();
+    let client = store.client();
+    let service = Service::new(client.clone());
+    let scenario = checkpoint::scenario(&client, &service, "ses_main", 1_000).await;
+    let session = &scenario.session;
+    let found = history_pruning::checkpoint(&store.snapshot().unwrap(), session)
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.through, scenario.through);
+    assert_eq!(found.job.to_utf8().unwrap(), scenario.job);
+    assert_eq!(found.text.as_str(), Some(checkpoint::SUMMARY));
+    assert_eq!(found.ended, 1_000);
+
+    let latest = |type_: &str| {
+        service
+            .latest(session, type_)
+            .unwrap()
+            .map(|m| message_id(&m))
+    };
+    assert_eq!(latest("user"), Some(scenario.ids.tail_user.clone()));
+    assert_eq!(latest("assistant"), Some(scenario.ids.failed_tail.clone()));
+    let retained = retained_rows(&store, "ses_main", scenario.through);
+    assert_eq!(ids(&service.recent(session, 100).unwrap()), retained);
+    for covered in [
+        &scenario.ids.first_user,
+        &scenario.ids.fork_target,
+        &scenario.ids.covered_user,
+        &scenario.ids.boundary,
+    ] {
+        assert!(!retained.contains(covered));
+    }
+    assert!(service.unsettled_tool_messages(session).unwrap().is_empty());
+    assert_eq!(
+        message_id(&service.context(session).unwrap()[0]),
+        scenario.ids.first_user
+    );
+}
+
+#[tokio::test]
+async fn failed_remote_unended_and_changed_checkpoints_keep_the_full_canonical_history() {
+    let store = support::store();
+    let client = store.client();
+    let service = Service::new(client.clone());
+    let full = |name: &str, first: &str| {
+        let session = checkpoint::id(name);
+        assert!(
+            history_pruning::checkpoint(&store.snapshot().unwrap(), &session)
+                .unwrap()
+                .is_none(),
+            "{name}"
+        );
+        let transcript = service.transcript(&session).unwrap();
+        assert_eq!(message_id(&transcript[0]), first, "{name}");
+        assert!(
+            transcript
+                .iter()
+                .all(|message| !message_id(message).starts_with("msg_compaction_")),
+            "{name}"
+        );
+        assert_eq!(
+            ids(&service.recent(&session, 1000).unwrap()),
+            ids(&service.context(&session).unwrap()),
+            "{name}"
+        );
+    };
+
+    for (name, kind) in [
+        ("ses_failed", checkpoint::Compaction::Failed),
+        ("ses_remote", checkpoint::Compaction::Remote),
+    ] {
+        checkpoint::session(&client, name);
+        let first = checkpoint::user(&service, name, "Only request", 1).await;
+        let answer = checkpoint::run(
+            &service,
+            name,
+            "Only answer",
+            checkpoint::Outcome::Succeeded,
+            1,
+        )
+        .await;
+        checkpoint::compaction(&client, &service, name, &answer, kind, 1).await;
+        checkpoint::user(&service, name, "Later request", 1).await;
+        full(name, &first);
+    }
+
+    let unended = checkpoint::scenario(&client, &service, "ses_unended", 1).await;
+    let job = unended.job.clone();
+    client
+        .submit(move |tx| {
+            let mut row = tx
+                .get::<ycoding_store::session::JobTable>(&checkpoint::key(&job))?
+                .unwrap();
+            row.status = "failed".into();
+            row.manifest_digest = None;
+            row.error_code = Some("provider_failed".into());
+            row.error_message = Some("Provider failed".into());
+            ycoding_store::session::JobTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    full("ses_unended", &unended.ids.first_user);
+
+    let changed = checkpoint::scenario(&client, &service, "ses_changed", 1).await;
+    let boundary = changed.ids.boundary.clone();
+    client
+        .submit(move |tx| {
+            let mut row = tx
+                .get::<MessageTable>(&checkpoint::key(&boundary))?
+                .unwrap();
+            let JsonValue::Object(data) = &mut row.data else {
+                panic!()
+            };
+            data.insert("finish".into(), JsonValue::String("length".into()));
+            MessageTable::put(tx, &row)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    full("ses_changed", &changed.ids.first_user);
+}
+
+#[tokio::test]
+async fn oldest_snapshot_and_transcript_start_with_checkpoint() {
+    let store = support::store();
+    let client = store.client();
+    let service = Service::new(client.clone());
+    let scenario = checkpoint::scenario(&client, &service, "ses_main", 1_000).await;
+    let session = &scenario.session;
+    let found = history_pruning::checkpoint(&store.snapshot().unwrap(), session)
+        .unwrap()
+        .unwrap();
+    let retained = retained_rows(&store, "ses_main", scenario.through);
+
+    let transcript = service.transcript(session).unwrap();
+    assert!(checkpoint_head(&transcript[0], &found));
+    assert_eq!(ids(&transcript[1..]), retained);
+    for limit in [1, 2, 3, 200] {
+        assert_eq!(paged(&service, session, limit), transcript, "limit {limit}");
+    }
+    let newest = service.snapshot(session, 2, None).unwrap();
+    assert!(newest.before.is_some());
+    assert!(
+        newest
+            .messages
+            .iter()
+            .all(|message| !checkpoint_head(message, &found))
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_cursors_limits_and_instruction_notices_do_not_leak_covered_rows() {
+    let store = support::store();
+    let client = store.client();
+    let service = Service::new(client.clone());
+    checkpoint::session(&client, "ses_main");
+    for hash in ["a", "b"] {
+        checkpoint::publish(
+            &service,
+            "ses_main",
+            "session.instructions.updated.2",
+            1,
+            &format!(r#","delta":{{"core/before":"{}"}}"#, hash.repeat(64)),
+        )
+        .await;
+    }
+    let scenario = checkpoint::scenario(&client, &service, "ses_main", 1).await;
+    for hash in ["a", "b"] {
+        checkpoint::publish(
+            &service,
+            "ses_main",
+            "session.instructions.updated.2",
+            2,
+            &format!(r#","delta":{{"core/after":"{}"}}"#, hash.repeat(64)),
+        )
+        .await;
+    }
+    let session = &scenario.session;
+    let found = history_pruning::checkpoint(&store.snapshot().unwrap(), session)
+        .unwrap()
+        .unwrap();
+    let text = |message: &session_message::Info| match message {
+        session_message::Info::System(system) => system.text.to_utf8().unwrap(),
+        _ => String::new(),
+    };
+    let transcript = service.transcript(session).unwrap();
+    let notices = transcript
+        .iter()
+        .map(text)
+        .filter(|text| text.starts_with("Instructions updated"))
+        .collect::<Vec<_>>();
+    assert_eq!(notices, vec!["Instructions updated: core/after"; 2]);
+    assert_eq!(
+        text(transcript.last().unwrap()),
+        "Instructions updated: core/after"
+    );
+    assert_eq!(paged(&service, session, 2), transcript);
+
+    let at_floor = service
+        .snapshot(
+            session,
+            2,
+            Some(&ycoding_core::session::history::encode_cursor(
+                session,
+                scenario.through + 1,
+            )),
+        )
+        .unwrap();
+    assert_eq!(at_floor.messages.len(), 1);
+    assert!(checkpoint_head(&at_floor.messages[0], &found));
+    assert!(at_floor.before.is_none());
+    let covered = service
+        .snapshot(
+            session,
+            2,
+            Some(&ycoding_core::session::history::encode_cursor(session, 1)),
+        )
+        .unwrap();
+    assert!(covered.messages.is_empty());
+    assert!(covered.before.is_none());
+    for limit in [0, 201] {
+        assert!(service.snapshot(session, limit, None).is_err());
+    }
 }

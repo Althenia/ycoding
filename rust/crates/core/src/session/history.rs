@@ -1,5 +1,10 @@
-use super::{info, key, model_history::Plan, store::Service};
-use std::ops::Bound;
+use super::{
+    history_pruning::{Floor, checkpoint_message, retained_floor},
+    info, key,
+    model_history::Plan,
+    store::Service,
+};
+use std::ops::{Bound, RangeBounds};
 use ycoding_schema::{
     DomainEncode, JsonPath, JsonValue, LosslessString, ObjectDecoder, session, session_message,
 };
@@ -183,12 +188,51 @@ pub fn transcript(
     snapshot: &Snapshot,
     id: &session::Id,
 ) -> Result<Vec<session_message::Info>, Error> {
-    let compaction = latest_compaction(snapshot, id)?;
-    let notices = super::instruction_state::notices(snapshot, id)?
+    let floor = retained_floor(snapshot, id)?;
+    let mut entries = Vec::new();
+    let mut after = None;
+    loop {
+        let rows = tables::messages(
+            snapshot,
+            id.as_lossless(),
+            floor.lower,
+            Bound::Unbounded,
+            IndexOrder::Ascending,
+            after.as_ref(),
+            128,
+        )?;
+        let Some(last) = rows.last() else {
+            break;
+        };
+        after = Some(last.cursor.clone());
+        for row in rows {
+            entries.push(Entry {
+                seq: row.record.seq,
+                message: row.record.info()?,
+            });
+        }
+    }
+    merge(entries, retained_notices(snapshot, id, &floor)?)
+}
+
+fn retained_notices(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    floor: &Floor,
+) -> Result<Vec<Entry>, Error> {
+    let mut notices = floor
+        .checkpoint
+        .as_ref()
+        .map(checkpoint_message)
+        .transpose()?
         .into_iter()
-        .filter(|notice| compaction.is_none_or(|compaction| notice.seq >= compaction))
-        .collect();
-    merge(entries(snapshot, id)?, notices)
+        .collect::<Vec<_>>();
+    notices.extend(
+        super::instruction_state::notices(snapshot, id)?
+            .into_iter()
+            .filter(|notice| (floor.lower, Bound::Unbounded).contains(&notice.seq)),
+    );
+    Ok(notices)
 }
 
 fn merge(
@@ -225,12 +269,11 @@ pub fn window(
     if !(1..=200).contains(&limit) {
         return Err(invalid_cursor());
     }
-    let compaction = latest_compaction(snapshot, id)?;
-    let lower = compaction.map_or(Bound::Unbounded, Bound::Included);
+    let floor = retained_floor(snapshot, id)?;
     let rows = tables::messages(
         snapshot,
         id.as_lossless(),
-        lower,
+        floor.lower,
         before.map_or(Bound::Unbounded, Bound::Excluded),
         IndexOrder::Descending,
         None,
@@ -238,11 +281,10 @@ pub fn window(
     )?;
     let returned = &rows[..rows.len().min(limit)];
     let oldest = returned.last().map(|row| row.record.seq);
-    let notices = super::instruction_state::notices(snapshot, id)?
+    let notices = retained_notices(snapshot, id, &floor)?
         .into_iter()
         .filter(|notice| {
-            compaction.is_none_or(|compaction| notice.seq >= compaction)
-                && before.is_none_or(|before| notice.seq < before)
+            before.is_none_or(|before| notice.seq < before)
                 && oldest.is_none_or(|oldest| notice.seq >= oldest || rows.len() <= limit)
         })
         .collect();
@@ -406,7 +448,7 @@ pub fn latest(
     id: &session::Id,
     type_: &str,
 ) -> Result<Option<session_message::Info>, Error> {
-    let lower = lower_bound(snapshot, id, None)?;
+    let lower = retained_floor(snapshot, id)?.lower;
     type_rows(
         snapshot,
         id,
@@ -427,7 +469,7 @@ pub fn recent(
     id: &session::Id,
     limit: usize,
 ) -> Result<Vec<session_message::Info>, Error> {
-    let lower = lower_bound(snapshot, id, None)?;
+    let lower = retained_floor(snapshot, id)?.lower;
     tables::messages(
         snapshot,
         id.as_lossless(),
@@ -447,7 +489,7 @@ pub fn unsettled_tool_messages(
     snapshot: &Snapshot,
     id: &session::Id,
 ) -> Result<Vec<session_message::Info>, Error> {
-    let lower = lower_bound(snapshot, id, None)?;
+    let lower = retained_floor(snapshot, id)?.lower;
     let mut after = None;
     let mut unsettled = Vec::new();
     loop {

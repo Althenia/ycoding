@@ -201,3 +201,87 @@ fn rows_covered_by_the_active_summary_are_not_decoded() {
 fn crate_hash(value: &JsonValue) -> JsonValue {
     ycoding_core::instructions::hash(value).encode()
 }
+
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
+#[tokio::test]
+async fn checkpoint_and_copied_checkpoint_disable_sole_user_shortcut() {
+    let store = support::store();
+    let client = store.client();
+    let service = Service::new(client.clone());
+    checkpoint::session(&client, "ses_main");
+    let only = checkpoint::user(&service, "ses_main", "Only request", 1).await;
+    let boundary = checkpoint::run(
+        &service,
+        "ses_main",
+        "Only answer",
+        checkpoint::Outcome::Succeeded,
+        1,
+    )
+    .await;
+    let sole = |name: &str| {
+        service
+            .first_user_message_if_only(&checkpoint::id(name))
+            .unwrap()
+            .map(|user| user.id.as_lossless().to_utf8().unwrap())
+    };
+    assert_eq!(sole("ses_main"), Some(only.clone()));
+    checkpoint::compaction(
+        &client,
+        &service,
+        "ses_main",
+        &boundary,
+        checkpoint::Compaction::Failed,
+        1,
+    )
+    .await;
+    assert_eq!(sole("ses_main"), Some(only));
+    checkpoint::compaction(
+        &client,
+        &service,
+        "ses_main",
+        &boundary,
+        checkpoint::Compaction::Ended,
+        1,
+    )
+    .await;
+    assert_eq!(sole("ses_main"), None);
+
+    store
+        .submit(|tx| {
+            MessageTable::insert(
+                tx,
+                &Message {
+                    session_id: "ses_two".into(),
+                    ..user("msg_copied_user", 5, "Copied")
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(sole("ses_two"), Some("msg_copied_user".into()));
+    store
+        .submit(|tx| {
+            MessageTable::insert(
+                tx,
+                &Message {
+                    id: "msg_copied_checkpoint".into(),
+                    session_id: "ses_two".into(),
+                    type_: "synthetic".into(),
+                    seq: 4,
+                    time_created: 4,
+                    time_updated: 4,
+                    data: ycoding_schema::parse_json(
+                        r#"{"text":"summary","description":"Compaction checkpoint","metadata":{"compactionCheckpoint":{"manifestDigest":"d","through":3}},"time":{"created":4}}"#,
+                    )
+                    .unwrap(),
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(sole("ses_two"), None);
+}
