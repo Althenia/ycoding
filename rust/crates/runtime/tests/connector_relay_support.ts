@@ -14,6 +14,8 @@ import {
   event_subscribe_ResultSchema,
   event_unsubscribe_RequestSchema,
   session_todo_list_RequestSchema,
+  session_snapshot_RequestSchema,
+  session_snapshot_ResultSchema,
   PublicEventSchema,
   Connector_ErrorSchema,
 } from "../../../../packages/protocol/src/v5"
@@ -114,11 +116,11 @@ async function run(args: string[]) {
   if (code !== 0) throw new Error(`Wrangler failed (${code})\n${stdout}\n${stderr}`)
 }
 const session = create(ScopeSchema, { target: { case: "session", value: "ses_real_connector" } })
-async function subscribe(client: TestPeer, sourceEpoch: string) {
+async function subscribe(client: TestPeer, sourceEpoch: string, scope = session) {
   const id = client.request(
     "event.subscribe",
-    session,
-    encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope: session })),
+    scope,
+    encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope })),
   )
   const settled = await client.next("settled", id)
   if (settled.status === "unknown") console.error("Subscriber closed", await client.closed)
@@ -129,7 +131,7 @@ async function subscribe(client: TestPeer, sourceEpoch: string) {
   const answer = decodeStrict(event_subscribe_ResultSchema, settled.payload!.payload)
   const accepted = decodeLossless(answer.subscriptionId!)
   expect(
-    client.connection.acceptSubscription(id, accepted, session, performance.now(), "receive", sourceEpoch).length === 0,
+    client.connection.acceptSubscription(id, accepted, scope, performance.now(), "receive", sourceEpoch).length === 0,
     "Client rejected backend identity",
   )
   return accepted
@@ -368,12 +370,93 @@ try {
   await untilPush("agent-completed")
   console.log(JSON.stringify({ phase: "completion-pushed" }))
   await command()
+  const affected = await subscribe(peers[0]!, owner.sourceEpoch)
+  const otherScope = create(ScopeSchema, { target: { case: "session", value: "ses_real_other" } })
+  const healthy = await subscribe(peers[1]!, owner.sourceEpoch, otherScope)
+  const epochs = peers.map((peer) => peer.connection.connectionEpoch)
+  const healthyResyncs = peers[1]!.raw.filter(
+    (frame) => frame.body.case === "control" && frame.body.value.kind.case === "resyncRequired",
+  ).length
+  console.log(JSON.stringify({ phase: "oversize-ready" }))
+  await command()
+  await events(peers[0]!, 2, owner.sourceEpoch, affected)
+  const resync = await peers[0]!.next("resync")
+  expect(
+    resync.scope.target.case === "session" &&
+      resync.scope.target.value === "ses_real_connector" &&
+      resync.sourceEpoch === owner.sourceEpoch,
+    "Oversize resync changed scope or source epoch",
+  )
+  const [unaffected] = await events(peers[1]!, 1, owner.sourceEpoch, healthy)
+  expect(
+    unaffected!.kind.case === "sessionTextDelta" && unaffected!.kind.value.data!.ordinal === 4n,
+    "Oversize blocked an unrelated Session",
+  )
+  peers[0]!.connection.beginHydration(affected)
+  const snapshotID = peers[0]!.request(
+    "session.snapshot",
+    session,
+    encodeStrict(
+      session_snapshot_RequestSchema,
+      create(session_snapshot_RequestSchema, {
+        params: { sessionID: encodeLossless("ses_real_connector") },
+        query: {},
+      }),
+    ),
+  )
+  const settled = await peers[0]!.next("settled", snapshotID)
+  expect(settled.status === "success", `Oversize canonical snapshot failed: ${settled.status}`)
+  const snapshot = decodeStrict(session_snapshot_ResultSchema, settled.payload!.payload).data!
+  const message = snapshot.messages!.items.find(
+    (message) => message.kind.case === "value8" && decodeLossless(message.kind.value.id!) === "msg_real_oversized",
+  )
+  expect(message?.kind.case === "value8", "Oversized assistant is not in the canonical snapshot")
+  const text = message.kind.value.content!.items.find((part) => part.kind.case === "value1")
+  expect(
+    text?.kind.case === "value1" && decodeLossless(text.kind.value.text!) === "x".repeat(2_320_000),
+    "Canonical bulk recovery lost assistant text",
+  )
+  expect(
+    peers[0]!.raw.some(
+      (frame) =>
+        frame.body.case === "bulkStart" &&
+        frame.body.value.operationId === 4063 &&
+        frame.body.value.byteCount > 2_320_000n,
+    ),
+    "Canonical recovery did not use typed bulk",
+  )
+  expect(decodeLossless(snapshot.sourceEpoch!) === owner.sourceEpoch, "Canonical snapshot changed backend epoch")
+  expect(
+    peers[0]!.connection.completeHydration(affected, owner.sourceEpoch, performance.now()).length === 0,
+    "Canonical snapshot did not finish hydration",
+  )
+  console.log(JSON.stringify({ phase: "oversize-resynced" }))
+  await command()
+  const [recovered] = await events(peers[0]!, 1, owner.sourceEpoch, affected)
+  expect(
+    recovered!.kind.case === "sessionTextDelta" && recovered!.kind.value.data!.ordinal === 4n,
+    "Resynced subscription no longer delivers events",
+  )
+  await events(peers[1]!, 1, owner.sourceEpoch, healthy)
+  expect(
+    peers.every(
+      (peer, index) => peer.connection.state === "established" && peer.connection.connectionEpoch === epochs[index],
+    ),
+    "Oversize recycled a browser connection",
+  )
+  expect(
+    peers[1]!.raw.filter((frame) => frame.body.case === "control" && frame.body.value.kind.case === "resyncRequired")
+      .length === healthyResyncs,
+    "Oversize invalidated an unrelated subscription",
+  )
+  console.log(JSON.stringify({ phase: "oversize-recovered" }))
+  await command()
   expect(
     peers.every((peer) => peer.failures.length === 0),
     "Remote client protocol failure",
   )
   console.error(
-    "PASS: real workerd enrollment, Rust AGENT connect, snapshot union, canonical epoch, ordered live/durable EVENTS, shared release and final observer release",
+    "PASS: real workerd enrollment, Rust AGENT connect, snapshot union, canonical epoch, ordered live/durable EVENTS, shared release, decrypted attention/completion pushes, oversized scoped resync and exact typed-bulk recovery with stable peer epochs",
   )
 } finally {
   clearTimeout(deadline)

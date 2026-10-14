@@ -880,7 +880,7 @@ export function createRelay(deps: RelayDeps) {
       if (control.case === "inventoryInvalidated")
         await Promise.all(
           [...peers.values()]
-            .filter((client) => client.identity.role === "client")
+            .filter((client) => client.identity.role === "client" && client.connection.state === "established")
             .map(async (client) => {
               if (await authorize(client, false)) forward(peer, frame, client, frame.body)
             }),
@@ -1104,24 +1104,18 @@ export function createRelay(deps: RelayDeps) {
       return
     }
     const previous = backendEpochs.get(scope.target.value)
-    if (
-      previous &&
-      (previous.epoch !== epoch ||
-        [...acceptedInterests.values()].some(
-          (accepted) => accepted.target.case === "session" && accepted.target.value === sessionID,
-        ))
-    ) {
+    if (previous && previous.epoch !== epoch) {
       for (const client of [...peers.values()])
         if (client.identity.role === "client" && interestSessions(client).includes(scope.target.value))
           drop(client, 1012, "EPOCH")
       return
     }
+    if (previous) return
     const bytes = epoch.length * 3 + RelayLimits.forwardingMetadataBytes
     if (!budget.reserve(bytes)) {
       drop(peer, 1009, "LIMIT")
       return
     }
-    if (previous) budget.release(previous.bytes)
     backendEpochs.set(scope.target.value, { epoch, bytes })
   }
   async function events(peer: Peer, entry: Extract<Decision, { type: "events" }>) {
@@ -1272,11 +1266,29 @@ export function createRelay(deps: RelayDeps) {
       ) {
         const scope = entry.scope
         const target = scope.target
-        canonicalEpoch(peer, scope, entry.sourceEpoch)
         if (target.case === "session")
           tasks.push(
             inLane(`${connectionID}:events:${target.value}`, async () => {
-              await authorize(peer)
+              if (!(await authorize(peer))) return
+              canonicalEpoch(peer, scope, entry.sourceEpoch)
+              if (!alive(peer) || backendEpochs.get(target.value)?.epoch !== entry.sourceEpoch) return
+              const subscriptions = [...acceptedInterests]
+                .filter(([, accepted]) => accepted.target.case === "session" && accepted.target.value === target.value)
+                .map(([id]) => id)
+              for (const id of subscriptions) {
+                peer.connection.beginHydration(id)
+                decisions(peer, peer.connection.completeHydration(id, entry.sourceEpoch, deps.monotonic()))
+              }
+              for (const client of peers.values()) {
+                if (
+                  client.identity.role !== "client" ||
+                  client.connection.state !== "established" ||
+                  !subscriptions.some((id) => client.subscriptions.has(id)) ||
+                  !(await authorize(client, false))
+                )
+                  continue
+                queued(client, received.frame!.body)
+              }
             }),
           )
       }

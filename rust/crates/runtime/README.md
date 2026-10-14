@@ -167,7 +167,11 @@ Each connection publishes the v5 `Status` and `Completions` controls from fresh 
 
 Completion synchronization replays root-only pages of at most 200 durable receipts in Session-ID order, with `more` marking continuation. A receipt observed during the baseline restarts replay; after baseline settlement, live `session.work.completed.1` receipts are forwarded individually. Read and enqueue failures defer retry on the same connection. Reconnect replays the baseline and current status without replaying mutations.
 
+An oversized subscribed event emits a scoped `ResyncRequired` after the preceding scoped event receipts settle. The relay distinguishes this same-source-epoch invalidation from backend epoch replacement, forwards it only to accepted subscribers of that Session, and keeps its projection-free forwarding owner ready for later events. Each affected client owns canonical snapshot/bulk hydration; unrelated subscriptions and connection epochs stay intact. A genuinely changed backend epoch retains the existing replacement behavior. Status and inventory invalidations skip clients whose handshakes have not established; the latest cached status is delivered when a client establishes.
+
 `tests/connector_status.rs` covers family aggregation, request precedence, failure attention and reconnect. `tests/connector_relay.rs` drives real request state and Core-validated completion receipts through the Rust connector and local workerd, verifies relay attention/completion notices, and decrypts intercepted Web Push records to assert both notification categories and their Session identity. The model/tool exchange is a durable-event fixture; the real Core completion validator owns receipt publication.
+
+The real-workerd test also publishes a projected 2,320,000-character assistant text event, verifies scoped resync and exact canonical typed-bulk recovery, and proves that the affected stream resumes while another Session keeps delivering with unchanged browser connection epochs.
 
 ## Remote request placement
 

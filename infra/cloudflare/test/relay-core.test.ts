@@ -335,6 +335,41 @@ test.each(["hello", "confirm"])(
   },
 )
 
+test.each(["hello", "confirm"])("inventory invalidation does not recycle a client in %s", async (phase) => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  await h.attach("established")
+  const joining = await h.attach("joining", "client", {}, undefined, false)
+  if (phase === "confirm") {
+    joining.start(0)
+    await h.send("joining")
+    h.receive("joining")
+  }
+  const body: Frame["body"] = {
+    case: "control",
+    value: create(ControlSchema, { kind: { case: "inventoryInvalidated", value: {} } }),
+  }
+  agent.enqueue(body, frameReservation(body), 0)
+  await h.send("agent")
+  expect(h.close).toEqual([])
+  expect(h.receive("joining")).toEqual([])
+  expect(
+    h
+      .receive("established")
+      .some(
+        (entry) => entry.frame?.body.case === "control" && entry.frame.body.value.kind.case === "inventoryInvalidated",
+      ),
+  ).toBe(true)
+  if (phase === "hello") {
+    joining.start(0)
+    await h.send("joining")
+    h.receive("joining")
+  }
+  await h.send("joining")
+  h.receive("joining")
+  expect(h.relay.connection("joining")!.state).toBe("established")
+})
+
 test("aggregate reservation caps retained input and every socket-handed fanout frame before per-peer windows exhaust", async () => {
   const h = await harness()
   const agent = await h.attach("agent", "agent")

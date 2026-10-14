@@ -64,10 +64,10 @@ fn field(value: &JsonValue, name: &str) -> String {
     value.to_utf8().unwrap()
 }
 
-fn emit(feed: &Feed, index: i64) {
+fn emit(feed: &Feed, owner: &str, index: i64) {
     feed.emit(
         Data::SessionTextDelta(Box::new(Fragment {
-            session_id: session::Id::new("ses_real_connector").unwrap(),
+            session_id: session::Id::new(owner).unwrap(),
             assistant_message_id: session_message::Id::new("msg_real_connector").unwrap(),
             ordinal: NonNegativeInt::new(index).unwrap(),
             delta: format!("live-{index}").into(),
@@ -122,6 +122,7 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
         .await
         .unwrap();
     support::insert_session("ses_real_connector", scratch.to_str().unwrap(), None).await;
+    support::insert_session("ses_real_other", scratch.to_str().unwrap(), None).await;
     let feed = world().core.events.clone();
     let mut services = services(LocalAuth::disabled(), true);
     services.core.as_mut().unwrap().events = feed.clone();
@@ -155,7 +156,7 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     assert_eq!(control.status().state, State::On);
     assert_eq!(feed.subscribers(), 2);
     for index in 0..3 {
-        emit(&feed, index);
+        emit(&feed, "ses_real_connector", index);
     }
     harness.send("{}");
     harness.phase("live-delivered");
@@ -173,7 +174,7 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     harness.send("{}");
     harness.phase("released-one");
     assert_eq!(feed.subscribers(), 2);
-    emit(&feed, 3);
+    emit(&feed, "ses_real_connector", 3);
     harness.send("{}");
     harness.phase("released-all");
     assert_eq!(feed.subscribers(), 1);
@@ -189,6 +190,29 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     connector_status_support::complete(&world().store, &world().core, &root).await;
     harness.send("{}");
     harness.phase("completion-pushed");
+    harness.send("{}");
+    harness.phase("oversize-ready");
+    for (index, (kind, data)) in [
+        ("session.step.started.1", parse_json(r#"{"assistantMessageID":"msg_real_oversized","agent":"build","model":{"providerID":"fixture","id":"model"}}"#).unwrap()),
+        ("session.text.started.1", parse_json(r#"{"assistantMessageID":"msg_real_oversized","ordinal":0}"#).unwrap()),
+        ("session.text.ended.1", ycoding_core::ycoding_schema::ObjectEncoder::new().field("assistantMessageID", "msg_real_oversized").field("ordinal", &0_f64).field("text", "x".repeat(2_320_000).as_str()).finish()),
+    ].into_iter().enumerate() {
+        let JsonValue::Object(mut data) = data else { unreachable!() };
+        data.insert("sessionID".into(), JsonValue::String(root.as_lossless().clone()));
+        world().core.sessions.publish(ycoding_core::ycoding_store::session::NewEvent {
+            id: format!("evt_real_oversized_{index}").into(), aggregate_id: root.as_lossless().clone(),
+            created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64,
+            type_: kind.into(), data: JsonValue::Object(data),
+        }).await.unwrap();
+    }
+    emit(&feed, "ses_real_other", 4);
+    harness.send("{}");
+    harness.phase("oversize-resynced");
+    emit(&feed, "ses_real_connector", 4);
+    emit(&feed, "ses_real_other", 5);
+    harness.send("{}");
+    harness.phase("oversize-recovered");
+    assert_eq!(control.status().state, State::On);
     harness.send("{}");
     harness.child.stdin.take();
     assert!(
