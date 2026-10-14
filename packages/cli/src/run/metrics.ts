@@ -8,7 +8,6 @@ type Metrics = Awaited<ReturnType<YCodingClient["session"]["usageReport"]>>["tot
 
 const zeroTokens: Tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 
-/** Accumulates the metrics of the root Session's steps in one run. */
 export function createRunMetrics() {
   const models = new Map<string, Model>()
   let steps = 0
@@ -24,7 +23,6 @@ export function createRunMetrics() {
     settled(step: { tokens?: Tokens; cost?: number; contextLimit?: number }) {
       steps++
       cost += step.cost ?? 0
-      // A zero limit means the model reports no context window, as in the session diagnostics.
       if (step.contextLimit !== undefined && step.contextLimit > 0) limit = step.contextLimit
       if (!step.tokens) return
       tokens = {
@@ -53,16 +51,52 @@ export function createRunMetrics() {
   }
 }
 
-/**
- * Reads every provider request recorded for the root Session family inside the run window.
- * `session.usageReport` selects the root Session, all descendant Sessions (managed subagents and
- * hidden compaction helpers), and applies `from` inclusively and `to` exclusively to request times.
- * Title requests are recorded under the Session they name.
- */
+export function createRunActivity() {
+  const sessions = new Map<string, { steps: number; turns: number; counted: boolean }>()
+  const session = (sessionID: string) => {
+    const existing = sessions.get(sessionID)
+    if (existing) return existing
+    const created = { steps: 0, turns: 0, counted: false }
+    sessions.set(sessionID, created)
+    return created
+  }
+
+  return {
+    observe(event: EventSubscribeOutput) {
+      switch (event.type) {
+        case "session.step.ended":
+        case "session.step.failed":
+          session(event.data.sessionID).steps++
+          return
+        case "session.input.promoted": {
+          const current = session(event.data.sessionID)
+          if (current.counted) return
+          current.counted = true
+          current.turns++
+          return
+        }
+        case "session.execution.started":
+        case "session.execution.succeeded":
+        case "session.execution.failed":
+        case "session.execution.interrupted":
+          session(event.data.sessionID).counted = false
+          return
+      }
+    },
+    steps(sessionID: string) {
+      return sessions.get(sessionID)?.steps
+    },
+    turns(sessionID: string) {
+      return sessions.get(sessionID)?.turns ?? 0
+    },
+  }
+}
+
 export async function readRunUsage(
   client: YCodingClient,
   sessionID: string,
   window: { from: number; to: number },
+  activity: ReturnType<typeof createRunActivity>,
 ) {
   const report = await readReport(client, sessionID, window)
   const subagents = new Map((await readTasks(client, sessionID)).map((task) => [task.sessionID, task]))
@@ -71,8 +105,13 @@ export async function readRunUsage(
     helpers.map((row) => client.session.get({ sessionID: row.key }).then((session) => session.agent)),
   )
   const rows = new Map(report.rows.map((row) => [row.key, row]))
+  const counted = [sessionID, ...subagents.keys()]
   return {
-    total: usage(report.total),
+    total: {
+      ...usage(report.total),
+      steps: counted.reduce((sum, id) => sum + (activity.steps(id) ?? 0), 0),
+      turns: counted.reduce((sum, id) => sum + activity.turns(id), 0),
+    },
     children: [
       ...[...subagents.values()].map((task) => ({
         sessionID: task.sessionID,
@@ -80,13 +119,19 @@ export async function readRunUsage(
         agent: task.agent,
         status: task.state,
         ...usage(rows.get(task.sessionID)),
+        steps: activity.steps(task.sessionID) ?? 0,
+        turns: activity.turns(task.sessionID),
       })),
-      ...helpers.map((row, index) => ({
-        sessionID: row.key,
-        kind: "helper" as const,
-        ...(helperAgents[index] === undefined ? {} : { agent: helperAgents[index] }),
-        ...usage(row),
-      })),
+      ...helpers.map((row, index) => {
+        const steps = activity.steps(row.key)
+        return {
+          sessionID: row.key,
+          kind: "helper" as const,
+          ...(helperAgents[index] === undefined ? {} : { agent: helperAgents[index] }),
+          ...usage(row),
+          ...(steps === undefined ? {} : { steps }),
+        }
+      }),
     ],
   }
 }

@@ -120,6 +120,14 @@ function stepStarted(): ServerEvent {
   }
 }
 
+function childDrain(sessionID: string, types: string[]): ServerEvent[] {
+  return [
+    "session.execution.started",
+    ...types,
+    "session.execution.succeeded",
+  ].map((type, index) => ({ id: `evt_${sessionID}_${index}`, created: index, type, data: { sessionID } }) as unknown as ServerEvent)
+}
+
 const zeroTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const zeroMetrics = { logical: 0, physical: 0, helpers: 0, tokens: zeroTokens }
 
@@ -717,6 +725,7 @@ describe("runNonInteractivePrompt", () => {
         status: "succeeded",
         durationMs: expect.any(Number),
         steps: 2,
+        turns: 1,
         tokens: { input: 120, output: 15, reasoning: 2, cache: { read: 350, write: 5 } },
         cost: 0.75,
         context: { limit: 1000, peakInput: 320 },
@@ -726,6 +735,8 @@ describe("runNonInteractivePrompt", () => {
           cost: 0.9,
           costProvenance: "recorded",
           requests: { logical: 3, physical: 4, helpers: 1 },
+          steps: 2,
+          turns: 1,
         },
         children: [],
       })
@@ -758,11 +769,26 @@ describe("runNonInteractivePrompt", () => {
           ses_sub: [{ sessionID: "ses_nested", agent: "reviewer", state: "completed" }],
         },
         agents: { ses_compaction_1: "compaction" },
-        turn: (messageID) => [prompted(messageID), settled()],
+        turn: (messageID) => [
+          prompted(messageID),
+          stepEnded(2),
+          ...childDrain("ses_sub", ["session.input.promoted", "session.step.ended", "session.input.promoted", "session.step.failed"]),
+          ...childDrain("ses_sub", ["session.input.promoted", "session.step.ended"]),
+          ...childDrain("ses_nested", ["session.input.promoted", "session.step.ended"]),
+          ...childDrain("ses_compaction_1", ["session.step.ended"]),
+          ...childDrain("ses_unrelated", ["session.input.promoted", "session.step.ended"]),
+          settled(),
+        ],
       })
 
       const summary = lines(output.stdout).at(-1)
-      expect(summary.total).toMatchObject({ cost: 0.3, costProvenance: "current_catalog" })
+      expect(summary.turns).toBe(1)
+      expect(summary.total).toMatchObject({
+        cost: 0.3,
+        costProvenance: "current_catalog",
+        steps: 1 + 3 + 1,
+        turns: 1 + 2 + 1,
+      })
       expect(summary.children).toEqual([
         {
           sessionID: "ses_sub",
@@ -773,6 +799,8 @@ describe("runNonInteractivePrompt", () => {
           cost: 0.1,
           costProvenance: "recorded",
           requests: { logical: 2, physical: 3, helpers: 0 },
+          steps: 3,
+          turns: 2,
         },
         {
           sessionID: "ses_idle",
@@ -781,6 +809,8 @@ describe("runNonInteractivePrompt", () => {
           status: "starting",
           tokens: zeroTokens,
           requests: { logical: 0, physical: 0, helpers: 0 },
+          steps: 0,
+          turns: 0,
         },
         {
           sessionID: "ses_nested",
@@ -789,6 +819,8 @@ describe("runNonInteractivePrompt", () => {
           status: "completed",
           tokens: zeroTokens,
           requests: { logical: 0, physical: 0, helpers: 0 },
+          steps: 1,
+          turns: 1,
         },
         {
           sessionID: "ses_compaction_1",
@@ -796,6 +828,7 @@ describe("runNonInteractivePrompt", () => {
           agent: "compaction",
           tokens,
           requests: { logical: 2, physical: 3, helpers: 2 },
+          steps: 1,
         },
       ])
       expect(summary.children[1]).not.toHaveProperty("cost")

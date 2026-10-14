@@ -9,7 +9,7 @@ import type {
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { EOL } from "node:os"
 import { toolOutputText, type MiniToolPart } from "@ycoding-ai/tui/mini/tool"
-import { createRunMetrics, readRunUsage } from "./metrics"
+import { createRunActivity, createRunMetrics, readRunUsage } from "./metrics"
 import { UI } from "./ui"
 
 type Model = {
@@ -84,6 +84,7 @@ export async function runNonInteractivePrompt(input: Input) {
   let interrupted = false
   let admission: AbortController | undefined
   const metrics = createRunMetrics()
+  const activity = createRunActivity()
   let submittedAt = Date.now()
   let admittedAt: number | undefined
   let lastEventTime: number | undefined
@@ -178,14 +179,17 @@ export async function runNonInteractivePrompt(input: Input) {
     if (input.format !== "json" || finished) return
     finished = true
     const finishedAt = Date.now()
-    const usage = await readRunUsage(input.client, input.sessionID, {
-      from: admittedAt ?? submittedAt,
-      to: (lastEventTime ?? finishedAt) + 1,
-    }).catch((error: unknown) => ({ usageError: error instanceof Error ? error.message : String(error) }))
+    const usage = await readRunUsage(
+      input.client,
+      input.sessionID,
+      { from: admittedAt ?? submittedAt, to: (lastEventTime ?? finishedAt) + 1 },
+      activity,
+    ).catch((error: unknown) => ({ usageError: error instanceof Error ? error.message : String(error) }))
     emit("run_finish", finishedAt, {
       status: runStatus(),
       durationMs: finishedAt - submittedAt,
       ...metrics.summary(),
+      turns: activity.turns(input.sessionID),
       ...usage,
     })
   }
@@ -229,6 +233,7 @@ export async function runNonInteractivePrompt(input: Input) {
         await cancelForm(event.data.form)
         continue
       }
+      activity.observe(event)
       if (!("sessionID" in event.data) || event.data.sessionID !== input.sessionID) continue
       const time = toMillis("created" in event ? event.created : undefined)
       lastEventTime = time

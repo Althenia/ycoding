@@ -137,12 +137,15 @@ test("a multi-step run reports step metadata and run totals read back from the p
       sessionID: "ses_metrics_steps",
       status: "succeeded",
       steps: 2,
+      turns: 1,
       tokens: { input: 110, output: 30, reasoning: 0, cache: { read: 140, write: 0 } },
       context: { peakInput: 150 },
       models: [{ providerID: server.provider.providerID, id: server.provider.modelID }],
       total: {
         tokens: { input: 110, output: 30, reasoning: 0, cache: { read: 140, write: 0 } },
         requests: { logical: 2, physical: 2, helpers: 0 },
+        steps: 2,
+        turns: 1,
       },
       children: [],
     })
@@ -222,7 +225,13 @@ test("a run that launches a subagent includes the child's usage in total and chi
       agent: "reviewer",
       tokens: { input: 30, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
       requests: { logical: 1, physical: 1, helpers: 0 },
+      steps: 1,
+      turns: 1,
     })
+    expect(finish.turns).toBe(1)
+    expect(finish.total.steps).toBe(finish.steps + child.steps)
+    expect(finish.total.turns).toBe(finish.turns + child.turns)
+    expect(finish.total.steps).toBe(finish.total.requests.logical)
     expect(child.sessionID).not.toBe(sessionID)
     expect(typeof child.status).toBe("string")
     expect(finish.total.tokens.input).toBe(finish.tokens.input + child.tokens.input)
