@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.9",
+    date: "2026-10-14",
+    title: "Muse quota on the usage dashboard",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Muse (Meta) subscription quota now appears on the usage dashboard (the TUI Usage screen and the web Usage page) and survives quota refreshes, instead of disappearing after a quota was reported from a Muse response. Quota is still reported only after a Muse response and is retained in memory." },
+    ],
+  },
+  {
     version: "0.10.8",
     date: "2026-10-14",
     title: "Smaller database and eval run controls",
