@@ -20,6 +20,12 @@ Custom endpoint saving invokes `provider.configure` for the backend's global con
 
 Family economics, activity, and captured changes are local presentation folds over loaded history and resident Session information. Captured changes retain T10's known/incomplete labelling, available root and authorized child patches, and failed-child-only retry. The shared Client correlation codec identifies dispatched inputs without importing runtime orchestration. The canonical captured-change list is all-or-error and cannot provide per-child retry. The three family projections admit Remote Client and Relay roles; the local TUI connection cannot invoke them.
 
+## Provider presentation
+
+Integration and model dialogs use the backend's lists without a frontend provider allowlist. Supported providers are OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (`cline-pass`), Z.ai, MiniMax, Kimi, and custom OpenAI-compatible endpoints, including local servers. Integration authentication methods, profile labels, and environment connection summaries come from the backend.
+
+OpenAI and Anthropic appear in the Popular integration group; other backend integrations appear alphabetically under Services. Models sort by availability, provider name, newest release, and model title. Connect offers a Custom OpenAI-compatible endpoint action; its dialog configures a URL, Chat or Responses API, optional model catalog and models, and credential profile. Local servers use that same dialog; it has no local-server preset selector. Retry links use the standard dialog treatment. Vendor-named themes remain independent of provider support.
+
 ## Protocol limitations
 
 Global Form reply/cancel and attachment/asset reads require the client/protocol phase-B contract. The TUI calls canonical methods and displays their explicit failures; it does not use another transport. The Rust runtime must serve `location.get` and the Session command, compact, switchAgent, switchModel, skill, skills, resolveSkillConflict, shell, subagent.launch, generate, and move methods before those reads/actions can succeed. File-bearing prompt admission requires runtime attachment resolution. `generate.text` has a registered Location-scoped runtime handler.

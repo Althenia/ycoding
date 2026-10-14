@@ -18,9 +18,7 @@ export type DialogModelSelection = {
   profile?: string
 }
 
-export type DialogModelResult =
-  | { type: "selected"; selection: DialogModelSelection }
-  | { type: "cancelled" }
+export type DialogModelResult = { type: "selected"; selection: DialogModelSelection } | { type: "cancelled" }
 
 export function completeModelSelection(input: {
   providerID: string
@@ -64,8 +62,14 @@ export function DialogModel(props: {
   })
 
   const connected = useConnected()
-  const selectionLocation = createMemo(() => props.sessionID ? data.session.get(props.sessionID)?.location ?? data.location.default() : data.location.default())
-  const providers = createMemo(() => new Map((data.location.provider.list(selectionLocation()) ?? []).map((item) => [item.id, item])))
+  const selectionLocation = createMemo(() =>
+    props.sessionID
+      ? (data.session.get(props.sessionID)?.location ?? data.location.default())
+      : data.location.default(),
+  )
+  const providers = createMemo(
+    () => new Map((data.location.provider.list(selectionLocation()) ?? []).map((item) => [item.id, item])),
+  )
   const models = createMemo(() => data.location.model.list(selectionLocation()) ?? [])
 
   const showExtra = createMemo(() => connected() && !props.providerID)
@@ -85,7 +89,11 @@ export function DialogModel(props: {
         return [
           {
             key: item,
-            value: { providerID: model.providerID, modelID: model.id, ...(item.profile === undefined ? {} : { profile: item.profile }) },
+            value: {
+              providerID: model.providerID,
+              modelID: model.id,
+              ...(item.profile === undefined ? {} : { profile: item.profile }),
+            },
             title: model.name,
             releaseDate: model.time.released,
             description: `${provider?.name ?? model.providerID} · ${item.profile ?? "provider default"}`,
@@ -129,7 +137,7 @@ export function DialogModel(props: {
                 : model.capabilities.tools
                   ? "tools"
                   : undefined,
-            category: connected() ? provider?.name ?? model.providerID : undefined,
+            category: connected() ? (provider?.name ?? model.providerID) : undefined,
             categoryView:
               selectable || !connected() ? undefined : (
                 <box height={1}>
@@ -310,7 +318,13 @@ function DialogModelProfile(props: {
       disabled: !props.providerDefaultAvailable,
     },
     ...(props.selected !== undefined && !props.profiles.some((profile) => profile.name === props.selected)
-      ? [{ title: `Unavailable: ${props.selected}`, value: props.selected, description: "No longer offered for this model" }]
+      ? [
+          {
+            title: `Unavailable: ${props.selected}`,
+            value: props.selected,
+            description: "No longer offered for this model",
+          },
+        ]
       : []),
     ...props.profiles.map((profile) => ({
       title: profile.name,
@@ -319,26 +333,35 @@ function DialogModelProfile(props: {
     })),
   ])
   let settled = false
-  onCleanup(() => { if (!settled) props.onCancel() })
-  return <DialogSelect<string | undefined>
-    title="Provider profile"
-    options={options()}
-    current={props.selected}
-    focusCurrent
-    onSelect={(option) => { settled = true; props.onSelect(option.value) }}
-  />
+  onCleanup(() => {
+    if (!settled) props.onCancel()
+  })
+  return (
+    <DialogSelect<string | undefined>
+      title="Provider profile"
+      options={options()}
+      current={props.selected}
+      focusCurrent
+      onSelect={(option) => {
+        settled = true
+        props.onSelect(option.value)
+      }}
+    />
+  )
 }
 
 export function sortModelOptions<
-  T extends { providerID?: string; providerName?: string; releaseDate: string | number; title: string; enabled?: boolean },
+  T extends {
+    providerID?: string
+    providerName?: string
+    releaseDate: string | number
+    title: string
+    enabled?: boolean
+  },
 >(options: T[]) {
   return options.toSorted((a, b) => {
     const availability = Number(a.enabled === false) - Number(b.enabled === false)
     if (availability !== 0) return availability
-
-    const provider =
-      Number(a.providerID !== "opencode") - Number(b.providerID !== "opencode") // YCODING_EXTERNAL_OPENCODE
-    if (provider !== 0) return provider
 
     const name = (a.providerName ?? "").localeCompare(b.providerName ?? "")
     if (name !== 0) return name

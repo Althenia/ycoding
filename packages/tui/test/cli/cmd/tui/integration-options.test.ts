@@ -18,12 +18,26 @@ describe("integrationOptions", () => {
   test("keeps popular integrations first and sorts the rest alphabetically", () => {
     expect(
       integrationOptions([
-        integration({ id: "mistral", name: "Mistral" }),
+        integration({ id: "minimax", name: "MiniMax" }),
         integration({ id: "openai", name: "OpenAI" }),
         integration({ id: "custom-z", name: "Zebra" }),
         integration({ id: "anthropic", name: "Anthropic" }),
       ]).map((item) => item.id),
-    ).toEqual(["openai", "anthropic", "mistral", "custom-z"])
+    ).toEqual(["openai", "anthropic", "minimax", "custom-z"])
+  })
+
+  test("keeps backend lists authoritative without privileging dropped provider IDs", () => {
+    expect(
+      integrationOptions([
+        integration({ id: "google", name: "Google" }),
+        integration({ id: "github-copilot", name: "GitHub Copilot" }),
+        integration({ id: "opencode-go", name: "OpenCode Go" }),
+        integration({ id: "ycoding", name: "YCoding Go" }),
+        integration({ id: "cursor", name: "Cursor" }),
+        integration({ id: "anthropic", name: "Anthropic" }),
+        integration({ id: "openai", name: "OpenAI" }),
+      ]).map((item) => item.id),
+    ).toEqual(["openai", "anthropic", "cursor", "github-copilot", "google", "opencode-go", "ycoding"])
   })
 })
 

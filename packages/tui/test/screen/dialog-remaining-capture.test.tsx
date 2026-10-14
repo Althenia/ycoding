@@ -99,17 +99,17 @@ const states = [
     view: () => <DialogAgent />,
   },
   { name: "settings", settle: "Settings", view: () => <DialogConfig /> },
-  { name: "connect-service", settle: "GitHub Copilot", evidence: "Popular", view: () => <DialogIntegration /> },
+  { name: "connect-service", settle: "Meta Muse", evidence: "Popular", view: () => <DialogIntegration /> },
   {
-    name: "connect-github-copilot",
-    settle: "Login with GitHub Copilot",
-    evidence: "API key",
+    name: "connect-meta-muse",
+    settle: "Meta Muse Code account",
+    evidence: "Meta Model API key",
     view: () => <DialogIntegrationMethods integration={integrations[2]!} />,
   },
   {
     name: "select-model",
     settle: "Claude Opus 5",
-    evidence: "Gemini 3 Pro",
+    evidence: "OpenRouter Model",
     view: () => (
       <DialogModel
         order={[
@@ -117,7 +117,7 @@ const states = [
           { providerID: "anthropic", modelID: "claude-sonnet-5" },
           { providerID: "anthropic", modelID: "claude-haiku-4-5" },
           { providerID: "openai", modelID: "gpt-5-2" },
-          { providerID: "google", modelID: "gemini-3-pro" },
+          { providerID: "openrouter", modelID: "openrouter-model" },
         ]}
       />
     ),
@@ -296,7 +296,7 @@ const states = [
         title="Provider connection"
         message="Could not connect to the provider. Check your network and credentials."
         label="Open provider settings"
-        link="https://opencode.ai/go"
+        link="https://console.anthropic.com"
         request={{ provider: "Anthropic", error: "429 rate limited", retryAfter: "retry after 30s" }}
       />
     ),
@@ -322,7 +322,7 @@ const states = [
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const
 
-test("the variant dialog renders only Grok's four offered effort IDs", async () => {
+test("the variant dialog renders only the backend's four offered effort IDs", async () => {
   const app = await testRender(
     () => (
       <DialogProviders>
@@ -350,8 +350,7 @@ test("OAuth authorization details remain visible in a short, narrow terminal", a
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(
-      () =>
-        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+      () => void beginOAuth(integrations[2], { id: "muse", type: "oauth", label: "Meta Muse Code account" }, dialog),
     )
     return null
   }
@@ -380,14 +379,14 @@ test("OAuth authorization details remain visible in a short, narrow terminal", a
       await app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
       const rows = app.captureCharFrame().replace(/\n$/, "").split("\n")
       expect(rows).toHaveLength(viewport.height)
-      expect(rows.join("\n")).toContain("Login with GitHub Copilot")
+      expect(rows.join("\n")).toContain("Meta Muse Code account")
       expect(rows.join("\n")).toContain("auth.example.test")
       expect(rows.join("\n")).toContain("client_id=synthetic-")
       expect(rows.join("\n")).toContain("client&scope=profile")
       expect(rows.join("\n")).toContain("TEST-ONLY")
       expect(rows.join("\n")).toContain("Waiting for authorization")
       expect(rows.join("\n")).toContain("copy")
-      const titleRow = rows.findIndex((row) => row.includes("Login with GitHub Copilot"))
+      const titleRow = rows.findIndex((row) => row.includes("Meta Muse Code account"))
       expect(titleRow).toBeLessThanOrEqual(2)
       expect(rows[titleRow]).toContain("esc")
       for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
@@ -395,7 +394,7 @@ test("OAuth authorization details remain visible in a short, narrow terminal", a
       await app.waitForFrame(() => copied === "TEST-ONLY")
       expect(copied).toBe("TEST-ONLY")
       app.mockInput.pressEscape()
-      await app.waitForFrame((frame) => !frame.includes("Login with GitHub Copilot"))
+      await app.waitForFrame((frame) => !frame.includes("Meta Muse Code account"))
       await app.waitForFrame(() => oauthCancelled.includes("attempt_layout"))
     } finally {
       app.renderer.destroy()
@@ -411,8 +410,7 @@ test("auto OAuth keeps polling while accepting a manual code and cancels only wh
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(
-      () =>
-        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+      () => void beginOAuth(integrations[2], { id: "muse", type: "oauth", label: "Meta Muse Code account" }, dialog),
     )
     return null
   }
@@ -458,8 +456,7 @@ test("auto OAuth without manual capability has no code action", async () => {
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(
-      () =>
-        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+      () => void beginOAuth(integrations[2], { id: "muse", type: "oauth", label: "Meta Muse Code account" }, dialog),
     )
     return null
   }
@@ -492,8 +489,7 @@ test("automatic completion while manual code entry is open settles without cance
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(
-      () =>
-        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+      () => void beginOAuth(integrations[2], { id: "muse", type: "oauth", label: "Meta Muse Code account" }, dialog),
     )
     return null
   }
@@ -529,8 +525,7 @@ test("escape from manual code entry cancels its one owned attempt", async () => 
   function OAuthFixture() {
     const dialog = useDialog()
     onMount(
-      () =>
-        void beginOAuth(integrations[2], { id: "github", type: "oauth", label: "Login with GitHub Copilot" }, dialog),
+      () => void beginOAuth(integrations[2], { id: "muse", type: "oauth", label: "Meta Muse Code account" }, dialog),
     )
     return null
   }
@@ -591,6 +586,159 @@ test("the Connect integration menu opens the custom endpoint dialog", async () =
   expect(opened).toBe(true)
   expect(app.captureCharFrame()).toContain("Endpoint URL")
   app.renderer.destroy()
+})
+
+test("Connect shows every kept provider and the custom endpoint action without dropped-provider options", async () => {
+  function Connect() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogIntegration onCustomEndpoint={() => {}} />))
+    return <SyncLocation />
+  }
+  for (const mode of ["dark", "light"] as const) {
+    const app = await testRender(
+      () => (
+        <DialogProviders mode={mode}>
+          <Connect />
+        </DialogProviders>
+      ),
+      { width: 100, height: 60 },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes("Z.ai") && frame.includes("Custom OpenAI-compatible endpoint"))
+      const frame = app.captureCharFrame()
+      for (const name of [
+        "OpenAI",
+        "Claude",
+        "OpenRouter",
+        "Cursor",
+        "Meta Muse",
+        "Meta",
+        "Cline",
+        "Z.ai",
+        "MiniMax",
+        "Kimi",
+      ])
+        expect(frame).toContain(name)
+      expect(frame).toContain("Configure an OpenAI-compatible provider")
+      expect(frame).not.toMatch(/OpenCode|YCoding Go|Copilot|Google|Gemini|Runpod|Bedrock|302\.AI|Kiro/)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
+test("kept API-key and subscription methods remain visible", async () => {
+  for (const [id, labels] of [
+    ["openai", ["ChatGPT Pro/Plus (browser)", "API key"]],
+    ["anthropic", ["Claude Code account", "API key"]],
+    ["muse", ["Meta Muse Code account", "Meta Model API key"]],
+  ] as const) {
+    const app = await testRender(
+      () => (
+        <DialogProviders>
+          <DialogIntegrationMethods integration={integrations.find((integration) => integration.id === id)!} />
+        </DialogProviders>
+      ),
+      { width: 80, height: 30 },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => labels.every((label) => frame.includes(label)))
+      const frame = app.captureCharFrame()
+      for (const label of labels) expect(frame).toContain(label)
+      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Runpod|Bedrock|Kiro/)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
+test("model dialogs show every kept provider and a backend-defined local endpoint", async () => {
+  for (const [providerID, name] of [
+    ["openai", "GPT-5.2"],
+    ["anthropic", "Claude Opus 5"],
+    ["openrouter", "OpenRouter Model"],
+    ["cursor", "Cursor Model"],
+    ["muse", "Meta Muse Model"],
+    ["meta", "Meta Model"],
+    ["cline-pass", "Cline Model"],
+    ["zai", "Z.ai Model"],
+    ["minimax", "MiniMax Model"],
+    ["moonshotai", "Kimi Model"],
+    ["local-endpoint", "Local endpoint Model"],
+  ] as const) {
+    function Picker() {
+      const dialog = useDialog()
+      onMount(() => dialog.replace(() => <DialogModel providerID={providerID} />))
+      return <SyncLocation />
+    }
+    const app = await testRender(
+      () => (
+        <DialogProviders>
+          <Picker />
+        </DialogProviders>
+      ),
+      { width: 80, height: 30 },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes(name))
+      const frame = app.captureCharFrame()
+      expect(frame).toContain(name)
+      if (providerID === "openrouter") expect(frame).toContain("Unavailable")
+      expect(frame).not.toMatch(/OpenCode|Copilot|Google|Gemini|Runpod|Bedrock|Kiro/)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
+test("retry links use the standard compact dialog treatment without a provider-specific upsell", async () => {
+  for (const link of ["https://opencode.ai/go", "https://console.anthropic.com"]) {
+    let dismissed: boolean | undefined
+    function Retry() {
+      const dialog = useDialog()
+      onMount(() =>
+        dialog.replace(() => (
+          <DialogRetryAction
+            title="Provider connection"
+            message="Check your credentials."
+            label="Open settings"
+            link={link}
+            onClose={(value) => {
+              dismissed = value
+            }}
+          />
+        )),
+      )
+      return <SyncLocation />
+    }
+    const app = await testRender(
+      () => (
+        <DialogProviders>
+          <Retry />
+        </DialogProviders>
+      ),
+      { width: 80, height: 30, kittyKeyboard: true, useMouse: true },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes(link) && frame.includes("don't show again"))
+      const rows = app.captureCharFrame().split("\n")
+      const titleRow = rows.findIndex((row) => row.includes("Provider connection"))
+      const linkRow = rows.findIndex((row) => row.includes(link))
+      expect(linkRow - titleRow).toBeLessThanOrEqual(4)
+      expect(rows.join("\n")).toContain("Check your credentials.")
+      expect(rows.join("\n")).toContain("Open settings")
+      const dismissRow = rows.findIndex((row) => row.includes("don't show again"))
+      await app.mockMouse.click(rows[dismissRow]!.indexOf("don't show again") + 1, dismissRow)
+      await app.waitFor(() => dismissed !== undefined)
+      expect(dismissed).toBe(true)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
 })
 
 test("a provider's profiles offer default selection instead of an active profile", async () => {
@@ -725,7 +873,7 @@ const designChecks: Partial<
   "select-agent": { title: "Select agent", row: 7, column: 6, text: "build" },
   settings: { title: "Settings", row: 8, column: 3, text: "Appearance" },
   "connect-service": { title: "Connect a service", row: 8, column: 3, text: "Popular" },
-  "connect-github-copilot": { title: "Connect GitHub Copilot", row: 7, column: 6, text: "Login with GitHub Copilot" },
+  "connect-meta-muse": { title: "Connect Meta Muse", row: 7, column: 6, text: "Meta Muse Code account" },
   "select-model": { title: "Select model", row: 8, column: 3, text: "Anthropic" },
   "select-variant": { title: "Select variant", row: 7, column: 6, text: "max" },
   "switch-session": { title: "Switch session", row: 8, column: 3, text: "Pinned" },
@@ -771,7 +919,7 @@ test("captures concrete remaining dialog fixtures at canonical terminal dimensio
   }
 }, 120_000)
 
-function DialogProviders(props: { children: JSX.Element; clipboard?: ClipboardService }) {
+function DialogProviders(props: { children: JSX.Element; clipboard?: ClipboardService; mode?: "dark" | "light" }) {
   const events = createEventStream()
   const transport = createFetch(route, events)
   return (
@@ -785,7 +933,7 @@ function DialogProviders(props: { children: JSX.Element; clipboard?: ClipboardSe
                   <ClientProvider api={createApi(transport.fetch)}>
                     <DataProvider>
                       <LocationProvider>
-                        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                        <ThemeProvider mode={props.mode ?? "dark"} source={{ discover: () => Promise.resolve({}) }}>
                           <LocalProvider>
                             <PromptStashProvider>
                               <DialogProvider>{props.children}</DialogProvider>
@@ -866,7 +1014,7 @@ function expectAt(rows: string[], row: number, column: number, text: string) {
 }
 
 async function route(url: URL, request: Request) {
-  if (url.pathname === "/api/integration/github-copilot/connect/oauth")
+  if (url.pathname === "/api/integration/muse/connect/oauth")
     return json({
       location,
       data: {
@@ -878,18 +1026,15 @@ async function route(url: URL, request: Request) {
         time: { created: 1, expires: 2 },
       },
     })
-  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "GET")
+  if (url.pathname === "/api/integration/muse/connect/oauth/attempt_layout" && request.method === "GET")
     return json({ location, data: { status: oauthStatus, time: { created: 1, expires: 2 } } })
-  if (
-    url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout/complete" &&
-    request.method === "POST"
-  ) {
+  if (url.pathname === "/api/integration/muse/connect/oauth/attempt_layout/complete" && request.method === "POST") {
     const input: unknown = await request.json()
     if (input && typeof input === "object" && "code" in input && typeof input.code === "string")
       oauthSubmitted.push(input.code)
     return new Response(null, { status: 204 })
   }
-  if (url.pathname === "/api/integration/github-copilot/connect/oauth/attempt_layout" && request.method === "DELETE") {
+  if (url.pathname === "/api/integration/muse/connect/oauth/attempt_layout" && request.method === "DELETE") {
     oauthCancelled.push("attempt_layout")
     return new Response(null, { status: 204 })
   }
@@ -1062,10 +1207,28 @@ const models = [
     context: 200_000,
   }),
   model({ id: "gpt-5-2", providerID: "openai", name: "GPT-5.2", family: "", context: 400_000 }),
+  ...[
+    { id: "cursor", name: "Cursor" },
+    { id: "muse", name: "Meta Muse" },
+    { id: "meta", name: "Meta" },
+    { id: "cline-pass", name: "Cline" },
+    { id: "zai", name: "Z.ai" },
+    { id: "minimax", name: "MiniMax" },
+    { id: "moonshotai", name: "Kimi" },
+    { id: "local-endpoint", name: "Local endpoint" },
+  ].map((provider) =>
+    model({
+      id: `${provider.id}-model`,
+      providerID: provider.id,
+      name: `${provider.name} Model`,
+      family: "",
+      context: 200_000,
+    }),
+  ),
   model({
-    id: "gemini-3-pro",
-    providerID: "google",
-    name: "Gemini 3 Pro",
+    id: "openrouter-model",
+    providerID: "openrouter",
+    name: "OpenRouter Model",
     family: "connect first",
     context: 1_000_000,
     enabled: false,
@@ -1074,43 +1237,60 @@ const models = [
 const providers = [
   { id: "anthropic", name: "Anthropic" },
   { id: "openai", name: "OpenAI" },
-  { id: "google", name: "Not configured" },
+  { id: "openrouter", name: "OpenRouter" },
+  { id: "cursor", name: "Cursor" },
+  { id: "muse", name: "Meta Muse" },
+  { id: "meta", name: "Meta" },
+  { id: "cline-pass", name: "Cline" },
+  { id: "zai", name: "Z.ai" },
+  { id: "minimax", name: "MiniMax" },
+  { id: "moonshotai", name: "Kimi" },
+  { id: "local-endpoint", name: "Local endpoint" },
 ]
 const credential = (label: string) => [{ type: "credential" as const, id: `cred_${label}`, label, active: true }]
 const integrations = [
-  { id: "ycoding", name: "YCoding Go", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "cline-pass", name: "Cline", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   {
     id: "openai",
     name: "OpenAI",
-    methods: [{ type: "key" as const, label: "API key" }],
+    methods: [
+      { id: "chatgpt-browser", type: "oauth" as const, label: "ChatGPT Pro/Plus (browser)" },
+      { type: "key" as const, label: "API key" },
+    ],
     connections: credential("default"),
   },
   {
-    id: "github-copilot",
-    name: "GitHub Copilot",
+    id: "muse",
+    name: "Meta Muse",
     methods: [
-      { id: "github", type: "oauth" as const, label: "Login with GitHub Copilot" },
-      { type: "key" as const, label: "API key" },
+      { id: "muse", type: "oauth" as const, label: "Meta Muse Code account" },
+      { type: "key" as const, label: "Meta Model API key" },
     ],
     connections: [],
   },
   {
     id: "anthropic",
     name: "Claude",
-    methods: [{ type: "key" as const, label: "API key" }],
+    methods: [
+      { id: "claude-code", type: "oauth" as const, label: "Claude Code account" },
+      { type: "key" as const, label: "API key" },
+    ],
     connections: [
       ...credential("Claude Max"),
       { type: "credential" as const, id: "cred_Work", label: "Work", active: false },
     ],
   },
-  { id: "google", name: "Google", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
-  { id: "302ai", name: "302.AI", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "openrouter", name: "OpenRouter", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "zai", name: "Z.ai", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   {
-    id: "amazon-bedrock",
-    name: "Amazon Bedrock",
+    id: "minimax",
+    name: "MiniMax",
     methods: [{ type: "key" as const, label: "API key" }],
     connections: [],
   },
+  { id: "cursor", name: "Cursor", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "meta", name: "Meta", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
+  { id: "moonshotai", name: "Kimi", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
 ]
 const skills = [
   {

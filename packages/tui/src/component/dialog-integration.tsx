@@ -19,12 +19,8 @@ import { Link } from "../ui/link"
 import { useToast } from "../ui/toast"
 
 const INTEGRATION_PRIORITY: Record<string, number> = {
-  ycoding: 0,
-  "opencode-go": 1,
-  openai: 2,
-  "github-copilot": 3,
-  anthropic: 4,
-  google: 5,
+  openai: 0,
+  anthropic: 1,
 }
 
 type ConnectMethod = Exclude<IntegrationInfo["methods"][number], { type: "env" }>
@@ -59,7 +55,7 @@ export function connectionSummary(integration: IntegrationInfo) {
     .join(", ")
 }
 
-export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void; onRunpodEndpoint?: () => void } = {}) {
+export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void } = {}) {
   const data = useData()
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
@@ -91,19 +87,16 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected;
       }
     })
     if (!props.onCustomEndpoint) return integrations
-    return [...integrations, ...(props.onRunpodEndpoint ? [{
-      title: "Runpod Serverless endpoint",
-      value: "runpod-endpoint",
-      description: "Connect a vLLM or Ollama Jobs endpoint",
-      category: "Services",
-      onSelect: props.onRunpodEndpoint,
-    }] : []), {
-      title: "Custom OpenAI-compatible endpoint",
-      value: "custom-openai-endpoint",
-      description: "Configure an OpenAI-compatible provider",
-      category: "Services",
-      onSelect: props.onCustomEndpoint,
-    }]
+    return [
+      ...integrations,
+      {
+        title: "Custom OpenAI-compatible endpoint",
+        value: "custom-openai-endpoint",
+        description: "Configure an OpenAI-compatible provider",
+        category: "Services",
+        onSelect: props.onCustomEndpoint,
+      },
+    ]
   })
 
   return (
@@ -556,12 +549,16 @@ function OAuthAuto(props: {
             .catch(toast.error)
         },
       },
-      ...(props.attempt.manualCode === true && !codeSent() ? [{
-        bind: "e",
-        title: "Enter authorization code",
-        group: "Dialog",
-        run: () => setEnteringCode(true),
-      }] : []),
+      ...(props.attempt.manualCode === true && !codeSent()
+        ? [
+            {
+              bind: "e",
+              title: "Enter authorization code",
+              group: "Dialog",
+              run: () => setEnteringCode(true),
+            },
+          ]
+        : []),
     ],
   }))
 
@@ -604,16 +601,19 @@ function OAuthAuto(props: {
   })
 
   return (
-    <Show when={enteringCode()} fallback={
-      <OAuthView
-        title={props.title}
-        url={props.attempt.url}
-        instructions={props.attempt.instructions}
-        message={codeSent() ? "Code submitted. Waiting for authorization..." : "Waiting for authorization..."}
-        copy
-        manualCode={props.attempt.manualCode === true && !codeSent()}
-      />
-    }>
+    <Show
+      when={enteringCode()}
+      fallback={
+        <OAuthView
+          title={props.title}
+          url={props.attempt.url}
+          instructions={props.attempt.instructions}
+          message={codeSent() ? "Code submitted. Waiting for authorization..." : "Waiting for authorization..."}
+          copy
+          manualCode={props.attempt.manualCode === true && !codeSent()}
+        />
+      }
+    >
       <DialogPrompt
         title="Authorization code"
         placeholder="Paste authorization code"
@@ -624,22 +624,26 @@ function OAuthAuto(props: {
             return
           }
           setCodeBusy(true)
-          void client.api.integration.oauth.complete({
-            integrationID: props.integration.id,
-            attemptID: props.attempt.attemptID,
-            location: location(data),
-            code,
-          }).then(() => {
-            if (!active) return
-            setCodeSent(true)
-            setEnteringCode(false)
-            dialog.setSize("large")
-            dialog.setCentered(true)
-          }).catch((cause) => {
-            if (active) setCodeError(message(cause))
-          }).finally(() => {
-            if (active) setCodeBusy(false)
-          })
+          void client.api.integration.oauth
+            .complete({
+              integrationID: props.integration.id,
+              attemptID: props.attempt.attemptID,
+              location: location(data),
+              code,
+            })
+            .then(() => {
+              if (!active) return
+              setCodeSent(true)
+              setEnteringCode(false)
+              dialog.setSize("large")
+              dialog.setCentered(true)
+            })
+            .catch((cause) => {
+              if (active) setCodeError(message(cause))
+            })
+            .finally(() => {
+              if (active) setCodeBusy(false)
+            })
         }}
         description={() => (
           <box gap={1}>
@@ -706,7 +710,14 @@ function OAuthCode(props: {
   )
 }
 
-function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean; manualCode?: boolean }) {
+function OAuthView(props: {
+  title: string
+  url?: string
+  instructions?: string
+  message: string
+  copy?: boolean
+  manualCode?: boolean
+}) {
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
   onMount(() => dialog.setCentered(true))
