@@ -182,6 +182,12 @@ requires a stable root ID and advertised workspace; reuse must match that
 workspace's current placement. Local scopes, path selection, result Locations,
 and filesystem entries remain unchanged.
 
+Local Session lists execute the Core query and use its opaque query-bearing
+cursors; every nonempty page returns previous and next anchors. Remote Session
+lists retain connector paging: pinned/active ordering, status and summary
+search, advertised workspace tokens, limits of 1–200, and cursors only where
+another page exists. Both use the dispatcher's remote-caller distinction.
+
 `tests/remote_placement.rs` exercises these boundaries with the real Session
 store, Location services, filesystem search, shell and quota services through
 authenticated connector dispatch.
