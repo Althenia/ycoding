@@ -925,6 +925,9 @@ dispatch cannot duplicate an admitted notification. Goal generation, task
 settlement, and notification-dispatch errors are reported without changing a
 successful drain into a false goal completion.
 
+Execution diagnostics use structured `sessionID` annotations and human-readable
+error messages rather than internal identifier or error Debug representations.
+
 `session::runner::Local` accepts explicit Location services: Session Store, model
 resolver, agents, credentials, tool registry, managed attachments, ordered
 instruction sources, optional loaded configuration and image-analyzer service,
@@ -1672,6 +1675,11 @@ the view survives reconnect and restart. The observation omits revisions and
 clocks and sorts questions first so unchanged decisions render identical text.
 Settled background tasks produce notifications; `dispatch_notifications`
 admits each as a deterministic synthetic parent input and wakes the parent.
+The terminal child transition records its outbox row atomically. A required
+parent wake that finds execution closed defers delivery: the admitted input and
+undelivered outbox row stay durable, and the next notifier retries the same input
+identity. It does not emit a dispatch failure or mark the row delivered. Other
+wake and storage failures propagate and retain their retryable outbox state.
 `reconcile_stale` marks active tasks lost with `evt_task_restart_lost_*`
 identifiers; those notifications are delivered by `dispatch_restart_losses`
 when the parent's execution starts, without waking provider work.

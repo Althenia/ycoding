@@ -26,7 +26,26 @@ pub enum Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "Session execution: {self:?}")
+        match self {
+            Self::Store(error) => write!(formatter, "Session execution storage failed: {error}"),
+            Self::Runner(error) => write!(
+                formatter,
+                "Session execution failed: {}",
+                String::from_utf16_lossy(&error.message.code_units().collect::<Vec<_>>())
+            ),
+            Self::Interrupted(reason) => write!(
+                formatter,
+                "Session execution interrupted: {}",
+                match reason {
+                    InterruptReason::User => "user",
+                    InterruptReason::Shutdown => "shutdown",
+                    InterruptReason::Superseded => "superseded",
+                }
+            ),
+            Self::Panicked => formatter.write_str("Session execution panicked"),
+            Self::Closed => formatter.write_str("Session execution is closed"),
+            Self::AlreadyInstalled => formatter.write_str("Session execution is already installed"),
+        }
     }
 }
 impl std::error::Error for Error {}

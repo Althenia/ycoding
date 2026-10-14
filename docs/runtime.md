@@ -673,6 +673,7 @@ Current behavior:
 - The tool returns the child Session ID immediately.
 - The child runs a configured non-primary agent with fresh context.
 - The parent receives lifecycle state and completion or failure notification.
+- Terminal child state and its notification outbox record commit together. Delivery admits a deterministic synthetic parent input before its advisory wake. If execution closes before accepting that wake, the notification remains durable and retryable without a dispatch-failure warning; a new notifier retries the same input identity, so parent history contains it once. Child state and TeamView rehydrate from stored task rows. Other delivery failures remain reported and retryable.
 - Once a parent has no local runnable work, it completes its own response and is free even while child Sessions continue in the background.
 - Completion notifications are delivered automatically; parent guidance prohibits polling and sleep or no-op waiting, and directs the model to continue useful work or finish its response until notification arrives.
 - TeamView is a durable chronological `team-view` observation whenever its selected child-state text changes. It is available on every provider route, including Codex, as a Synthetic user-authority message with description `TeamView update`; final terminal state remains stored. An empty update clears a previously observed or inherited view when no children remain, but Sessions with no prior view receive no initial empty observation.

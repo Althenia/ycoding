@@ -620,6 +620,49 @@ async fn cancel_interrupts_once_and_rejects_settled_tasks() {
 }
 
 #[tokio::test]
+async fn notification_wake_storage_failures_propagate_and_leave_the_original_notice_retryable() {
+    struct FailedWake;
+    impl Execution for FailedWake {
+        fn wake(&self, _: &session::Id) -> Outcome {
+            Err(ycoding_core::session::run_coordinator::Error::Store(
+                Arc::new(ycoding_store::Error::Rejected("parent wake storage failed")),
+            ))
+        }
+
+        fn interrupt(&self, _: &session::Id) -> RunFuture {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let harness = harness();
+    let child = launched(&harness, "call_notify_failure").await;
+    let cancelled = harness
+        .service
+        .cancel(&id("ses_one"), &child)
+        .await
+        .unwrap();
+    let failing = Service::new(harness.sessions.clone(), Arc::new(FailedWake));
+    let error = failing.dispatch_notifications().await.unwrap_err();
+    assert!(
+        matches!(error, Error::Execution(ycoding_core::session::run_coordinator::Error::Store(error)) if matches!(&*error, ycoding_store::Error::Rejected("parent wake storage failed")))
+    );
+    let notice = Launch::new(
+        &id("ses_one"),
+        &message("msg_parent"),
+        "call_notify_failure",
+    )
+    .notification(cancelled.revision.get(), &NotificationType::Cancelled);
+    assert!(harness.sessions.pending(&notice).unwrap().is_some());
+    assert_eq!(notifications(&harness.store)[0].delivered, 0);
+    assert_eq!(harness.service.dispatch_notifications().await.unwrap(), 1);
+    assert_eq!(harness.service.dispatch_notifications().await.unwrap(), 0);
+    assert_eq!(
+        harness.sessions.pending_list(&id("ses_one")).unwrap().len(),
+        1
+    );
+    assert_eq!(notifications(&harness.store)[0].delivered, 1);
+}
+
+#[tokio::test]
 async fn parent_messages_restart_a_terminal_child_only_for_new_pending_work() {
     let harness = harness();
     let child = launched(&harness, "call_1").await;

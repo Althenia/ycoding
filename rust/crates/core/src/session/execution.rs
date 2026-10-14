@@ -237,9 +237,10 @@ impl Drain for RuntimeDrain {
                 .get::<TaskTable>(&super::key(request.session_id.as_lossless()))?
                 && task.state.as_str() != Some("running")
             {
-                eprintln!(
-                    "Session drain skipped for non-running managed task {:?}: {:?}",
-                    request.session_id, task.state
+                tracing::warn!(
+                    sessionID = %String::from_utf16_lossy(&request.session_id.as_lossless().code_units().collect::<Vec<_>>()),
+                    state = %String::from_utf16_lossy(&task.state.code_units().collect::<Vec<_>>()),
+                    "Session drain skipped for non-running managed task"
                 );
                 return Ok(());
             }
@@ -306,7 +307,7 @@ impl Drain for RuntimeDrain {
                         match result {
                             Ok(advanced) => advanced,
                             Err(error) => {
-                                eprintln!("Failed to continue the autonomous goal {id:?}: {error}");
+                                tracing::warn!(sessionID = %String::from_utf16_lossy(&id.as_lossless().code_units().collect::<Vec<_>>()), error = %error, "Failed to continue the autonomous goal");
                                 None
                             }
                         }
@@ -325,10 +326,10 @@ impl Drain for RuntimeDrain {
                     .await?;
             }
             if let Err(error) = settle_task(&store, &id, &terminal).await {
-                eprintln!("Failed to settle managed child task {id:?}: {error}");
+                tracing::error!(sessionID = %String::from_utf16_lossy(&id.as_lossless().code_units().collect::<Vec<_>>()), error = %error, "Failed to settle managed child task");
             }
             if let Err(error) = orchestration.dispatch_notifications().await {
-                eprintln!("Failed to dispatch subagent notifications {id:?}: {error}");
+                tracing::error!(sessionID = %String::from_utf16_lossy(&id.as_lossless().code_units().collect::<Vec<_>>()), error = %error, "Failed to dispatch subagent notifications");
             }
             if let Some(advanced) = advanced {
                 match advanced.admit(&store, &id).await {
@@ -337,7 +338,7 @@ impl Drain for RuntimeDrain {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        eprintln!("Failed to queue autonomous goal continuation {id:?}: {error}")
+                        tracing::warn!(sessionID = %String::from_utf16_lossy(&id.as_lossless().code_units().collect::<Vec<_>>()), error = %error, "Failed to queue autonomous goal continuation")
                     }
                 }
             }

@@ -166,7 +166,11 @@ impl Service {
             Err(error) => return Err(error),
         };
         if wake && !held {
-            self.execution.wake(&parent_id)?;
+            match self.execution.wake(&parent_id) {
+                Ok(()) => {}
+                Err(crate::session::run_coordinator::Error::Closed) => return Ok(Delivery::Retry),
+                Err(error) => return Err(error.into()),
+            }
         }
         Ok(Delivery::Admitted)
     }

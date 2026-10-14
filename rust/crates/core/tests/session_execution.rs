@@ -224,3 +224,42 @@ fn terminals_distinguish_owner_interruption_from_a_typed_runner_failure() {
         );
     }
 }
+
+#[test]
+fn execution_error_display_preserves_causes_without_internal_debug_representations() {
+    for (error, expected) in [
+        (Error::Closed, "Session execution is closed"),
+        (Error::Panicked, "Session execution panicked"),
+        (
+            Error::AlreadyInstalled,
+            "Session execution is already installed",
+        ),
+        (
+            Error::Interrupted(InterruptReason::User),
+            "Session execution interrupted: user",
+        ),
+        (
+            Error::Interrupted(InterruptReason::Shutdown),
+            "Session execution interrupted: shutdown",
+        ),
+        (
+            Error::Interrupted(InterruptReason::Superseded),
+            "Session execution interrupted: superseded",
+        ),
+        (
+            Error::Runner(ycoding_schema::session_error::Error {
+                r#type: "provider.transport".into(),
+                message: "Provider disconnected".into(),
+            }),
+            "Session execution failed: Provider disconnected",
+        ),
+        (
+            Error::Store(Arc::new(ycoding_core::ycoding_store::Error::Rejected(
+                "parent wake storage failed",
+            ))),
+            "Session execution storage failed: transaction rejected: parent wake storage failed",
+        ),
+    ] {
+        assert_eq!(error.to_string(), expected);
+    }
+}

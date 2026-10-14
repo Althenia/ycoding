@@ -1,0 +1,37 @@
+use ycoding_store::session;
+
+pub fn record(id: &str) -> session::Session {
+    session::Session {
+        id: id.into(),
+        project_id: "prj_one".into(),
+        workspace_id: None,
+        parent_id: None,
+        fork_session_id: None,
+        fork_message_id: None,
+        fork_seq: None,
+        directory: "/project".into(),
+        path: None,
+        title: "Test".into(),
+        cost: 0.0,
+        tokens_input: 0,
+        tokens_output: 0,
+        tokens_reasoning: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+        revert: None,
+        permission: None,
+        autonomy: None,
+        autonomy_revision: 0,
+        orchestration_revision: 0,
+        agent: None,
+        model: None,
+        profile_binding: None,
+        daybreak: None,
+        time_created: 1,
+        time_updated: 1,
+        time_archived: None,
+        time_active: None,
+        time_pinned: None,
+        time_suspended: None,
+    }
+}
