@@ -55,6 +55,7 @@ impl Options {
 }
 
 type Request = Box<dyn FnOnce(&Database, &AtomicBool, &Metadata) + Send>;
+const TRANSACTION_WORK: usize = 65_536;
 
 pub struct Store {
     client: Client,
@@ -581,6 +582,7 @@ fn transact<R>(
         failed: false,
         rejection: None,
         events: Vec::new(),
+        remaining_work: TRANSACTION_WORK,
     };
     let result = catch_unwind(AssertUnwindSafe(|| operation(&mut write)));
     let failed = write.failed;
@@ -625,6 +627,7 @@ pub struct Write<'a> {
     failed: bool,
     rejection: Option<Error>,
     events: Vec<Event>,
+    remaining_work: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -656,6 +659,17 @@ pub struct IndexQuery<'a> {
 }
 
 impl Write<'_> {
+    fn work(&mut self, units: usize) -> Result<(), Error> {
+        let Some(remaining) = self.remaining_work.checked_sub(units) else {
+            return Err(self.reject(Error::Domain {
+                kind: "transaction_work_limit",
+                message: "transaction exceeds 65536 logical work units",
+            }));
+        };
+        self.remaining_work = remaining;
+        Ok(())
+    }
+
     pub(crate) fn record_event(&mut self, event: Event) {
         self.events.push(event);
     }
@@ -668,15 +682,21 @@ impl Write<'_> {
         name: &str,
         query: IndexQuery<'_>,
     ) -> Result<Vec<IndexEntry<T::Record>>, Error> {
+        self.work(1)?;
         let result = (|| {
             self.catalog.require::<T>()?;
             let index = index_definition::<T>(name)?;
-            read_index_range::<T>(
+            let rows = read_index_range::<T>(
                 &self.transaction.open_table(definition(T::NAME))?,
                 &self.transaction.open_table(definition(index.name))?,
                 index,
-                query,
-            )
+                IndexQuery {
+                    limit: query.limit.min(self.remaining_work + 1),
+                    ..query
+                },
+            )?;
+            self.work(rows.len())?;
+            Ok(rows)
         })();
         self.failed |= result.is_err();
         result
@@ -701,17 +721,20 @@ impl Write<'_> {
         after_primary: Option<&[u8]>,
         limit: usize,
     ) -> Result<Vec<T::Record>, Error> {
+        self.work(1)?;
         let result = (|| {
             self.catalog.require::<T>()?;
             let index = index_definition::<T>(name)?;
-            read_index::<T>(
+            let rows = read_index::<T>(
                 &self.transaction.open_table(definition(T::NAME))?,
                 &self.transaction.open_table(definition(index.name))?,
                 index,
                 key,
                 after_primary,
-                limit,
-            )
+                limit.min(self.remaining_work + 1),
+            )?;
+            self.work(rows.len())?;
+            Ok(rows)
         })();
         self.failed |= result.is_err();
         result
@@ -723,22 +746,27 @@ impl Write<'_> {
         upper: Bound<&[u8]>,
         limit: usize,
     ) -> Result<Vec<T::Record>, Error> {
+        self.work(1)?;
         let result = (|| {
             self.catalog.require::<T>()?;
-            self.transaction
+            let rows = self
+                .transaction
                 .open_table(definition(T::NAME))?
                 .range::<&[u8]>((lower, upper))?
-                .take(limit)
+                .take(limit.min(self.remaining_work + 1))
                 .map(|entry| {
                     let (key, value) = entry?;
                     decode_record::<T>(key.value(), value.value())
                 })
-                .collect::<Result<Vec<_>, Error>>()
+                .collect::<Result<Vec<_>, Error>>()?;
+            self.work(rows.len())?;
+            Ok(rows)
         })();
         self.failed |= result.is_err();
         result
     }
     pub fn get<T: TableSpec>(&mut self, key: &[u8]) -> Result<Option<T::Record>, Error> {
+        self.work(1)?;
         let result = (|| {
             self.catalog.require::<T>()?;
             let table = self.transaction.open_table(definition(T::NAME))?;
@@ -752,6 +780,7 @@ impl Write<'_> {
     }
 
     pub fn put<T: TableSpec>(&mut self, record: &T::Record) -> Result<(), Error> {
+        self.work(1)?;
         let result = self.put_inner::<T>(record);
         self.failed |= result.is_err();
         result
@@ -793,6 +822,7 @@ impl Write<'_> {
     }
 
     pub fn delete<T: TableSpec>(&mut self, key: &[u8]) -> Result<bool, Error> {
+        self.work(1)?;
         let result = (|| {
             self.catalog.require::<T>()?;
             let old = {

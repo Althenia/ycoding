@@ -17,6 +17,8 @@ struct Facts;
 struct Consent;
 static FAIL_SECOND: AtomicBool = AtomicBool::new(false);
 static SERIAL: Mutex<()> = Mutex::new(());
+static PAGE_BARRIER: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> =
+    Mutex::new(None);
 impl TableSpec for Facts {
     type Record = (u64, i64);
     const NAME: &'static str = "test_facts";
@@ -86,6 +88,13 @@ static SOURCES: &[Source] = &[Source {
     allowed: |snapshot, _| Ok(snapshot.get::<Consent>(&[])?.unwrap_or(false)),
     load,
     page: |snapshot, after, limit| {
+        let barrier = PAGE_BARRIER.lock().unwrap().take();
+        if let Some((reached, release)) = barrier {
+            reached.send(()).unwrap();
+            release
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap();
+        }
         Ok(snapshot
             .scan::<Facts>(
                 after.map_or(Bound::Unbounded, Bound::Excluded),
@@ -288,6 +297,140 @@ fn native_rows_and_checkpoint_rollback_together_then_lost_ack_reconciles_on_reop
             )
             .unwrap(),
         (2, 50)
+    );
+}
+
+#[test]
+fn analytics_queue_deadline_and_cancellation_bounds_leave_canonical_work_available() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (root, store, worker) = setup();
+    drop(worker);
+    let engine =
+        crate::analytics::Engine::start(store.client(), root.0.join("derived"), SOURCES).unwrap();
+    let (started, reached) = std::sync::mpsc::channel();
+    let (release, barrier) = std::sync::mpsc::channel();
+    *PAGE_BARRIER.lock().unwrap() = Some((started, barrier));
+    let (reply, first) = std::sync::mpsc::sync_channel(1);
+    engine
+        .send(crate::analytics::Command {
+            operation: Operation::Rebuild,
+            cancellation: Cancellation::default(),
+            deadline: Instant::now() + REPORT_DEADLINE,
+            reply: Some(reply),
+        })
+        .unwrap();
+    reached
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    for _ in 0..254 {
+        engine.notify().unwrap();
+    }
+    let mut receipts = Vec::new();
+    for expired in [false, true] {
+        let (reply, receipt) = std::sync::mpsc::sync_channel(1);
+        let cancellation = Cancellation::default();
+        if !expired {
+            cancellation.cancel();
+        }
+        engine
+            .send(crate::analytics::Command {
+                operation: Operation::Rebuild,
+                cancellation,
+                deadline: if expired {
+                    Instant::now()
+                } else {
+                    Instant::now() + REPORT_DEADLINE
+                },
+                reply: Some(reply),
+            })
+            .unwrap();
+        receipts.push(receipt);
+    }
+    assert!(matches!(engine.rebuild(), Err(Error::Busy)));
+    engine.notify().unwrap();
+    put(&store, 1, 10);
+    assert_eq!(
+        store
+            .snapshot()
+            .unwrap()
+            .get::<Facts>(&1_u64.to_be_bytes())
+            .unwrap(),
+        Some((1, 10))
+    );
+    release.send(()).unwrap();
+    first
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        receipts[0]
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap(),
+        Err(Error::Cancelled)
+    ));
+    assert!(matches!(
+        receipts[1]
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap(),
+        Err(Error::Deadline)
+    ));
+    assert_eq!(
+        engine.report(queries()).unwrap()[0],
+        vec![vec![Value::BigInt(10)]]
+    );
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn native_configuration_locks_selected_bounds_and_rejects_one_past() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (_root, store, mut worker) = setup();
+    worker
+        .execute(
+            Operation::Rebuild,
+            &Cancellation::default(),
+            Instant::now() + REPORT_DEADLINE,
+        )
+        .unwrap();
+    let connection = worker.connection.as_ref().unwrap();
+    for (setting, selected, overflow) in [
+        ("threads", "2", "3"),
+        ("memory_limit", "256.0 MiB", "268435457B"),
+        ("max_temp_directory_size", "256.0 MiB", "268435457B"),
+        ("max_expression_depth", "1000", "1001"),
+    ] {
+        let query = format!("SELECT current_setting('{setting}')::VARCHAR");
+        assert_eq!(
+            connection
+                .query_row(&query, [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            selected
+        );
+        let error = connection
+            .execute_batch(&format!("SET {setting} = '{overflow}'"))
+            .map_err(Error::from)
+            .unwrap_err();
+        assert!(matches!(error, Error::Duck(_)));
+        assert!(
+            error.to_string().contains("configuration") && error.to_string().contains("locked")
+        );
+        assert_eq!(
+            connection
+                .query_row(&query, [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            selected
+        );
+    }
+    put(&store, 1, 10);
+    assert_eq!(
+        worker
+            .execute(
+                Operation::Report(worker.read_state().unwrap(), queries()),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE
+            )
+            .unwrap()[0],
+        vec![vec![Value::BigInt(10)]]
     );
 }
 

@@ -15,6 +15,7 @@ use ycoding_store::{
 
 static SERIAL: Mutex<()> = Mutex::new(());
 static PAGE_BARRIER: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
+static NESTED_REPORT: Mutex<Option<analytics::Handle>> = Mutex::new(None);
 
 struct Facts;
 #[derive(Clone)]
@@ -94,6 +95,17 @@ fn load(snapshot: &Snapshot, key: &[u8]) -> Result<Option<SourceRow>, Error> {
     Ok(result)
 }
 fn page(snapshot: &Snapshot, after: Option<&[u8]>, limit: usize) -> Result<Vec<SourceRow>, Error> {
+    let nested = NESTED_REPORT.lock().unwrap().take();
+    if let Some(handle) = nested {
+        assert!(matches!(
+            handle.report(vec![Query {
+                sql: "SELECT 1",
+                parameters: vec![],
+                max_rows: 1,
+            }]),
+            Err(analytics::Error::Busy)
+        ));
+    }
     if std::env::var_os("YCODING_ANALYTICS_CRASH_REBUILD").is_some_and(|phase| phase == "rebuild") {
         println!("REBUILD_SNAPSHOT_CAPTURED");
         std::io::stdout().flush().unwrap();
@@ -673,6 +685,82 @@ fn encoded_intent_budget_invalidates_instead_of_rejecting_source_commit() {
 }
 
 #[test]
+fn encoded_intent_budget_accepts_exact_bytes_and_invalidates_one_byte_past() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    for delta in [-1_isize, 0, 1] {
+        let root = Root::new();
+        let store = root.store();
+        allow(&store);
+        let engine = root.engine(&store);
+        assert_report(&engine, &[]);
+        engine.shutdown().unwrap();
+        let empty = analytics::Intent {
+            source: "test_metrics".to_owned(),
+            identity: vec![],
+            generation: 1,
+            order: 1,
+            delete: false,
+        };
+        let overhead =
+            IntentTable::primary_key(&empty).len() + IntentTable::encode(&empty).unwrap().len();
+        let bytes = analytics::INTENT_BYTES.checked_add_signed(delta).unwrap();
+        let mut identity = vec![1; (bytes - overhead) / 2];
+        if (bytes - overhead) % 2 == 1 {
+            identity[0] = 0;
+        }
+        store
+            .submit(move |tx| {
+                tx.put::<Facts>(&Fact {
+                    id: 1,
+                    amount: 10,
+                    scope: b"scope".to_vec(),
+                })?;
+                analytics::record(
+                    tx,
+                    Change {
+                        source: "test_metrics",
+                        identity,
+                        delete: false,
+                    },
+                )
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        let state = store
+            .snapshot()
+            .unwrap()
+            .get::<DeliveryTable>(&[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.valid, delta <= 0);
+        assert_eq!(state.bytes, if delta <= 0 { bytes } else { 0 });
+        assert_eq!(state.intents, usize::from(delta <= 0));
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .get::<Facts>(&1_u64.to_be_bytes())
+                .unwrap()
+                .unwrap()
+                .amount,
+            10
+        );
+        put(&store, 2, 20);
+        assert!(!store.is_fenced());
+        store.shutdown().unwrap();
+        let reopened = root.reopen();
+        let persisted = reopened
+            .snapshot()
+            .unwrap()
+            .get::<DeliveryTable>(&[])
+            .unwrap()
+            .unwrap();
+        assert!(!persisted.valid);
+    }
+}
+
+#[test]
 fn cancellation_and_external_access_reject_and_leave_owner_usable() {
     let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let root = Root::new();
@@ -970,6 +1058,19 @@ fn report_request_byte_budget_is_enforced() {
 }
 
 #[test]
+fn recursive_report_is_rejected_without_waiting_or_blocking_canonical_work() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let engine = root.engine(&store);
+    *NESTED_REPORT.lock().unwrap() = Some(engine.handle());
+    assert_report(&engine, &[]);
+    put(&store, 1, 10);
+    assert_report(&engine, &[10]);
+}
+
+#[test]
 fn report_scalar_output_budget_rejects_nested_values() {
     let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let root = Root::new();
@@ -1000,7 +1101,7 @@ fn native_resource_configuration_private_files_and_single_process_owner_are_boun
         Engine::start(store.client(), root.0.join("other"), SOURCES),
         Err(analytics::Error::Busy)
     ));
-    let rows = engine.report(vec![Query { sql: "SELECT current_setting('threads')::BIGINT, current_setting('memory_limit'), current_setting('max_temp_directory_size'), current_setting('enable_external_access'), current_setting('autoload_known_extensions'), current_setting('autoinstall_known_extensions'), current_setting('lock_configuration')", parameters: vec![], max_rows: 1 }, Query { sql: "SELECT sum(memory_usage_bytes)::BIGINT, sum(temporary_storage_bytes)::BIGINT FROM duckdb_memory()", parameters: vec![], max_rows: 1 }]).unwrap();
+    let rows = engine.report(vec![Query { sql: "SELECT current_setting('threads')::BIGINT, current_setting('memory_limit'), current_setting('max_temp_directory_size'), current_setting('enable_external_access'), current_setting('autoload_known_extensions'), current_setting('autoinstall_known_extensions'), current_setting('lock_configuration'), current_setting('max_expression_depth')::BIGINT", parameters: vec![], max_rows: 1 }, Query { sql: "SELECT sum(memory_usage_bytes)::BIGINT, sum(temporary_storage_bytes)::BIGINT FROM duckdb_memory()", parameters: vec![], max_rows: 1 }]).unwrap();
     assert_eq!(
         rows[0],
         vec![vec![
@@ -1010,7 +1111,8 @@ fn native_resource_configuration_private_files_and_single_process_owner_are_boun
             Value::Boolean(false),
             Value::Boolean(false),
             Value::Boolean(false),
-            Value::Boolean(true)
+            Value::Boolean(true),
+            Value::BigInt(1000)
         ]]
     );
     assert!(matches!(rows[1][0][0], Value::BigInt(bytes) if bytes <= 256 * 1024 * 1024));

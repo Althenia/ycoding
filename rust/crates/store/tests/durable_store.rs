@@ -583,6 +583,101 @@ fn snapshot_is_coherent_bounded_and_drop_releases_only_its_permit() {
 }
 
 #[test]
+fn transaction_work_limit_is_atomic_for_point_and_range_operations() {
+    const WORK_LIMIT: usize = 65_536;
+    for file_backed in [false, true] {
+        let root = Root::new();
+        let store = if file_backed {
+            Store::initialize(root.file(), options(), CATALOG, metadata()).unwrap()
+        } else {
+            Store::disposable(options(), CATALOG, metadata()).unwrap()
+        };
+        store
+            .submit(|tx| tx.put::<Accounts>(&account(1, b"a", 1)))
+            .unwrap()
+            .wait()
+            .unwrap();
+        for operation in 0..6 {
+            for delta in [-1_isize, 0, 1] {
+                let result = store
+                    .submit(move |tx| {
+                        tx.put::<Ledger>(&999)?;
+                        let cost = if operation < 3 { 1 } else { 2 };
+                        for _ in 0..(WORK_LIMIT - cost - 1).checked_add_signed(delta).unwrap() {
+                            tx.get::<Ledger>(&key(0))?;
+                        }
+                        let result = match operation {
+                            0 => tx.get::<Ledger>(&key(999)).map(|_| ()),
+                            1 => tx.put::<Ledger>(&999),
+                            2 => tx.delete::<Ledger>(&key(888)).map(|_| ()),
+                            3 => tx
+                                .scan::<Ledger>(Bound::Unbounded, Bound::Unbounded, usize::MAX)
+                                .map(|rows| assert_eq!(rows, vec![999])),
+                            4 => tx
+                                .index::<Accounts>(
+                                    "account_group",
+                                    &tuple_key(&[KeyPart::I64(1)]),
+                                    None,
+                                    usize::MAX,
+                                )
+                                .map(|rows| assert_eq!(rows.len(), 1)),
+                            _ => tx
+                                .index_range::<Accounts>(
+                                    "account_group",
+                                    ycoding_store::IndexQuery {
+                                        lower: Bound::Unbounded,
+                                        upper: Bound::Unbounded,
+                                        prefix: None,
+                                        order: ycoding_store::IndexOrder::Ascending,
+                                        after: None,
+                                        limit: usize::MAX,
+                                    },
+                                )
+                                .map(|rows| assert_eq!(rows.len(), 1)),
+                        };
+                        if delta <= 0 {
+                            result?;
+                            return Ok(());
+                        }
+                        assert!(matches!(
+                            result,
+                            Err(Error::Domain {
+                                kind: "transaction_work_limit",
+                                ..
+                            })
+                        ));
+                        Ok(())
+                    })
+                    .unwrap()
+                    .wait();
+                if delta > 0 {
+                    assert!(matches!(
+                        result,
+                        Err(Error::Domain {
+                            kind: "transaction_work_limit",
+                            ..
+                        })
+                    ));
+                } else {
+                    result.unwrap();
+                }
+                assert_eq!(
+                    store.snapshot().unwrap().get::<Ledger>(&key(999)).unwrap(),
+                    (delta <= 0).then_some(999)
+                );
+                assert!(!store.is_fenced());
+                store
+                    .submit(|tx| tx.delete::<Ledger>(&key(999)))
+                    .unwrap()
+                    .wait()
+                    .unwrap();
+            }
+        }
+        store.shutdown().unwrap();
+    }
+}
+
+#[test]
 fn saturated_queue_cancellation_commit_receipt_and_joined_shutdown() {
     let root = Root::new();
     let store = Store::initialize(root.file(), options(), CATALOG, metadata()).unwrap();
@@ -637,6 +732,61 @@ fn saturated_queue_cancellation_commit_receipt_and_joined_shutdown() {
     }
     drop(snapshot);
     reopened.shutdown().unwrap();
+}
+
+#[test]
+fn selected_writer_queue_and_snapshot_bounds_reject_one_past_capacity() {
+    for max_snapshots in [Options::core().max_snapshots, 256] {
+        let root = Root::new();
+        let store = Store::initialize(
+            root.file(),
+            Options {
+                cache_bytes: 1024 * 1024,
+                max_snapshots,
+                ..Options::core()
+            },
+            CATALOG,
+            metadata(),
+        )
+        .unwrap();
+        let snapshots = (0..max_snapshots)
+            .map(|_| store.snapshot().unwrap())
+            .collect::<Vec<_>>();
+        assert!(matches!(store.snapshot(), Err(Error::SnapshotLimit)));
+        let (started, reached) = mpsc::channel();
+        let (release, barrier) = mpsc::channel();
+        let active = store
+            .submit(move |tx| {
+                started.send(()).unwrap();
+                barrier.recv_timeout(Duration::from_secs(20)).unwrap();
+                tx.put::<Ledger>(&1)
+            })
+            .unwrap();
+        reached.recv_timeout(Duration::from_secs(20)).unwrap();
+        let queued = (0..256)
+            .map(|_| store.submit(|tx| tx.get::<Ledger>(&key(1))).unwrap())
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            store.submit(|tx| tx.put::<Ledger>(&2)),
+            Err(Error::QueueFull)
+        ));
+        release.send(()).unwrap();
+        active.wait().unwrap();
+        for receipt in queued {
+            assert_eq!(receipt.wait().unwrap(), Some(1));
+        }
+        drop(snapshots);
+        assert_eq!(
+            store.snapshot().unwrap().get::<Ledger>(&key(2)).unwrap(),
+            None
+        );
+        store
+            .submit(|tx| tx.put::<Ledger>(&3))
+            .unwrap()
+            .wait()
+            .unwrap();
+        store.shutdown().unwrap();
+    }
 }
 
 #[test]

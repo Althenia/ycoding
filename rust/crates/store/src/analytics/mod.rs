@@ -230,6 +230,7 @@ impl Engine {
         };
         let handle = Handle(Arc::new(Shared {
             store,
+            writer: writer.thread().id(),
             sender: Mutex::new(Some(sender)),
         }));
         handle
@@ -284,6 +285,7 @@ impl Link {
 }
 struct Shared {
     store: crate::Client,
+    writer: std::thread::ThreadId,
     sender: Mutex<Option<mpsc::SyncSender<Command>>>,
 }
 enum Operation {
@@ -359,6 +361,9 @@ impl Handle {
         self.call(Operation::Report(state, queries), cancellation)
     }
     fn send(&self, command: Command) -> Result<(), Error> {
+        if thread::current().id() == self.0.writer {
+            return Err(Error::Busy);
+        }
         self.0
             .sender
             .lock()
