@@ -409,10 +409,12 @@ async fn native_platform_and_models_producers_cross_global_and_session_subscript
         config.reload().unwrap();
         let shell = shell::Shell::new(&roots, root.clone(), "prj_ephemeral", world().store.clone()).await.unwrap();
         shell.event_source.bind(world().core.events.clone(), Some(location.clone())).unwrap();
-        let mut prepared = shell.prepare(ycoding_core::ycoding_schema::shell::CreateInput::decode(&parse_json(r#"{"command":"printf native","timeout":5}"#).unwrap()).unwrap(), &config).unwrap();
+        let mut prepared = shell.prepare(ycoding_core::ycoding_schema::shell::CreateInput::decode(&parse_json(r#"{"command":"printf native","timeout":0}"#).unwrap()).unwrap(), &config).unwrap();
         let created = shell.create(&mut prepared).await.unwrap();
         assert!(created.pid.is_some());
-        shell.wait(&created.id).await.unwrap();
+        let settled = shell.wait(&created.id).await.unwrap();
+        assert_eq!(settled.status, ycoding_core::ycoding_schema::shell::Status::Exited);
+        assert_eq!(settled.exit.map(|exit| exit.get()), Some(0.0));
         shell.remove(&created.id).await.unwrap();
         let pty = pty::Pty::new(root.clone());
         pty.event_source.bind(world().core.events.clone(), Some(location.clone())).unwrap();
