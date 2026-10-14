@@ -26,20 +26,16 @@ test("M3 forwards a global backend configuration and never credentials", () => {
   })
 })
 
-test("M3 selects the endpoint protocol and provider default for each supported worker", () => {
-  expect(customEndpointConfiguration({ baseURL: "https://example.test", api: "chat", models: [] })).toMatchObject({
-    providerID: "custom-openai",
-    endpoint: { baseURL: "https://example.test", api: "chat" },
-  })
-  for (const worker of ["ollama", "vllm"] as const) {
-    const input = customEndpointConfiguration({
-      baseURL: "https://api.runpod.ai/v2/endpoint",
-      api: "chat",
-      worker,
-      models: [{ id: "model", modelID: "org/model", tools: true }],
-    })
-    expect(input.providerID).toBe("runpod")
-    expect(input.endpoint).toEqual({ baseURL: "https://api.runpod.ai/v2/endpoint", worker })
-    expect(input.models).toEqual([{ id: "model", modelID: "org/model", tools: true }])
-  }
+test("M3 preserves localhost and remote endpoints for both supported APIs", () => {
+  for (const api of ["chat", "responses"] as const)
+    for (const baseURL of ["http://localhost:1234/v1", "https://example.test/v1"]) {
+      const input = customEndpointConfiguration({
+        baseURL,
+        api,
+        models: [{ id: "model", modelID: "org/model", tools: true }],
+      })
+      expect(input.providerID).toBe("custom-openai")
+      expect(input.endpoint).toEqual({ baseURL, api })
+      expect(input.models).toEqual([{ id: "model", modelID: "org/model", tools: true }])
+    }
 })

@@ -3619,11 +3619,6 @@ enum ProviderEndpointAPI {
   PROVIDERENDPOINTAPI_RESPONSES = 2;
 }
 
-enum ProviderEndpointWorker {
-  PROVIDERENDPOINTWORKER_OLLAMA = 1;
-  PROVIDERENDPOINTWORKER_VLLM = 2;
-}
-
 enum ProviderEndpointCatalog {
   PROVIDERENDPOINTCATALOG_OPENAI_MODELS = 1;
 }
@@ -3631,18 +3626,12 @@ enum ProviderEndpointCatalog {
 message ProviderEndpoint {
   oneof kind {
     ProviderEndpoint_OpenAI openai = 1;
-    ProviderEndpoint_Runpod runpod = 2;
   }
 }
 
 message ProviderEndpoint_OpenAI {
   required LosslessString baseURL = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
   required ProviderEndpointAPI api = 2;
-}
-
-message ProviderEndpoint_Runpod {
-  required LosslessString baseURL = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 8192 }];
-  required ProviderEndpointWorker worker = 2;
 }
 
 message ProviderEndpointModel {

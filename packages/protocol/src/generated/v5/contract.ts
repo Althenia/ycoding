@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "317fbfa455103307db7bf54bbfc9e80bc8ff380030c73b22b7e80c7cf539b0f0"
+export const CONTRACT_DIGEST = "206626f342f424b740f186bfe6d5ac9b412c816be7c4ae37e60d90893a40ecbb"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -56568,15 +56568,6 @@ export const messages = {
         target: "ycoding.v5.ProviderEndpoint_OpenAI",
         group: 0,
       },
-      {
-        tag: 2,
-        name: "runpod",
-        type: 11,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.ProviderEndpoint_Runpod",
-        group: 0,
-      },
     ],
   },
   "ycoding.v5.ProviderEndpoint_OpenAI": {
@@ -56601,31 +56592,6 @@ export const messages = {
         required: true,
         repeated: false,
         target: "ycoding.v5.ProviderEndpointAPI",
-      },
-    ],
-  },
-  "ycoding.v5.ProviderEndpoint_Runpod": {
-    oneofs: 0,
-    fields: [
-      {
-        tag: 1,
-        name: "baseURL",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.LosslessString",
-        constraints: {
-          utf16Min: 1,
-          utf16Max: 8192,
-        },
-      },
-      {
-        tag: 2,
-        name: "worker",
-        type: 14,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.ProviderEndpointWorker",
       },
     ],
   },
@@ -57595,7 +57561,6 @@ export const enums = {
   "ycoding.v5.ConfigurationPartialFailure__tag": [1],
   "ycoding.v5.ConfigurationPartialFailure_stage": [1, 2],
   "ycoding.v5.ProviderEndpointAPI": [1, 2],
-  "ycoding.v5.ProviderEndpointWorker": [1, 2],
   "ycoding.v5.ProviderEndpointCatalog": [1],
   "ycoding.v5.FrontendPackageError__tag": [1],
   "ycoding.v5.FrontendPackageError_code": [1, 2, 3, 4, 5],

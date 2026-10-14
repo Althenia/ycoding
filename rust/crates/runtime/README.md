@@ -1,5 +1,11 @@
 # Local wire runtime
 
+## Provider configuration boundary
+
+`provider.configure` registers an OpenAI-compatible custom endpoint with explicit Chat/Responses selection, configured models or an optional OpenAI model-list source. Localhost endpoints use the same boundary. Credential connection follows successful configuration reload and integration registration; secrets stay out of the configuration RPC. `plugin.list` reports active capabilities from the Location generation, including only the six native provider plugins: Anthropic, Cursor, Muse, OpenAI-compatible, OpenAI and OpenRouter.
+
+Dropped built-in provider declarations produce nonfatal config diagnostics and are excluded from the effective catalog while other document settings load. A dropped package on one model excludes that model without dropping kept siblings. Saved credentials remain stored; excluded accounts do not trigger model discovery. Unknown executable packages and unsafe configuration remain subject to the existing rejection rules.
+
 ## Launcher and disposable readiness harness
 
 `ycoding-runtime [serve] --service` composes the production Core and Store, installs Core observability, serves authenticated `/health`, the TypeScript discovery endpoint `/api/health`, the exact-instance stop endpoint `/api/service/stop`, and `/ws/v5/local`. Its atomic private registration is the complete service-discovery contract. The executable needs no files beside it. Distribute it only as an embedded CLI payload extracted to a versioned path; never add a release-archive entry. `--stdio --port 0` publishes one JSON readiness line and exits when stdin closes. `--meeting`, off by default, starts one Meeting runtime for each Location the server composes, matching `serve --meeting`. That runtime uses the Location's Meeting directory, lock and loopback bridge, survives Location reload, and stops before Session execution at shutdown. Each such Location adds the hidden `meeting-intelligence` agent, the `meeting_history` tool and the analysis restriction to its runner; analysis Sessions run through the process-global Session execution. A Location whose Meeting runtime fails to start logs the failure and keeps serving without it. See [runtime configuration](../../../docs/configuration.md#rust-runtime-executable) for flags, paths, authentication, contention, and shutdown.

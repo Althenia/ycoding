@@ -7,11 +7,9 @@ export function customEndpointConfiguration(
 ): ProviderConfigureInput {
   return {
     location,
-    providerID: result.provider?.trim() || (result.worker ? "runpod" : "custom-openai"),
+    providerID: result.provider?.trim() || "custom-openai",
     scope: "global",
-    endpoint: result.worker
-      ? { baseURL: result.baseURL, worker: result.worker }
-      : { baseURL: result.baseURL, api: result.api },
+    endpoint: { baseURL: result.baseURL, api: result.api },
     ...(result.catalog ? { catalog: result.catalog } : {}),
     ...(result.models ? { models: result.models } : {}),
   }

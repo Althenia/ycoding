@@ -7,6 +7,7 @@ use ycoding_schema::{DomainEncode, LosslessString, model, provider};
 
 mod providers;
 pub mod quota;
+pub(crate) mod scope;
 pub use providers::ProviderContext;
 mod route;
 pub(crate) use route::from_catalog_model_base;
@@ -149,31 +150,8 @@ pub fn with_variant(
 pub enum ProviderFamily {
     OpenAI,
     Anthropic,
-    Google,
     Compatible,
-    Azure,
     OpenRouter,
-    Xai,
-    Bedrock,
-    RunPod,
-    Copilot,
-    Vertex,
-    VertexAnthropic,
-    Alibaba,
-    Cohere,
-    Cerebras,
-    Deepinfra,
-    Gateway,
-    Groq,
-    Mistral,
-    Perplexity,
-    Venice,
-    Vercel,
-    Together,
-    Gitlab,
-    Sap,
-    CloudflareGateway,
-    Mantle,
     Cursor,
 }
 pub fn family(package: &provider::Package) -> Result<ProviderFamily, Error> {
@@ -186,44 +164,12 @@ pub fn family(package: &provider::Package) -> Result<ProviderFamily, Error> {
         "@ai-sdk/anthropic"
         | "@ycoding-ai/ai/providers/anthropic"
         | "@ycoding-ai/ai/providers/anthropic-compatible" => Ok(ProviderFamily::Anthropic),
-        "@ai-sdk/google" | "@ycoding-ai/ai/providers/google" => Ok(ProviderFamily::Google),
-        "@ai-sdk/google-vertex" | "@ycoding-ai/ai/providers/google-vertex" => {
-            Ok(ProviderFamily::Vertex)
-        }
-        "@ai-sdk/google-vertex/anthropic" | "@ycoding-ai/ai/providers/google-vertex/anthropic" => {
-            Ok(ProviderFamily::VertexAnthropic)
-        }
         "@ai-sdk/openai-compatible"
         | "@ycoding-ai/ai/providers/openai-compatible"
         | "@ycoding-ai/ai/providers/openai-compatible/responses" => Ok(ProviderFamily::Compatible),
-        "@ai-sdk/azure"
-        | "@ycoding-ai/ai/providers/azure"
-        | "@ycoding-ai/ai/providers/azure/chat"
-        | "@ycoding-ai/ai/providers/azure/responses" => Ok(ProviderFamily::Azure),
         "@openrouter/ai-sdk-provider" | "@ycoding-ai/ai/providers/openrouter" => {
             Ok(ProviderFamily::OpenRouter)
         }
-        "@ai-sdk/xai" | "@ycoding-ai/ai/providers/xai" => Ok(ProviderFamily::Xai),
-        "@ai-sdk/amazon-bedrock" | "@ycoding-ai/ai/providers/amazon-bedrock" => {
-            Ok(ProviderFamily::Bedrock)
-        }
-        "@ycoding-ai/ai/providers/runpod" => Ok(ProviderFamily::RunPod),
-        "@ai-sdk/github-copilot" => Ok(ProviderFamily::Copilot),
-        "@ai-sdk/alibaba" => Ok(ProviderFamily::Alibaba),
-        "@ai-sdk/cohere" => Ok(ProviderFamily::Cohere),
-        "@ai-sdk/cerebras" => Ok(ProviderFamily::Cerebras),
-        "@ai-sdk/deepinfra" => Ok(ProviderFamily::Deepinfra),
-        "@ai-sdk/gateway" => Ok(ProviderFamily::Gateway),
-        "@ai-sdk/groq" => Ok(ProviderFamily::Groq),
-        "@ai-sdk/mistral" => Ok(ProviderFamily::Mistral),
-        "@ai-sdk/perplexity" => Ok(ProviderFamily::Perplexity),
-        "venice-ai-sdk-provider" => Ok(ProviderFamily::Venice),
-        "@ai-sdk/vercel" => Ok(ProviderFamily::Vercel),
-        "@ai-sdk/togetherai" => Ok(ProviderFamily::Together),
-        "gitlab-ai-provider" => Ok(ProviderFamily::Gitlab),
-        "@jerome-benoit/sap-ai-provider-v2" => Ok(ProviderFamily::Sap),
-        "ai-gateway-provider" => Ok(ProviderFamily::CloudflareGateway),
-        "@ai-sdk/amazon-bedrock/mantle" => Ok(ProviderFamily::Mantle),
         "cursor-opencode-provider" => Ok(ProviderFamily::Cursor),
         _ => Err(Error::UnsupportedPackage),
     }

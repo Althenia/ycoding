@@ -81,6 +81,7 @@ impl Catalog {
             event_source: Default::default(),
             providers: snapshots
                 .into_iter()
+                .filter(|snapshot| super::model::scope::catalog_provider(&snapshot.info.id.0))
                 .map(|snapshot| {
                     let mut info = snapshot.info;
                     info.integration_id = Some(
@@ -556,6 +557,9 @@ impl Catalog {
                 continue;
             };
             for (id, item) in providers.iter() {
+                if super::model::scope::dropped_provider(id, item) {
+                    continue;
+                }
                 let provider_id = provider::Id(id.clone());
                 if !configured
                     .providers
@@ -599,6 +603,12 @@ impl Catalog {
                 }
                 if let Some(JsonValue::Object(models)) = field(item, "models") {
                     for (id, config) in models.iter() {
+                        if field(config, "package")
+                            .and_then(models_dev::text)
+                            .is_some_and(super::model::scope::dropped_package)
+                        {
+                            continue;
+                        }
                         if !record.models.iter().any(|m| &m.id == id) {
                             record
                                 .models

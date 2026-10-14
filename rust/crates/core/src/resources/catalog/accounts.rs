@@ -1,5 +1,5 @@
 use super::{
-    Catalog, DiscoveryDiagnostic, ProviderRecord, empty_model, field, merge_json,
+    Catalog, DiscoveryDiagnostic, ProviderRecord, field,
     models_dev::{self, text},
     object, project, set,
 };
@@ -23,7 +23,6 @@ pub struct AccountCatalog {
     next_reconcile: i64,
     configured: Option<(String, Catalog, Vec<DiscoveryDiagnostic>, i64)>,
     cursor_env: Option<(String, Vec<ycoding_schema::model::Info>)>,
-    remote_baseline: Option<Catalog>,
 }
 impl AccountCatalog {
     pub fn new(
@@ -49,7 +48,6 @@ impl AccountCatalog {
             next_reconcile: 0,
             configured: None,
             cursor_env: None,
-            remote_baseline: None,
         })
     }
     pub fn seed(
@@ -61,31 +59,13 @@ impl AccountCatalog {
         for id in catalog
             .providers
             .iter()
-            .filter(|record| {
-                matches!(
-                    record.provider.id.0.as_str(),
-                    Some("cursor" | "github-copilot")
-                ) || record
-                    .provider
-                    .integration_id
-                    .as_ref()
-                    .is_some_and(|id| id.as_lossless().as_str() == Some("opencode"))
-            })
+            .filter(|record| matches!(record.provider.id.0.as_str(), Some("cursor")))
             .map(|record| record.provider.id.clone())
             .chain(
                 self.accounts
                     .iter()
                     .flat_map(|account| account.providers.iter())
-                    .filter(|record| {
-                        matches!(
-                            record.provider.id.0.as_str(),
-                            Some("github-copilot" | "cursor")
-                        ) || record
-                            .provider
-                            .integration_id
-                            .as_ref()
-                            .is_some_and(|id| id.as_lossless().as_str() == Some("opencode"))
-                    })
+                    .filter(|record| matches!(record.provider.id.0.as_str(), Some("cursor")))
                     .map(|record| record.provider.id.clone()),
             )
             .collect::<std::collections::BTreeSet<_>>()
@@ -178,30 +158,6 @@ impl AccountCatalog {
                 catalog.account_update(selected, openai.clone(), models);
             }
         }
-        if let Some(record) = catalog
-            .providers
-            .iter_mut()
-            .find(|record| record.provider.id.0 == "opencode".into())
-        {
-            let connected = saved
-                .iter()
-                .any(|selected| selected.integration_id().as_str() == Some("opencode"));
-            if !connected
-                && !self.environment.contains_key("OPENCODE_API_KEY")
-                && record
-                    .provider
-                    .overlays
-                    .settings
-                    .as_ref()
-                    .and_then(|settings| settings.0.get(&"apiKey".into()))
-                    .and_then(text)
-                    .is_none()
-            {
-                for model in &mut record.models {
-                    model.enabled = false;
-                }
-            }
-        }
         catalog.transform_providers(&self.environment)
     }
     pub async fn reconcile(
@@ -246,10 +202,7 @@ impl AccountCatalog {
         }
         for selected in &saved {
             let integration = selected.integration_id().as_str().unwrap_or("");
-            if !matches!(
-                integration,
-                "openai" | "github-copilot" | "cursor" | "opencode" | "anthropic"
-            ) {
+            if !matches!(integration, "openai" | "cursor" | "anthropic") {
                 continue;
             }
             let prepared = self
@@ -277,29 +230,14 @@ impl AccountCatalog {
                     if integration == "cursor" {
                         tracing::warn!(provider = "cursor", "failed to sync Cursor models");
                     }
-                    if integration != "github-copilot"
-                        && let Some(previous) = self.accounts.iter().find(|account| {
-                            account.selected.id() == selected.id()
-                                && account.selected.account_generation()
-                                    == selected.account_generation()
-                        })
-                    {
+                    if let Some(previous) = self.accounts.iter().find(|account| {
+                        account.selected.id() == selected.id()
+                            && account.selected.account_generation()
+                                == selected.account_generation()
+                    }) {
                         next.push(Inventory {
                             selected: selected.clone(),
                             providers: previous.providers.clone(),
-                        });
-                    }
-                    if integration == "github-copilot"
-                        && let Some(mut record) = baseline
-                            .providers
-                            .iter()
-                            .find(|record| record.provider.id.0 == "github-copilot".into())
-                            .cloned()
-                    {
-                        record.models.clear();
-                        next.push(Inventory {
-                            selected: selected.clone(),
-                            providers: vec![record],
                         });
                     }
                 }
@@ -309,17 +247,7 @@ impl AccountCatalog {
             .accounts
             .iter()
             .flat_map(|account| account.providers.iter())
-            .filter(|record| {
-                record
-                    .provider
-                    .integration_id
-                    .as_ref()
-                    .is_some_and(|id| id.as_lossless().as_str() == Some("opencode"))
-                    || matches!(
-                        record.provider.id.0.as_str(),
-                        Some("github-copilot" | "cursor")
-                    )
-            })
+            .filter(|record| matches!(record.provider.id.0.as_str(), Some("cursor")))
             .map(|record| record.provider.id.clone())
             .collect::<std::collections::BTreeSet<_>>()
         {
@@ -495,7 +423,6 @@ impl AccountCatalog {
                 diagnostics: diagnostics.clone(),
             });
         }
-        self.remote_baseline = Some(Catalog::new(snapshots.clone()));
         if self
             .configured
             .as_ref()
@@ -542,70 +469,6 @@ impl AccountCatalog {
             }
         };
         let token = token.ok_or(models_dev::Error::Request)?;
-        if integration == "opencode" {
-            let server = metadata
-                .and_then(|metadata| metadata.get(&"server".into()))
-                .and_then(text)
-                .unwrap_or("https://console.opencode.ai");
-            let server = self
-                .endpoints
-                .get("opencode")
-                .map(String::as_str)
-                .unwrap_or(server);
-            let mut request = self
-                .http
-                .get(format!("{}/api/config", server.trim_end_matches('/')))
-                .bearer_auth(token);
-            if let Some(org) = metadata
-                .and_then(|metadata| metadata.get(&"orgID".into()))
-                .and_then(text)
-            {
-                request = request.header("x-org-id", org);
-            }
-            let response = request
-                .send()
-                .await
-                .map_err(|_| models_dev::Error::Request)?;
-            if response.status().as_u16() == 404 {
-                return Ok(self
-                    .accounts
-                    .iter()
-                    .find(|account| {
-                        account.selected.id() == selected.id()
-                            && account.selected.account_generation()
-                                == selected.account_generation()
-                    })
-                    .map(|account| account.providers.clone())
-                    .unwrap_or_default());
-            }
-            let response = json(response).await?;
-            let providers = field(&response, "config")
-                .and_then(|config| field(config, "providers"))
-                .ok_or(models_dev::Error::InvalidSource)?;
-            let providers = sanitize(providers);
-            let mut remote = self.remote_baseline.as_ref().unwrap_or(baseline).clone();
-            remote.configure(&[object(&[("providers", providers.clone())])])?;
-            let JsonValue::Object(providers) = providers else {
-                return Err(models_dev::Error::InvalidSource);
-            };
-            return Ok(providers
-                .iter()
-                .filter_map(|(id, _)| {
-                    remote
-                        .providers
-                        .iter()
-                        .find(|record| &record.provider.id.0 == id)
-                })
-                .cloned()
-                .map(|mut record| {
-                    record.provider.integration_id = Some(
-                        ycoding_schema::integration::Id::new("opencode")
-                            .expect("static integration"),
-                    );
-                    record
-                })
-                .collect());
-        }
         if integration == "cursor" {
             let response = self.cursor_models(token).await?;
             let available = ycoding_ai::cursor::models::available_models(&response)
@@ -631,45 +494,6 @@ impl AccountCatalog {
             return Ok(Vec::new());
         };
         if integration == "anthropic" {
-            return Ok(vec![record]);
-        }
-        if integration == "github-copilot" {
-            let token = match value {
-                ycoding_schema::credential::Value::OAuth(value) => value
-                    .refresh
-                    .as_str()
-                    .ok_or(models_dev::Error::InvalidSource)?,
-                _ => token,
-            };
-            let enterprise = metadata
-                .and_then(|metadata| metadata.get(&"enterpriseUrl".into()))
-                .and_then(text);
-            let base = self
-                .endpoints
-                .get("github-copilot")
-                .cloned()
-                .unwrap_or_else(|| {
-                    enterprise
-                        .map(|domain| {
-                            format!(
-                                "https://copilot-api.{}",
-                                domain.trim_start_matches("https://").trim_end_matches('/')
-                            )
-                        })
-                        .unwrap_or_else(|| "https://api.githubcopilot.com".into())
-                });
-            let response = json(
-                self.http
-                    .get(format!("{base}/models"))
-                    .bearer_auth(token)
-                    .header("X-GitHub-Api-Version", "2026-06-01")
-                    .header("Copilot-Integration-Id", "vscode-chat")
-                    .send()
-                    .await
-                    .map_err(|_| models_dev::Error::Request)?,
-            )
-            .await?;
-            record.models = copilot_models(&response, &base, &record)?;
             return Ok(vec![record]);
         }
         record.models = record
@@ -866,304 +690,4 @@ async fn json(response: reqwest::Response) -> Result<JsonValue, models_dev::Erro
         std::str::from_utf8(&bytes).map_err(|_| models_dev::Error::InvalidSource)?,
     )
     .map_err(|_| models_dev::Error::InvalidSource)
-}
-fn sanitize(value: &JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Object(fields) => {
-            let mut result = ycoding_schema::JsonObject::new();
-            for (name, value) in fields.iter() {
-                let value = if name.as_str() == Some("settings") {
-                    if let JsonValue::Object(settings) = value {
-                        let mut result = ycoding_schema::JsonObject::new();
-                        for (name, value) in settings.iter().filter(|(name, _)| {
-                            !matches!(name.as_str(), Some("apiKey" | "headers"))
-                        }) {
-                            result.insert(name.clone(), value.clone());
-                        }
-                        JsonValue::Object(result)
-                    } else {
-                        value.clone()
-                    }
-                } else {
-                    sanitize(value)
-                };
-                result.insert(name.clone(), value);
-            }
-            JsonValue::Object(result)
-        }
-        JsonValue::Array(values) => JsonValue::Array(values.iter().map(sanitize).collect()),
-        _ => value.clone(),
-    }
-}
-fn copilot_models(
-    response: &JsonValue,
-    base: &str,
-    record: &ProviderRecord,
-) -> Result<Vec<ycoding_schema::model::Info>, models_dev::Error> {
-    let Some(JsonValue::Array(rows)) = field(response, "data") else {
-        return Err(models_dev::Error::InvalidSource);
-    };
-    let mut models = Vec::new();
-    for row in rows {
-        let Some(id) = field(row, "id").and_then(text) else {
-            continue;
-        };
-        let Some(capabilities) = field(row, "capabilities") else {
-            continue;
-        };
-        let Some(limits) = field(capabilities, "limits") else {
-            continue;
-        };
-        let Some(supports) = field(capabilities, "supports") else {
-            continue;
-        };
-        if !matches!(field(row, "model_picker_enabled"), Some(JsonValue::Bool(_)))
-            || field(row, "name").and_then(text).is_none()
-            || field(row, "version").and_then(text).is_none()
-            || field(capabilities, "family").and_then(text).is_none()
-        {
-            continue;
-        }
-        let Some(input) = field(limits, "max_prompt_tokens") else {
-            continue;
-        };
-        let Some(output) = field(limits, "max_output_tokens") else {
-            continue;
-        };
-        let Some(JsonValue::Bool(tools)) = field(supports, "tool_calls") else {
-            continue;
-        };
-        if field(row, "policy")
-            .and_then(|policy| field(policy, "state"))
-            .and_then(text)
-            == Some("disabled")
-        {
-            continue;
-        }
-        let endpoints = field(row, "supported_endpoints").and_then(|value| {
-            if let JsonValue::Array(values) = value {
-                Some(values)
-            } else {
-                None
-            }
-        });
-        let has = |name: &str| {
-            endpoints.is_some_and(|values| values.iter().any(|value| text(value) == Some(name)))
-        };
-        let endpoint = if has("/v1/messages") {
-            "messages"
-        } else if has("/responses") {
-            "responses"
-        } else {
-            "chat"
-        };
-        let previous = record
-            .models
-            .iter()
-            .filter(|model| model.model_id.as_str() == Some(id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let new = previous.is_empty();
-        let mut aliases = if new {
-            vec![empty_model(record.provider.id.clone(), id.into())?]
-        } else {
-            previous
-        };
-        for model in &mut aliases {
-            model.model_id = id.into();
-            if new {
-                model.name = field(row, "name").and_then(text).unwrap_or(id).into();
-            }
-            model.family = model
-                .family
-                .clone()
-                .or_else(|| field(capabilities, "family").and_then(text).map(Into::into));
-            model.package = Some(
-                format!(
-                    "aisdk:{}",
-                    if endpoint == "messages" {
-                        "@ai-sdk/anthropic"
-                    } else {
-                        "@ai-sdk/github-copilot"
-                    }
-                )
-                .into(),
-            );
-            if model.time.released.get() == 0.0
-                && let Some(version) = field(row, "version").and_then(text)
-            {
-                let date = version.strip_prefix(&format!("{id}-")).unwrap_or(version);
-                model.time.released = ycoding_schema::schema::Finite::new(
-                    models_dev::date_millis(date).unwrap_or(0.0),
-                )?;
-            }
-            let mut settings = object(&[
-                (
-                    "baseURL",
-                    format!("{base}{}", if endpoint == "messages" { "/v1" } else { "" }).encode(),
-                ),
-                ("endpoint", endpoint.encode()),
-            ]);
-            if endpoint == "messages" {
-                set(&mut settings, "toolStreaming", false.encode());
-            }
-            if endpoint == "responses" {
-                set(&mut settings, "store", false.encode());
-                if field(supports, "reasoning_effort").is_some_and(
-                    |value| matches!(value,JsonValue::Array(values) if !values.is_empty()),
-                ) {
-                    set(
-                        &mut settings,
-                        "include",
-                        JsonValue::Array(vec!["reasoning.encrypted_content".encode()]),
-                    );
-                }
-                if !matches!(
-                    field(capabilities, "family").and_then(text),
-                    Some("gpt-5" | "gpt-5.1" | "gpt-5.2")
-                ) {
-                    let threshold = if let JsonValue::Number(input) = input {
-                        if *input > 0.0 {
-                            (input * 0.9).floor()
-                        } else {
-                            50000.0
-                        }
-                    } else {
-                        50000.0
-                    };
-                    set(
-                        &mut settings,
-                        "contextManagement",
-                        JsonValue::Array(vec![object(&[
-                            ("type", "compaction".encode()),
-                            ("compactThreshold", threshold.encode()),
-                        ])]),
-                    );
-                }
-            }
-            model.settings = Some(provider::Settings::decode(&merge_json(
-                &model
-                    .settings
-                    .as_ref()
-                    .map(DomainEncode::encode)
-                    .unwrap_or_else(|| object(&[])),
-                &settings,
-            ))?);
-            model.capabilities.tools = *tools;
-            model.capabilities.input = vec!["text".into()];
-            if field(supports, "vision") == Some(&JsonValue::Bool(true)) {
-                model.capabilities.input.push("image".into());
-            }
-            model.capabilities.output = vec!["text".into()];
-            model.limit = ycoding_schema::model::Limit::decode(&object(&[
-                (
-                    "context",
-                    field(limits, "max_context_window_tokens")
-                        .unwrap_or(input)
-                        .clone(),
-                ),
-                ("input", input.clone()),
-                ("output", output.clone()),
-            ]))?;
-            model.enabled = field(row, "model_picker_enabled") == Some(&JsonValue::Bool(true))
-                && id != "gpt-5-chat-latest";
-            model.variants.clear();
-            if let Some(JsonValue::Array(efforts)) = field(supports, "reasoning_effort")
-                && (endpoint != "messages"
-                    || field(supports, "adaptive_thinking") == Some(&JsonValue::Bool(true)))
-            {
-                model.variants = efforts
-                    .iter()
-                    .filter_map(|effort| text(effort))
-                    .map(|effort| {
-                        let options = if endpoint == "messages" {
-                            let mut thinking = object(&[("type", "adaptive".encode())]);
-                            if id.contains("opus-4.7") {
-                                set(&mut thinking, "display", "summarized".encode());
-                            }
-                            object(&[("effort", effort.encode()), ("thinking", thinking)])
-                        } else {
-                            object(&[
-                                ("reasoningEffort", effort.encode()),
-                                ("reasoningSummary", "auto".encode()),
-                                (
-                                    "include",
-                                    JsonValue::Array(vec!["reasoning.encrypted_content".encode()]),
-                                ),
-                            ])
-                        };
-                        ycoding_schema::model::Variant::decode(&object(&[
-                            ("id", effort.encode()),
-                            ("settings", options),
-                        ]))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-            }
-            if model.variants.is_empty()
-                && let Some(JsonValue::Number(max)) = field(supports, "max_thinking_budget")
-            {
-                model.variants = [("max", max - 1.0), ("high", (max / 2.0).floor())]
-                    .into_iter()
-                    .map(|(id, budget)| {
-                        ycoding_schema::model::Variant::decode(&object(&[
-                            ("id", id.encode()),
-                            (
-                                "settings",
-                                object(&[(
-                                    "thinking",
-                                    object(&[
-                                        ("type", "enabled".encode()),
-                                        ("budgetTokens", budget.encode()),
-                                    ]),
-                                )]),
-                            ),
-                        ]))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-            }
-            let prices = field(row, "billing").and_then(|billing| field(billing, "token_prices"));
-            let multiplier = prices
-                .and_then(|prices| field(prices, "batch_size"))
-                .and_then(|value| {
-                    if let JsonValue::Number(value) = value {
-                        (*value > 0.0).then_some(10000.0 / value)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0.0);
-            let price = |name| {
-                prices
-                    .and_then(|prices| field(prices, "default"))
-                    .and_then(|prices| field(prices, name))
-                    .and_then(|value| {
-                        if let JsonValue::Number(value) = value {
-                            Some(*value * multiplier)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0.0)
-            };
-            let mut encoded = model.encode();
-            set(
-                &mut encoded,
-                "cost",
-                JsonValue::Array(vec![object(&[
-                    ("input", price("input_price").encode()),
-                    ("output", price("output_price").encode()),
-                    (
-                        "cache",
-                        object(&[
-                            ("read", price("cache_price").encode()),
-                            ("write", 0.0.encode()),
-                        ]),
-                    ),
-                ])]),
-            );
-            *model = ycoding_schema::model::Info::decode(&encoded)?;
-        }
-        models.extend(aliases);
-    }
-    Ok(models)
 }

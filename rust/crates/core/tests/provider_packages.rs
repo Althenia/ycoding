@@ -1,5 +1,5 @@
 use ycoding_core::resources::{catalog, config, model};
-use ycoding_core::ycoding_schema::{JsonValue, parse_json};
+use ycoding_core::ycoding_schema::parse_json;
 
 const PACKAGES: &[(&[&str], model::ProviderFamily)] = &[
     (
@@ -19,24 +19,6 @@ const PACKAGES: &[(&[&str], model::ProviderFamily)] = &[
         model::ProviderFamily::Anthropic,
     ),
     (
-        &["@ai-sdk/google", "@ycoding-ai/ai/providers/google"],
-        model::ProviderFamily::Google,
-    ),
-    (
-        &[
-            "@ai-sdk/google-vertex",
-            "@ycoding-ai/ai/providers/google-vertex",
-        ],
-        model::ProviderFamily::Vertex,
-    ),
-    (
-        &[
-            "@ai-sdk/google-vertex/anthropic",
-            "@ycoding-ai/ai/providers/google-vertex/anthropic",
-        ],
-        model::ProviderFamily::VertexAnthropic,
-    ),
-    (
         &[
             "@ai-sdk/openai-compatible",
             "@ycoding-ai/ai/providers/openai-compatible",
@@ -46,90 +28,33 @@ const PACKAGES: &[(&[&str], model::ProviderFamily)] = &[
     ),
     (
         &[
-            "@ai-sdk/azure",
-            "@ycoding-ai/ai/providers/azure",
-            "@ycoding-ai/ai/providers/azure/chat",
-            "@ycoding-ai/ai/providers/azure/responses",
-        ],
-        model::ProviderFamily::Azure,
-    ),
-    (
-        &[
             "@openrouter/ai-sdk-provider",
             "@ycoding-ai/ai/providers/openrouter",
         ],
         model::ProviderFamily::OpenRouter,
     ),
-    (
-        &["@ai-sdk/xai", "@ycoding-ai/ai/providers/xai"],
-        model::ProviderFamily::Xai,
-    ),
-    (
-        &[
-            "@ai-sdk/amazon-bedrock",
-            "@ycoding-ai/ai/providers/amazon-bedrock",
-        ],
-        model::ProviderFamily::Bedrock,
-    ),
-    (
-        &["@ycoding-ai/ai/providers/runpod"],
-        model::ProviderFamily::RunPod,
-    ),
-    (&["@ai-sdk/github-copilot"], model::ProviderFamily::Copilot),
-    (&["@ai-sdk/alibaba"], model::ProviderFamily::Alibaba),
-    (&["@ai-sdk/cohere"], model::ProviderFamily::Cohere),
-    (&["@ai-sdk/cerebras"], model::ProviderFamily::Cerebras),
-    (&["@ai-sdk/deepinfra"], model::ProviderFamily::Deepinfra),
-    (&["@ai-sdk/gateway"], model::ProviderFamily::Gateway),
-    (&["@ai-sdk/groq"], model::ProviderFamily::Groq),
-    (&["@ai-sdk/mistral"], model::ProviderFamily::Mistral),
-    (&["@ai-sdk/perplexity"], model::ProviderFamily::Perplexity),
-    (&["venice-ai-sdk-provider"], model::ProviderFamily::Venice),
-    (&["@ai-sdk/vercel"], model::ProviderFamily::Vercel),
-    (&["@ai-sdk/togetherai"], model::ProviderFamily::Together),
-    (&["gitlab-ai-provider"], model::ProviderFamily::Gitlab),
-    (
-        &["@jerome-benoit/sap-ai-provider-v2"],
-        model::ProviderFamily::Sap,
-    ),
-    (
-        &["ai-gateway-provider"],
-        model::ProviderFamily::CloudflareGateway,
-    ),
-    (
-        &["@ai-sdk/amazon-bedrock/mantle"],
-        model::ProviderFamily::Mantle,
-    ),
     (&["cursor-opencode-provider"], model::ProviderFamily::Cursor),
 ];
 
 #[test]
-fn every_native_family_identity_is_accepted_at_provider_and_model_level_with_both_prefix_forms() {
+fn kept_native_packages_load_at_provider_and_model_level_with_both_prefix_forms() {
     for (packages, expected) in PACKAGES {
         for package in *packages {
             for package in [package.to_string(), format!("aisdk:{package}")] {
                 assert_eq!(model::family(&package.as_str().into()).unwrap(), *expected);
                 for declaration in [
-                    format!(
-                        r#"{{"providers":{{"fixture":{{"package":"{package}","models":{{"code":{{}}}}}}}}}}"#
-                    ),
-                    format!(
-                        r#"{{"providers":{{"fixture":{{"models":{{"code":{{"package":"{package}"}}}}}}}}}}"#
-                    ),
+                    serde_json::json!({"providers":{"fixture":{"package":package,"models":{"code":{}}}}}),
+                    serde_json::json!({"providers":{"fixture":{"models":{"code":{"package":package}}}}}),
                 ] {
-                    let decoded = config::decode_document(&declaration, "fixture");
+                    let decoded = config::decode_document(&declaration.to_string(), "fixture");
                     assert!(
                         decoded.diagnostics.is_empty(),
                         "{declaration}: {:?}",
                         decoded.diagnostics
                     );
-                    let mut configuration = configuration(&declaration);
+                    let configuration = configuration(decoded.info.unwrap());
                     ycoding_core::extension::Configuration::reject_obsolete(&configuration)
                         .unwrap();
-                    configuration.entries = vec![config::Entry::Document {
-                        path: None,
-                        info: decoded.info.unwrap(),
-                    }];
                     let catalog = catalog::Catalog::from_config(vec![], &configuration).unwrap();
                     let mut registrations =
                         ycoding_core::resources::auth::integration::Draft::default();
@@ -180,7 +105,7 @@ fn unknown_packages_and_executable_keys_remain_rejected_at_every_declaration_lev
         assert!(
             matches!(
                 ycoding_core::extension::Configuration::reject_obsolete(&configuration(
-                    declaration
+                    parse_json(declaration).unwrap()
                 )),
                 Err(ycoding_core::extension::Error::ObsoleteConfiguration)
             ),
@@ -189,7 +114,53 @@ fn unknown_packages_and_executable_keys_remain_rejected_at_every_declaration_lev
     }
 }
 
-fn configuration(declaration: &str) -> config::Configuration {
+#[test]
+fn dropped_native_families_cannot_resolve_under_an_alias_or_prefix() {
+    for package in [
+        "@ai-sdk/google",
+        "@ai-sdk/azure",
+        "@ai-sdk/xai",
+        "@ai-sdk/amazon-bedrock",
+        "@ycoding-ai/ai/providers/runpod",
+        "@ai-sdk/github-copilot",
+        "@ai-sdk/alibaba",
+        "@ai-sdk/cohere",
+        "@ai-sdk/cerebras",
+        "@ai-sdk/deepinfra",
+        "@ai-sdk/gateway",
+        "@ai-sdk/groq",
+        "@ai-sdk/mistral",
+        "@ai-sdk/perplexity",
+        "venice-ai-sdk-provider",
+        "@ai-sdk/vercel",
+        "@ai-sdk/togetherai",
+        "gitlab-ai-provider",
+        "@jerome-benoit/sap-ai-provider-v2",
+        "ai-gateway-provider",
+        "@ai-sdk/amazon-bedrock/mantle",
+        "@ai-sdk/google-vertex",
+        "@ai-sdk/google-vertex/anthropic",
+    ] {
+        for package in [package.to_owned(), format!("aisdk:{package}")] {
+            assert!(
+                matches!(
+                    model::family(&package.as_str().into()),
+                    Err(model::Error::UnsupportedPackage)
+                ),
+                "{package}"
+            );
+            let decoded = config::decode_document(&serde_json::json!({"default_agent":"god","providers":{"alias":{"package":package}}}).to_string(), "fixture");
+            assert!(decoded.info.is_some(), "{package}");
+            assert_eq!(decoded.diagnostics.len(), 1, "{package}");
+            let catalog =
+                catalog::Catalog::from_config(vec![], &configuration(decoded.info.unwrap()))
+                    .unwrap();
+            assert!(catalog.providers.is_empty(), "{package}");
+        }
+    }
+}
+
+fn configuration(info: ycoding_core::ycoding_schema::JsonValue) -> config::Configuration {
     let root = std::env::temp_dir().join(format!("native-package-shapes-{}", std::process::id()));
     let mut configuration = config::Configuration::load(config::LoadOptions {
         directory: root.clone(),
@@ -200,16 +171,6 @@ fn configuration(declaration: &str) -> config::Configuration {
         env: Default::default(),
     })
     .unwrap();
-    configuration.entries = vec![config::Entry::Document {
-        path: None,
-        info: parse_json(declaration).unwrap(),
-    }];
-    assert!(matches!(
-        configuration.entries[0],
-        config::Entry::Document {
-            info: JsonValue::Object(_),
-            ..
-        }
-    ));
+    configuration.entries = vec![config::Entry::Document { path: None, info }];
     configuration
 }

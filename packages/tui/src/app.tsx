@@ -886,9 +886,6 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           dialog.replace(() => (
             <DialogIntegration
               onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
-              onRunpodEndpoint={() =>
-                dialog.replace(() => <DialogCustomEndpoint kind="runpod" onComplete={saveEndpoint} />)
-              }
               onCustomEndpoint={() =>
                 dialog.replace(() => (
                   <DialogCustomEndpoint

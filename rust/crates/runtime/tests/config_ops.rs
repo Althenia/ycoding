@@ -122,7 +122,7 @@ async fn flow() {
     let directory = root.join("project").to_str().unwrap().to_owned();
     fs::write(
         root.join("project/ycoding.jsonc"),
-        "{\n  // retained wire comment\n  \"default_agent\" : \"god\"\n}\n",
+        "{\n  // retained wire comment\n  \"default_agent\" : \"god\",\n  \"providers\": {\"native-openai\": {\"package\": \"@ai-sdk/openai\", \"models\": {\"code\": {}}}}\n}\n",
     )
     .unwrap();
     let store = Store::initialize(
@@ -212,6 +212,32 @@ async fn flow() {
             .any(|server| units(&server.name) == "production-global-mcp")
     );
     let mut global = provider(&directory, "production-global");
+    let plugins: v5::PluginListResult = ask(
+        &mut production_client,
+        "plugin.list",
+        location_scope(&directory),
+        v5::PluginListRequest {
+            query: query(&directory, None),
+        },
+    )
+    .await;
+    assert_eq!(
+        plugins
+            .data
+            .items
+            .iter()
+            .map(|plugin| units(&plugin.id))
+            .filter(|id| id.starts_with("ycoding.provider."))
+            .collect::<Vec<_>>(),
+        vec![
+            "ycoding.provider.anthropic",
+            "ycoding.provider.cursor",
+            "ycoding.provider.muse",
+            "ycoding.provider.openai-compatible",
+            "ycoding.provider.openai",
+            "ycoding.provider.openrouter",
+        ]
+    );
     global.payload.scope = 1;
     let configured: v5::ProviderConfigureResult = ask(
         &mut production_client,
@@ -222,18 +248,12 @@ async fn flow() {
     .await;
     assert!(configured.data.registered);
     assert_eq!(configured.data.target.scope, 1);
-    let mut runpod = provider(&directory, "production-runpod");
-    runpod.payload.endpoint.kind = Some(v5::provider_endpoint::Kind::Runpod(
-        v5::ProviderEndpointRunpod {
-            base_url: text("https://api.runpod.ai/v2/fixture"),
-            worker: 1,
-        },
-    ));
+    let custom = provider(&directory, "production-custom");
     let configured: v5::ProviderConfigureResult = ask(
         &mut production_client,
         "provider.configure",
         location_scope(&directory),
-        runpod,
+        custom,
     )
     .await;
     assert!(configured.data.registered);
@@ -302,7 +322,7 @@ async fn flow() {
     assert!(
         integrations
             .registry
-            .get(&"production-runpod".into())
+            .get(&"production-custom".into())
             .unwrap()
             .is_some()
     );
@@ -313,13 +333,13 @@ async fn flow() {
                 .models
                 .catalog()
                 .provider(&ycoding_core::ycoding_schema::provider::Id(
-                    "production-runpod".into()
+                    "production-custom".into()
                 ))
                 .unwrap()
                 .package
         )
         .unwrap(),
-        ycoding_core::resources::model::ProviderFamily::RunPod
+        ycoding_core::resources::model::ProviderFamily::Compatible
     );
     drop(original);
     drop(location);
@@ -510,13 +530,7 @@ async fn flow() {
     .await;
     assert_eq!(allowed.data.target.scope, 1);
     assert!(roots.config.join("ycoding.json").is_file());
-    let mut collision = provider(&directory, "fixture-provider");
-    collision.payload.endpoint.kind = Some(v5::provider_endpoint::Kind::Runpod(
-        v5::ProviderEndpointRunpod {
-            base_url: text("https://api.runpod.ai/v2/fixture"),
-            worker: 1,
-        },
-    ));
+    let collision = provider(&directory, "native-openai");
     let failure: v5::ConfigurationWriteError = refuse(
         &mut client,
         "provider.configure",

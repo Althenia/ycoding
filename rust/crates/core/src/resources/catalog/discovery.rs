@@ -64,6 +64,9 @@ impl Catalog {
                 continue;
             };
             for (id, provider) in providers.iter() {
+                if crate::resources::model::scope::dropped_provider(id, provider) {
+                    continue;
+                }
                 if !configured.iter().any(|(key, _)| key == id) {
                     configured.push((
                         id.clone(),

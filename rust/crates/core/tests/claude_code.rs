@@ -908,70 +908,66 @@ async fn admit(store: &ycoding_store::Store) {
 }
 
 #[tokio::test]
-async fn runner_prepares_expired_openai_and_xai_oauth_before_native_request_construction() {
+async fn runner_prepares_expired_openai_oauth_before_native_request_construction() {
     const CHAT: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
-    for integration in ["openai", "xai"] {
-        let store = support::store();
-        let credentials = credential::Service::new(store.client());
-        let value = ycoding_schema::credential::Value::OAuth(ycoding_schema::credential::OAuth {
-            method_id: ycoding_schema::integration_id::IntegrationMethodId::new("browser").unwrap(),
-            access: "fixture-expired".into(),
-            refresh: "fixture-refresh".into(),
-            expires: ycoding_schema::schema::NonNegativeInt::new(1).unwrap(),
-            metadata: None,
-        });
-        let profile = credentials
-            .create(
-                "profile".into(),
-                integration.into(),
-                Some("Work".into()),
-                ycoding_store::resources::Secret::new(ycoding_schema::DomainEncode::encode(&value))
-                    .unwrap(),
-                1,
-            )
-            .await
-            .unwrap();
-        let mut fixture = Fixture::new(vec![(200, "0", "{\"access_token\":\"fixture-prepared\",\"refresh_token\":\"fixture-rotated\",\"expires_in\":3600}"), (200, "0", CHAT)]).await;
-        let preparation = ycoding_core::resources::auth::Preparation {
-            clients: BTreeMap::from([(
-                integration.into(),
-                Client::new(&fixture.endpoint, "fixture").unwrap(),
-            )]),
-            cursor: None,
-            providers: None,
-        };
-        admit(&store).await;
-        let coordinator =
-            ycoding_core::session::run_coordinator::Coordinator::new(Arc::new(runner(
-                &store,
-                integration,
-                &fixture.endpoint,
-                Some(preparation),
-                None,
-            )));
-        coordinator
-            .run(&ycoding_schema::session::Id::new("ses_one").unwrap())
-            .await
-            .unwrap();
-        fixture.finish().await;
-        let requests = fixture.requests.lock().unwrap().clone();
-        assert!(
-            requests[0].starts_with("POST /oauth/token ")
-                || requests[0].starts_with("POST /token ")
-        );
-        assert!(requests[0].contains("fixture-refresh"));
-        assert!(requests[1].contains("authorization: Bearer fixture-prepared"));
-        assert!(!requests[1].contains("fixture-expired"));
-        let current = credentials.get(profile.id()).unwrap().unwrap();
-        assert_eq!(current.account_generation(), profile.account_generation());
-        assert!(
-            stringify_json(&current.secret().domain().unwrap().encode())
-                .contains("fixture-prepared")
-        );
-        coordinator.shutdown().await.unwrap();
-        credentials.shutdown().await.unwrap();
-        store.shutdown().unwrap();
-    }
+    let integration = "openai";
+    let store = support::store();
+    let credentials = credential::Service::new(store.client());
+    let value = ycoding_schema::credential::Value::OAuth(ycoding_schema::credential::OAuth {
+        method_id: ycoding_schema::integration_id::IntegrationMethodId::new("browser").unwrap(),
+        access: "fixture-expired".into(),
+        refresh: "fixture-refresh".into(),
+        expires: ycoding_schema::schema::NonNegativeInt::new(1).unwrap(),
+        metadata: None,
+    });
+    let profile = credentials
+        .create(
+            "profile".into(),
+            integration.into(),
+            Some("Work".into()),
+            ycoding_store::resources::Secret::new(ycoding_schema::DomainEncode::encode(&value))
+                .unwrap(),
+            1,
+        )
+        .await
+        .unwrap();
+    let mut fixture = Fixture::new(vec![(200, "0", "{\"access_token\":\"fixture-prepared\",\"refresh_token\":\"fixture-rotated\",\"expires_in\":3600}"), (200, "0", CHAT)]).await;
+    let preparation = ycoding_core::resources::auth::Preparation {
+        clients: BTreeMap::from([(
+            integration.into(),
+            Client::new(&fixture.endpoint, "fixture").unwrap(),
+        )]),
+        cursor: None,
+        providers: None,
+    };
+    admit(&store).await;
+    let coordinator = ycoding_core::session::run_coordinator::Coordinator::new(Arc::new(runner(
+        &store,
+        integration,
+        &fixture.endpoint,
+        Some(preparation),
+        None,
+    )));
+    coordinator
+        .run(&ycoding_schema::session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    fixture.finish().await;
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert!(
+        requests[0].starts_with("POST /oauth/token ") || requests[0].starts_with("POST /token ")
+    );
+    assert!(requests[0].contains("fixture-refresh"));
+    assert!(requests[1].contains("authorization: Bearer fixture-prepared"));
+    assert!(!requests[1].contains("fixture-expired"));
+    let current = credentials.get(profile.id()).unwrap().unwrap();
+    assert_eq!(current.account_generation(), profile.account_generation());
+    assert!(
+        stringify_json(&current.secret().domain().unwrap().encode()).contains("fixture-prepared")
+    );
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
 }
 
 #[tokio::test]

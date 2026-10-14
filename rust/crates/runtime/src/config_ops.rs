@@ -77,16 +77,6 @@ fn endpoint(
                 .map_err(|_| invalid())?,
             api: api(endpoint.api)?,
         },
-        Some(v5::provider_endpoint::Kind::Runpod(endpoint)) => config::Endpoint::Runpod {
-            base_url: convert::domain(&endpoint.base_url)?
-                .to_utf8()
-                .map_err(|_| invalid())?,
-            worker: match endpoint.worker {
-                1 => config::EndpointWorker::Ollama,
-                2 => config::EndpointWorker::Vllm,
-                _ => return Err(invalid()),
-            },
-        },
         None => return Err(invalid()),
     };
     if payload.catalog.is_some_and(|catalog| catalog != 1) {

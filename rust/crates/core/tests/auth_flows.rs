@@ -73,47 +73,7 @@ fn client(endpoint: &str) -> Client {
 }
 
 #[tokio::test]
-async fn copilot_device_poll_obeys_pending_slow_down_and_terminal_states() {
-    let mut fixture = Fixture::new(vec![
-        Some((
-            200,
-            r#"{"verification_uri":"https://example.invalid/device","user_code":"CODE","device_code":"fixture-device-secret","interval":1}"#,
-        )),
-        Some((200, r#"{"error":"authorization_pending"}"#)),
-        Some((200, r#"{"error":"slow_down","interval":9}"#)),
-        Some((200, r#"{"access_token":"fixture-access-secret"}"#)),
-    ]);
-    let mut attempt = client(&fixture.endpoint)
-        .start_device(DeviceFlow::Copilot { enterprise: None }, 100)
-        .await
-        .unwrap();
-    assert_eq!(attempt.status(), Status::Pending);
-    assert_eq!(attempt.poll(100).await.unwrap(), Poll::WaitUntil(4100));
-    assert_eq!(attempt.poll(4100).await.unwrap(), Poll::WaitUntil(16100));
-    assert_eq!(attempt.poll(5000).await.unwrap(), Poll::WaitUntil(16100));
-    let Poll::Complete(secret) = attempt.poll(16100).await.unwrap() else {
-        panic!("not complete")
-    };
-    let credential::Value::OAuth(value) = secret.domain().unwrap() else {
-        panic!("not oauth")
-    };
-    assert_eq!(value.expires.get(), 0);
-    assert_eq!(value.refresh, value.access);
-    assert_eq!(attempt.status(), Status::Complete);
-    assert_eq!(attempt.poll(17000).await.unwrap_err(), Error::Rejected);
-    for text in [
-        format!("{attempt:?}"),
-        format!("{secret:?}"),
-        format!("{secret}"),
-    ] {
-        assert!(!text.contains("fixture-"));
-    }
-    fixture.finish();
-    assert_eq!(fixture.requests.lock().unwrap().len(), 4);
-}
-
-#[tokio::test]
-async fn xai_device_denied_expired_and_slow_down_are_distinct_and_redacted() {
+async fn muse_device_denied_expired_and_slow_down_are_distinct_and_redacted() {
     for (error, expected) in [
         ("access_denied", Status::Denied),
         ("expired_token", Status::Expired),
@@ -132,11 +92,11 @@ async fn xai_device_denied_expired_and_slow_down_are_distinct_and_redacted() {
             Some((400, body)),
         ]);
         let mut attempt = client(&fixture.endpoint)
-            .start_device(DeviceFlow::Xai, 0)
+            .start_device(DeviceFlow::Muse, 0)
             .await
             .unwrap();
-        assert_eq!(attempt.poll(0).await.unwrap(), Poll::WaitUntil(10_000));
-        let error = attempt.poll(10_000).await.unwrap_err();
+        assert_eq!(attempt.poll(0).await.unwrap(), Poll::WaitUntil(7000));
+        let error = attempt.poll(7000).await.unwrap_err();
         assert_eq!(attempt.status(), expected);
         assert!(!format!("{error:?} {error}").contains("fixture"));
         fixture.finish();
@@ -287,9 +247,16 @@ async fn api_key_login_and_automatic_device_enrollment_persist_selected_profile(
     let mut fixture = Fixture::new(vec![
         Some((
             200,
-            r#"{"verification_uri":"https://example.invalid/device","user_code":"CODE","device_code":"device","interval":1}"#,
+            r#"{"user_code":"CODE","device_auth_id":"device","interval":"1"}"#,
         )),
-        Some((200, r#"{"access_token":"auto-access"}"#)),
+        Some((
+            200,
+            r#"{"authorization_code":"code","code_verifier":"verifier"}"#,
+        )),
+        Some((
+            200,
+            r#"{"access_token":"auto-access","refresh_token":"refresh","expires_in":3600}"#,
+        )),
     ]);
     let client = client(&fixture.endpoint);
     let key = client
@@ -302,20 +269,19 @@ async fn api_key_login_and_automatic_device_enrollment_persist_selected_profile(
         .await
         .unwrap();
     let mut enrollment = client
-        .enroll_device(
-            service.clone(),
-            DeviceFlow::Copilot { enterprise: None },
-            Some("Team".into()),
-        )
+        .enroll_device(service.clone(), DeviceFlow::Openai, Some("Team".into()))
         .await
         .unwrap();
     assert_eq!(
         enrollment.wait().await.unwrap().integration_id().as_str(),
-        Some("github-copilot")
+        Some("openai")
     );
     assert_eq!(enrollment.status(), Status::Complete);
-    assert_eq!(service.list(&"github-copilot".into()).unwrap().len(), 1);
-    assert_eq!(service.get(key.id()).unwrap().unwrap(), key);
+    assert_eq!(service.list(&"openai".into()).unwrap().len(), 2);
+    assert_eq!(
+        service.get(key.id()).unwrap().unwrap().secret(),
+        key.secret()
+    );
     assert!(!format!("{enrollment:?}").contains("auto-access"));
     fixture.finish();
     service.shutdown().await.unwrap();
@@ -385,14 +351,14 @@ async fn device_local_expiry_cancel_and_transport_unknown_outcome_never_send_aga
     ));
     let mut fixture = Fixture::new(vec![response, response, response, None]);
     let client = client(&fixture.endpoint);
-    let mut expired = client.start_device(DeviceFlow::Xai, 0).await.unwrap();
+    let mut expired = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
     assert_eq!(expired.poll(1000).await.unwrap_err(), Error::Rejected);
     assert_eq!(expired.status(), Status::Expired);
-    let mut cancelled = client.start_device(DeviceFlow::Xai, 0).await.unwrap();
+    let mut cancelled = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
     cancelled.cancel();
     assert_eq!(cancelled.poll(0).await.unwrap_err(), Error::Rejected);
     assert_eq!(cancelled.status(), Status::Cancelled);
-    let mut unknown = client.start_device(DeviceFlow::Xai, 0).await.unwrap();
+    let mut unknown = client.start_device(DeviceFlow::Muse, 0).await.unwrap();
     assert_eq!(unknown.poll(0).await.unwrap_err(), Error::UnknownOutcome);
     assert_eq!(unknown.poll(0).await.unwrap_err(), Error::UnknownOutcome);
     fixture.finish();

@@ -17,26 +17,35 @@ pub fn native_package_declaration(value: &JsonValue, path: &JsonPath) -> bool {
     let JsonValue::String(package) = value else {
         return false;
     };
-    let declaration = match path.0.as_slice() {
+    let provider = match path.0.as_slice() {
         [
             PathSegment::Key(providers),
-            PathSegment::Key(_),
+            PathSegment::Key(provider),
             PathSegment::Key(field),
-        ] => providers.as_str() == Some("providers") && field.as_str() == Some("package"),
+        ] if providers.as_str() == Some("providers") && field.as_str() == Some("package") => {
+            Some(provider)
+        }
         [
             PathSegment::Key(providers),
-            PathSegment::Key(_),
+            PathSegment::Key(provider),
             PathSegment::Key(models),
             PathSegment::Key(_),
             PathSegment::Key(field),
-        ] => {
-            providers.as_str() == Some("providers")
-                && models.as_str() == Some("models")
-                && field.as_str() == Some("package")
+        ] if providers.as_str() == Some("providers")
+            && models.as_str() == Some("models")
+            && field.as_str() == Some("package") =>
+        {
+            Some(provider)
         }
-        _ => false,
+        _ => None,
     };
-    declaration && crate::resources::model::family(package).is_ok()
+    provider.is_some_and(|id| {
+        crate::resources::model::family(package).is_ok()
+            || package
+                .as_str()
+                .is_some_and(crate::resources::model::scope::dropped_package)
+            || crate::resources::model::scope::dropped_provider_id(id)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,21 +87,9 @@ pub enum EndpointApi {
     Chat,
     Responses,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EndpointWorker {
-    Ollama,
-    Vllm,
-}
 #[derive(Clone, Debug)]
 pub enum Endpoint {
-    OpenAi {
-        base_url: String,
-        api: EndpointApi,
-    },
-    Runpod {
-        base_url: String,
-        worker: EndpointWorker,
-    },
+    OpenAi { base_url: String, api: EndpointApi },
 }
 
 #[derive(Clone, Debug)]
@@ -118,7 +115,6 @@ impl ProviderConfiguration {
     pub fn package(&self) -> &'static str {
         match self.endpoint {
             Endpoint::OpenAi { .. } => "aisdk:@ai-sdk/openai-compatible",
-            Endpoint::Runpod { .. } => "@ycoding-ai/ai/providers/runpod",
         }
     }
 
@@ -131,7 +127,7 @@ impl ProviderConfiguration {
         self.family()?;
         identifier(&self.provider_id, 128)?;
         let base = match &self.endpoint {
-            Endpoint::OpenAi { base_url, .. } | Endpoint::Runpod { base_url, .. } => base_url,
+            Endpoint::OpenAi { base_url, .. } => base_url,
         };
         if base.encode_utf16().count() > 8192 {
             return Err(WriteError::InvalidConfig);
@@ -159,19 +155,6 @@ impl ProviderConfiguration {
             || url.fragment().is_some()
         {
             return Err(WriteError::InvalidConfig);
-        }
-        if matches!(self.endpoint, Endpoint::Runpod { .. }) {
-            let id = base
-                .strip_prefix("https://api.runpod.ai/v2/")
-                .ok_or(WriteError::InvalidConfig)?;
-            if id.is_empty()
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-                || self.catalog
-            {
-                return Err(WriteError::InvalidConfig);
-            }
         }
         let models = self.models.as_deref().unwrap_or_default();
         if models.len() > 256 {
@@ -288,30 +271,6 @@ impl Configuration {
                             "openai-models".encode(),
                         ));
                     }
-                }
-                Endpoint::Runpod { base_url, worker } => {
-                    changes.push((
-                        vec![
-                            "providers".into(),
-                            id.clone(),
-                            "settings".into(),
-                            "baseURL".into(),
-                        ],
-                        base_url.encode(),
-                    ));
-                    changes.push((
-                        vec![
-                            "providers".into(),
-                            id.clone(),
-                            "settings".into(),
-                            "worker".into(),
-                        ],
-                        match worker {
-                            EndpointWorker::Ollama => "ollama",
-                            EndpointWorker::Vllm => "vllm",
-                        }
-                        .encode(),
-                    ));
                 }
             }
             for model in input.models.as_deref().unwrap_or_default() {

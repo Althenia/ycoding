@@ -86,7 +86,6 @@ pub enum Transport {
     Native,
     Http(Framing),
     Muse(Arc<crate::muse::Connection>),
-    RunPodJobs,
     WebSocket(Arc<websocket::JsonTransport>),
     Process(Arc<dyn ProcessAttempt>),
 }
@@ -638,25 +637,6 @@ impl Executor {
             Transport::Native => Err(Error::invalid(
                 "Native transport requires a native protocol handler",
             )),
-            Transport::RunPodJobs => {
-                let frame = crate::runpod::frames(self, &prepared)
-                    .await
-                    .map_err(|mut error| {
-                        error.message = redact(&error.message, &prepared);
-                        error
-                    })?;
-                Ok(EventStream {
-                    native: None,
-                    transport: StreamTransport::Buffered,
-                    parser,
-                    frames: VecDeque::from([frame]),
-                    events: VecDeque::new(),
-                    terminal: false,
-                    ended: false,
-                    textual: TextualTools::default(),
-                    redaction: prepared,
-                })
-            }
             Transport::Process(attempt) => {
                 let input = ProcessInput {
                     model: prepared.request.model.id.clone(),
@@ -689,43 +669,6 @@ impl Executor {
                 };
                 let response = match result {
                     Ok(response) => response,
-                    Err(error)
-                        if prepared.protocol == "snowflake-cortex"
-                            && error.http.as_ref().is_some_and(|http| {
-                                !http.body_truncated
-                                    && http.body.as_deref().is_some_and(|body| {
-                                        crate::snowflake_cortex::conversation_complete(
-                                            error.status.unwrap_or(0),
-                                            body,
-                                        )
-                                    })
-                            }) =>
-                    {
-                        tracker.settle(true, false, None);
-                        return Ok(EventStream {
-                            native: None,
-                            transport: StreamTransport::Buffered,
-                            parser,
-                            frames: VecDeque::from([json::object([(
-                                "choices",
-                                JsonValue::Array(vec![json::object([
-                                    (
-                                        "delta",
-                                        json::object([
-                                            ("role", json::s("assistant")),
-                                            ("content", json::s("")),
-                                        ]),
-                                    ),
-                                    ("finish_reason", json::s("stop")),
-                                ])]),
-                            )])]),
-                            events: VecDeque::new(),
-                            terminal: false,
-                            ended: false,
-                            textual: TextualTools::default(),
-                            redaction: prepared,
-                        });
-                    }
                     Err(error) => {
                         tracker.settle(false, false, None);
                         return Err(error);

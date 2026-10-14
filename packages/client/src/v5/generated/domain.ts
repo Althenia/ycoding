@@ -987,10 +987,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "1": "chat",
     "2": "responses",
   },
-  "ycoding.v5.ProviderEndpointWorker": {
-    "1": "ollama",
-    "2": "vllm",
-  },
   "ycoding.v5.ProviderEndpointCatalog": {
     "1": "openai-models",
   },

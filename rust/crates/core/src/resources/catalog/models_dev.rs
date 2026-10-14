@@ -51,85 +51,6 @@ pub fn normalize(source: &JsonValue) -> Result<Vec<Snapshot>, Error> {
     for (_, provider) in providers.iter() {
         snapshots.push(normalize_provider(provider)?);
     }
-    let real = providers.len() > 5
-        || providers.get(&"openrouter".into()).is_some()
-        || providers.get(&"anthropic".into()).is_some();
-    if providers.get(&"deepseek".into()).is_none() && real {
-        let mut source = object(&[
-            ("id", "deepseek".encode()),
-            ("name", "DeepSeek".encode()),
-            ("env", JsonValue::Array(vec!["DEEPSEEK_API_KEY".encode()])),
-            ("npm", "@ai-sdk/openai-compatible".encode()),
-            ("api", "https://api.deepseek.com/v1".encode()),
-            ("models", object(&[])),
-        ]);
-        let models = [deepseek_model(false), deepseek_model(true)];
-        set(
-            &mut source,
-            "models",
-            object(&[
-                ("deepseek-v4-pro", models[0].clone()),
-                ("deepseek-v4-flash", models[1].clone()),
-            ]),
-        );
-        snapshots.push(normalize_provider(&source)?);
-    }
-    if let Some(snapshot) = snapshots
-        .iter_mut()
-        .find(|p| p.info.id.0 == "deepseek".into())
-    {
-        for (base, id, name, family, date, input, output, read) in [
-            (
-                "deepseek-v4-pro",
-                "deepseek-v4-pro-0813",
-                "DeepSeek V4 Pro 0813",
-                "deepseek-thinking",
-                "2026-08-12",
-                0.435,
-                0.87,
-                0.003625,
-            ),
-            (
-                "deepseek-v4-flash",
-                "deepseek-v4-flash-0793",
-                "DeepSeek V4 Flash 0793",
-                "deepseek-flash",
-                "2026-07-31",
-                0.14,
-                0.28,
-                0.0028,
-            ),
-        ] {
-            if snapshot.models.iter().any(|m| m.id == id.into()) {
-                continue;
-            }
-            let Some(base) = snapshot
-                .models
-                .iter()
-                .find(|m| m.id == base.into())
-                .cloned()
-            else {
-                continue;
-            };
-            let mut model = base;
-            model.id = id.into();
-            model.model_id = id.into();
-            model.name = name.into();
-            model.family = Some(family.into());
-            model.time.released =
-                ycoding_schema::schema::Finite::new(date_millis(date).unwrap_or(0.0))?;
-            model.cost = costs(Some(&object(&[
-                ("input", input.encode()),
-                ("output", output.encode()),
-                ("cache_read", read.encode()),
-            ])))?;
-            model.variants = super::variants::variants(
-                Some("@ai-sdk/openai-compatible"),
-                &deepseek_model(base_id_flash(id)),
-            )?;
-            snapshot.models.push(model);
-        }
-    }
     if let Some(snapshot) = snapshots
         .iter_mut()
         .find(|p| p.info.id.0 == "openai".into())
@@ -149,32 +70,6 @@ pub fn normalize(source: &JsonValue) -> Result<Vec<Snapshot>, Error> {
         snapshot.models.push(alias);
     }
     Ok(snapshots)
-}
-fn base_id_flash(id: &str) -> bool {
-    id.contains("flash")
-}
-fn deepseek_model(flash: bool) -> JsonValue {
-    let mut value = ycoding_schema::parse_json(r#"{"id":"deepseek-v4-pro","name":"DeepSeek V4 Pro","family":"deepseek-thinking","release_date":"2026-08-12","attachment":false,"reasoning":true,"reasoning_options":[{"type":"toggle"},{"type":"effort","values":["high","max"]}],"tool_call":true,"interleaved":{"field":"reasoning_content"},"temperature":true,"limit":{"context":1000000,"output":384000},"modalities":{"input":["text"],"output":["text"]},"cost":{"input":0.435,"output":0.87,"cache_read":0.003625}}"#).expect("static source");
-    if flash {
-        for (key, text) in [
-            ("id", "deepseek-v4-flash"),
-            ("name", "DeepSeek V4 Flash"),
-            ("family", "deepseek-flash"),
-            ("release_date", "2026-07-31"),
-        ] {
-            set(&mut value, key, text.encode());
-        }
-        set(
-            &mut value,
-            "cost",
-            object(&[
-                ("input", 0.14.encode()),
-                ("output", 0.28.encode()),
-                ("cache_read", 0.0028.encode()),
-            ]),
-        );
-    }
-    value
 }
 fn normalize_provider(value: &JsonValue) -> Result<Snapshot, Error> {
     let o = ObjectDecoder::new(value, &ROOT)?;

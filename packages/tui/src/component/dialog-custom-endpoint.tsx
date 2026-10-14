@@ -1,5 +1,5 @@
 import { InputRenderable, RGBA, TextAttributes } from "@opentui/core"
-import { Index, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { Index, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { Keymap } from "../context/keymap"
@@ -10,7 +10,6 @@ export type CustomEndpointResult = {
   baseURL: string
   api: "chat" | "responses"
   provider?: string
-  worker?: "ollama" | "vllm"
   apiKey?: string
   profile?: string
   credentialID?: string
@@ -34,7 +33,6 @@ type CustomEndpointModelDraft = {
   family: string
   api: string
   disabled?: boolean
-  tools?: boolean
 }
 
 const API_OPTIONS = ["chat", "responses"] as const
@@ -50,7 +48,6 @@ function isValidURL(url: string): boolean {
 }
 
 export function DialogCustomEndpoint(props: {
-  kind?: "runpod"
   providerOptions?: { id: string; name?: string; profiles?: { id: string; label: string; active: boolean }[] }[]
   onComplete?: (result: CustomEndpointResult) => void
   onCancel?: () => void
@@ -61,7 +58,6 @@ export function DialogCustomEndpoint(props: {
   const selectedBackground = () => theme.background.action.primary.focused
   const [baseURL, setBaseURL] = createSignal("")
   const [api, setApi] = createSignal<"chat" | "responses">("chat")
-  const [worker, setWorker] = createSignal<"ollama" | "vllm">("vllm")
   const [provider, setProvider] = createSignal("")
   const [apiKey, setApiKey] = createSignal("")
   const [profile, setProfile] = createSignal("default")
@@ -73,7 +69,12 @@ export function DialogCustomEndpoint(props: {
   let providerInput: InputRenderable | undefined
   let apiKeyInput: InputRenderable | undefined
   let profileInput: InputRenderable | undefined
-  const modelInputs: { id?: InputRenderable; name?: InputRenderable; family?: InputRenderable; api?: InputRenderable }[] = []
+  const modelInputs: {
+    id?: InputRenderable
+    name?: InputRenderable
+    family?: InputRenderable
+    api?: InputRenderable
+  }[] = []
   let focusIndex = 0
   let settled = false
   onCleanup(() => {
@@ -93,24 +94,15 @@ export function DialogCustomEndpoint(props: {
       setError("Invalid URL format")
       return
     }
-    if (props.kind === "runpod" && !/^https:\/\/api\.runpod\.ai\/v2\/[a-zA-Z0-9_-]+$/.test(url)) {
-      setError("Use a Runpod Jobs endpoint root: https://api.runpod.ai/v2/<ENDPOINT_ID>")
-      return
-    }
     const modelEntries = models().map((model) => ({
       id: model.id.trim(),
       ...(model.name.trim() ? { name: model.name.trim() } : {}),
       ...(model.family.trim() ? { family: model.family.trim() } : {}),
       ...(model.api.trim() ? { api: model.api.trim() as "chat" | "responses" } : {}),
       ...(model.disabled === undefined ? {} : { disabled: model.disabled }),
-      ...(model.tools === undefined ? {} : { tools: model.tools }),
     }))
     if (modelEntries.some((model) => !model.id)) {
       setError("Model IDs cannot be empty")
-      return
-    }
-    if (props.kind === "runpod" && !modelEntries.length) {
-      setError("Add the model served by this endpoint")
       return
     }
     if (modelEntries.some((model) => model.api && !API_OPTIONS.includes(model.api))) {
@@ -126,11 +118,10 @@ export function DialogCustomEndpoint(props: {
       baseURL: url,
       api: api(),
       provider: provider().trim() || undefined,
-      ...(props.kind === "runpod" ? { worker: worker() } : {}),
       apiKey: apiKey().trim() || undefined,
       profile: profile().trim() || "default",
       ...(credentialID() ? { credentialID: credentialID() } : {}),
-      catalog: props.kind !== "runpod" && catalog() === "openai-models" ? "openai-models" : undefined,
+      catalog: catalog() === "openai-models" ? "openai-models" : undefined,
       models: modelEntries,
     })
     dialog.clear()
@@ -144,7 +135,7 @@ export function DialogCustomEndpoint(props: {
   function focusableInputs() {
     return [
       baseURLInput,
-      ...modelInputs.flatMap((fields) => [fields.id, fields.name, fields.family, ...(props.kind === "runpod" ? [] : [fields.api])]),
+      ...modelInputs.flatMap((fields) => [fields.id, fields.name, fields.family, fields.api]),
       profileInput,
       providerInput,
       apiKeyInput,
@@ -167,7 +158,7 @@ export function DialogCustomEndpoint(props: {
     const index = models().length
     modelInputs[index] = {}
     setModels((current) => [...current, { id: "", name: "", family: "", api: "" }])
-    focusIndex = index * (props.kind === "runpod" ? 3 : 4) + 1
+    focusIndex = index * 4 + 1
     setTimeout(() => modelInputs[index]?.id?.focus(), 1)
   }
 
@@ -180,8 +171,7 @@ export function DialogCustomEndpoint(props: {
     if (!event.ctrl) return
     const action = {
       n: addModel,
-      w: () => { if (props.kind === "runpod") setWorker((current) => current === "vllm" ? "ollama" : "vllm") },
-      o: () => setCatalog((current) => current === "none" ? "openai-models" : "none"),
+      o: () => setCatalog((current) => (current === "none" ? "openai-models" : "none")),
       p: () => {
         const options = props.providerOptions ?? []
         if (!options.length) return
@@ -190,14 +180,13 @@ export function DialogCustomEndpoint(props: {
       },
       d: () => {
         if (modelIndex === undefined) return
-        setModels((current) => current.map((model, index) => index === modelIndex
-          ? { ...model, disabled: model.disabled === undefined ? true : !model.disabled }
-          : model))
-      },
-      t: () => {
-        if (props.kind !== "runpod" || modelIndex === undefined) return
-        setModels((current) => current.map((model, index) => index === modelIndex
-          ? { ...model, tools: !model.tools } : model))
+        setModels((current) =>
+          current.map((model, index) =>
+            index === modelIndex
+              ? { ...model, disabled: model.disabled === undefined ? true : !model.disabled }
+              : model,
+          ),
+        )
       },
       s: submit,
     }[event.name]
@@ -242,15 +231,8 @@ export function DialogCustomEndpoint(props: {
         bind: "ctrl+o",
         title: "Toggle OpenAI model catalog",
         group: "Dialog",
-        run: () => setCatalog((current) => current === "none" ? "openai-models" : "none"),
+        run: () => setCatalog((current) => (current === "none" ? "openai-models" : "none")),
       },
-      ...(props.kind === "runpod" ? [{
-        id: "runpod-endpoint.worker",
-        bind: "ctrl+w",
-        title: "Switch Runpod worker",
-        group: "Dialog",
-        run: () => setWorker((current) => current === "vllm" ? "ollama" : "vllm"),
-      }] : []),
       {
         id: "custom-endpoint.provider",
         bind: "ctrl+p",
@@ -280,7 +262,7 @@ export function DialogCustomEndpoint(props: {
 
   return (
     <box paddingTop={1} paddingBottom={1}>
-      <DialogHeader title={<DialogTitle>{props.kind === "runpod" ? "Runpod Serverless Endpoint" : "Custom OpenAI-Compatible Endpoint"}</DialogTitle>} />
+      <DialogHeader title={<DialogTitle>Custom OpenAI-Compatible Endpoint</DialogTitle>} />
       <box flexDirection="column" paddingTop={1} paddingLeft={6} paddingRight={4}>
         <box flexDirection="column">
           <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
@@ -297,7 +279,7 @@ export function DialogCustomEndpoint(props: {
             }}
             onKeyDown={handleInputKeyDown}
             onMouseDown={() => focusField(baseURLInput)}
-            placeholder={props.kind === "runpod" ? "https://api.runpod.ai/v2/ENDPOINT_ID" : "https://api.example.com/v1"}
+            placeholder="https://api.example.com/v1"
             placeholderColor={theme.text.subdued}
             textColor={theme.text.formfield.default}
             focusedTextColor={theme.text.formfield.default}
@@ -312,66 +294,118 @@ export function DialogCustomEndpoint(props: {
           </Show>
         </box>
 
-        <Show when={props.kind === "runpod"}>
-          <box flexDirection="column" paddingTop={1}>
-            <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Worker</text>
-            <box flexDirection="row" gap={1}>
-              {(["vllm", "ollama"] as const).map((type) => (
-                <box paddingX={1} backgroundColor={worker() === type ? selectedBackground() : undefined} onMouseUp={() => setWorker(type)}>
-                  <text fg={worker() === type ? theme.text.action.primary.focused : theme.text.default} bg={worker() === type ? selectedBackground() : undefined}>{type}</text>
-                </box>
-              ))}
-            </box>
-          </box>
-        </Show>
-        <Show when={props.kind !== "runpod"}><box flexDirection="column" paddingTop={1}>
-          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Catalog source</text>
+        <box flexDirection="column" paddingTop={1}>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+            Catalog source
+          </text>
           <box flexDirection="row" gap={1}>
             {(["none", "openai-models"] as const).map((source) => (
-              <box paddingX={1} onMouseUp={() => setCatalog(source)} backgroundColor={catalog() === source ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}>
-                <text fg={catalog() === source ? theme.text.action.primary.focused : theme.text.default} bg={catalog() === source ? selectedBackground() : undefined}>{source}</text>
+              <box
+                paddingX={1}
+                onMouseUp={() => setCatalog(source)}
+                backgroundColor={catalog() === source ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}
+              >
+                <text
+                  fg={catalog() === source ? theme.text.action.primary.focused : theme.text.default}
+                  bg={catalog() === source ? selectedBackground() : undefined}
+                >
+                  {source}
+                </text>
               </box>
             ))}
           </box>
-        </box></Show>
+        </box>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Models</text>
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+            Models
+          </text>
           <Index each={models()}>
             {(model, index) => (
-            <box flexDirection="column">
-              <input
-                ref={(value: InputRenderable) => { modelInputs[index]!.id = value }}
-                value={model().id}
-                onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, id: value } : item))}
-                onKeyDown={(event) => handleInputKeyDown(event, index)}
-                onMouseDown={() => focusField(modelInputs[index]?.id)}
-                placeholder="Model ID"
-                placeholderColor={theme.text.subdued}
-                textColor={theme.text.formfield.default}
-                focusedTextColor={theme.text.formfield.default}
-                cursorColor={theme.text.formfield.default}
-              />
-            <input ref={(value: InputRenderable) => { modelInputs[index]!.name = value }} value={model().name}
-              onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, name: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.name)} placeholder="Name (optional)" placeholderColor={theme.text.subdued}
-              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
-            <input ref={(value: InputRenderable) => { modelInputs[index]!.family = value }} value={model().family}
-              onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, family: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.family)} placeholder="Family (optional)" placeholderColor={theme.text.subdued}
-              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
-            <Show when={props.kind !== "runpod"}><input ref={(value: InputRenderable) => { modelInputs[index]!.api = value }} value={model().api}
-              onInput={(value) => setModels((current) => current.map((item, i) => i === index ? { ...item, api: value } : item))}
-              onKeyDown={(event) => handleInputKeyDown(event, index)} onMouseDown={() => focusField(modelInputs[index]?.api)} placeholder="API type (chat/responses, optional)" placeholderColor={theme.text.subdued}
-              textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} /></Show>
-            <text fg={theme.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, disabled: item.disabled === undefined ? true : !item.disabled } : item))}>
-              Disabled: {model().disabled ? "yes" : "no"} · Ctrl+D
-            </text>
-            <Show when={props.kind === "runpod"}><text fg={theme.text.default} onMouseUp={() => setModels((current) => current.map((item, i) => i === index ? { ...item, tools: !item.tools } : item))}>
-              Tool calling: {model().tools ? "yes" : "no"} · Ctrl+T
-            </text></Show>
-            <text fg={theme.text.default} onMouseUp={() => setModels((current) => current.filter((_, i) => i !== index))}>Remove model ×</text>
-            </box>
+              <box flexDirection="column">
+                <input
+                  ref={(value: InputRenderable) => {
+                    modelInputs[index]!.id = value
+                  }}
+                  value={model().id}
+                  onInput={(value) =>
+                    setModels((current) => current.map((item, i) => (i === index ? { ...item, id: value } : item)))
+                  }
+                  onKeyDown={(event) => handleInputKeyDown(event, index)}
+                  onMouseDown={() => focusField(modelInputs[index]?.id)}
+                  placeholder="Model ID"
+                  placeholderColor={theme.text.subdued}
+                  textColor={theme.text.formfield.default}
+                  focusedTextColor={theme.text.formfield.default}
+                  cursorColor={theme.text.formfield.default}
+                />
+                <input
+                  ref={(value: InputRenderable) => {
+                    modelInputs[index]!.name = value
+                  }}
+                  value={model().name}
+                  onInput={(value) =>
+                    setModels((current) => current.map((item, i) => (i === index ? { ...item, name: value } : item)))
+                  }
+                  onKeyDown={(event) => handleInputKeyDown(event, index)}
+                  onMouseDown={() => focusField(modelInputs[index]?.name)}
+                  placeholder="Name (optional)"
+                  placeholderColor={theme.text.subdued}
+                  textColor={theme.text.formfield.default}
+                  focusedTextColor={theme.text.formfield.default}
+                  cursorColor={theme.text.formfield.default}
+                />
+                <input
+                  ref={(value: InputRenderable) => {
+                    modelInputs[index]!.family = value
+                  }}
+                  value={model().family}
+                  onInput={(value) =>
+                    setModels((current) => current.map((item, i) => (i === index ? { ...item, family: value } : item)))
+                  }
+                  onKeyDown={(event) => handleInputKeyDown(event, index)}
+                  onMouseDown={() => focusField(modelInputs[index]?.family)}
+                  placeholder="Family (optional)"
+                  placeholderColor={theme.text.subdued}
+                  textColor={theme.text.formfield.default}
+                  focusedTextColor={theme.text.formfield.default}
+                  cursorColor={theme.text.formfield.default}
+                />
+                <input
+                  ref={(value: InputRenderable) => {
+                    modelInputs[index]!.api = value
+                  }}
+                  value={model().api}
+                  onInput={(value) =>
+                    setModels((current) => current.map((item, i) => (i === index ? { ...item, api: value } : item)))
+                  }
+                  onKeyDown={(event) => handleInputKeyDown(event, index)}
+                  onMouseDown={() => focusField(modelInputs[index]?.api)}
+                  placeholder="API type (chat/responses, optional)"
+                  placeholderColor={theme.text.subdued}
+                  textColor={theme.text.formfield.default}
+                  focusedTextColor={theme.text.formfield.default}
+                  cursorColor={theme.text.formfield.default}
+                />
+                <text
+                  fg={theme.text.default}
+                  onMouseUp={() =>
+                    setModels((current) =>
+                      current.map((item, i) =>
+                        i === index ? { ...item, disabled: item.disabled === undefined ? true : !item.disabled } : item,
+                      ),
+                    )
+                  }
+                >
+                  Disabled: {model().disabled ? "yes" : "no"} · Ctrl+D
+                </text>
+                <text
+                  fg={theme.text.default}
+                  onMouseUp={() => setModels((current) => current.filter((_, i) => i !== index))}
+                >
+                  Remove model ×
+                </text>
+              </box>
             )}
           </Index>
           <box onMouseUp={addModel}>
@@ -380,42 +414,61 @@ export function DialogCustomEndpoint(props: {
         </box>
 
         <box flexDirection="column" paddingTop={1}>
-          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>Credential profile</text>
-          <input ref={(value: InputRenderable) => { profileInput = value }} value={profile()} onInput={setProfile} onKeyDown={handleInputKeyDown} onMouseDown={() => focusField(profileInput)} placeholder="Profile name" placeholderColor={theme.text.subdued} textColor={theme.text.formfield.default} focusedTextColor={theme.text.formfield.default} cursorColor={theme.text.formfield.default} />
+          <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+            Credential profile
+          </text>
+          <input
+            ref={(value: InputRenderable) => {
+              profileInput = value
+            }}
+            value={profile()}
+            onInput={setProfile}
+            onKeyDown={handleInputKeyDown}
+            onMouseDown={() => focusField(profileInput)}
+            placeholder="Profile name"
+            placeholderColor={theme.text.subdued}
+            textColor={theme.text.formfield.default}
+            focusedTextColor={theme.text.formfield.default}
+            cursorColor={theme.text.formfield.default}
+          />
           <Show when={(props.providerOptions?.find((option) => option.id === provider())?.profiles?.length ?? 0) > 0}>
             <box flexDirection="column">
-              {props.providerOptions?.find((option) => option.id === provider())?.profiles?.slice(0, 3).map((item) => (
-                <text fg={theme.text.default} onMouseUp={() => { setCredentialID(item.id); setProfile(item.label) }}>
-                  {Locale.truncateWidth(item.label.replace(/[\x00-\x1f\x7f]/g, " "), 28)}{item.active ? " (active)" : ""}
-                </text>
-              ))}
-              <Show when={(props.providerOptions?.find((option) => option.id === provider())?.profiles?.length ?? 0) > 3}>
+              {props.providerOptions
+                ?.find((option) => option.id === provider())
+                ?.profiles?.slice(0, 3)
+                .map((item) => (
+                  <text
+                    fg={theme.text.default}
+                    onMouseUp={() => {
+                      setCredentialID(item.id)
+                      setProfile(item.label)
+                    }}
+                  >
+                    {Locale.truncateWidth(item.label.replace(/[\x00-\x1f\x7f]/g, " "), 28)}
+                    {item.active ? " (active)" : ""}
+                  </text>
+                ))}
+              <Show
+                when={(props.providerOptions?.find((option) => option.id === provider())?.profiles?.length ?? 0) > 3}
+              >
                 <text fg={theme.text.subdued}>Manage other profiles via /connect</text>
               </Show>
             </box>
           </Show>
         </box>
 
-        <Show when={props.kind !== "runpod"}><box flexDirection="column" paddingTop={1}>
+        <box flexDirection="column" paddingTop={1}>
           <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
             API Type
           </text>
           <box flexDirection="row" gap={1}>
             <box
               paddingX={1}
-              backgroundColor={
-                api() === "chat"
-                  ? selectedBackground()
-                  : RGBA.fromInts(0, 0, 0, 0)
-              }
+              backgroundColor={api() === "chat" ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}
               onMouseUp={() => setApi("chat")}
             >
               <text
-                fg={
-                  api() === "chat"
-                    ? theme.text.action.primary.focused
-                    : theme.text.default
-                }
+                fg={api() === "chat" ? theme.text.action.primary.focused : theme.text.default}
                 bg={api() === "chat" ? selectedBackground() : undefined}
                 attributes={api() === "chat" ? TextAttributes.BOLD : undefined}
               >
@@ -424,19 +477,11 @@ export function DialogCustomEndpoint(props: {
             </box>
             <box
               paddingX={1}
-              backgroundColor={
-                api() === "responses"
-                  ? selectedBackground()
-                  : RGBA.fromInts(0, 0, 0, 0)
-              }
+              backgroundColor={api() === "responses" ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}
               onMouseUp={() => setApi("responses")}
             >
               <text
-                fg={
-                  api() === "responses"
-                    ? theme.text.action.primary.focused
-                    : theme.text.default
-                }
+                fg={api() === "responses" ? theme.text.action.primary.focused : theme.text.default}
                 bg={api() === "responses" ? selectedBackground() : undefined}
                 attributes={api() === "responses" ? TextAttributes.BOLD : undefined}
               >
@@ -444,19 +489,21 @@ export function DialogCustomEndpoint(props: {
               </text>
             </box>
           </box>
-        </box></Show>
+        </box>
 
         <box flexDirection="column" paddingTop={1}>
           <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
-            {props.kind === "runpod" ? "Endpoint name (provider ID)" : "Provider (optional)"}
+            Provider (optional)
           </text>
           <input
-            ref={(value: InputRenderable) => { providerInput = value }}
+            ref={(value: InputRenderable) => {
+              providerInput = value
+            }}
             value={provider()}
             onInput={(e) => setProvider(e)}
             onKeyDown={handleInputKeyDown}
             onMouseDown={() => focusField(providerInput)}
-            placeholder={props.kind === "runpod" ? "e.g., runpod-coder" : "e.g., openai"}
+            placeholder="e.g., openai"
             placeholderColor={theme.text.subdued}
             textColor={theme.text.formfield.default}
             focusedTextColor={theme.text.formfield.default}
@@ -465,10 +512,7 @@ export function DialogCustomEndpoint(props: {
           <Show when={(props.providerOptions?.length ?? 0) > 0}>
             <box flexDirection="column">
               {props.providerOptions?.slice(0, 3).map((option) => (
-                <text
-                  fg={theme.text.default}
-                  onMouseUp={() => setProvider(option.id)}
-                >
+                <text fg={theme.text.default} onMouseUp={() => setProvider(option.id)}>
                   {Locale.truncateWidth((option.name ?? option.id).replace(/[\x00-\x1f\x7f]/g, " "), 28)}
                 </text>
               ))}
@@ -484,7 +528,9 @@ export function DialogCustomEndpoint(props: {
             API Key (optional)
           </text>
           <input
-            ref={(value: InputRenderable) => { apiKeyInput = value }}
+            ref={(value: InputRenderable) => {
+              apiKeyInput = value
+            }}
             value={apiKey()}
             onInput={(e) => setApiKey(e)}
             onKeyDown={handleInputKeyDown}
@@ -498,12 +544,21 @@ export function DialogCustomEndpoint(props: {
         </box>
       </box>
       <box paddingTop={2} paddingLeft={6} paddingRight={4}>
-        <text fg={theme.text.default} onMouseUp={submit}>Save endpoint</text>
-        <text fg={theme.text.default}>Ctrl+S <span style={{ fg: theme.text.subdued }}>{props.kind === "runpod" ? "save · Ctrl+W worker · Ctrl+N model · Ctrl+T tools · Esc cancel" : "save · Tab next field · Ctrl+O catalog · Ctrl+P provider · Esc cancel"}</span></text>
+        <text fg={theme.text.default} onMouseUp={submit}>
+          Save endpoint
+        </text>
+        <text fg={theme.text.default}>
+          Ctrl+S{" "}
+          <span style={{ fg: theme.text.subdued }}>
+            save · Tab next field · Ctrl+O catalog · Ctrl+P provider · Esc cancel
+          </span>
+        </text>
       </box>
     </box>
   )
 }
 
-DialogCustomEndpoint.show = (dialog: DialogContext, opts?: { onComplete?: (result: CustomEndpointResult) => void; onCancel?: () => void }) =>
-  dialog.replace(() => <DialogCustomEndpoint onComplete={opts?.onComplete} onCancel={opts?.onCancel} />)
+DialogCustomEndpoint.show = (
+  dialog: DialogContext,
+  opts?: { onComplete?: (result: CustomEndpointResult) => void; onCancel?: () => void },
+) => dialog.replace(() => <DialogCustomEndpoint onComplete={opts?.onComplete} onCancel={opts?.onCancel} />)

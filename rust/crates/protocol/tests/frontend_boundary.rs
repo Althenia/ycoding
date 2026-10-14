@@ -35,16 +35,13 @@ fn device() -> v5::RemoteDevice {
 
 #[test]
 fn m3_provider_endpoints_models_scopes_and_write_registration_settlement_round_trip() {
-    for kind in [
-        v5::provider_endpoint::Kind::Openai(v5::ProviderEndpointOpenAi {
+    assert!(decode_strict::<v5::ProviderEndpoint>(&[0x12, 0]).is_err());
+    for kind in [v5::provider_endpoint::Kind::Openai(
+        v5::ProviderEndpointOpenAi {
             base_url: text("https://models.example/v1"),
             api: 2,
-        }),
-        v5::provider_endpoint::Kind::Runpod(v5::ProviderEndpointRunpod {
-            base_url: text("https://api.runpod.ai/v2/test"),
-            worker: 1,
-        }),
-    ] {
+        },
+    )] {
         for models in [
             None,
             Some(v5::ProviderEndpointModels { items: vec![] }),

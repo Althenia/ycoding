@@ -3,7 +3,6 @@ use crate::{
     auth::{self, Auth},
     json::{self, get, s},
     llm::{HttpOptions, Usage},
-    openai_shared::pick,
     route::{Executor, apply_query, redact_http, request_headers},
 };
 use reqwest::{
@@ -16,32 +15,24 @@ use ycoding_schema::{JsonValue, LosslessString, model, provider, stringify_json}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     OpenAI,
-    Google,
-    Xai,
     Zai,
 }
 impl Kind {
     pub fn id(self) -> &'static str {
         match self {
             Self::OpenAI => "openai-images",
-            Self::Google => "google-images",
-            Self::Xai => "xai-images",
             Self::Zai => "zai-images",
         }
     }
     fn provider(self) -> &'static str {
         match self {
             Self::OpenAI => "openai",
-            Self::Google => "google",
-            Self::Xai => "xai",
             Self::Zai => "zai",
         }
     }
     fn base_url(self) -> &'static str {
         match self {
             Self::OpenAI => crate::openai_images::DEFAULT_BASE_URL,
-            Self::Google => crate::google_images::DEFAULT_BASE_URL,
-            Self::Xai => crate::xai_images::DEFAULT_BASE_URL,
             Self::Zai => crate::zai_images::DEFAULT_BASE_URL,
         }
     }
@@ -93,18 +84,6 @@ impl Model {
         }
         let lowered = match self.kind {
             Kind::OpenAI => crate::openai_images::lower(request, &http)?,
-            Kind::Google => Body::json(
-                format!("/models/{}:generateContent", usv_string(&self.id)),
-                crate::google_images::lower(request, &http)?,
-            ),
-            Kind::Xai => Body::json(
-                if request.images.is_empty() {
-                    "/images/generations"
-                } else {
-                    "/images/edits"
-                },
-                crate::xai_images::lower(request, &http)?,
-            ),
             Kind::Zai => Body::json(
                 "/images/generations",
                 crate::zai_images::lower(request, &http)?,
@@ -143,8 +122,6 @@ impl Model {
     pub fn parse(&self, request: &Request, payload: &JsonValue) -> Result<Response, Error> {
         match self.kind {
             Kind::OpenAI => crate::openai_images::parse(request, payload),
-            Kind::Google => crate::google_images::parse(payload),
-            Kind::Xai => crate::xai_images::parse(payload),
             Kind::Zai => crate::zai_images::parse(payload),
         }
     }
@@ -245,8 +222,6 @@ impl Executor {
             .await?;
         let name = match request.model.kind {
             Kind::OpenAI => "OpenAI",
-            Kind::Google => "Google",
-            Kind::Xai => "xAI",
             Kind::Zai => "Z.ai",
         };
         let text = response
@@ -317,9 +292,6 @@ pub(crate) fn body(
 }
 pub(crate) fn metadata(key: &str, value: JsonValue) -> Option<JsonValue> {
     Some(json::object([(key, value)]))
-}
-pub(crate) fn copy(target: &mut JsonValue, source: &JsonValue, keys: &[&str]) {
-    *target = json::merge(target, &pick(source, keys));
 }
 pub(crate) fn data_url(input: &Input) -> Option<LosslessString> {
     let Input::Bytes { data, media_type } = input else {

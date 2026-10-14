@@ -156,63 +156,6 @@ test("saves a blank-provider API key through the registered default integration"
   await rm(configDir, { recursive: true, force: true })
 })
 
-test("renders Runpod worker selection and submits a served model", async () => {
-  let submitted: Parameters<typeof saveCustomEndpoint>[0] | undefined
-  const config = createTuiResolvedConfig()
-  const app = await testRender(
-    () => (
-      <TestTuiContexts>
-        <ConfigProvider config={config}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ToastProvider>
-              <Keymap.Provider config={config}>
-                <DialogProvider>
-                  <DialogCustomEndpoint
-                    kind="runpod"
-                    onComplete={(result) => {
-                      submitted = result
-                    }}
-                  />
-                </DialogProvider>
-              </Keymap.Provider>
-            </ToastProvider>
-          </ThemeProvider>
-        </ConfigProvider>
-      </TestTuiContexts>
-    ),
-    { width: 100, height: 50, kittyKeyboard: true },
-  )
-  app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Runpod Serverless Endpoint"))
-  expect(app.captureCharFrame()).toContain("vllm")
-  expect(app.captureCharFrame()).toContain("ollama")
-  expect(app.captureCharFrame()).not.toContain("openai-models")
-  const initial = app.captureSpans().lines.flatMap((line) => line.spans)
-  expect(initial.find((item) => item.text.includes("vllm"))!.text).toBe("vllm")
-  const selectedBg = initial.find((item) => item.text.includes("vllm"))!.bg.toInts()
-  const inactiveBg = initial.find((item) => item.text.includes("ollama"))!.bg.toInts()
-  await Bun.sleep(20)
-  await app.mockInput.typeText("https://api.runpod.ai/v2/endpoint123")
-  app.mockInput.pressKey("w", { ctrl: true })
-  await app.renderOnce()
-  const switched = app.captureSpans().lines.flatMap((line) => line.spans)
-  expect(switched.find((item) => item.text.includes("ollama"))!.text).toBe("ollama")
-  expect(switched.find((item) => item.text.includes("ollama"))!.bg.toInts()).toEqual(selectedBg)
-  expect(switched.find((item) => item.text.includes("vllm"))!.bg.toInts()).toEqual(inactiveBg)
-  app.mockInput.pressKey("n", { ctrl: true })
-  await Bun.sleep(10)
-  await app.mockInput.typeText("org/served-model")
-  app.mockInput.pressKey("t", { ctrl: true })
-  app.mockInput.pressKey("s", { ctrl: true })
-  await Bun.sleep(10)
-  expect(submitted).toMatchObject({
-    baseURL: "https://api.runpod.ai/v2/endpoint123",
-    worker: "ollama",
-    models: [{ id: "org/served-model", tools: true }],
-  })
-  app.renderer.destroy()
-})
-
 test("clicking a field focuses it instead of editing the previous field", async () => {
   let submitted: Parameters<typeof saveCustomEndpoint>[0] | undefined
   const config = createTuiResolvedConfig()
@@ -225,7 +168,6 @@ test("clicking a field focuses it instead of editing the previous field", async 
               <Keymap.Provider config={config}>
                 <DialogProvider>
                   <DialogCustomEndpoint
-                    kind="runpod"
                     onComplete={(result) => {
                       submitted = result
                     }}
@@ -243,7 +185,7 @@ test("clicking a field focuses it instead of editing the previous field", async 
     app.renderer.start()
     await app.waitForFrame((frame) => frame.includes("Credential profile"))
     await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
-    await app.mockInput.typeText("https://api.runpod.ai/v2/endpoint")
+    await app.mockInput.typeText("http://localhost:1234/v1")
     const urlInput = app.renderer.currentFocusedEditor
     app.mockInput.pressKey("n", { ctrl: true })
     await app.waitFor(() => app.renderer.currentFocusedEditor !== urlInput)
@@ -260,7 +202,7 @@ test("clicking a field focuses it instead of editing the previous field", async 
     app.mockInput.pressKey("s", { ctrl: true })
     await app.waitFor(() => submitted !== undefined)
     expect(submitted?.profile).toBe("default-work")
-    expect(submitted?.baseURL).toBe("https://api.runpod.ai/v2/endpoint")
+    expect(submitted?.baseURL).toBe("http://localhost:1234/v1")
   } finally {
     app.renderer.destroy()
   }
@@ -363,76 +305,62 @@ test("endpoint choices and actions stay readable in dark and light themes", asyn
       .map((channel) => channel / 255)
       .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
       .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!, 0)
-  for (const mode of ["dark", "light"] as const)
-    for (const kind of ["runpod", "openai"] as const) {
-      const config = createTuiResolvedConfig()
-      const app = await testRender(
-        () => (
-          <TestTuiContexts>
-            <ConfigProvider config={config}>
-              <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
-                <ToastProvider>
-                  <Keymap.Provider config={config}>
-                    <DialogProvider>
-                      <DialogCustomEndpoint kind={kind === "runpod" ? "runpod" : undefined} />
-                    </DialogProvider>
-                  </Keymap.Provider>
-                </ToastProvider>
-              </ThemeProvider>
-            </ConfigProvider>
-          </TestTuiContexts>
-        ),
-        { width: 100, height: 50 },
-      )
-      try {
-        app.renderer.start()
-        await app.waitForFrame((frame) => frame.includes("Save endpoint"))
-        if (mode === "light" && kind === "runpod") {
-          const selected = app
-            .captureSpans()
-            .lines.flatMap((line) => line.spans)
-            .find((item) => item.text.includes("vllm"))
-          expect(selected?.bg.toInts()).toEqual([59, 125, 216, 255])
-          expect(selected?.fg.toInts()).toEqual([0, 0, 0, 255])
-        }
-        for (const label of [
-          ...(kind === "runpod" ? ["vllm", "ollama"] : ["none", "openai-models", "Chat", "Responses"]),
-          "+ Add model",
-          "Save endpoint",
-        ]) {
-          const span = app
-            .captureSpans()
-            .lines.flatMap((line) => line.spans)
-            .find((item) => item.text.includes(label))
-          expect(span, `${mode}/${kind}: ${label} must render`).toBeDefined()
-          const foreground = luminance(span!.fg.toInts())
-          const background = luminance(span!.bg.toInts())
-          expect(
-            (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
-            `${mode}/${kind}: ${label} contrast, fg=${span!.fg.toInts()}, bg=${span!.bg.toInts()}`,
-          ).toBeGreaterThanOrEqual(4.5)
-        }
-        for (const [selected, inactive] of kind === "runpod"
-          ? [["vllm", "ollama"]]
-          : [
-              ["none", "openai-models"],
-              ["Chat", "Responses"],
-            ]) {
-          const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-          const activeBg = spans.find((item) => item.text.includes(selected))!.bg.toInts()
-          const inactiveBg = spans.find((item) => item.text.includes(inactive))!.bg.toInts()
-          const activeLuminance = luminance(activeBg)
-          const inactiveLuminance = luminance(inactiveBg)
-          expect(
-            (Math.max(activeLuminance, inactiveLuminance) + 0.05) /
-              (Math.min(activeLuminance, inactiveLuminance) + 0.05),
-            `${mode}/${kind}: ${selected} background must visibly differ from ${inactive}; got ${activeBg} and ${inactiveBg}`,
-          ).toBeGreaterThanOrEqual(2)
-        }
-      } finally {
-        app.renderer.destroy()
+  for (const mode of ["dark", "light"] as const) {
+    const config = createTuiResolvedConfig()
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <Keymap.Provider config={config}>
+                  <DialogProvider>
+                    <DialogCustomEndpoint />
+                  </DialogProvider>
+                </Keymap.Provider>
+              </ToastProvider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 100, height: 50 },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes("Save endpoint"))
+      expect(app.captureCharFrame()).toContain("Custom OpenAI-Compatible Endpoint")
+      expect(app.captureCharFrame()).not.toContain("Worker")
+      for (const label of ["none", "openai-models", "Chat", "Responses", "+ Add model", "Save endpoint"]) {
+        const span = app
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .find((item) => item.text.includes(label))
+        expect(span, `${mode}: ${label} must render`).toBeDefined()
+        const foreground = luminance(span!.fg.toInts())
+        const background = luminance(span!.bg.toInts())
+        expect(
+          (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+          `${mode}: ${label} contrast, fg=${span!.fg.toInts()}, bg=${span!.bg.toInts()}`,
+        ).toBeGreaterThanOrEqual(4.5)
       }
+      for (const [selected, inactive] of [
+        ["none", "openai-models"],
+        ["Chat", "Responses"],
+      ]) {
+        const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+        const activeBg = spans.find((item) => item.text.includes(selected))!.bg.toInts()
+        const inactiveBg = spans.find((item) => item.text.includes(inactive))!.bg.toInts()
+        const activeLuminance = luminance(activeBg)
+        const inactiveLuminance = luminance(inactiveBg)
+        expect(
+          (Math.max(activeLuminance, inactiveLuminance) + 0.05) / (Math.min(activeLuminance, inactiveLuminance) + 0.05),
+          `${mode}: ${selected} background must visibly differ from ${inactive}; got ${activeBg} and ${inactiveBg}`,
+        ).toBeGreaterThanOrEqual(2)
+      }
+    } finally {
+      app.renderer.destroy()
     }
+  }
 })
 
 test("OpenAI provider suggestions cannot spill a long identifier across the dialog", async () => {

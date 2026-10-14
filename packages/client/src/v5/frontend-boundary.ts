@@ -11,9 +11,7 @@ import type { RequestOptions } from "../promise/generated/client.js"
 export type ConfigurationScope = "global" | "project"
 export type ConfigurationTarget = { scope: ConfigurationScope; path: string }
 export type ProviderEndpointAPI = "chat" | "responses"
-export type ProviderEndpoint =
-  | { baseURL: string; api: ProviderEndpointAPI }
-  | { baseURL: string; worker: "ollama" | "vllm" }
+export type ProviderEndpoint = { baseURL: string; api: ProviderEndpointAPI }
 export type ProviderEndpointModel = {
   id: string
   modelID?: string

@@ -39,6 +39,12 @@ const roundTrip = (name: string, value: Record<string, unknown>) => {
   return bytes
 }
 
+test("custom endpoints reject the removed RunPod wire alternative", () => {
+  expect(() => decodeStrict(schemaFor("ProviderEndpoint"), new Uint8Array([0x12, 0]))).toThrow("unknown field")
+  expect(schemaFor("ProviderEndpoint").fields.map((field) => field.number)).toEqual([1])
+  expect(schemas.some((schema) => schema.typeName === "ycoding.v5.ProviderEndpoint_Runpod")).toBe(false)
+})
+
 test("M3/M4/M5/M10 have closed local-only completed mutation descriptors", () => {
   for (const [name, id, scope] of [
     ["provider.configure", 2060, ScopeKind.LOCATION],
@@ -83,10 +89,9 @@ test("M3/M4/M5/M10 descriptors declare exact closed errors and secret inputs", (
   }
 })
 
-test("M3 both endpoint kinds, model overrides and optional empty lists round trip", () => {
+test("M3 compatible endpoint, model overrides and optional empty lists round trip", () => {
   for (const endpoint of [
     { kind: { case: "openai", value: { baseURL: text("https://models.example/v1"), api: 2 } } },
-    { kind: { case: "runpod", value: { baseURL: text("https://api.runpod.ai/v2/test"), worker: 1 } } },
   ]) {
     for (const models of [
       undefined,

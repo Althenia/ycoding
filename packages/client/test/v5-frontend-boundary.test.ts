@@ -144,7 +144,7 @@ test("M3/M4 alternate provider and remote MCP shapes keep global scope and optio
     {
       providerID: "custom",
       scope: "global",
-      endpoint: { baseURL: "https://api.runpod.ai/v2/test", worker: "vllm" },
+      endpoint: { baseURL: "https://models.example/v1", api: "responses" },
       models: [],
     },
     { providerID: "custom", scope: "global", endpoint: { baseURL: "https://models.example", api: "chat" } },

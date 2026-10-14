@@ -352,23 +352,20 @@ fn endpoint_and_model_boundaries_reject_invalid_input() {
         Err(WriteError::InvalidConfig)
     );
     input.models = Some(vec![]);
-    input.endpoint = Endpoint::Runpod {
-        base_url: "https://api.runpod.ai/v2/endpoint_ID-1".into(),
-        worker: config::EndpointWorker::Vllm,
+    input.endpoint = Endpoint::OpenAi {
+        base_url: "http://localhost:1234/v1".into(),
+        api: EndpointApi::Responses,
     };
     config.write_provider(Scope::Project, &input).unwrap();
     let text = fs::read_to_string(fixture.options.directory.join("ycoding.json")).unwrap();
-    assert!(text.contains("\"worker\": \"vllm\"") || text.contains("\"worker\":\"vllm\""));
-    assert!(!text.contains("\"api\""));
+    assert!(text.contains("responses"));
+    assert!(!text.contains("\"worker\""));
     input.catalog = true;
-    assert_eq!(
-        config.write_provider(Scope::Project, &input),
-        Err(WriteError::InvalidConfig)
-    );
+    config.write_provider(Scope::Project, &input).unwrap();
     input.catalog = false;
-    input.endpoint = Endpoint::Runpod {
-        base_url: "https://api.runpod.ai/v2/id/extra".into(),
-        worker: config::EndpointWorker::Ollama,
+    input.endpoint = Endpoint::OpenAi {
+        base_url: "file:///endpoint".into(),
+        api: EndpointApi::Chat,
     };
     assert_eq!(
         config.write_provider(Scope::Project, &input),
@@ -411,7 +408,7 @@ async fn ts_endpoint_packages_reload_and_register_native_routes_without_dynamic_
       // TS custom endpoint declarations
       "providers": {
         "compatible": {"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"http://localhost:4567/v1","api":"responses"},"models":{"code":{"capabilities":{"tools":false}}}},
-        "jobs": {"package":"@ycoding-ai/ai/providers/runpod","settings":{"baseURL":"https://api.runpod.ai/v2/fixture","worker":"ollama"},"models":{"code":{}}}
+        "messages": {"package":"@ycoding-ai/ai/providers/anthropic-compatible","settings":{"baseURL":"http://localhost:4567/v1"},"models":{"code":{}}}
       }
     }"#);
     let mut config = fixture.config();
@@ -444,8 +441,8 @@ async fn ts_endpoint_packages_reload_and_register_native_routes_without_dynamic_
             ycoding_core::resources::model::ProviderFamily::Compatible,
         ),
         (
-            "jobs",
-            ycoding_core::resources::model::ProviderFamily::RunPod,
+            "messages",
+            ycoding_core::resources::model::ProviderFamily::Anthropic,
         ),
     ] {
         let provider = catalog.provider(&provider::Id(id.into())).unwrap();

@@ -19,10 +19,7 @@ use ycoding_schema::{DomainDecode, parse_json, provider, stringify_json};
 
 const CHAT: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
 const RESPONSES: &str = "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"item\",\"delta\":\"answer\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"response\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n";
-const COHERE: &str = "data: {\"type\":\"message-start\",\"id\":\"msg\"}\n\ndata: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"answer\"}}}}\n\ndata: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"tokens\":{\"input_tokens\":2,\"output_tokens\":1}}}}\n\n";
-const GATEWAY: &str = "data: {\"type\":\"text-delta\",\"id\":\"text\",\"delta\":\"answer\"}\n\ndata: {\"type\":\"finish\",\"finishReason\":{\"unified\":\"stop\"},\"usage\":{\"inputTokens\":{\"total\":2},\"outputTokens\":{\"total\":1}}}\n\n";
 const MESSAGES: &str = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"usage\":{\"input_tokens\":2}}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
-const GEMINI: &str = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"answer\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":3}}\n\n";
 
 #[path = "session_support/guardrails.rs"]
 mod guardrails;
@@ -124,77 +121,27 @@ fn info(package: &str, settings: serde_json::Value) -> ycoding_schema::model::In
 async fn configured_bundled_families_reach_real_core_resolution_and_http_wire() {
     for (package, stream, path, auth) in [
         (
-            "aisdk:@ai-sdk/alibaba",
+            "aisdk:@ai-sdk/openai",
+            RESPONSES,
+            "/responses",
+            "authorization",
+        ),
+        (
+            "aisdk:@ai-sdk/anthropic",
+            MESSAGES,
+            "/messages",
+            "x-api-key",
+        ),
+        (
+            "aisdk:@ai-sdk/openai-compatible",
             CHAT,
             "/chat/completions",
             "authorization",
         ),
         (
-            "aisdk:@ai-sdk/cerebras",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/deepinfra",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/groq",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/togetherai",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/mistral",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/perplexity",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:venice-ai-sdk-provider",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:@ai-sdk/vercel",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        ("aisdk:@ai-sdk/cohere", COHERE, "/chat", "authorization"),
-        (
-            "aisdk:@ai-sdk/gateway",
-            GATEWAY,
-            "/language-model",
-            "authorization",
-        ),
-        ("aisdk:@ai-sdk/azure", RESPONSES, "/responses", "api-key"),
-        (
-            "aisdk:@ai-sdk/github-copilot",
-            CHAT,
-            "/chat/completions",
-            "authorization",
-        ),
-        (
-            "aisdk:ai-gateway-provider",
-            CHAT,
-            "/chat/completions",
+            "aisdk:@openrouter/ai-sdk-provider",
+            RESPONSES,
+            "/responses",
             "authorization",
         ),
     ] {
@@ -270,66 +217,13 @@ async fn selected_account_metadata_controls_subscription_routes_not_http_body() 
     );
     assert_eq!(prepared.headers["chatgpt-account-id"], "account-a");
     assert!(!prepared.encoded_body.contains("account-a"));
-    let copilot = ycoding_schema::credential::Value::decode(&parse_json(r#"{"type":"oauth","methodID":"device","access":"prepared","refresh":"refresh","expires":0,"metadata":{"enterpriseUrl":"example.ghe.com"}}"#).unwrap()).unwrap();
-    let mut info = info("aisdk:@ai-sdk/anthropic", serde_json::json!({}));
-    info.provider_id = provider::Id("github-copilot".into());
-    let model = context.model(&info, Some(&copilot)).await.unwrap();
-    assert_eq!(model.route.id, "github-copilot-messages");
-    assert_eq!(
-        model.route.endpoint.base_url,
-        "https://copilot-api.example.ghe.com"
-    );
-    assert!(
-        !stringify_json(
-            &model
-                .defaults
-                .http
-                .body
-                .unwrap_or(parse_json("{}").unwrap())
-        )
-        .contains("enterpriseUrl")
-    );
-}
-
-#[tokio::test]
-async fn gitlab_and_sap_reconstruct_exchanged_credentials_for_each_request() {
-    for package in [
-        "aisdk:gitlab-ai-provider",
-        "aisdk:@jerome-benoit/sap-ai-provider-v2",
-    ] {
-        let fixture = Fixture::new(CHAT).await;
-        let context = ProviderContext::new(BTreeMap::new(), "fixture").unwrap();
-        let settings = serde_json::json!({"apiKey":"selected","instanceUrl":fixture.base,"aiGatewayUrl":fixture.base,"deploymentId":"deployment","serviceKey":serde_json::json!({"clientid":"selected","clientsecret":"secret","url":fixture.base,"serviceurls":{"AI_API_URL":fixture.base}}).to_string()});
-        let mut info = info(package, settings);
-        info.model_id = if package.contains("gitlab") {
-            "duo-chat-gpt-5-4".into()
-        } else {
-            "fixture-model".into()
-        };
-        for _ in 0..2 {
-            let model = context.model(&info, None).await.unwrap();
-            let prepared = model
-                .route
-                .prepare(&llm::Request::new(model.clone()))
-                .unwrap();
-            assert_eq!(prepared.headers["authorization"], "Bearer exchanged");
-        }
-        if package.contains("gitlab") {
-            info.model_id = "duo-workflow-exact".into();
-            assert!(context.model(&info, None).await.is_err());
-        }
-        let sent = fixture.finish().await;
-        assert_eq!(sent.len(), 2);
-    }
 }
 
 #[test]
 fn attribution_transforms_apply_to_configured_aliases_with_distinct_override_rules() {
     let mut catalog = Catalog::new(Vec::new());
-    let documents = parse_json(r#"{"providers":{"kilo-alias":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://api.kilo.ai/api/gateway"},"headers":{"X-Title":"user"}},"zenmux-alias":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://zenmux.ai/api/v1"},"headers":{"X-Title":"user"}},"nvidia-alias":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://integrate.api.nvidia.com/v1"},"headers":{"X-BILLING-INVOKE-ORIGIN":"user"}},"cerebras-alias":{"package":"aisdk:@ai-sdk/cerebras"},"router-alias":{"package":"aisdk:@openrouter/ai-sdk-provider","headers":{"X-OpenRouter-Title":"user"},"models":{"gpt-5-chat-latest":{}}}}}"#).unwrap();
+    let documents = parse_json(r#"{"providers":{"router-alias":{"package":"aisdk:@openrouter/ai-sdk-provider","headers":{"X-OpenRouter-Title":"user"},"models":{"gpt-5-chat-latest":{}}},"custom":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://fixture.example/v1"},"headers":{"X-Title":"user"}}}}"#).unwrap();
     catalog.configure(&[documents]).unwrap();
-    catalog.configure(&[parse_json(r#"{"providers":{"llmgateway-alias":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://api.llmgateway.io/v1"},"headers":{"X-Title":"user","X-Source":"user"}},"llmgateway-disabled":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://api.llmgateway.io/v1"}},"vercel-alias":{"package":"aisdk:@ai-sdk/vercel","headers":{"X-Title":"user"}},"wrong-endpoint":{"package":"aisdk:@ai-sdk/openai-compatible","settings":{"baseURL":"https://zenmux.ai/api/v1/"}},"wrong-package":{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{"baseURL":"https://api.kilo.ai/api/gateway"}}}}"#).unwrap()]).unwrap();
-    catalog.set_disabled(&provider::Id("llmgateway-disabled".into()), true);
     catalog.transform_providers(&BTreeMap::new()).unwrap();
     let headers = |id: &str| {
         catalog
@@ -341,45 +235,13 @@ fn attribution_transforms_apply_to_configured_aliases_with_distinct_override_rul
             .unwrap()
     };
     assert_eq!(
-        headers("kilo-alias").get(&"X-Title".into()),
-        Some(&parse_json("\"YCoding\"").unwrap())
-    );
-    assert_eq!(
-        headers("zenmux-alias").get(&"X-Title".into()),
+        headers("custom").get(&"X-Title".into()),
         Some(&parse_json("\"user\"").unwrap())
-    );
-    assert_eq!(
-        headers("nvidia-alias").get(&"X-BILLING-INVOKE-ORIGIN".into()),
-        Some(&parse_json("\"user\"").unwrap())
-    );
-    assert_eq!(
-        headers("cerebras-alias").get(&"X-Cerebras-3rd-Party-Integration".into()),
-        Some(&parse_json("\"ycoding\"").unwrap())
     );
     assert_eq!(
         headers("router-alias").get(&"X-OpenRouter-Title".into()),
         Some(&parse_json("\"user\"").unwrap())
     );
-    for name in ["X-Title", "X-Source"] {
-        assert_eq!(
-            headers("llmgateway-alias").get(&name.into()),
-            Some(&parse_json("\"YCoding\"").unwrap())
-        );
-    }
-    assert_eq!(
-        headers("vercel-alias").get(&"x-title".into()),
-        Some(&parse_json("\"YCoding\"").unwrap())
-    );
-    for id in ["llmgateway-disabled", "wrong-endpoint", "wrong-package"] {
-        assert!(
-            catalog
-                .provider(&provider::Id(id.into()))
-                .unwrap()
-                .overlays
-                .headers
-                .is_none()
-        );
-    }
     assert!(
         !catalog
             .all(&[])
@@ -462,85 +324,27 @@ fn runner_services(
 async fn runner_bundled_packages_publish_real_assistant_messages_without_a_bridge() {
     use ycoding_core::session::{pending, run_coordinator::Coordinator, store::Service};
     for (package, stream) in [
-        ("@ai-sdk/alibaba", CHAT),
-        ("@ai-sdk/mistral", CHAT),
-        ("@ai-sdk/perplexity", CHAT),
-        ("venice-ai-sdk-provider", CHAT),
-        ("@ai-sdk/vercel", CHAT),
-        ("@ai-sdk/cohere", COHERE),
-        ("@ai-sdk/gateway", GATEWAY),
-        ("@ai-sdk/azure", RESPONSES),
-        ("@ai-sdk/github-copilot", CHAT),
-        ("@ai-sdk/cerebras", CHAT),
-        ("@ai-sdk/deepinfra", CHAT),
-        ("@ai-sdk/groq", CHAT),
-        ("@ai-sdk/togetherai", CHAT),
         ("@ai-sdk/openai", RESPONSES),
         ("@ai-sdk/anthropic", MESSAGES),
-        ("@ai-sdk/google", GEMINI),
-        ("@ai-sdk/google-vertex", GEMINI),
-        ("@ai-sdk/google-vertex/anthropic", MESSAGES),
         ("@ai-sdk/openai-compatible", CHAT),
         ("@openrouter/ai-sdk-provider", RESPONSES),
-        ("@ai-sdk/xai", RESPONSES),
-        ("@ai-sdk/amazon-bedrock/mantle", RESPONSES),
-        ("@ai-sdk/amazon-bedrock", "bedrock"),
-        (
-            "@ycoding-ai/ai/providers/runpod",
-            r#"{"status":"COMPLETED","output":[{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":2,"eval_count":1}]}"#,
-        ),
-        ("ai-gateway-provider", CHAT),
-        ("gitlab-ai-provider", CHAT),
-        (
-            "@jerome-benoit/sap-ai-provider-v2",
-            "data: {\"final_result\":{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}}\n\ndata: [DONE]\n\n",
-        ),
-        ("workers", CHAT),
-        ("cortex", CHAT),
-        ("cognitive", CHAT),
-        ("muse", RESPONSES),
         ("codex", RESPONSES),
-        ("unified", CHAT),
     ] {
-        let fixture = if stream == "bedrock" {
-            let recorded: serde_json::Value = serde_json::from_str(include_str!("../../../../packages/ai/test/fixtures/recordings/bedrock-converse/streams-text.json")).unwrap();
-            Fixture::bytes(decode_base64(
-                recorded["interactions"][0]["response"]["body"]
-                    .as_str()
-                    .unwrap(),
-            ))
-            .await
-        } else {
-            Fixture::new(stream).await
-        };
+        let fixture = Fixture::new(stream).await;
         let store = support::store();
         let service = Service::new(store.client());
         let mut catalog = Catalog::new(Vec::new());
         let (provider, package) = match package {
-            "workers" => ("cloudflare-workers-ai", "@ai-sdk/openai-compatible"),
-            "cortex" => ("snowflake-cortex", "@ai-sdk/openai-compatible"),
-            "cognitive" => ("azure-cognitive-services", "@ai-sdk/openai-compatible"),
-            "muse" => ("muse", "@ai-sdk/openai"),
             "codex" => ("openai", "@ai-sdk/openai"),
-            "unified" => ("unified", "ai-gateway-provider"),
             package => ("fixture", package),
         };
-        let model_id = if package == "gitlab-ai-provider" {
-            "duo-chat-gpt-5-4"
-        } else {
-            "fixture-model"
-        };
+        let model_id = "fixture-model";
         let package = if package.starts_with("@ycoding-ai/") {
             package.into()
         } else {
             format!("aisdk:{package}")
         };
-        let mut settings = serde_json::json!({"baseURL":fixture.base,"apiKey":"fixture-key","accessToken":"fixture-key","worker":"ollama","region":"us-east-1","instanceUrl":fixture.base,"aiGatewayUrl":fixture.base,"deploymentId":"deployment","serviceKey":serde_json::json!({"clientid":"selected","clientsecret":"secret","url":fixture.base,"serviceurls":{"AI_API_URL":fixture.base}}).to_string()});
-        if provider == "unified" {
-            settings.as_object_mut().unwrap().remove("baseURL");
-            settings["accountId"] = "account".into();
-            settings["gateway"] = "gateway".into();
-        }
+        let mut settings = serde_json::json!({"baseURL":fixture.base,"apiKey":"fixture-key"});
         if provider == "openai" {
             settings.as_object_mut().unwrap().remove("apiKey");
             let credentials = ycoding_core::resources::credential::Service::new(store.client());
@@ -552,9 +356,6 @@ async fn runner_bundled_packages_publish_real_assistant_messages_without_a_bridg
         context
             .endpoints
             .insert("openai-codex-responses".into(), fixture.base.clone());
-        context
-            .endpoints
-            .insert("cloudflare-unified-gateway".into(), fixture.base.clone());
         let coordinator = Coordinator::new(Arc::new(runner(&store, catalog, context)));
         tokio::time::timeout(
             Duration::from_secs(10),
@@ -572,34 +373,12 @@ async fn runner_bundled_packages_publish_real_assistant_messages_without_a_bridg
         .unwrap()
         .unwrap();
         assert!(
-            stringify_json(&ycoding_schema::DomainEncode::encode(&message)).contains(
-                if stream == "bedrock" {
-                    "Hello"
-                } else {
-                    "answer"
-                }
-            ),
+            stringify_json(&ycoding_schema::DomainEncode::encode(&message)).contains("answer"),
             "{package}"
         );
         let requests = fixture.finish().await;
-        assert_eq!(
-            requests.len(),
-            if package.contains("gitlab") || package.contains("sap-ai") {
-                2
-            } else {
-                1
-            },
-            "{package}"
-        );
-        if provider == "unified" {
-            assert_eq!(
-                requests[0].2[0]["headers"]["Authorization"],
-                "Bearer fixture-key"
-            );
-            assert_eq!(requests[0].1["cf-aig-authorization"], "Bearer fixture-key");
-        } else {
-            assert!(!requests[0].2.to_string().contains("fixture-key"));
-        }
+        assert_eq!(requests.len(), 1, "{package}");
+        assert!(!requests[0].2.to_string().contains("fixture-key"));
         if provider == "openai" {
             assert_eq!(requests[0].1["chatgpt-account-id"], "fixture-account");
             assert_eq!(requests[0].1["authorization"], "Bearer fixture-codex");
@@ -608,32 +387,6 @@ async fn runner_bundled_packages_publish_real_assistant_messages_without_a_bridg
         store.shutdown().unwrap();
     }
 }
-fn decode_base64(value: &str) -> Vec<u8> {
-    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    value
-        .as_bytes()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|chunk| {
-            let values = chunk.map(|byte| {
-                if byte == b'=' {
-                    0
-                } else {
-                    alphabet
-                        .iter()
-                        .position(|candidate| *candidate == byte)
-                        .unwrap() as u32
-                }
-            });
-            let bits = (values[0] << 18) | (values[1] << 12) | (values[2] << 6) | values[3];
-            [(bits >> 16) as u8, (bits >> 8) as u8, bits as u8]
-                .into_iter()
-                .take(3 - usize::from(chunk[3] == b'=') - usize::from(chunk[2] == b'='))
-        })
-        .collect()
-}
-
 #[tokio::test]
 async fn account_catalog_preserves_key_inventory_and_fences_plan_entitlements() {
     use ycoding_core::resources::{auth::Preparation, catalog::AccountCatalog, credential};
@@ -719,58 +472,6 @@ async fn account_catalog_preserves_key_inventory_and_fences_plan_entitlements() 
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].1["chatgpt-account-id"], "account-plan");
     credentials.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn vertex_adc_is_resolved_and_refreshes_at_dispatch_without_secret_body_fields() {
-    use ycoding_core::resources::auth::{self, google};
-    const GEMINI: &str = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"answer\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":3}}\n\n";
-    let fixture = Fixture::new(GEMINI).await;
-    let context = ProviderContext::new(
-        BTreeMap::from([
-            ("GOOGLE_VERTEX_PROJECT".into(), "project".into()),
-            ("GOOGLE_VERTEX_LOCATION".into(), "global".into()),
-        ]),
-        "fixture",
-    )
-    .unwrap();
-    let store = google::Store::new(
-        google::Credentials::AuthorizedUser {
-            client_id: "fixture-client".into(),
-            client_secret: "fixture-secret".into(),
-            refresh_token: "fixture-refresh".into(),
-        },
-        auth::Client::new(&format!("{}/oauth", fixture.base), "fixture").unwrap(),
-        &fixture.base,
-    )
-    .unwrap();
-    context.set_google(store.clone()).await;
-    let mut configured = info(
-        "aisdk:@ai-sdk/google-vertex",
-        serde_json::json!({"baseURL":fixture.base}),
-    );
-    configured.model_id = " gemini-fixture ".into();
-    let model = context.model(&configured, None).await.unwrap();
-    let mut request = llm::Request::new(model);
-    request.messages.push(llm::Message::user("hello"));
-    assert_eq!(
-        Executor::new(Executor::http_client().unwrap())
-            .generate(&request)
-            .await
-            .unwrap()
-            .text(),
-        "answer".into()
-    );
-    context.shutdown().await;
-    let requests = fixture.finish().await;
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[2].1["authorization"], "Bearer exchanged");
-    assert!(!requests[2].2.to_string().contains("fixture-secret"));
-    assert!(!requests[2].2.to_string().contains("exchanged"));
-    assert_eq!(
-        requests[2].0,
-        "/models/gemini-fixture:streamGenerateContent"
-    );
 }
 
 #[tokio::test]
@@ -866,29 +567,16 @@ fn builtin_account_methods_register_browser_device_remote_and_env_contracts() {
         .unwrap();
     for (id, methods) in [
         ("openai", vec!["chatgpt-browser", "chatgpt-headless"]),
-        ("xai", vec!["browser", "device"]),
-        ("github-copilot", vec!["device"]),
         ("cursor", vec!["browser"]),
         ("muse", vec!["device"]),
-        ("opencode", vec!["device"]),
     ] {
         for method in methods {
             assert!(draft.methods(&id.into()).iter().any(|candidate|matches!(candidate,ycoding_schema::integration::Method::OAuth(candidate) if candidate.id.as_lossless().as_str()==Some(method))),"{id}/{method}");
         }
     }
-    let copilot = draft
-        .methods(&"github-copilot".into())
-        .iter()
-        .find_map(|method| {
-            if let ycoding_schema::integration::Method::OAuth(method) = method {
-                Some(method)
-            } else {
-                None
-            }
-        })
-        .unwrap();
-    assert_eq!(copilot.remote, Some(true));
-    assert_eq!(copilot.prompts.as_ref().unwrap().len(), 2);
+    for id in ["xai", "github-copilot", "opencode", "google", "runpod"] {
+        assert!(draft.methods(&id.into()).is_empty(), "{id}");
+    }
 }
 
 #[test]
@@ -929,42 +617,6 @@ fn live_model_resolver_replaces_one_catalog_authority_without_changing_prior_sna
             .model_id,
         "first-api".into()
     );
-}
-
-#[tokio::test]
-async fn core_mantle_and_converse_use_resolved_aws_credentials_with_the_correct_service() {
-    let context = ProviderContext::new(
-        BTreeMap::from([
-            ("AWS_ACCESS_KEY_ID".into(), "fixture-key".into()),
-            ("AWS_SECRET_ACCESS_KEY".into(), "fixture-secret".into()),
-            ("AWS_REGION".into(), "us-east-1".into()),
-        ]),
-        "fixture",
-    )
-    .unwrap();
-    for (package, service) in [
-        ("aisdk:@ai-sdk/amazon-bedrock/mantle", "bedrock-mantle"),
-        ("aisdk:@ai-sdk/amazon-bedrock", "bedrock"),
-    ] {
-        let model = context
-            .model(&info(package, serde_json::json!({})), None)
-            .await
-            .unwrap();
-        let prepared = model
-            .route
-            .prepare(&llm::Request::new(model.clone()))
-            .unwrap();
-        assert!(
-            prepared.headers["authorization"]
-                .to_str()
-                .unwrap()
-                .contains(&format!("/us-east-1/{service}/aws4_request"))
-        );
-        assert!(prepared.headers["authorization"].is_sensitive());
-        assert!(!stringify_json(&prepared.wire_body).contains("fixture-secret"));
-        assert!(!stringify_json(&prepared.wire_body).contains("fixture-key"));
-    }
-    context.shutdown().await;
 }
 
 #[tokio::test]

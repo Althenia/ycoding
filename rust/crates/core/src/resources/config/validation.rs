@@ -735,6 +735,42 @@ pub(super) fn recover(mut input: JsonValue, target: &str) -> super::DecodedDocum
             )).collect(),
         };
     }
+    if let JsonValue::Object(document) = &mut input
+        && let Some(JsonValue::Object(providers)) = document.get(&"providers".into()).cloned()
+    {
+        let mut supported = JsonObject::new();
+        for (id, item) in providers.iter() {
+            if crate::resources::model::scope::dropped_provider(id, item) {
+                diagnostics.push(diagnostic(
+                    target,
+                    Some(&JsonPath::default().key("providers").key(id.clone())),
+                    "invalid-values",
+                    "This provider is unsupported and excluded from the catalog",
+                    false,
+                ));
+                continue;
+            }
+            let mut item = item.clone();
+            if let JsonValue::Object(provider) = &mut item
+                && let Some(JsonValue::Object(models)) = provider.get(&"models".into()).cloned()
+            {
+                let mut supported_models = JsonObject::new();
+                for (model_id, model) in models.iter() {
+                    if crate::resources::catalog::field(model, "package")
+                        .and_then(crate::resources::catalog::models_dev::text)
+                        .is_some_and(crate::resources::model::scope::dropped_package)
+                    {
+                        diagnostics.push(diagnostic(target, Some(&JsonPath::default().key("providers").key(id.clone()).key("models").key(model_id.clone())), "invalid-values", "This model's provider package is unsupported and excluded from the catalog", false));
+                        continue;
+                    }
+                    supported_models.insert(model_id.clone(), model.clone());
+                }
+                provider.insert("models".into(), JsonValue::Object(supported_models));
+            }
+            supported.insert(id.clone(), item);
+        }
+        document.insert("providers".into(), JsonValue::Object(supported));
+    }
     repair_security(&mut input, &JsonPath::default(), target, &mut diagnostics);
     loop {
         match inspect(&input, ROOT, &JsonPath::default()) {

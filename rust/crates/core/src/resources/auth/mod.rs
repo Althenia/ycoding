@@ -17,14 +17,11 @@ use ycoding_schema::{
 };
 use ycoding_store::resources::Secret;
 
-pub mod bedrock;
 mod builtin;
 pub mod claude;
 pub mod cursor;
-pub mod google;
 pub mod integration;
 pub mod muse;
-pub mod opencode;
 pub mod page;
 
 #[derive(Clone, Default)]
@@ -46,43 +43,6 @@ impl Preparation {
             .integration_id()
             .as_str()
             .ok_or(Error::InvalidCredential)?;
-        if integration == "opencode" && stored.needs_refresh(time)? {
-            let credential::Value::OAuth(value) = stored
-                .secret()
-                .domain()
-                .map_err(|_| Error::InvalidCredential)?
-            else {
-                return Ok(stored.secret().clone());
-            };
-            let server = value
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get(&"server".into()))
-                .and_then(|value| {
-                    if let JsonValue::String(value) = value {
-                        value.as_str()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or("https://console.opencode.ai");
-            let console = opencode::Console::new(
-                self.clients
-                    .get("opencode")
-                    .cloned()
-                    .map(Ok)
-                    .unwrap_or_else(|| Client::new(server, env!("CARGO_PKG_VERSION")))?,
-            );
-            return credentials
-                .refresh(
-                    stored,
-                    time,
-                    async move { console.refresh(value, time).await },
-                )
-                .await?
-                .ok_or(Error::ProfileUnavailable)
-                .map(|value| value.secret().clone());
-        }
         let client = self
             .clients
             .get(integration)
@@ -102,9 +62,6 @@ impl Preparation {
 }
 
 const OPENAI_CLIENT: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const XAI_CLIENT: &str = "b1a00492-073a-47ea-816f-4c329264a828";
-const COPILOT_CLIENT: &str = "Iv23liQxejUrCuRKOtA0";
-const XAI_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 async fn join_finished(tasks: Vec<tokio::task::JoinHandle<()>>) -> Result<(), Error> {
@@ -140,9 +97,7 @@ impl fmt::Debug for Poll {
 }
 #[derive(Clone)]
 pub enum DeviceFlow {
-    Copilot { enterprise: Option<String> },
     Openai,
-    Xai,
     Muse,
 }
 impl fmt::Debug for DeviceFlow {
@@ -187,8 +142,6 @@ impl Client {
         Self::new(
             match provider {
                 "openai" => "https://auth.openai.com",
-                "xai" => "https://auth.x.ai/oauth2",
-                "github-copilot" => "https://github.com",
                 "cursor" => "https://api2.cursor.sh",
                 "anthropic" => "https://claude.ai",
                 "muse" => "https://auth.meta.com",
@@ -225,9 +178,7 @@ impl Client {
         label: Option<LosslessString>,
     ) -> Result<Enrollment, Error> {
         let integration = match &flow {
-            DeviceFlow::Copilot { .. } => "github-copilot",
             DeviceFlow::Openai => "openai",
-            DeviceFlow::Xai => "xai",
             DeviceFlow::Muse => "muse",
         }
         .into();
@@ -287,7 +238,6 @@ impl Client {
     ) -> Result<BrowserAttempt, Error> {
         let (host, default_port, path) = match (provider, method) {
             ("openai", "chatgpt-browser") => ("localhost", 1455, "/auth/callback"),
-            ("xai", "browser") => ("127.0.0.1", 56121, "/callback"),
             _ => return Err(Error::Rejected),
         };
         let listener = tokio::net::TcpListener::bind((host, port.unwrap_or(default_port)))
@@ -353,25 +303,9 @@ impl Client {
 
     pub async fn start_device(&self, flow: DeviceFlow, now: i64) -> Result<DeviceAttempt, Error> {
         let request = match &flow {
-            DeviceFlow::Copilot { enterprise } => {
-                if let Some(domain) = enterprise {
-                    let domain = normalize_enterprise(domain)?;
-                    if self.endpoint != format!("https://{domain}") {
-                        return Err(Error::Rejected);
-                    }
-                }
-                self.json(
-                    "/login/device/code",
-                    json!({"client_id":COPILOT_CLIENT,"scope":"read:user"}),
-                )
-            }
             DeviceFlow::Openai => self.json(
                 "/api/accounts/deviceauth/usercode",
                 json!({"client_id":OPENAI_CLIENT}),
-            ),
-            DeviceFlow::Xai => self.form(
-                "/device/code",
-                &[("client_id", XAI_CLIENT), ("scope", XAI_SCOPE)],
             ),
             DeviceFlow::Muse => self.form(
                 "/oidc/device/authorization/",
@@ -403,18 +337,6 @@ impl Client {
                     now.saturating_add((expires * 1000.0) as i64),
                 )
             }
-            DeviceFlow::Copilot { .. } => {
-                let uri = string(&value, "verification_uri")?;
-                let user = string(&value, "user_code")?;
-                (
-                    uri.into(),
-                    format!("Enter code: {user}"),
-                    string(&value, "device_code")?.into(),
-                    user.into(),
-                    number(&value, "interval").ok_or(Error::Rejected)?.max(1.0) * 1000.0,
-                    now.saturating_add(600_000),
-                )
-            }
             DeviceFlow::Openai => {
                 let user = string(&value, "user_code")?;
                 let interval = value
@@ -432,22 +354,6 @@ impl Client {
                     user.into(),
                     interval as f64 * 1000.0,
                     now.saturating_add(600_000),
-                )
-            }
-            DeviceFlow::Xai => {
-                let uri = string(&value, "verification_uri")?;
-                let user = string(&value, "user_code")?;
-                (
-                    value
-                        .get("verification_uri_complete")
-                        .and_then(Value::as_str)
-                        .unwrap_or(uri)
-                        .into(),
-                    format!("Open {uri} on any device and enter code: {user}"),
-                    string(&value, "device_code")?.into(),
-                    user.into(),
-                    positive(&value, "interval", 5.0).max(1.0) * 1000.0,
-                    now.saturating_add((positive(&value, "expires_in", 300.0) * 1000.0) as i64),
                 )
             }
         };
@@ -471,10 +377,7 @@ impl Client {
         method: &str,
         redirect: &str,
     ) -> Result<CodeAttempt, Error> {
-        if !matches!(
-            (provider, method),
-            ("openai", "chatgpt-browser") | ("xai", "browser")
-        ) {
+        if (provider, method) != ("openai", "chatgpt-browser") {
             return Err(Error::Rejected);
         }
         let redirect_url = Url::parse(redirect).map_err(|_| Error::Rejected)?;
@@ -485,60 +388,25 @@ impl Client {
         {
             return Err(Error::Rejected);
         }
-        let verifier = random_string(if provider == "openai" { 43 } else { 64 })?;
-        let state = if provider == "openai" {
-            base64(&random_bytes(32)?)
-        } else {
-            random_string(32)?
-        };
+        let verifier = random_string(43)?;
+        let state = base64(&random_bytes(32)?);
         let challenge = base64(digest::digest(&digest::SHA256, verifier.as_bytes()).as_ref());
-        let mut url = Url::parse(&format!(
-            "{}{}",
-            self.endpoint,
-            if provider == "openai" {
-                "/oauth/authorize"
-            } else {
-                "/authorize"
-            }
-        ))
-        .map_err(|_| Error::Rejected)?;
+        let mut url = Url::parse(&format!("{}/oauth/authorize", self.endpoint))
+            .map_err(|_| Error::Rejected)?;
         url.query_pairs_mut().extend_pairs([
             ("response_type", "code"),
-            (
-                "client_id",
-                if provider == "openai" {
-                    OPENAI_CLIENT
-                } else {
-                    XAI_CLIENT
-                },
-            ),
+            ("client_id", OPENAI_CLIENT),
             ("redirect_uri", redirect),
-            (
-                "scope",
-                if provider == "openai" {
-                    "openid profile email offline_access"
-                } else {
-                    XAI_SCOPE
-                },
-            ),
+            ("scope", "openid profile email offline_access"),
             ("code_challenge", &challenge),
             ("code_challenge_method", "S256"),
             ("state", &state),
         ]);
-        if provider == "openai" {
-            url.query_pairs_mut().extend_pairs([
-                ("id_token_add_organizations", "true"),
-                ("codex_cli_simplified_flow", "true"),
-                ("originator", "ycoding"),
-            ]);
-        }
-        if provider == "xai" {
-            url.query_pairs_mut().extend_pairs([
-                ("nonce", random_string(32)?.as_str()),
-                ("plan", "generic"),
-                ("referrer", "ycoding"),
-            ]);
-        }
+        url.query_pairs_mut().extend_pairs([
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("originator", "ycoding"),
+        ]);
         Ok(CodeAttempt {
             client: self.clone(),
             provider: provider.into(),
@@ -567,9 +435,6 @@ impl Client {
             .integration_id()
             .as_str()
             .ok_or(Error::InvalidCredential)?;
-        if integration == "github-copilot" {
-            return Ok(stored);
-        }
         if integration == "muse" {
             return if value.expires.get() == 0 || value.expires.get() > now {
                 Ok(stored)
@@ -577,7 +442,7 @@ impl Client {
                 Err(Error::ProfileUnavailable)
             };
         }
-        if !matches!(integration, "openai" | "xai" | "cursor") {
+        if !matches!(integration, "openai" | "cursor") {
             return Err(Error::Rejected);
         }
         let client = self.clone();
@@ -678,22 +543,11 @@ impl Client {
         }
         let (status, tokens) = self
             .send(self.form(
-                if provider == "openai" {
-                    "/oauth/token"
-                } else {
-                    "/token"
-                },
+                "/oauth/token",
                 &[
                     ("grant_type", "refresh_token"),
                     ("refresh_token", refresh),
-                    (
-                        "client_id",
-                        if provider == "openai" {
-                            OPENAI_CLIENT
-                        } else {
-                            XAI_CLIENT
-                        },
-                    ),
+                    ("client_id", OPENAI_CLIENT),
                 ],
             ))
             .await?;
@@ -908,35 +762,10 @@ impl BrowserAttempt {
                 .next()
                 .ok_or(Error::Rejected)?
                 .split_whitespace();
-            let method = line.next().ok_or(Error::Rejected)?;
+            line.next().ok_or(Error::Rejected)?;
             let path = line.next().ok_or(Error::Rejected)?;
             let redirect = Url::parse(&self.code.redirect).map_err(|_| Error::Rejected)?;
             let callback = redirect.join(path).map_err(|_| Error::Rejected)?;
-            let origin = request.lines().find_map(|line| {
-                line.split_once(':')
-                    .filter(|(key, _)| key.eq_ignore_ascii_case("origin"))
-                    .map(|(_, value)| value.trim())
-            });
-            let cors = if self.code.provider == "xai"
-                && matches!(origin, Some("https://accounts.x.ai" | "https://auth.x.ai"))
-            {
-                format!(
-                    "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nVary: Origin\r\n",
-                    origin.ok_or(Error::Rejected)?
-                )
-            } else {
-                String::new()
-            };
-            if method == "OPTIONS" && self.code.provider == "xai" {
-                stream
-                    .write_all(
-                        format!("HTTP/1.1 204 No Content\r\n{cors}Connection: close\r\n\r\n")
-                            .as_bytes(),
-                    )
-                    .await
-                    .map_err(|_| Error::Rejected)?;
-                continue;
-            }
             if callback.path() != redirect.path() {
                 stream
                     .write_all(
@@ -970,7 +799,7 @@ impl BrowserAttempt {
                     Some(provider),
                 )
             };
-            stream.write_all(format!("HTTP/1.1 {response}\r\n{cors}Content-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}", html.len()).as_bytes()).await.map_err(|_| Error::Rejected)?;
+            stream.write_all(format!("HTTP/1.1 {response}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}", html.len()).as_bytes()).await.map_err(|_| Error::Rejected)?;
             return self.code.complete(callback.as_str(), now()?).await;
         }
     }
@@ -1038,10 +867,18 @@ impl DeviceAttempt {
     }
     async fn poll_request(&mut self, now: i64) -> Result<Poll, Error> {
         let request = match &self.flow {
-            DeviceFlow::Copilot { .. } => self.client.json("/login/oauth/access_token", json!({"client_id":COPILOT_CLIENT,"device_code":self.code,"grant_type":DEVICE_GRANT})),
-            DeviceFlow::Openai => self.client.json("/api/accounts/deviceauth/token", json!({"device_auth_id":self.code,"user_code":self.user_code})),
-            DeviceFlow::Xai => self.client.form("/token", &[("client_id", XAI_CLIENT), ("device_code", &self.code), ("grant_type", DEVICE_GRANT)]),
-            DeviceFlow::Muse => self.client.form("/oidc/device/token/", &[("grant_type", DEVICE_GRANT), ("device_code", &self.code), ("client_id", muse::CLIENT_ID)]),
+            DeviceFlow::Openai => self.client.json(
+                "/api/accounts/deviceauth/token",
+                json!({"device_auth_id":self.code,"user_code":self.user_code}),
+            ),
+            DeviceFlow::Muse => self.client.form(
+                "/oidc/device/token/",
+                &[
+                    ("grant_type", DEVICE_GRANT),
+                    ("device_code", &self.code),
+                    ("client_id", muse::CLIENT_ID),
+                ],
+            ),
         };
         let (status, tokens) = self.client.send(request).await?;
         if matches!(self.flow, DeviceFlow::Muse)
@@ -1109,44 +946,10 @@ impl DeviceAttempt {
             }
             return Err(Error::Rejected);
         }
-        if matches!(self.flow, DeviceFlow::Xai) && status.is_success() {
-            return Ok(Poll::Complete(token_secret(
-                "xai", "device", &tokens, now, None,
-            )?));
-        }
-        if let DeviceFlow::Copilot { enterprise } = &self.flow {
-            if !status.is_success() {
-                return Err(Error::Rejected);
-            }
-            if let Some(access) = tokens
-                .get("access_token")
-                .and_then(Value::as_str)
-                .filter(|v| !v.is_empty())
-            {
-                let metadata = enterprise.as_ref().map(|domain| {
-                    let mut metadata = JsonObject::new();
-                    metadata.insert(
-                        "enterpriseUrl".into(),
-                        JsonValue::String(domain.clone().into()),
-                    );
-                    metadata
-                });
-                return Ok(Poll::Complete(oauth_secret(
-                    "device", access, access, 0, metadata,
-                )?));
-            }
-        }
         match tokens.get("error").and_then(Value::as_str) {
             Some("authorization_pending") => Ok(self.wait(now)),
             Some("slow_down") => {
-                self.interval = if matches!(self.flow, DeviceFlow::Copilot { .. }) {
-                    number(&tokens, "interval")
-                        .filter(|value| *value > 0.0)
-                        .map(|value| (value * 1000.0) as i64)
-                        .unwrap_or(self.interval.saturating_add(5000))
-                } else {
-                    self.interval.saturating_add(5000)
-                };
+                self.interval = self.interval.saturating_add(5000);
                 Ok(self.wait(now))
             }
             Some("access_denied" | "authorization_denied") => {
@@ -1450,23 +1253,12 @@ impl CodeAttempt {
         let (status, tokens) = self
             .client
             .send(self.client.form(
-                if self.provider == "openai" {
-                    "/oauth/token"
-                } else {
-                    "/token"
-                },
+                "/oauth/token",
                 &[
                     ("grant_type", "authorization_code"),
                     ("code", code),
                     ("redirect_uri", &self.redirect),
-                    (
-                        "client_id",
-                        if self.provider == "openai" {
-                            OPENAI_CLIENT
-                        } else {
-                            XAI_CLIENT
-                        },
-                    ),
+                    ("client_id", OPENAI_CLIENT),
                     ("code_verifier", &self.verifier),
                 ],
             ))
@@ -1489,13 +1281,6 @@ fn token_secret(
     let refresh = tokens
         .get("refresh_token")
         .and_then(Value::as_str)
-        .or_else(|| {
-            if provider == "xai" {
-                current.and_then(|v| v.refresh.as_str())
-            } else {
-                None
-            }
-        })
         .ok_or(Error::UnknownOutcome)?;
     let seconds = match tokens.get("expires_in") {
         None => None,
@@ -1613,11 +1398,6 @@ fn number(value: &Value, field: &str) -> Option<f64> {
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite())
 }
-fn positive(value: &Value, field: &str, fallback: f64) -> f64 {
-    number(value, field)
-        .filter(|value| *value > 0.0)
-        .unwrap_or(fallback)
-}
 fn account_claim(token: &str) -> Option<String> {
     let value = jwt(token)?;
     if value
@@ -1710,23 +1490,6 @@ fn random_string(length: usize) -> Result<String, Error> {
         .into_iter()
         .map(|byte| alphabet[usize::from(byte) % alphabet.len()] as char)
         .collect())
-}
-fn normalize_enterprise(input: &str) -> Result<String, Error> {
-    let domain = input
-        .strip_prefix("https://")
-        .or_else(|| input.strip_prefix("http://"))
-        .unwrap_or(input)
-        .trim_end_matches('/');
-    let url = Url::parse(&format!("https://{domain}")).map_err(|_| Error::Rejected)?;
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(Error::Rejected);
-    }
-    Ok(domain.into())
 }
 fn now() -> Result<i64, Error> {
     SystemTime::now()

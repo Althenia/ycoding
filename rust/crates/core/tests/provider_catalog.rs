@@ -24,97 +24,36 @@ fn reference(provider: &str, id: &str, profile: &str) -> model::Ref {
 }
 
 #[tokio::test]
-async fn opencode_profiles_republish_retained_inventory_config_and_attribution_to_wire() {
-    let remote = |id: &str, endpoint: &str| {
-        serde_json::json!({"config":{"providers":{"router":{"package":"aisdk:@openrouter/ai-sdk-provider","settings":{"baseURL":endpoint,"apiKey":"remote-secret","headers":{"Authorization":"private"}},"models":{id:{"modelID":id,"limit":{"context":10000,"output":1000}}}}}}}).to_string()
-    };
-    let fixture = Fixture::new(vec![
-        (200, remote("work-model", "http://127.0.0.1:1/work")),
-        (200, remote("personal-model", "http://127.0.0.1:1/personal")),
-        (503, "private upstream".into()),
-        (503, "private upstream".into()),
-    ])
-    .await;
+async fn dropped_saved_accounts_never_discover_or_reintroduce_providers() {
+    let fixture = Fixture::new(Vec::new()).await;
     let (store, credentials) = store();
-    for (time, (id, name)) in [("work", "Work"), ("personal", "Personal")]
+    for (time, id) in ["opencode", "github-copilot", "xai"]
         .into_iter()
         .enumerate()
     {
-        credentials.create(id.into(), "opencode".into(), Some(name.into()), secret(&serde_json::json!({"type":"key","key":format!("selected-{id}"),"metadata":{"orgID":id}}).to_string()), time as i64).await.unwrap();
+        credentials
+            .create(
+                id.into(),
+                id.into(),
+                None,
+                secret(r#"{"type":"key","key":"fixture-key"}"#),
+                time as i64,
+            )
+            .await
+            .unwrap();
     }
-    let documents = vec![parse_json(r#"{"providers":{"router":{"headers":{"X-Title":"configured-title"},"models":{"work-model":{"limit":{"output":777}},"personal-model":{}}}}}"#).unwrap()];
     let mut accounts = AccountCatalog::new(Preparation::default(), BTreeMap::new()).unwrap();
-    accounts
-        .endpoints
-        .insert("opencode".into(), fixture.base.clone());
-    for (now, force) in [(100, true), (101, false), (60101, false), (60102, false)] {
-        let composition = Catalog::compose_with_accounts(
-            Vec::new(),
-            &documents,
-            &credentials,
-            &mut accounts,
-            now,
-            force,
-        )
-        .await
-        .unwrap();
-        let resolver = Resolver::new(composition.catalog);
-        let saved = credentials.all().unwrap();
-        for (profile, id) in [("Work", "work-model"), ("Personal", "personal-model")] {
-            let selected = saved
-                .iter()
-                .find(|credential| credential.label().as_str() == Some(profile))
-                .unwrap();
-            let resolved = resolver
-                .resolve(&reference("router", id, profile), &saved, Some(selected))
-                .unwrap();
-            assert!(
-                resolver
-                    .resolve(
-                        &reference(
-                            "router",
-                            if profile == "Work" {
-                                "personal-model"
-                            } else {
-                                "work-model"
-                            },
-                            profile
-                        ),
-                        &saved,
-                        Some(selected)
-                    )
-                    .is_err()
-            );
-            assert_eq!(
-                resolved.info.package.as_ref().unwrap().as_str(),
-                Some("@ycoding-ai/ai/providers/openrouter")
-            );
-            let native =
-                ycoding_core::resources::model::ProviderContext::new(BTreeMap::new(), "fixture")
-                    .unwrap()
-                    .model(&resolved.info, Some(&selected.secret().domain().unwrap()))
-                    .await
-                    .unwrap();
-            let prepared = native
-                .route
-                .prepare(&ycoding_ai::llm::Request::new(native.clone()))
-                .unwrap();
-            assert_eq!(prepared.headers["x-title"], "configured-title");
-            assert_eq!(
-                prepared.headers["authorization"],
-                format!("Bearer selected-{}", selected.id().as_str().unwrap())
-            );
-            assert!(!prepared.encoded_body.contains("remote-secret"));
-            assert!(!prepared.encoded_body.contains("private"));
-            if profile == "Work" {
-                assert_eq!(resolved.info.limit.output.get(), 777);
-            }
-        }
+    for id in ["opencode", "github-copilot", "xai"] {
+        accounts.endpoints.insert(id.into(), fixture.base.clone());
     }
-    let requests = fixture.finish().await;
-    assert_eq!(requests.len(), 4);
-    assert_eq!(header(&requests[0], "x-org-id"), Some("work"));
-    assert_eq!(header(&requests[1], "x-org-id"), Some("personal"));
+    let composition =
+        Catalog::compose_with_accounts(Vec::new(), &[], &credentials, &mut accounts, 100, true)
+            .await
+            .unwrap();
+    assert!(composition.catalog.providers.is_empty());
+    assert!(composition.diagnostics.is_empty());
+    assert_eq!(credentials.all().unwrap().len(), 3);
+    assert!(fixture.finish().await.is_empty());
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
 }
@@ -168,20 +107,27 @@ async fn muse_retained_owner_seeds_rebuilt_catalog_and_reconciles_on_timer() {
 
 #[tokio::test]
 async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowing_stale_models() {
-    let copilot = serde_json::json!({"data":[{"id":"gpt-fixture","name":"Fixture","version":"2026-01-01","model_picker_enabled":true,"capabilities":{"family":"gpt-fixture","limits":{"max_prompt_tokens":10000,"max_output_tokens":1000},"supports":{"tool_calls":false}},"supported_endpoints":["/chat/completions"]}]}).to_string();
-    let fixture = Fixture::new(vec![(200, copilot), (503, "failed".into())]).await;
+    let cursor =
+        serde_json::json!({"models":[{"name":"gpt-fixture","supportsAgent":true}]}).to_string();
+    let fixture = Fixture::new(vec![(200, cursor), (503, "failed".into())]).await;
     let (store, credentials) = store();
-    let first = credentials.create("copilot-profile".into(), "github-copilot".into(), Some("Work".into()), secret(r#"{"type":"oauth","methodID":"device","access":"copilot-first","refresh":"github-first","expires":0}"#), 1).await.unwrap();
-    let documents = vec![
-        parse_json(
-            r#"{"providers":{"github-copilot":{"package":"aisdk:@ai-sdk/github-copilot"}}}"#,
+    let first = credentials
+        .create(
+            "cursor-profile".into(),
+            "cursor".into(),
+            Some("Work".into()),
+            secret(r#"{"type":"key","key":"cursor-first"}"#),
+            1,
         )
-        .unwrap(),
+        .await
+        .unwrap();
+    let documents = vec![
+        parse_json(r#"{"providers":{"cursor":{"package":"cursor-opencode-provider"}}}"#).unwrap(),
     ];
     let mut accounts = AccountCatalog::new(Preparation::default(), BTreeMap::new()).unwrap();
     accounts
         .endpoints
-        .insert("github-copilot".into(), fixture.base.clone());
+        .insert("cursor".into(), fixture.base.clone());
     let mut composition = Catalog::compose_with_accounts(
         Vec::new(),
         &documents,
@@ -195,13 +141,21 @@ async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowi
     assert!(
         Resolver::new(composition.catalog.clone())
             .resolve(
-                &reference("github-copilot", "gpt-fixture", "Work"),
+                &reference("cursor", "gpt-fixture", "Work"),
                 &credentials.all().unwrap(),
                 Some(&first)
             )
             .is_ok()
     );
-    credentials.update(first.id().clone(), None, Some(secret(r#"{"type":"oauth","methodID":"device","access":"copilot-replaced","refresh":"github-replaced","expires":0}"#)), 101).await.unwrap();
+    credentials
+        .update(
+            first.id().clone(),
+            None,
+            Some(secret(r#"{"type":"key","key":"cursor-replaced"}"#)),
+            101,
+        )
+        .await
+        .unwrap();
     composition.diagnostics = accounts
         .reconcile(&mut composition.catalog, &credentials, 101, false)
         .await
@@ -210,7 +164,7 @@ async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowi
     assert!(
         Resolver::new(composition.catalog.clone())
             .resolve(
-                &reference("github-copilot", "gpt-fixture", "Work"),
+                &reference("cursor", "gpt-fixture", "Work"),
                 &credentials.all().unwrap(),
                 credentials.all().unwrap().first()
             )
@@ -230,17 +184,17 @@ async fn account_removal_and_replacement_clear_dynamic_inventory_without_borrowi
             .catalog
             .all(&[])
             .iter()
-            .all(|model| model.provider_id.0 != "github-copilot".into())
+            .all(|model| model.provider_id.0 != "cursor".into())
     );
     let requests = fixture.finish().await;
     assert_eq!(requests.len(), 2);
     assert_eq!(
         header(&requests[0], "authorization"),
-        Some("Bearer github-first")
+        Some("Bearer cursor-first")
     );
     assert_eq!(
         header(&requests[1], "authorization"),
-        Some("Bearer github-replaced")
+        Some("Bearer cursor-replaced")
     );
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
