@@ -1,6 +1,6 @@
 use ycoding_core::resources::model::quota::{
-    normalize_claude, normalize_codex, normalize_cursor, normalize_go, normalize_grok,
-    normalize_openrouter, normalize_organization, normalize_zai,
+    normalize_claude, normalize_codex, normalize_cursor, normalize_openrouter,
+    normalize_organization, normalize_zai,
 };
 use ycoding_schema::{parse_json, provider};
 
@@ -13,65 +13,6 @@ fn claude_scoped_lanes_cents_and_reset_preserve_unknown_values() {
     assert_eq!(snapshot.windows[1].used, None);
     assert_eq!(snapshot.windows[1].limit, Some(10.0));
     assert_eq!(snapshot.windows[2].label, "Sonnet weekly".into());
-}
-
-#[test]
-fn grok_weekly_clamps_over_limit_and_monthly_proto_zero_is_not_weekly() {
-    let weekly = normalize_grok(provider::Id("xai".into()),"Grok",100,&parse_json(r#"{"config":{"creditUsagePercent":135,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-21T00:00:00Z","end":"2026-09-28T00:00:00Z"},"onDemandCap":{"val":2500}}}"#).unwrap()).unwrap();
-    assert_eq!(weekly.windows.len(), 2);
-    assert_eq!(weekly.windows[0].used, Some(100.0));
-    assert_eq!(weekly.windows[0].period_seconds.unwrap().get(), 604800);
-    assert_eq!(weekly.windows[0].reset_at.unwrap().get(), 1790553600000);
-    assert_eq!(weekly.windows[1].limit, Some(2500.0));
-    let monthly = normalize_grok(provider::Id("xai".into()),"Grok",100,&parse_json(r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_MONTHLY","start":"2026-09-01T00:00:00Z","end":"2026-10-01T00:00:00Z"}}}"#).unwrap()).unwrap();
-    assert_eq!(monthly.windows.len(), 1);
-    assert_eq!(monthly.windows[0].id, "extra-usage".into());
-    assert_eq!(monthly.windows[0].limit, Some(0.0));
-    for response in [
-        r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY"}}}"#,
-        r#"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-21T00:00:00Z","end":"2026-09-28T00:00:00Z"},"onDemandCap":"unknown"}}"#,
-    ] {
-        assert!(
-            normalize_grok(
-                provider::Id("xai".into()),
-                "Grok",
-                100,
-                &parse_json(response).unwrap()
-            )
-            .is_err()
-        );
-    }
-}
-
-#[test]
-fn go_three_windows_clamp_preserve_zero_and_ignore_invalid_reset() {
-    let result = normalize_go(provider::Id("opencode-go".into()),"OpenCode Go",100,&parse_json(r#"{"usage":{"rolling":{"percent":130,"resetsAt":"2026-09-28T00:00:00Z"},"weekly":{"percent":0,"resetsAt":"invalid"},"monthly":{"percent":51}}}"#).unwrap()).unwrap();
-    assert_eq!(
-        result.windows.iter().map(|w| w.used).collect::<Vec<_>>(),
-        vec![Some(100.0), Some(0.0), Some(51.0)]
-    );
-    assert_eq!(
-        result
-            .windows
-            .iter()
-            .map(|w| w.period_seconds.unwrap().get())
-            .collect::<Vec<_>>(),
-        vec![18000, 604800, 2592000]
-    );
-    assert_eq!(result.windows[0].reset_at.unwrap().get(), 1790553600000);
-    assert!(result.windows[1].reset_at.is_none());
-    assert!(
-        normalize_go(
-            provider::Id("opencode-go".into()),
-            "Go",
-            100,
-            &parse_json(
-                r#"{"usage":{"rolling":{},"weekly":{"percent":1},"monthly":{"percent":2}}}"#
-            )
-            .unwrap()
-        )
-        .is_err()
-    );
 }
 
 #[test]
@@ -99,6 +40,21 @@ fn cursor_all_lanes_unknown_values_and_allowance_units_remain_separate() {
     let unknown = normalize_cursor(provider::Id("cursor".into()),"Cursor",100,&parse_json(r#"{"planUsage":{"totalPercentUsed":40,"autoPercentUsed":"x"},"billingCycleStart":10,"billingCycleEnd":5}"#).unwrap(),None).unwrap();
     assert_eq!(unknown.windows.len(), 1);
     assert!(unknown.windows[0].period_seconds.is_none());
+    let invalid_reset = normalize_cursor(provider::Id("cursor".into()), "Cursor", 100, &parse_json(r#"{"planUsage":{"totalPercentUsed":40,"autoPercentUsed":0,"apiPercentUsed":null},"billingCycleStart":"invalid","billingCycleEnd":"invalid"}"#).unwrap(), None).unwrap();
+    assert_eq!(
+        invalid_reset
+            .windows
+            .iter()
+            .map(|w| w.used)
+            .collect::<Vec<_>>(),
+        vec![Some(40.0), Some(0.0)]
+    );
+    assert!(
+        invalid_reset
+            .windows
+            .iter()
+            .all(|w| w.reset_at.is_none() && w.period_seconds.is_none())
+    );
     assert!(
         normalize_cursor(
             provider::Id("cursor".into()),
@@ -288,15 +244,20 @@ fn claude_all_model_buckets_deduplicate_scoped_lanes_and_validate_numeric_inputs
     assert_eq!(result.windows[1].label, "Sonnet weekly".into());
     assert_eq!(result.windows[2].used, Some(12.0));
     assert_eq!(result.windows[2].remaining, Some(0.0));
-    assert!(
-        normalize_claude(
-            provider::Id("anthropic".into()),
-            "Claude",
-            100,
-            &parse_json(r#"{"seven_day":{"utilization":101}}"#).unwrap()
-        )
-        .is_err()
-    );
+    for response in [
+        r#"{"seven_day":{"utilization":101}}"#,
+        r#"{"extra_usage":{"is_enabled":true,"monthly_limit":"unknown"}}"#,
+    ] {
+        assert!(
+            normalize_claude(
+                provider::Id("anthropic".into()),
+                "Claude",
+                100,
+                &parse_json(response).unwrap()
+            )
+            .is_err()
+        );
+    }
     let empty = normalize_claude(
         provider::Id("anthropic".into()),
         "Claude",

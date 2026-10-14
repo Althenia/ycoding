@@ -308,9 +308,11 @@ fn bundled_catalog_packages_match_the_kept_set_and_every_dropped_document_recove
     let JsonValue::Object(providers) = source else {
         panic!("expected catalog");
     };
+    let endpoints = model::quota::Endpoints::provider();
     for (id, item) in providers.iter().filter(|(id, _)| {
         !KEPT.iter().any(|(kept, _)| id.as_str() == Some(*kept)) && id.as_str() != Some("lmstudio")
     }) {
+        assert!(!endpoints.0.contains_key(id.as_str().unwrap()), "{id:?}");
         let Some(JsonValue::String(package)) = field(item, "npm") else {
             panic!("expected package");
         };

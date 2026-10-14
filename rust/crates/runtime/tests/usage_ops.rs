@@ -325,27 +325,28 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
     timeout(Duration::from_secs(60), async {
         let credentials = credential::Service::new(world().store.clone());
         let secret = Secret::new(parse_json(r#"{"type":"key","key":"synthetic-private-key"}"#).unwrap()).unwrap();
-        for (provider, id) in [("openrouter", "private-credential-router"), ("opencode-go", "private-credential-go")] {
+        for (provider, id) in [("openrouter", "private-credential-router"), ("cursor", "private-credential-cursor")] {
             credentials.create(id.into(), provider.into(), Some("Work".into()), secret.clone(), 1).await.unwrap();
         }
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let worker = tokio::spawn(async move {
-            for (path, status, body) in [
-                ("/key", 200, r#"{"data":{"usage_daily":0,"limit":null,"limit_remaining":null,"email":"private@example.invalid","credentialID":"private-credential-router"}}"#),
-                ("/credits", 403, "{}"),
-                ("/key", 503, r#"{"token":"synthetic-private-key"}"#),
-                ("/usage", 503, r#"{"email":"private@example.invalid"}"#),
+            for (method, path, status, body) in [
+                ("GET", "/key", 200, r#"{"data":{"usage_daily":0,"limit":null,"limit_remaining":null,"email":"private@example.invalid","credentialID":"private-credential-router"}}"#),
+                ("GET", "/credits", 403, "{}"),
+                ("GET", "/key", 503, r#"{"token":"synthetic-private-key"}"#),
+                ("POST", "/GetCurrentPeriodUsage", 503, r#"{"email":"private@example.invalid"}"#),
+                ("POST", "/GetCurrentPeriodUsage", 403, r#"{"token":"synthetic-private-key"}"#),
             ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = vec![0; 8192];
                 let size = socket.read(&mut bytes).await.unwrap();
-                assert!(String::from_utf8_lossy(&bytes[..size]).starts_with(&format!("GET {path} HTTP/1.1")));
+                assert!(String::from_utf8_lossy(&bytes[..size]).starts_with(&format!("{method} {path} HTTP/1.1")));
                 socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             }
         });
-        let quota = Arc::new(quota::Service::new(credentials.clone(), quota::Endpoints(BTreeMap::from([("openrouter".into(), endpoint.clone()), ("opencode-go".into(), endpoint)]))).unwrap());
-        let other = Arc::new(quota::Service::new(credentials, quota::Endpoints::default()).unwrap());
+        let quota = Arc::new(quota::Service::new(credentials.clone(), quota::Endpoints(BTreeMap::from([("openrouter".into(), endpoint.clone()), ("cursor".into(), endpoint.clone())]))).unwrap());
+        let other = Arc::new(quota::Service::new(credentials, quota::Endpoints(BTreeMap::from([("cursor".into(), endpoint)]))).unwrap());
         observe(&quota, Some(0.0));
         observe(&other, None);
         let mut config = services(LocalAuth::disabled(), true);
@@ -353,7 +354,7 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
             let quota = quota.clone(); let other = other.clone();
             move |info| Ok(ProviderUsageServices {
                 quota: if info.directory.as_lossless().as_str() == Some("/project") { quota.clone() } else { other.clone() },
-                providers: ["muse", "openrouter", "opencode-go"].map(|id| provider::Id(id.into())).to_vec(),
+                providers: ["muse", "openrouter", "cursor"].map(|id| provider::Id(id.into())).to_vec(),
             })
         }));
         let server = start(config, standard().unwrap()).await;
@@ -377,9 +378,14 @@ async fn quotas_are_location_owned_normalized_and_best_effort_with_stale_and_par
         assert_eq!(absent.data.windows.items[0].used, None);
         let list: v5::ProviderUsageListResult = success(client.call("providerUsage.list", location("/project"), v5::ProviderUsageListRequest { query: query(Some(false)) }.encode_to_vec()).await);
         assert_eq!(list.data.items.len(), 3);
-        assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "opencode-go").unwrap().status, 5);
+        assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "cursor").unwrap().status, 5);
         assert_eq!(list.data.items.iter().find(|snapshot| units(&snapshot.provider_id) == "muse").unwrap().status, 1);
-        for bytes in [first.encode_to_vec(), stale.encode_to_vec(), list.encode_to_vec()] {
+        let unauthorized = get(&mut client, "/project/team", "cursor", Some(true)).await;
+        assert_eq!(units(&unauthorized.location.directory), "/project/team");
+        assert_eq!(unauthorized.data.status, 4);
+        assert!(unauthorized.data.windows.items.is_empty());
+        assert_eq!(unauthorized.data.message.as_ref().map(units).as_deref(), Some("Provider usage credentials are unauthorized"));
+        for bytes in [first.encode_to_vec(), stale.encode_to_vec(), list.encode_to_vec(), unauthorized.encode_to_vec()] {
             let payload = String::from_utf8_lossy(&bytes);
             for private in ["synthetic-private-key", "private-credential", "private@example", "usage_daily", "limit_remaining", "authorization"] { assert!(!payload.contains(private)); }
         }

@@ -1,6 +1,6 @@
 use super::{
-    Cache, Error, empty, normalize_codex, normalize_cursor, normalize_go, normalize_grok,
-    normalize_openrouter, normalize_organization, normalize_zai,
+    Cache, Error, empty, normalize_codex, normalize_cursor, normalize_openrouter,
+    normalize_organization, normalize_zai,
 };
 use crate::resources::catalog::{
     field,
@@ -24,11 +24,9 @@ impl Endpoints {
         Self(BTreeMap::from([
             ("openrouter".into(), "https://openrouter.ai/api/v1".into()),
             ("anthropic".into(), "https://api.anthropic.com".into()),
-            ("opencode-go".into(), "https://opencode.ai/zen/go/v1".into()),
             ("openai".into(), "https://api.openai.com/v1".into()),
             ("codex".into(), "https://chatgpt.com/backend-api".into()),
             ("meta".into(), "https://api.llama.com/v1".into()),
-            ("xai".into(), "https://cli-chat-proxy.grok.com/v1".into()),
             ("zai".into(), "https://api.z.ai".into()),
             ("zai-coding-plan".into(), "https://api.z.ai".into()),
             (
@@ -758,29 +756,6 @@ impl Service {
                     true,
                 )
             }
-            Some("xai") => {
-                if !matches!(&value,credential::Value::OAuth(oauth) if ["browser","device"].iter().any(|method| oauth.method_id.as_lossless() == &(*method).into()))
-                {
-                    let mut snapshot = unavailable(
-                        provider,
-                        "Grok",
-                        now,
-                        "unsupported",
-                        "Grok Build usage requires a connected xAI subscription account",
-                    );
-                    snapshot.source = "provider_internal_api".into();
-                    snapshot.stability = "best_effort".into();
-                    return Ok(snapshot);
-                }
-                normalize_grok(
-                    provider,
-                    "Grok",
-                    now,
-                    &self
-                        .request(format!("{base}/billing?format=credits"), &key, false)
-                        .await?,
-                )
-            }
             Some("zai" | "zai-coding-plan") => {
                 if !matches!(value, credential::Value::Key(_)) {
                     return Err(Error::InvalidResponse);
@@ -842,12 +817,6 @@ impl Service {
                     Err(error) => Err(error),
                 }
             }
-            Some("opencode-go") => normalize_go(
-                provider,
-                "OpenCode Go",
-                now,
-                &self.request(format!("{base}/usage"), &key, false).await?,
-            ),
             Some("cursor") => {
                 let usage = self
                     .request(format!("{base}/GetCurrentPeriodUsage"), &key, true)

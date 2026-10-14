@@ -171,45 +171,6 @@ pub fn normalize_zai(
     }
     Ok(snapshot)
 }
-pub fn normalize_grok(
-    provider: provider::Id,
-    label: &str,
-    now: i64,
-    response: &JsonValue,
-) -> Result<Snapshot, Error> {
-    let config = field(response, "config").ok_or(Error::InvalidResponse)?;
-    let period = field(config, "currentPeriod").ok_or(Error::InvalidResponse)?;
-    let start = field(period, "start")
-        .and_then(text)
-        .and_then(date_millis)
-        .ok_or(Error::InvalidResponse)?;
-    let end = field(period, "end")
-        .and_then(text)
-        .and_then(date_millis)
-        .ok_or(Error::InvalidResponse)?;
-    if end <= start || field(period, "type").and_then(text).is_none() {
-        return Err(Error::InvalidResponse);
-    }
-    let used = amount(field(config, "creditUsagePercent"))?.unwrap_or(0.0);
-    let cap = match field(config, "onDemandCap") {
-        Some(v @ JsonValue::Object(_)) => amount(field(v, "val"))?.unwrap_or(0.0),
-        None => 0.0,
-        _ => return Err(Error::InvalidResponse),
-    };
-    let mut snapshot = empty(provider, label, now, "provider_internal_api", "best_effort");
-    if field(period, "type").and_then(text) == Some("USAGE_PERIOD_TYPE_WEEKLY") {
-        let mut w = window("weekly", "Weekly", "percent");
-        w.used = Some(used.min(100.0));
-        w.reset_at = Some(integer(end)?);
-        w.period_seconds = Some(integer(((end - start) / 1000.0).floor())?);
-        snapshot.windows.push(w);
-    }
-    let mut w = window("extra-usage", "Extra usage", "count");
-    w.limit = Some(cap);
-    snapshot.windows.push(w);
-    Ok(snapshot)
-}
-
 pub fn normalize_organization(
     provider: provider::Id,
     label: &str,

@@ -15,9 +15,7 @@ mod service;
 pub use service::{Endpoints, Service};
 pub use ycoding_ai::muse::{normalize_usage, unreported};
 mod normalize;
-pub use normalize::{
-    normalize_claude, normalize_codex, normalize_grok, normalize_organization, normalize_zai,
-};
+pub use normalize::{normalize_claude, normalize_codex, normalize_organization, normalize_zai};
 mod app_server;
 pub use app_server::{AppServerCommand, load_app_server};
 mod spend;
@@ -312,36 +310,6 @@ pub fn normalize_openrouter(
         }
         let mut w = window("balance", "Balance", "usd");
         w.remaining = Some(balance);
-        snapshot.windows.push(w);
-    }
-    Ok(snapshot)
-}
-pub fn normalize_go(
-    provider: provider::Id,
-    label: &str,
-    updated: i64,
-    response: &JsonValue,
-) -> Result<Snapshot, Error> {
-    let usage = field(response, "usage").ok_or(Error::InvalidResponse)?;
-    let mut snapshot = empty(provider, label, updated, "provider_api", "stable");
-    for (key, id, label, seconds) in [
-        ("rolling", "session", "Session", 18000),
-        ("weekly", "weekly", "Weekly", 604800),
-        ("monthly", "monthly", "Monthly", 2592000),
-    ] {
-        let value = field(usage, key).ok_or(Error::InvalidResponse)?;
-        let mut w = window(id, label, "percent");
-        w.used = Some(
-            amount(field(value, "percent"))?
-                .ok_or(Error::InvalidResponse)?
-                .min(100.0),
-        );
-        w.period_seconds = Some(NonNegativeInt::new(seconds).map_err(|_| Error::InvalidResponse)?);
-        w.reset_at = field(value, "resetsAt")
-            .and_then(text)
-            .and_then(super::super::catalog::models_dev::date_millis)
-            .filter(|n| *n >= 0.0)
-            .and_then(|n| NonNegativeInt::new(n as i64).ok());
         snapshot.windows.push(w);
     }
     Ok(snapshot)

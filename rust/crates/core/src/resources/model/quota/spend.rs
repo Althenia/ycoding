@@ -21,7 +21,7 @@ pub fn local_spend_snapshots(rows: &[LocalSpendRow], now: i64) -> Result<Vec<Sna
         };
         if row.time_created < start
             || row.time_created >= end
-            || !["anthropic", "openai", "opencode", "opencode-go", "xai"]
+            || !["anthropic", "openai"]
                 .iter()
                 .any(|id| row.provider_id.0 == (*id).into())
         {
@@ -33,11 +33,8 @@ pub fn local_spend_snapshots(rows: &[LocalSpendRow], now: i64) -> Result<Vec<Sna
         .into_iter()
         .map(|(provider, used)| {
             let label = match provider.0.as_str() {
-                Some("opencode") => "OpenCode Zen",
-                Some("opencode-go") => "OpenCode Go",
                 Some("anthropic") => "Claude",
                 Some("openai") => "Openai",
-                Some("xai") => "Xai",
                 _ => unreachable!(),
             };
             let mut snapshot = empty(provider, label, now, "local_session", "stable");
@@ -53,8 +50,8 @@ pub fn local_spend_from_store(store: &Client, now: i64) -> Result<Vec<Snapshot>,
     let (start, end) =
         crate::resources::catalog::date::day_bounds(now).ok_or(Error::InvalidResponse)?;
     let rows = store.analytics().map_err(|_| Error::Storage)?.report(vec![Query {
-        sql: "SELECT provider, sum(cost) FROM session_provider_request WHERE time_created >= $1 AND time_created < $2 AND cost >= 0 AND isfinite(cost) AND provider IN ('anthropic', 'openai', 'opencode', 'opencode-go', 'xai') GROUP BY provider ORDER BY provider",
-        parameters: vec![Value::BigInt(start), Value::BigInt(end)], max_rows: 5,
+        sql: "SELECT provider, sum(cost) FROM session_provider_request WHERE time_created >= $1 AND time_created < $2 AND cost >= 0 AND isfinite(cost) AND provider IN ('anthropic', 'openai') GROUP BY provider ORDER BY provider",
+        parameters: vec![Value::BigInt(start), Value::BigInt(end)], max_rows: 2,
     }]).map_err(|_| Error::Storage)?.remove(0).into_iter().map(|row| {
         Ok(LocalSpendRow { provider_id: provider::Id(reports::value_text(&row[0]).map_err(|_| Error::Storage)?.into()),
             cost: Some(reports::value_number(&row[1]).map_err(|_| Error::Storage)?), time_created: now })

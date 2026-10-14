@@ -85,16 +85,18 @@ fn quota_absent_is_not_zero_and_payload_is_not_exposed() {
     assert_eq!(result.stability, "stable".into());
     let encoded = result.encode();
     assert!(!format!("{encoded:?}").contains("is_free_tier"));
-    assert!(
-        normalize_openrouter(
-            provider::Id("openrouter".into()),
-            "OpenRouter",
-            100,
-            &parse_json(r#"{"data":{"usage_daily":-1}}"#).unwrap(),
-            None
-        )
-        .is_err()
-    );
+    for response in [r#"{}"#, r#"{"data":{"usage_daily":-1}}"#] {
+        assert!(
+            normalize_openrouter(
+                provider::Id("openrouter".into()),
+                "OpenRouter",
+                100,
+                &parse_json(response).unwrap(),
+                None
+            )
+            .is_err()
+        );
+    }
 }
 
 #[tokio::test]

@@ -37,19 +37,27 @@ fn local_spend_uses_local_calendar_day_filters_invalid_costs_and_never_invents_t
             row("anthropic", None, now),
             row("anthropic", Some(-1.0), now),
             row("anthropic", Some(f64::NAN), now),
+            row("anthropic", Some(0.0), now),
             row("opencode-go", Some(0.0), now),
+            row(
+                ycoding_core::resources::model::DROPPED_UPSTREAM_PROVIDER_ID,
+                Some(10.0),
+                now,
+            ),
+            row("xai", Some(10.0), now),
             row("meta", Some(2.0), now),
         ],
         now,
     )
     .unwrap();
     assert_eq!(snapshots.len(), 2);
-    assert_eq!(snapshots[0].provider_id.0, "openai".into());
-    assert_eq!(snapshots[0].windows[0].used, Some(3.0));
-    assert_eq!(snapshots[0].source, "local_session".into());
-    assert_eq!(snapshots[0].profile, Some("YCoding local".into()));
-    assert_eq!(snapshots[1].label, "OpenCode Go".into());
-    assert_eq!(snapshots[1].windows[0].used, Some(0.0));
+    assert_eq!(snapshots[0].provider_id.0, "anthropic".into());
+    assert_eq!(snapshots[0].label, "Claude".into());
+    assert_eq!(snapshots[0].windows[0].used, Some(0.0));
+    assert_eq!(snapshots[1].provider_id.0, "openai".into());
+    assert_eq!(snapshots[1].windows[0].used, Some(3.0));
+    assert_eq!(snapshots[1].source, "local_session".into());
+    assert_eq!(snapshots[1].profile, Some("YCoding local".into()));
     assert!(
         snapshots
             .iter()
@@ -82,8 +90,8 @@ fn local_spend_reads_real_request_rows_without_mutating_session_or_request_data(
     store.submit(|tx| {
         project::ProjectTable::insert(tx,&project::Project { id: "p".into(),worktree: "".into(),vcs: None,name: None,icon_url: None,icon_url_override: None,icon_color: None,time_created: 0,time_updated: 0,time_initialized: None,sandboxes: vec![],commands: None })?;
         session::SessionTable::insert(tx,&session::Session { id: "s".into(),project_id: "p".into(),workspace_id: None,parent_id: None,fork_session_id: None,fork_message_id: None,fork_seq: None,directory: "".into(),path: None,title: "".into(),cost: 0.0,tokens_input: 0,tokens_output: 0,tokens_reasoning: 0,tokens_cache_read: 0,tokens_cache_write: 0,revert: None,permission: None,autonomy: None,autonomy_revision: 0,orchestration_revision: 0,agent: None,model: None,profile_binding: None,daybreak: None,time_created: 0,time_updated: 0,time_archived: None,time_active: None,time_pinned: None,time_suspended: None })?;
-        for (index,cost) in [Some(1.0),Some(2.0),None,Some(-1.0)].into_iter().enumerate() {
-            resources::RequestTable::insert(tx,&resources::Request { id: format!("request-{index}").into(),session_id: "s".into(),input_id: None,assistant_message_id: None,connection_identity_digest: None,source: "step".into(),agent: "fixture".into(),model: session::Document::from_domain(&ycoding_schema::model::Ref { id: "m".into(),provider_id: provider::Id("openai".into()),variant: None,profile: None })?,route_id: "fixture".into(),prompt_cache_key: "fixture-private-cache".into(),system_digest: "fixture-private-system".into(),tool_digest: "fixture-private-tools".into(),request: index as i64,attempts: 1,invalidation: "none".into(),continuation: "none".into(),cache_read_reported: None,timing: None,cost,tokens: session::Document::new(ycoding_schema::parse_json(r#"{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}"#).unwrap())?,time_created: 1790598896000 })?;
+        for (index,(provider,cost)) in [("openai",Some(1.0)),("openai",Some(2.0)),("openai",None),("openai",Some(-1.0)),("anthropic",Some(0.0)),("opencode-go",Some(10.0)),(ycoding_core::resources::model::DROPPED_UPSTREAM_PROVIDER_ID,Some(10.0)),("xai",Some(10.0))].into_iter().enumerate() {
+            resources::RequestTable::insert(tx,&resources::Request { id: format!("request-{index}").into(),session_id: "s".into(),input_id: None,assistant_message_id: None,connection_identity_digest: None,source: "step".into(),agent: "fixture".into(),model: session::Document::from_domain(&ycoding_schema::model::Ref { id: "m".into(),provider_id: provider::Id(provider.into()),variant: None,profile: None })?,route_id: "fixture".into(),prompt_cache_key: "fixture-private-cache".into(),system_digest: "fixture-private-system".into(),tool_digest: "fixture-private-tools".into(),request: index as i64,attempts: 1,invalidation: "none".into(),continuation: "none".into(),cache_read_reported: None,timing: None,cost,tokens: session::Document::new(ycoding_schema::parse_json(r#"{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}"#).unwrap())?,time_created: 1790598896000 })?;
         }
         Ok(())
     }).unwrap().wait().unwrap();
@@ -107,7 +115,11 @@ fn local_spend_reads_real_request_rows_without_mutating_session_or_request_data(
         1790598896000,
     )
     .unwrap();
-    assert_eq!(result[0].windows[0].used, Some(3.0));
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].provider_id.0, "anthropic".into());
+    assert_eq!(result[0].windows[0].used, Some(0.0));
+    assert_eq!(result[1].provider_id.0, "openai".into());
+    assert_eq!(result[1].windows[0].used, Some(3.0));
     assert!(!format!("{result:?}").contains("fixture-private"));
     let after = store
         .snapshot()
