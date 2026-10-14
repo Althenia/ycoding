@@ -73,6 +73,23 @@ tool selection and effective permissions. A server contributes guidance only
 when `execute` is usable and one of its tool names passes both checks; the tool
 allow list does not independently exclude the `execute` wrapper.
 
+`project_artifact::source::Service::set_capabilities` replaces managed catalogs
+with their current standard catalogs while disabled. Refresh and standard-source
+replacement preserve this selection; re-enabling can apply the same stored
+versions. Suppression changes neither artifact rows/lifecycle nor managed files.
+The source keeps its generation-owned registry registration and clears active
+managed provenance rather than deleting or disabling stored artifacts.
+
+`instruction_assembly::select_sources` selects per-Session instruction sources
+from the selected agent, Session permission ceiling, current configuration and
+tool registry. Effective tool permissions append the ceiling, then subagent
+nesting denies. Builtin dependencies use actual registry availability, including
+CodeMode reachability; environment, date and Git blocks have no tool dependency.
+Memory guidance additionally requires `memory.enabled`. Domain memory and
+project-artifact guidance share their builtin gates. `instructions::when` keeps
+source keys and observes disabled values as Removed, allowing durable removal
+and later re-enable without an unavailable or omitted source.
+
 ## Session movement
 
 Session movement adopts a destination Project's previous artifact scope in its

@@ -60,6 +60,38 @@ pub struct Source {
     pub removed: Option<Arc<Initial>>,
 }
 
+pub fn constant(key: &str, content: &'static str) -> Source {
+    Source {
+        key: instruction::Key::decode(&JsonValue::String(key.into()))
+            .expect("static instruction key"),
+        read: Arc::new(move || {
+            Box::pin(async move { Ok(Observation::Value(JsonValue::String(content.into()))) })
+        }),
+        initial: Arc::new(|value| match value {
+            JsonValue::String(value) => Some(value.clone()),
+            _ => None,
+        }),
+        changed: Arc::new(|_, value| match value {
+            JsonValue::String(value) => Some(value.clone()),
+            _ => None,
+        }),
+        removed: None,
+    }
+}
+
+pub fn when(enabled: bool, sources: Vec<Source>) -> Vec<Source> {
+    if enabled {
+        return sources;
+    }
+    sources
+        .into_iter()
+        .map(|mut source| {
+            source.read = Arc::new(|| Box::pin(async { Ok(Observation::Removed) }));
+            source
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Admission {
     pub delta: instruction::Delta,

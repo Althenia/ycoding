@@ -90,6 +90,7 @@ struct CatalogState {
     standard: Catalogs,
     current: Catalogs,
     pending_standard: bool,
+    enabled: bool,
 }
 #[derive(Default)]
 struct State {
@@ -126,12 +127,29 @@ impl Service {
                 current: standard.clone(),
                 standard,
                 pending_standard: true,
+                enabled: true,
             }),
             state: Mutex::new(State::default()),
         }))
     }
     pub async fn catalogs(&self) -> Catalogs {
         self.0.catalogs.lock().await.current.clone()
+    }
+    pub async fn set_capabilities(
+        &self,
+        capabilities: &crate::resources::config::capabilities::ConfigCapabilities,
+    ) -> Result<(), Error> {
+        let mut catalogs = self.0.catalogs.lock().await;
+        let previous = (catalogs.enabled, catalogs.pending_standard);
+        catalogs.enabled = capabilities.project_artifacts != Some(false);
+        catalogs.pending_standard = true;
+        if let Err(error) = self.refresh_unsafe(&mut catalogs).await {
+            catalogs.enabled = previous.0;
+            catalogs.pending_standard = previous.1;
+            lock(&self.0.state).diagnostics.insert("refresh-failed");
+            return Err(error);
+        }
+        Ok(())
     }
     pub async fn replace_standard(&self, catalogs: Catalogs) {
         let mut state = self.0.catalogs.lock().await;
@@ -150,7 +168,7 @@ impl Service {
     }
     async fn refresh_unsafe(&self, catalogs: &mut CatalogState) -> Result<(), Error> {
         let options = &self.0.options;
-        let observed_catalogs = if catalogs.pending_standard {
+        let observed_catalogs = if catalogs.pending_standard || !catalogs.enabled {
             &mut catalogs.standard
         } else {
             &mut catalogs.current
@@ -206,6 +224,18 @@ impl Service {
                     &options.project_id,
                 ));
             }
+        }
+        if !catalogs.enabled {
+            let mut state = lock(&self.0.state);
+            let mut registry = lock(&options.registry);
+            match state.registration {
+                Some(owner) => registry.update(&self.0.key, owner, observed),
+                None => state.registration = Some(registry.replace(self.0.key.clone(), observed)),
+            }
+            state.active.clear();
+            catalogs.current = catalogs.standard.clone();
+            catalogs.pending_standard = false;
+            return Ok(());
         }
         let mut details = Vec::new();
         if options.project_id.as_lossless().as_str() != Some("global") {

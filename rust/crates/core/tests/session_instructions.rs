@@ -27,6 +27,63 @@ fn id() -> session::Id {
 }
 
 #[tokio::test]
+async fn disabled_guidance_publishes_removed_and_reenables_by_same_key() {
+    use ycoding_core::instructions;
+    let store = support::store();
+    let service = Service::new(store.client());
+    let sources = vec![instructions::constant("core/decision-use", "Use decision.")];
+    service
+        .prepare_instructions(&id(), &sources, 1)
+        .await
+        .unwrap();
+    let initial = service
+        .assemble_instructions(&id(), &sources)
+        .unwrap()
+        .current;
+    let disabled = instructions::when(false, sources.clone());
+    let observation = service
+        .observe_instructions(&id(), &disabled)
+        .await
+        .unwrap();
+    assert_eq!(
+        observation.delta.encode(),
+        parse_json(r#"{"core/decision-use":"removed"}"#).unwrap()
+    );
+    service.commit_instructions(observation, 2).await.unwrap();
+    assert!(
+        service
+            .assemble_instructions(&id(), &disabled)
+            .unwrap()
+            .current
+            .iter()
+            .next()
+            .is_none()
+    );
+    service
+        .prepare_instructions(&id(), &sources, 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .assemble_instructions(&id(), &sources)
+            .unwrap()
+            .current,
+        initial
+    );
+    assert!(
+        service
+            .observe_instructions(&id(), &sources)
+            .await
+            .unwrap()
+            .delta
+            .0
+            .iter()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn hash_only_instruction_events_fold_initial_changed_and_removed_values() {
     let store = support::store();
     let service = Service::new(store.client());

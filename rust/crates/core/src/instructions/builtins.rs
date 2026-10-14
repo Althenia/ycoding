@@ -10,6 +10,28 @@ pub struct Environment {
     pub platform: String,
 }
 
+pub fn enabled(
+    name: &str,
+    capabilities: &crate::resources::config::capabilities::ConfigCapabilities,
+    tools: &std::collections::BTreeSet<String>,
+) -> bool {
+    if !crate::resources::config::capabilities::BUILTIN_INSTRUCTIONS.contains(&name) {
+        return false;
+    }
+    let required = match name {
+        "subagent-reuse" => Some("subagent"),
+        "shell-memory" => Some("shell"),
+        "project-artifact-authoring" => Some("project_artifact"),
+        "human-input" => Some("question"),
+        "decision-use" => Some("decision"),
+        "task-completion" => Some("task_complete"),
+        "memory" => Some("memory"),
+        _ => None,
+    };
+    capabilities.builtin_instructions.allows(&name.into())
+        && required.is_none_or(|tool| tools.contains(tool))
+}
+
 pub fn load(environment: Environment, clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Vec<Source> {
     let value = format!(
         "<env>\n  Working directory: {}\n  Workspace root folder: {}\n  Is directory a git repo: {}\n  Platform: {}\n</env>",

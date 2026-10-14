@@ -7,6 +7,180 @@ use ycoding_core::resources::project_artifact::source_registry::{
 };
 use ycoding_core::resources::project_artifact::{adapter, filesystem::Hooks, package, source};
 use ycoding_schema::{DomainDecode, JsonValue, project, project_artifact};
+include!("tool_fixture.rs");
+
+#[tokio::test]
+async fn disabled_artifacts_restore_standard_catalogs_without_store_mutation() {
+    use std::sync::{Arc, Mutex};
+    use ycoding_core::resources::{
+        agent, command,
+        config::{Entry, capabilities::ConfigCapabilities},
+        project_artifact::{accounting, store},
+        skill,
+    };
+    let fixture = ToolFixture::new();
+    let client = fixture.authority.store.client();
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let accounting = accounting::Service::new(client.clone(), "synthetic".into());
+    let artifacts = store::Service::new(
+        client.clone(),
+        store::Paths {
+            data: fixture.root.join("data"),
+            home: fixture.root.join("home"),
+            config: fixture.root.join("config"),
+        },
+        registry.clone(),
+    );
+    let mut written = Vec::new();
+    for (id, definition) in [
+        (
+            "managed-skill",
+            r#"{"kind":"skill","name":"Guide","description":"Guide","content":"Use safely."}"#,
+        ),
+        (
+            "managed-command",
+            r#"{"kind":"command","name":"Command","description":"Run","template":"Run safely.","subtask":false}"#,
+        ),
+        (
+            "managed-agent",
+            r#"{"kind":"agent","name":"Agent","description":"Work","system":"Work safely.","mode":"subagent","permissions":[]}"#,
+        ),
+    ] {
+        written.push(
+            artifacts
+                .write_manual(store::ManualWriteInput {
+                    scope: project_artifact::ScopeSelector::Project,
+                    project_id: Some(project_id("project")),
+                    id,
+                    definition: &project_artifact::Definition::decode(
+                        &ycoding_schema::parse_json(definition).unwrap(),
+                    )
+                    .unwrap(),
+                    expected: None,
+                    now: 100,
+                })
+                .unwrap(),
+        );
+    }
+    let standard = source::Catalogs {
+        agents: agent::Service::new(vec![agent::empty("standard".into())]),
+        commands: command::Service::from_documents(&[Entry::Document {
+            path: None,
+            info: ycoding_schema::parse_json(
+                r#"{"commands":{"standard":{"template":"Standard"}}}"#,
+            )
+            .unwrap(),
+        }])
+        .unwrap(),
+        skills: skill::Service::new(&fixture.root.join("cache")),
+    };
+    let service = source::Service::new(
+        source::Options {
+            client: client.clone(),
+            store: artifacts.clone(),
+            accounting,
+            registry: registry.clone(),
+            location: ycoding_schema::location::Ref {
+                directory: ycoding_schema::schema::AbsolutePath::new(
+                    fixture.root.to_string_lossy().as_ref(),
+                )
+                .unwrap(),
+                workspace_id: None,
+            },
+            project_id: project_id("project"),
+            project_directory: fixture.root.clone(),
+            data_root: fixture.root.join("data"),
+        },
+        standard.clone(),
+    );
+    service.refresh().await;
+    let mut active = service.catalogs().await;
+    assert_eq!(active.skills.list().await.unwrap().len(), 1);
+    assert!(active.commands.get(&"managed-command".into()).is_some());
+    assert!(
+        active
+            .agents
+            .list()
+            .iter()
+            .any(|agent| agent.id == "managed-agent".into())
+    );
+    let before = written
+        .iter()
+        .map(|item| artifacts.get(&item.scope_id, &item.kind, &item.id).unwrap())
+        .collect::<Vec<_>>();
+    let before_scopes = client
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::artifacts::ScopeTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            100,
+        )
+        .unwrap();
+    let policy = ConfigCapabilities::resolve(&[Entry::Document {
+        path: None,
+        info: ycoding_schema::parse_json(r#"{"capabilities":{"project_artifacts":false}}"#)
+            .unwrap(),
+    }]);
+    service.set_capabilities(&policy).await.unwrap();
+    service.refresh().await;
+    let mut disabled = service.catalogs().await;
+    assert!(disabled.skills.list().await.unwrap().is_empty());
+    assert_eq!(
+        disabled
+            .commands
+            .list()
+            .iter()
+            .map(|info| info.name.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["standard"]
+    );
+    assert_eq!(
+        disabled
+            .agents
+            .list()
+            .iter()
+            .map(|info| info.id.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["standard"]
+    );
+    service.replace_standard(standard).await;
+    assert_eq!(
+        written
+            .iter()
+            .map(|item| artifacts.get(&item.scope_id, &item.kind, &item.id).unwrap())
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(
+        client
+            .snapshot()
+            .unwrap()
+            .scan::<ycoding_store::artifacts::ScopeTable>(
+                std::ops::Bound::Unbounded,
+                std::ops::Bound::Unbounded,
+                100
+            )
+            .unwrap(),
+        before_scopes
+    );
+    service
+        .set_capabilities(&ConfigCapabilities::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        service.catalogs().await.skills.list().await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        written
+            .iter()
+            .map(|item| artifacts.get(&item.scope_id, &item.kind, &item.id).unwrap())
+            .collect::<Vec<_>>(),
+        before
+    );
+    fixture.cleanup();
+}
 
 fn project_id(id: &str) -> project::Id {
     project::Id::decode(&JsonValue::String(id.into())).unwrap()

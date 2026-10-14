@@ -35,6 +35,57 @@ pub struct Preview {
     pub update: LosslessString,
 }
 
+pub fn tool_permissions(
+    agent: &ycoding_schema::agent::Info,
+    ceiling: &[ycoding_schema::permission::Rule],
+) -> ycoding_schema::permission::Ruleset {
+    let mut permissions = agent.permissions.clone();
+    permissions.extend_from_slice(ceiling);
+    if agent.mode.as_str() == Some("subagent") {
+        permissions.extend(["subagent", "subagent_control"].map(|name| {
+            ycoding_schema::permission::Rule {
+                action: name.into(),
+                resource: "*".into(),
+                effect: ycoding_schema::permission::Effect("deny".into()),
+            }
+        }));
+    }
+    permissions
+}
+
+pub fn select_sources(
+    sources: &[Source],
+    agent: &ycoding_schema::agent::Info,
+    ceiling: &[ycoding_schema::permission::Rule],
+    configuration: &crate::resources::config::Configuration,
+    registry: &crate::tools::registry::Registry,
+) -> Vec<Source> {
+    let tools = registry.available(&tool_permissions(agent, ceiling));
+    let memory_enabled =
+        crate::resources::memory::Limits::from_configuration(configuration).enabled;
+    sources
+        .iter()
+        .flat_map(|source| {
+            let key = instructions::key(&source.key);
+            let name = match key.as_str() {
+                Some(crate::resources::memory::instructions::KEY) => Some("memory"),
+                Some(crate::resources::project_artifact::instructions::KEY) => {
+                    Some("project-artifact-authoring")
+                }
+                Some(key) => key.strip_prefix("core/").filter(|name| {
+                    crate::resources::config::capabilities::BUILTIN_INSTRUCTIONS.contains(name)
+                }),
+                None => None,
+            };
+            let enabled = name.is_none_or(|name| {
+                (name != "memory" || memory_enabled)
+                    && instructions::builtins::enabled(name, &configuration.capabilities, &tools)
+            });
+            instructions::when(enabled, vec![source.clone()])
+        })
+        .collect()
+}
+
 impl Service {
     pub async fn observe_instructions(
         &self,
