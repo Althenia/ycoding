@@ -47,7 +47,7 @@ beforeAll(async () => {
 })
 
 async function relayHarness() {
-  const sockets = new Map<string, Bun.ServerWebSocket<{ id: string; browser: string }>>()
+  const sockets = new Map<string, Bun.ServerWebSocket<{ id: string; browser: string; delivery: Promise<void> }>>()
   const endpoints = new Map<string, { answer: PushServiceAnswer; readonly shown: string[] }>()
   let pushGate: Promise<void> | undefined
   const serverModule = "../../../infra/cloudflare/test/support/push-server"
@@ -89,6 +89,8 @@ async function relayHarness() {
     },
   }
   const holds: { readonly match: (operation: string) => boolean; readonly release: Promise<void> }[] = []
+  const receivedOperations: string[] = []
+  let protocolFailures = 0
   const subscribed = new Set<string>()
   const agent = createAgentPeer(
     () => performance.now(),
@@ -125,7 +127,10 @@ async function relayHarness() {
     newID: () => crypto.randomUUID().replaceAll("-", ""),
     send: (connectionID, raw) =>
       connectionID === "agent" ? agent.receive(raw.slice().buffer) : sockets.get(connectionID)?.send(raw),
-    close: (connectionID, code, reason) => sockets.get(connectionID)?.close(code, reason),
+    close: (connectionID, code, reason) => {
+      if (code === 1002) protocolFailures += 1
+      sockets.get(connectionID)?.close(code, reason)
+    },
     loadOfflineCheck: async () => undefined,
     saveOfflineCheck: async () => undefined,
     notices,
@@ -153,7 +158,7 @@ async function relayHarness() {
   await flush()
   agent.control({ case: "completions", value: { items: [], more: false } })
   await flush()
-  const server = Bun.serve<{ id: string; browser: string }>({
+  const server = Bun.serve<{ id: string; browser: string; delivery: Promise<void> }>({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, server) {
@@ -168,6 +173,7 @@ async function relayHarness() {
           data: {
             id: crypto.randomUUID(),
             browser: new URL(request.url).searchParams.get("browser") ?? "browser_test",
+            delivery: Promise.resolve(),
           },
         })
       )
@@ -184,12 +190,18 @@ async function relayHarness() {
           role: "client",
         })
       },
-      async message(socket, raw) {
+      message(socket, raw) {
         const operation = binaryOperation(raw)
+        if (operation !== undefined) receivedOperations.push(operation)
         const held = operation === undefined ? undefined : holds.find((hold) => hold.match(operation))
-        if (held !== undefined) await held.release
-        await relay.handleClientMessage(socket.data.id, binaryData(raw))
-        if (operation === "notice.subscribe") subscribed.add(socket.data.id)
+        const data = binaryData(raw)
+        socket.data.delivery = socket.data.delivery.then(async () => {
+          if (held !== undefined) await held.release
+          if (socket.readyState !== 1) return
+          await relay.handleClientMessage(socket.data.id, data)
+          if (operation === "notice.subscribe") subscribed.add(socket.data.id)
+        })
+        return socket.data.delivery
       },
       close(socket) {
         sockets.delete(socket.data.id)
@@ -384,6 +396,8 @@ async function relayHarness() {
       }
     },
     wsURL: `ws://127.0.0.1:${server.port}`,
+    receivedOperations,
+    protocolFailures: () => protocolFailures,
     stop: async () => {
       await server.stop(true)
       pushServer.close()
@@ -673,6 +687,7 @@ describe("device-synced notices through the real relay core", () => {
       await harness.rawRequest("notice.readAll")
       await harness.status([], [...attention(3), "ses_x", "ses_y"])
       expect(harness.stored()).toHaveLength(2)
+      expect(harness.protocolFailures()).toBe(0)
       release()
       await waitFor(
         () => late.store.state().noticeSync.status === "ready" && other.store.state().noticeSync.status === "ready",
@@ -691,6 +706,27 @@ describe("device-synced notices through the real relay core", () => {
       await harness.stop()
     }
   }, 30_000)
+
+  test("holding a notice request preserves frame order for the next request on the same connection", async () => {
+    const harness = await relayHarness()
+    const transport = createRemoteTransport({ url: harness.wsURL })
+    const release = harness.hold("notice.list")
+    try {
+      transport.connect()
+      await waitFor(() => transport.status().kind === "open", 5_000)
+      const page = transport.request("notice.list", { input: { before: "ntc_1" } })
+      const mutation = transport.request("notice.readAll")
+      await waitFor(() => harness.receivedOperations.includes("notice.readAll"))
+      expect(harness.protocolFailures()).toBe(0)
+      release()
+      expect((await page).status).toBe("ok")
+      expect((await mutation).status).toBe("ok")
+    } finally {
+      release()
+      transport.close()
+      await harness.stop()
+    }
+  })
 
   test("a Load more held while other clients read older notices and add new ones neither resurrects nor loses a notice", async () => {
     const harness = await relayHarness()

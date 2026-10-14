@@ -8,7 +8,7 @@ Complete initial or invalidated-stream hydration when its snapshot settles. Use 
 
 Keep native fixtures schema-valid. Give each subscription its own identity, release its producer ownership on unsubscribe, and acknowledge telemetry batches with their accepted sample count. Wait for delivered events and observable state rather than assuming v5 event coalescing fits an old flush delay.
 
-Serialize in-process fixture agent frames so canonical-epoch resync admission settles before its dependent subscription result.
+Serialize native fixture frames per connection, including held client operations; never let a later frame overtake one awaiting release. Settle canonical-epoch resync admission before its dependent subscription result.
 
 Detect in-flight goal setting through `session.autonomy.set` with a string `goal`; distinguish YOLO changes and null-goal stops.
 
