@@ -115,6 +115,48 @@ it.live("reads retained samples after reopening the same isolated SQLite file", 
   ),
 )
 
+it.live("waits for another process's write lock instead of failing the append", () =>
+  Effect.acquireUseRelease(
+    Effect.promise(() => tmpdir()),
+    (tmp) =>
+      Effect.gen(function* () {
+        const file = path.join(tmp.path, "web-latency.db")
+        const result = yield* Effect.gen(function* () {
+          const database = yield* Database.Service
+          const consent = yield* TelemetryConsent.make(database.db)
+          yield* consent.set({ enabled: true, noticeVersion: 1 })
+          const writer = Bun.spawn(
+            [
+              process.execPath,
+              "-e",
+              `const { Database } = require("bun:sqlite")
+const db = new Database(process.env.WEB_LATENCY_DB)
+db.run("BEGIN IMMEDIATE")
+db.run("UPDATE telemetry_consent SET decided_at = decided_at")
+console.log("held")
+Bun.sleepSync(300)
+db.run("COMMIT")`,
+            ],
+            { stdout: "pipe", env: { ...process.env, WEB_LATENCY_DB: file } },
+          )
+          const held = yield* Effect.promise(() => writer.stdout.getReader().read())
+          const accepted = yield* WebLatency.append(database.db, [sample])
+          return {
+            held: new TextDecoder().decode(held.value),
+            accepted,
+            exitCode: yield* Effect.promise(() => writer.exited),
+            rows: yield* database.db.select().from(WebLatencyTable).all(),
+          }
+        }).pipe(Effect.provide(Database.layerFromPath(file), { local: true }), Effect.scoped)
+        expect(result.held).toBe("held\n")
+        expect(result.exitCode).toBe(0)
+        expect(result.accepted).toEqual({ accepted: 1 })
+        expect(result.rows.map((row) => row.sample)).toEqual([sample])
+      }),
+    (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+  ),
+)
+
 it.effect("defaults to undecided, persists decisions and refuses disabled append without writes", () =>
   Effect.gen(function* () {
     const database = yield* Database.Service

@@ -49,6 +49,7 @@ export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples:
           .get()
         if (oldestRetained) yield* tx.delete(WebLatencyTable).where(lt(WebLatencyTable.id, oldestRetained.id)).run()
       }),
+      { behavior: "immediate" },
     )
     .pipe(Effect.catchTag("SqlError", Effect.die), Effect.catchTag("EffectDrizzleQueryError", Effect.die))
   return { accepted: samples.length }

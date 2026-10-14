@@ -22,6 +22,15 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.10",
+    date: "2026-10-14",
+    title: "No error while another process writes",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once." },
+    ],
+  },
+  {
     version: "0.10.9",
     date: "2026-10-14",
     title: "Muse quota on the usage dashboard",
