@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.8",
+    date: "2026-10-14",
+    title: "Smaller database and eval run controls",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "A capabilities configuration object turns capabilities off for a run: global or project AGENTS.md files (or individual files by path pattern), including nested files the read tool injects, built-in instruction blocks by name, skills, tools, MCP servers, and external plugins by allow and deny lists, managed project artifacts, the ~/.agents and ~/.claude roots, and it can pin the websearch provider. It works in any configuration layer, including YCODING_CONFIG_CONTENT." },
+      { tag: "Added", text: "ycoding run --config <file> applies a JSON/JSONC configuration document as the highest-priority layer of a private server for that run." },
+      { tag: "Added", text: "ycoding run --isolated runs on a private server with a temporary data directory and database that are removed afterwards, so the run never touches your Sessions or database. Stored credentials are unavailable in an isolated run; provide provider keys through environment variables or configuration." },
+      { tag: "Changed", text: "History that a finished local compaction removed from model context is deleted by the startup and hourly retention sweep, shrinking the database. Sessions compacted by Codex remote compaction keep their full history. Copy and export start at the compaction checkpoint summary. Forking or reverting to a message in removed history reports an error and changes nothing. Failure events from the removed range are kept for 7 days." },
+      { tag: "Fixed", text: "Opening the shared database from another YCoding process, such as ycoding run --standalone or serve --stdio, no longer marks a running service's active child tasks as lost. Each active child task records its owning process, and only tasks whose owner process has exited are marked lost when a process starts." },
+      { tag: "Fixed", text: "Built-in guidance for a tool the agent cannot use, such as workspace memory while memory is disabled or decision while it is denied, is no longer included in the instructions." },
+    ],
+  },
+  {
     version: "0.10.7",
     date: "2026-10-13",
     title: "Background Chrome and computer use",
