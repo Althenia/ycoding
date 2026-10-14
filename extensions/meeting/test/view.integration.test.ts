@@ -6,104 +6,26 @@ import path from "node:path"
 import { Readable, Writable } from "node:stream"
 import { z } from "zod"
 import { connect, type Client } from "../../../packages/core/src/browser/isolated-cdp"
-import { startBridge } from "../src/bridge"
-import { meetingConfigSchema } from "../src/config"
-import { createMeetingQuestions } from "../src/plugin"
-import { MeetingRuntime } from "../src/runtime"
-import { MeetingStore } from "../src/store"
+import { startBackend } from "./fixture/runtime"
 import { viewAssets, viewPolicy } from "../view/assets"
 
 test("Passage captures real tab audio, preserves evidence, recovers failure and finalizes with advisory chat", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-view-"))
-  const store = new MeetingStore(path.join(directory, "meeting.sqlite"))
-  let failing = false
-  let answerFailing = true
-  let reportFindings = false
-  let reportMetrics = false
-  const captureMessages: { type: string; captureID: string; source?: string; sequence?: number }[] = []
+  const backend = await startBackend()
+  const captureMessages: { type: string; captureID: string; source?: string; sequence?: number; reason?: string }[] = []
   let audible = false
-  let buffered = false
-  const releaseAnswer = Promise.withResolvers<void>()
-  const runtime = new MeetingRuntime({
-    directory,
-    store,
-    config: meetingConfigSchema.parse({
-      analysis: { incremental: false },
-      knowledge: { mcpEnabled: false },
-      streaming: { vad: false },
-      transcription: { chunkSeconds: 1, overlapSeconds: 0 },
-    }),
-    createSession: async () => "view-test-session",
-    generate: async (_session, prompt) => {
-      if (prompt.includes('"question":"fail"') && answerFailing) throw new Error("Provider unavailable")
-      if (prompt.includes('"question":"hold"')) await releaseAnswer.promise
-      if (prompt.includes('"question":')) return "Advisory: rollout ยังเป็นข้อเสนอ · cite supplied transcript evidence."
-      return JSON.stringify({ summary: "สรุป rollout · unconfirmed", findings: [], proposals: [] })
-    },
-    mcp: {
-      tools: async () => [],
-      callTool: async () => {
-        throw new Error("View must not use tools")
-      },
-    },
-    providerFactory: (config) => ({
-      id: config.provider,
-      initialize: async () => undefined,
-      dispose: async () => undefined,
-      healthCheck: async () => ({ healthy: true, initialized: true, metrics: { device: "test-device" } }),
-      transcribe: async (chunk) => {
-        if (failing) throw new Error("inference_failed")
-        return [
-          {
-            startMs: chunk.startMs,
-            endMs: chunk.startMs + 900,
-            text: "เราจะทดสอบ canary rollout และ transcription latency",
-          },
-        ]
-      },
-    }),
-  })
-  const questions = createMeetingQuestions(runtime)
-  const controller = "v".repeat(64)
-  const bridge = await startBridge({
-    controlToken: controller,
-    onView: () => ({
-      ...questions.state(),
-      findings: reportFindings ? runtime.status().findings : undefined,
-      ...(reportMetrics ? {} : { audio: { sources: runtime.status().audio.sources } }),
-    }),
-    onAsk: (question) => questions.ask(question),
-    onControl: (value) => runtime.control(value),
-    onCapture: (input) => {
-      captureMessages.push(input)
-      if (input.type === "audio") {
-        const pcm = Buffer.from(input.pcm, "base64")
-        for (let offset = 0; offset < pcm.length; offset += 4)
-          if (Math.abs(pcm.readFloatLE(offset)) > 0.001) audible = true
-        expect(pcm.length / 4).toBeLessThanOrEqual(input.sampleRate)
-      }
-      buffered ||= runtime.status().audio.bufferedSeconds > 0
-      return runtime.capture(input)
-    },
-  })
   const fixture = mediaFixture()
   let browser: Awaited<ReturnType<typeof launch>> | undefined
   try {
-    await runtime.control({ action: "start", title: "Passage · synthetic Thai / English" })
-    const urlReply = await fetch(`${bridge.url}/control`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${controller}`, "content-type": "application/json" },
-      body: JSON.stringify({ action: "view" }),
-    })
-    const url = string(record(await urlReply.json()).url)
-    const response = await fetch(`${bridge.url}/view`)
+    await backend.control({ action: "start", title: "Passage · synthetic Thai / English" })
+    const url = backend.url
+    const response = await fetch(`${backend.origin}/view`)
     expect(response.status).toBe(200)
     expect(response.headers.get("content-security-policy")).toBe(viewPolicy)
     expect(response.headers.get("cache-control")).toBe("no-store")
     expect(response.headers.get("referrer-policy")).toBe("no-referrer")
     expect(await response.text()).toBe(viewAssets.get("/view")!.body)
     for (const [asset, expected] of viewAssets) {
-      const reply = await fetch(`${bridge.url}${asset}`)
+      const reply = await fetch(`${backend.origin}${asset}`)
       expect(reply.status).toBe(200)
       expect(await reply.text()).toBe(expected.body)
     }
@@ -117,6 +39,8 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     const network: string[] = []
     const reads = new Set<string>()
     let maximumReads = 0
+    let trackEndedRequest: string | undefined
+    const trackEnded = Promise.withResolvers<void>()
     const unsubscribe = browser.cdp.subscribe((event) => {
       if (event.sessionId !== session) return
       if (event.method === "Runtime.exceptionThrown") errors.push("Page exception")
@@ -124,7 +48,29 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         const request = record(event.params?.request)
         const target = new URL(string(request.url))
         if (target.protocol === "data:" || target.href === "about:blank") return
-        if (target.origin !== bridge.url || target.search || target.hash) network.push("Unexpected network target")
+        if (target.origin !== backend.origin || target.search || target.hash) network.push("Unexpected network target")
+        if (target.pathname === "/view/capture" && typeof request.postData === "string") {
+          const input = z
+            .object({
+              type: z.string(),
+              captureID: z.string(),
+              source: z.string().optional(),
+              sequence: z.number().optional(),
+              reason: z.string().optional(),
+              pcm: z.string().optional(),
+              sampleRate: z.number().optional(),
+            })
+            .parse(JSON.parse(request.postData))
+          captureMessages.push(input)
+          if (input.type === "stop" && input.reason === "track_ended")
+            trackEndedRequest = string(event.params?.requestId)
+          if (input.type === "audio") {
+            const pcm = Buffer.from(input.pcm!, "base64")
+            for (let offset = 0; offset < pcm.length; offset += 4)
+              if (Math.abs(pcm.readFloatLE(offset)) > 0.001) audible = true
+            expect(pcm.length / 4).toBeLessThanOrEqual(input.sampleRate!)
+          }
+        }
         if (target.pathname === "/view/state") {
           reads.add(string(event.params?.requestId))
           maximumReads = Math.max(maximumReads, reads.size)
@@ -132,10 +78,22 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       }
       if (event.method === "Network.loadingFinished" || event.method === "Network.loadingFailed")
         reads.delete(string(event.params?.requestId))
+      if (event.method === "Network.loadingFinished" && event.params?.requestId === trackEndedRequest)
+        trackEnded.resolve()
+      if (event.method === "Network.loadingFailed" && event.params?.requestId === trackEndedRequest)
+        trackEnded.reject(new Error("Track-ended Stop request failed"))
     })
     await browser.cdp.send("Runtime.enable", {}, session)
+    await browser.cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }, session)
     await browser.cdp.send("Network.enable", {}, session)
     await browser.cdp.send("Page.enable", {}, session)
+    await browser.cdp.send(
+      "Page.addScriptToEvaluateOnNewDocument",
+      {
+        source: `window.omitOptionalDiagnostics=true;const nativeFetch=window.fetch.bind(window);window.fetch=async(...args)=>{const response=await nativeFetch(...args);if(window.omitOptionalDiagnostics&&new URL(args[0],location.href).pathname==='/view/state'){const value=await response.json();delete value.findings;value.audio={sources:value.audio?.sources};return new Response(JSON.stringify(value),{status:response.status,headers:response.headers})}return response}`,
+      },
+      session,
+    )
     await browser.cdp.send("Page.navigate", { url }, session)
     await waitDOM(browser.cdp, session, "document.querySelector('#connection')?.textContent.includes('Connected')")
     expect(await evaluate(browser.cdp, session, "location.hash")).toBe("")
@@ -146,11 +104,10 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         "['buffered','backlog','processed','lag'].every(id=>{const n=document.getElementById(id);return n.textContent==='Unreported' && n.checkVisibility()})",
       ),
     ).toBe(true)
-    reportMetrics = true
     expect(await evaluate(browser.cdp, session, "document.querySelector('#findings-title').textContent")).toBe(
       "Findings · unreported",
     )
-    reportFindings = true
+    await evaluate(browser.cdp, session, "window.omitOptionalDiagnostics=false;true")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#start').disabled")).toBe(true)
     await click(browser.cdp, session, "#consent")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#start').disabled")).toBe(true)
@@ -165,11 +122,11 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     expect(
       await evaluate(browser.cdp, session, "document.querySelector('#segments').textContent.includes('Temporary')"),
     ).toBe(true)
-    expect(runtime.status().audio.processedSeconds).toBeGreaterThan(0)
-    expect(runtime.status().audio.sources?.microphone).toBe("capturing")
+    expect((await backend.status()).audio.processedSeconds).toBeGreaterThan(0)
+    expect((await backend.status()).audio.sources?.microphone).toBe("capturing")
     expect(captureMessages.some((message) => message.type === "audio" && message.source === "microphone")).toBe(true)
     expect(audible).toBe(true)
-    expect(buffered).toBe(true)
+    await waitDOM(browser.cdp, session, "parseFloat(document.querySelector('#buffered').textContent)>0")
     expect(captureMessages.some((message) => message.type === "audio")).toBe(true)
     expect(
       await evaluate(
@@ -319,13 +276,13 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       session,
       "document.querySelector('#ask').disabled && document.querySelector('#chat-feedback').textContent.includes('one question')",
     )
-    const busy = await fetch(`${bridge.url}/view/ask`, {
+    const busy = await fetch(`${backend.origin}/view/ask`, {
       method: "POST",
       headers: { authorization: `Bearer ${new URL(url).hash.slice(5)}`, "content-type": "application/json" },
       body: JSON.stringify({ question: "concurrent" }),
     })
     expect(busy.status).toBe(409)
-    releaseAnswer.resolve()
+    backend.releaseAnswer.resolve()
     await waitDOM(browser.cdp, session, "!document.querySelector('#ask').disabled")
     await fill(browser.cdp, session, "#question", "fail")
     await click(browser.cdp, session, "#ask")
@@ -343,18 +300,23 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       ),
     ).toBe(true)
     await fill(browser.cdp, session, "#question", "unsaved draft")
-    answerFailing = false
+    backend.flags.answerFailing = false
     await click(browser.cdp, session, "#retry-question")
     await waitDOM(
       browser.cdp,
       session,
       "document.querySelector('#chat-feedback').textContent.includes('Answered') && !document.querySelector('#ask').disabled",
     )
-    expect(questions.state().ask.history.at(-1)?.question).toBe("fail")
-    expect(questions.state().ask.history.at(-1)?.status).toBe("answered")
+    const state = await fetch(`${backend.origin}/view/state`, {
+      headers: { authorization: `Bearer ${new URL(url).hash.slice(5)}` },
+    })
+    expect(state.status).toBe(200)
+    const asked = record(record(await state.json()).ask).history
+    if (!Array.isArray(asked)) throw new Error("Missing Rust Ask history")
+    expect(asked.at(-1)).toMatchObject({ question: "fail", status: "answered" })
     expect(await evaluate(browser.cdp, session, "document.querySelector('#question').value")).toBe("unsaved draft")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#question').value")).toBe("unsaved draft")
-    failing = true
+    await backend.failAudio(true)
     await waitDOM(browser.cdp, session, "!document.querySelector('#retry-audio').hidden")
     expect(
       await evaluate(browser.cdp, session, "document.querySelector('#retry-audio').getClientRects().length>0"),
@@ -366,17 +328,24 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         "document.querySelector('#recovery-text').textContent.includes('Capture remains stopped')",
       ),
     ).toBe(true)
-    failing = false
+    await backend.failAudio(false)
     await click(browser.cdp, session, "#retry-audio")
     await waitDOM(
       browser.cdp,
       session,
       "document.querySelector('#control-feedback').textContent.includes('retry completed')",
     )
-    expect(runtime.status().audio.backlog).toBe(0)
-    expect(runtime.status().audio.sources?.remote).toBe("inactive")
+    expect((await backend.status()).audio.backlog).toBe(0)
+    expect((await backend.status()).audio.sources?.remote).toBe("inactive")
     expect(await evaluate(browser.cdp, session, "window.viewRow === document.querySelector('.segment')")).toBe(true)
-    for (let index = 0; index < 51; index++) await questions.ask(`history-${index}`)
+    for (let index = 0; index < 51; index++) {
+      const answer = await fetch(`${backend.origin}/view/ask`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${new URL(url).hash.slice(5)}`, "content-type": "application/json" },
+        body: JSON.stringify({ question: `history-${index}` }),
+      })
+      expect(answer.status).toBe(200)
+    }
     await waitDOM(
       browser.cdp,
       session,
@@ -386,7 +355,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       await evaluate(browser.cdp, session, "document.querySelector('#chat-history').textContent.includes('history-0')"),
     ).toBe(false)
     expect(await evaluate(browser.cdp, session, "document.querySelector('#question').value")).toBe("unsaved draft")
-    await runtime.control({ action: "start", title: "Second capture" })
+    await backend.control({ action: "start", title: "Second capture" })
     await waitDOM(
       browser.cdp,
       session,
@@ -423,7 +392,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     )
     await waitDOM(browser.cdp, session, "!document.querySelector('#stop-dialog').open")
     expect(await evaluate(browser.cdp, session, "document.activeElement.id")).toBe("stop")
-    expect(runtime.status().meeting?.status).toBe("recording")
+    expect((await backend.status()).meeting?.status).toBe("recording")
     await click(browser.cdp, session, "#stop")
     await click(browser.cdp, session, "#confirm-stop")
     await waitDOM(
@@ -431,7 +400,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       session,
       "document.querySelector('#control-feedback').textContent.includes('Capture stopped')",
     )
-    expect(runtime.status().meeting?.status).toBe("stopped")
+    expect((await backend.status()).meeting?.status).toBe("stopped")
     const firstCapture = captureMessages.find((message) => message.type === "start")!.captureID
     for (const source of ["remote", "microphone"]) {
       const sequences = captureMessages
@@ -446,23 +415,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     expect(await evaluate(browser.cdp, session, "document.querySelector('#insights').nextElementSibling.id")).toBe(
       "transcript",
     )
-    const stoppedMeeting = runtime.status().meeting!
-    const firstSequence = store.nextSequence(stoppedMeeting.id)
-    for (let index = 0; index < 24; index++)
-      store.putSegment({
-        id: `reading-${index}`,
-        meetingID: stoppedMeeting.id,
-        sequence: firstSequence + index,
-        source: "remote",
-        speakerID: "remote-unknown",
-        startMs: index * 1000,
-        endMs: (index + 1) * 1000,
-        rawText: `Evidence ${index} · canary rollout ยังไม่ยืนยัน`,
-        text: `Evidence ${index} · canary rollout ยังไม่ยืนยัน`,
-        state: "final",
-        model: "fixture",
-        createdAt: new Date().toISOString(),
-      })
+    await backend.control({ action: "select", meetingID: "imported" })
     await waitDOM(browser.cdp, session, "document.querySelectorAll('.segment').length>=24")
     await evaluate(
       browser.cdp,
@@ -476,7 +429,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         "document.querySelector('[data-segment-id=\"reading-12\"]').getBoundingClientRect().top",
       ),
     )
-    store.correctSegment("reading-0", "Long corrected evidence · ".repeat(120))
+    await backend.control({ action: "correct", segmentID: "reading-0", text: "Long corrected evidence · ".repeat(120) })
     await waitDOM(
       browser.cdp,
       session,
@@ -493,7 +446,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         ) - anchorTop,
       ),
     ).toBeLessThanOrEqual(1)
-    await runtime.control({ action: "start", title: "Chrome sharing ended" })
+    await backend.control({ action: "start", title: "Chrome sharing ended" })
     await waitDOM(browser.cdp, session, "document.querySelector('#meeting-title').textContent==='Chrome sharing ended'")
     await click(browser.cdp, session, "#consent")
     await click(browser.cdp, session, "#policy")
@@ -509,14 +462,16 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       session,
       "document.querySelector('#capture-feedback').textContent.includes('Stop sharing ended capture')",
     )
+    const stopDeadline = setTimeout(() => trackEnded.reject(new Error("Track-ended Stop did not settle")), 10000)
+    await trackEnded.promise.finally(() => clearTimeout(stopDeadline))
     expect(
       captureMessages.some(
         (message) => message.type === "stop" && "reason" in message && message.reason === "track_ended",
       ),
     ).toBe(true)
-    expect(runtime.status().meeting?.status).toBe("stopped")
+    expect((await backend.status()).meeting?.status).toBe("stopped")
     await navigate(browser.cdp, session, "about:blank")
-    await navigate(browser.cdp, session, `${bridge.url}/view#key=${"f".repeat(64)}`)
+    await navigate(browser.cdp, session, `${backend.origin}/view#key=${"f".repeat(64)}`)
     await waitDOM(browser.cdp, session, "document.querySelector('#connection')?.textContent.includes('key is invalid')")
     expect(
       await evaluate(
@@ -529,69 +484,28 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     expect(network).toEqual([])
     unsubscribe()
   } finally {
-    releaseAnswer.resolve()
+    backend.releaseAnswer.resolve()
     await browser?.close()
     fixture.stop(true)
-    await bridge.close()
-    await questions.settled()
-    await runtime.close()
-    store.close()
-    await rm(directory, { recursive: true, force: true })
+    await backend.stop()
   }
 }, 240000)
 
 test("native tab sharing without audio and denied microphone recover without runtime admission", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "ycoding-passage-permission-"))
-  const store = new MeetingStore(path.join(directory, "meeting.sqlite"))
+  const backend = await startBackend()
   const messages: string[] = []
-  const runtime = new MeetingRuntime({
-    directory,
-    store,
-    config: meetingConfigSchema.parse({ analysis: { incremental: false }, knowledge: { mcpEnabled: false } }),
-    createSession: async () => "permission-test-session",
-    generate: async () => JSON.stringify({ summary: "", findings: [], proposals: [] }),
-    mcp: {
-      tools: async () => [],
-      callTool: async () => {
-        throw new Error("No tools")
-      },
-    },
-    providerFactory: (config) => ({
-      id: config.provider,
-      initialize: async () => {},
-      dispose: async () => {},
-      healthCheck: async () => ({ healthy: true, initialized: true, metrics: {} }),
-      transcribe: async () => {
-        throw new Error("Capture must not be admitted")
-      },
-    }),
-  })
-  const bridge = await startBridge({
-    controlToken: "p".repeat(64),
-    onView: () => ({ ...runtime.status(), ask: { busy: false, history: [] } }),
-    onControl: (input) => runtime.control(input),
-    onCapture: (input) => {
-      messages.push(input.type)
-      return runtime.capture(input)
-    },
-  })
   const fixture = mediaFixture()
   let browser: Awaited<ReturnType<typeof launch>> | undefined
   try {
-    await runtime.control({ action: "start", title: "Permission recovery" })
-    const response = await fetch(`${bridge.url}/control`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${"p".repeat(64)}`, "content-type": "application/json" },
-      body: JSON.stringify({ action: "view" }),
-    })
-    const url = string(record(await response.json()).url)
+    await backend.control({ action: "start", title: "Permission recovery" })
+    const url = backend.url
     for (const surface of ["silent", "tab"] as const) {
       browser = await launch(surface)
       {
         await openMedia(browser.cdp, fixture.port)
         if (surface === "tab")
           await browser.cdp.send("Browser.setPermission", {
-            origin: bridge.url,
+            origin: backend.origin,
             permission: { name: "microphone" },
             setting: "denied",
           })
@@ -601,6 +515,14 @@ test("native tab sharing without audio and denied microphone recover without run
         record(await browser.cdp.send("Target.attachToTarget", { targetId: target, flatten: true })).sessionId,
       )
       await browser.cdp.send("Runtime.enable", {}, session)
+      await browser.cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }, session)
+      await browser.cdp.send("Network.enable", {}, session)
+      browser.cdp.subscribe((event) => {
+        if (event.sessionId === session && event.method === "Network.requestWillBeSent") {
+          const request = record(event.params?.request)
+          if (new URL(string(request.url)).pathname === "/view/capture") messages.push(string(request.postData))
+        }
+      })
       await browser.cdp.send("Page.enable", {}, session)
       await navigate(browser.cdp, session, url)
       await waitDOM(browser.cdp, session, "document.querySelector('#connection').textContent.includes('Connected')")
@@ -616,7 +538,8 @@ test("native tab sharing without audio and denied microphone recover without run
           : "document.querySelector('#capture-feedback').textContent.includes('Microphone is blocked')",
       )
       expect(messages).toEqual([])
-      expect(runtime.status().meeting?.status).toBe("ready")
+      expect((await backend.status()).meeting?.status).toBe("ready")
+      expect(await evaluate(browser.cdp, session, "document.visibilityState")).toBe("visible")
       expect(
         await evaluate(
           browser.cdp,
@@ -656,10 +579,7 @@ test("native tab sharing without audio and denied microphone recover without run
   } finally {
     await browser?.close()
     fixture.stop(true)
-    await bridge.close()
-    await runtime.close()
-    store.close()
-    await rm(directory, { recursive: true, force: true })
+    await backend.stop()
   }
 }, 240000)
 
@@ -762,13 +682,11 @@ function mediaFixture() {
 
 async function evaluate(cdp: Client, session: string, expression: string) {
   const result = record(
-    await cdp.send(
-      "Runtime.evaluate",
-      { expression, awaitPromise: true, returnByValue: true },
-      session,
-      undefined,
-      15000,
-    ),
+    await cdp
+      .send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, session, undefined, 15000)
+      .catch((cause: unknown) => {
+        throw new Error(`Chrome evaluation did not settle: ${expression}`, { cause })
+      }),
   )
   if (result.exceptionDetails) throw new Error(`Chrome evaluation failed: ${JSON.stringify(result.exceptionDetails)}`)
   return record(result.result).value
@@ -789,15 +707,23 @@ async function navigate(cdp: Client, session: string, url: string) {
   }
 }
 
-function waitDOM(cdp: Client, session: string, expression: string) {
+async function waitDOM(cdp: Client, session: string, expression: string) {
   return evaluate(
     cdp,
     session,
     `new Promise((resolve,reject)=>{const matches=()=>(${expression});if(matches())return resolve(true);const observer=new MutationObserver(()=>{if(matches()){observer.disconnect();clearTimeout(timer);resolve(true)}});const timer=setTimeout(()=>{observer.disconnect();reject(new Error('Meeting view state did not render'))},10000);observer.observe(document,{subtree:true,attributes:true,childList:true,characterData:true})})`,
-  )
+  ).catch(async (cause: unknown) => {
+    const state = await evaluate(
+      cdp,
+      session,
+      "JSON.stringify({visibility:document.visibilityState,capture:document.querySelector('#capture-feedback')?.textContent,control:document.querySelector('#control-feedback')?.textContent,meeting:document.querySelector('#meeting-status')?.textContent})",
+    )
+    throw new Error(`Meeting view predicate did not settle: ${expression}; state=${state}`, { cause })
+  })
 }
 
 async function click(cdp: Client, session: string, selector: string) {
+  await cdp.send("Page.bringToFront", {}, session)
   const point = record(
     await evaluate(
       cdp,

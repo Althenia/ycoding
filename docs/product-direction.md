@@ -81,7 +81,7 @@ Customization is a product capability. Supported domains include:
 - MCP servers and tools;
 - project and global artifacts;
 - model providers;
-- opt-in local meeting capture and intelligence through `ycoding meeting`, its page-owned consent-led audio capture, Rust Meeting service, and TUI presentation;
+- opt-in local meeting capture and intelligence through `ycoding meeting`, its page-owned consent-led audio capture, Rust-only Meeting backend, and TUI presentation;
 - Session guardrails and provider-usage sources.
 
 Project artifacts provide managed scope, lifecycle, validation, provenance, and rollback for reusable agent behavior.

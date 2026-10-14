@@ -794,7 +794,7 @@ Executable runtime `plugins`, `plugin`, `npm`, singular `provider`, or non-nativ
 
 TUI presentation plugins use global `cli.json` `plugins`, with ordered enable/remove selectors. They do not compose backend tools or execution. `frontendPackage.resolve` resolves trusted presentation packages on the backend for local clients; npm must be on its PATH, installation scripts are disabled, and archive/entrypoint integrity is verified.
 
-Meeting speech, processing, analysis, knowledge bindings, and retention use the channel's per-Location Meeting `settings.json`. `ycoding meeting` and `ycoding serve --meeting` enable Rust Meeting services without a runtime plugin declaration or a top-level `meeting` key; enabling them does not download weights or start recording. See [Meeting capture](#meeting-capture).
+Meeting speech, processing, analysis, knowledge bindings, and retention use the channel's per-Location Meeting `settings.json`. `ycoding meeting` and `ycoding serve --meeting` enable Rust Meeting services without a runtime plugin declaration or a top-level `meeting` key; enabling them does not download weights or start recording. The source Meeting launcher starts the same Rust backend and attaches its TUI presentation plugin through temporary `cli.json` configuration. It requires a built `rust/target/debug/ycoding-runtime` or `YCODING_RUNTIME_EXECUTABLE`. See [Meeting capture](#meeting-capture).
 
 ## MCP
 

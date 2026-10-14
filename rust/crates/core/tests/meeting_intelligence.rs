@@ -54,6 +54,17 @@ fn parse(text: &str) -> Result<Value, String> {
 }
 
 #[test]
+fn analysis_agent_is_hidden_primary_and_denies_every_tool() {
+    let agent = ycoding_core::session::analysis::analysis_agent();
+    assert_eq!(agent.mode.as_str(), Some("primary"));
+    assert!(agent.hidden);
+    assert_eq!(agent.permissions.len(), 1);
+    assert_eq!(agent.permissions[0].action.as_str(), Some("*"));
+    assert_eq!(agent.permissions[0].resource.as_str(), Some("*"));
+    assert_eq!(agent.permissions[0].effect.0.as_str(), Some("deny"));
+}
+
+#[test]
 fn accepts_one_complete_json_fence_without_weakening_evidence_or_approval_validation() {
     let body = extraction("Discussed authentication", vec![finding(json!({}))], vec![]);
     let fenced = parse(&format!("```json\n{body}\n```")).unwrap();
@@ -214,6 +225,72 @@ fn analyzer(directory: &Directory, generate: Generate) -> Arc<Intelligence> {
         None,
         settings(vec![]),
     )
+}
+
+#[tokio::test]
+async fn long_meeting_checkpoints_consume_each_final_segment_once_with_bounded_inputs() {
+    bounded(async {
+        let directory = directory().await;
+        for sequence in 1..=120 {
+            directory
+                .database
+                .put_segment(&segment(
+                    &format!("segment-{sequence}"),
+                    sequence,
+                    &"ก".repeat(400),
+                ))
+                .await
+                .unwrap();
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        let intelligence = Intelligence::new(
+            directory.database.clone(),
+            Some(generator(move |_, prompt| {
+                let recorded = recorded.clone();
+                async move {
+                    assert!(prompt.encode_utf16().count() <= 8000);
+                    let data: Value =
+                        serde_json::from_str(prompt.split_once('\n').unwrap().1).unwrap();
+                    recorded.lock().unwrap().extend(
+                        data["transcript"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|segment| segment["id"].as_str().unwrap().to_owned()),
+                    );
+                    Ok(extraction("Rolling summary", vec![], vec![]))
+                }
+            })),
+            None,
+            Settings {
+                max_characters: 8000,
+                ..settings(vec![])
+            },
+        );
+        intelligence
+            .analyze("meeting", true, false)
+            .wait()
+            .await
+            .unwrap();
+        let ids = seen.lock().unwrap().clone();
+        assert_eq!(ids.len(), 120);
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            120
+        );
+        let checkpoints = directory.database.checkpoints("meeting").unwrap();
+        assert_eq!(checkpoints.last().unwrap()["throughSequence"], 120);
+        assert_eq!(checkpoints.last().unwrap()["final"], true);
+        intelligence
+            .analyze("meeting", true, false)
+            .wait()
+            .await
+            .unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 120);
+        directory.database.close().await.unwrap();
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -544,6 +621,7 @@ struct Wiki {
     writes: AtomicUsize,
     searches: AtomicUsize,
     schema: Value,
+    read_fails: bool,
     write_fails: bool,
     write_is_lost: bool,
 }
@@ -560,6 +638,7 @@ impl Wiki {
                 "properties": { "id": {}, "content": {}, "expectedRevision": {} },
                 "required": ["id", "content", "expectedRevision"],
             }),
+            read_fails: false,
             write_fails: false,
             write_is_lost: false,
         })
@@ -604,11 +683,19 @@ impl Mcp for Wiki {
                     self.searches.fetch_add(1, Ordering::SeqCst);
                     json!({ "documents": [{ "id": "page" }] })
                 }
+                "read" if self.read_fails => {
+                    return Ok(McpResult {
+                        is_error: true,
+                        structured: None,
+                        text: vec!["unavailable".into()],
+                    });
+                }
                 "read" => json!({
                     "id": "page", "revision": format!("revision-{}", self.revision.lock().unwrap()),
                     "content": self.content.lock().unwrap().clone(),
                 }),
                 _ => {
+                    self.writes.fetch_add(1, Ordering::SeqCst);
                     if self.write_fails {
                         return Ok(McpResult {
                             is_error: true,
@@ -616,7 +703,6 @@ impl Mcp for Wiki {
                             text: vec!["denied".into()],
                         });
                     }
-                    self.writes.fetch_add(1, Ordering::SeqCst);
                     if !self.write_is_lost {
                         *self.content.lock().unwrap() =
                             args["content"].as_str().unwrap().to_owned();
@@ -831,11 +917,58 @@ async fn an_approved_proposal_is_written_with_the_expected_revision_and_verified
 }
 
 #[tokio::test]
+async fn unreadable_search_hits_fail_analysis_without_persisting_references_or_proposals() {
+    bounded(async {
+        let directory = directory().await;
+        directory
+            .database
+            .put_segment(&segment("first", 1, "Replace the requirement"))
+            .await
+            .unwrap();
+        let intelligence = Intelligence::new(
+            directory.database.clone(),
+            Some(generator(|_, _| async {
+                panic!("Unreadable knowledge must block generation")
+            })),
+            Some(Wiki::variant(|wiki| wiki.read_fails = true)),
+            settings(vec![binding(true)]),
+        );
+        assert_eq!(
+            intelligence
+                .analyze("meeting", true, false)
+                .wait()
+                .await
+                .unwrap_err(),
+            "MCP knowledge operation failed"
+        );
+        assert!(directory.database.references("meeting").unwrap().is_empty());
+        assert!(directory.database.proposals("meeting").unwrap().is_empty());
+        assert!(directory.database.approvals("meeting").unwrap().is_empty());
+        assert_eq!(
+            directory.database.jobs("meeting").unwrap()[0]["status"],
+            "failed"
+        );
+        directory.database.close().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn approval_degrades_to_manual_stale_uncertain_or_failed_and_never_replays_a_write() {
     bounded(async {
-        let (directory, intelligence, id) = proposed(Wiki::new(), false).await;
+        let readonly = Wiki::new();
+        let (directory, intelligence, id) = proposed(readonly.clone(), false).await;
         intelligence.review("meeting", &id, true).await.unwrap();
         assert_eq!(status(&directory, &id)["status"], "manual");
+        assert_eq!(readonly.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            directory.database.references("meeting").unwrap()[0]["content"],
+            "Canonical requirement"
+        );
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         directory.database.close().await.unwrap();
 
         let weak = Wiki::variant(|wiki| {
@@ -851,6 +984,10 @@ async fn approval_degrades_to_manual_stale_uncertain_or_failed_and_never_replays
             "The MCP writer does not advertise required revision-aware update fields"
         );
         assert_eq!(weak.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         directory.database.close().await.unwrap();
 
         let wiki = Wiki::new();
@@ -864,6 +1001,11 @@ async fn approval_degrades_to_manual_stale_uncertain_or_failed_and_never_replays
             "Canonical document changed; reconcile and review a new proposal"
         );
         assert_eq!(wiki.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(*wiki.content.lock().unwrap(), "Changed elsewhere");
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         directory.database.close().await.unwrap();
 
         let refused = Wiki::variant(|wiki| wiki.write_fails = true);
@@ -881,6 +1023,12 @@ async fn approval_degrades_to_manual_stale_uncertain_or_failed_and_never_replays
             intelligence.review("meeting", &id, true).await.is_err(),
             "uncertain writes need inspection, not a retry"
         );
+        assert_eq!(refused.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(directory.database.approvals("meeting").unwrap().len(), 1);
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         directory.database.close().await.unwrap();
 
         let lost = Wiki::variant(|wiki| wiki.write_is_lost = true);
@@ -888,6 +1036,12 @@ async fn approval_degrades_to_manual_stale_uncertain_or_failed_and_never_replays
         intelligence.review("meeting", &id, true).await.unwrap();
         assert_eq!(status(&directory, &id)["status"], "uncertain");
         assert_eq!(lost.writes.load(Ordering::SeqCst), 1);
+        assert!(intelligence.review("meeting", &id, true).await.is_err());
+        assert_eq!(lost.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         directory.database.close().await.unwrap();
     })
     .await;
@@ -986,6 +1140,10 @@ async fn a_pre_write_verification_failure_marks_the_approved_proposal_failed_wit
         );
         assert_eq!(wiki.writes.load(Ordering::SeqCst), 0);
         assert!(!intelligence.writing());
+        assert_eq!(
+            directory.database.approvals("meeting").unwrap()[0]["decision"],
+            "approve"
+        );
         broken.1.store(false, Ordering::SeqCst);
         intelligence.review("meeting", &id, true).await.unwrap();
         assert_eq!(status(&directory, &id)["status"], "applied");

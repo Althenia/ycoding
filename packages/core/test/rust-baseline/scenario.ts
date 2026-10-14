@@ -51,7 +51,7 @@ import { Shell } from "@ycoding-ai/schema/shell"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import path from "node:path"
-import { MeetingStore } from "../../../../extensions/meeting/src/store"
+import meetingBaseline from "../../../../extensions/meeting/test/fixture/stable-meeting/snapshot.json"
 
 export const unicode = {
   paired: "paired:\ud83d\ude80",
@@ -431,7 +431,7 @@ export async function buildScenario(root: string) {
       2,
     ),
   )
-  buildMeeting(root)
+  await buildMeeting(root)
 }
 
 const compactFixture = Effect.fn("Baseline.compaction")(function* (
@@ -563,11 +563,40 @@ const shellFixture = Effect.fn("Baseline.shell")(function* (db: Database.Interfa
   yield* ShellLedger.reconcile(db, proc)
 })
 
-function buildMeeting(root: string) {
-  const meeting = new MeetingStore(path.join(root, "meeting/meetings.sqlite"))
+async function buildMeeting(root: string) {
+  const { Database } = await import("bun:sqlite")
+  const meeting = new Database(path.join(root, "meeting/meetings.sqlite"), { create: true, strict: true })
+  const put = (table: string, value: Record<string, unknown>, extra: Record<string, string | number> = {}) => {
+    const columns = {
+      id: String(value.id ?? value.meetingID),
+      meeting_id: String(value.meetingID),
+      ...extra,
+      data: JSON.stringify(value),
+    }
+    const entries =
+      table === "meetings" ? Object.entries(columns).filter(([key]) => key !== "meeting_id") : Object.entries(columns)
+    meeting
+      .query(
+        `INSERT INTO ${table} (${entries.map(([key]) => key).join(",")}) VALUES (${entries.map(() => "?").join(",")})`,
+      )
+      .run(...entries.map(([, value]) => value))
+  }
   try {
+    meeting.exec(
+      "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA user_version=1",
+    )
+    for (const entry of meetingBaseline.schema.filter((entry) => entry.type === "table")) meeting.exec(entry.sql!)
+    for (const entry of meetingBaseline.schema.filter((entry) => entry.type === "index" && entry.sql))
+      meeting.exec(entry.sql!)
     const now = "2026-01-01T00:00:00.000Z"
-    meeting.createMeeting({ id: "baseline-meeting", title: unicode.mixed, sessionID: "ses_baseline_root" })
+    put("meetings", {
+      id: "baseline-meeting",
+      title: unicode.mixed,
+      sessionID: "ses_baseline_root",
+      status: "ready",
+      createdAt: now,
+      updatedAt: now,
+    })
     const reference = {
       server: "synthetic-mcp",
       target: "synthetic-doc",
@@ -575,22 +604,28 @@ function buildMeeting(root: string) {
       content: unicode.high,
       retrievedAt: now,
     }
-    meeting.putSegment({
-      id: "baseline-segment",
-      meetingID: "baseline-meeting",
-      sequence: 1,
-      source: "remote",
-      speakerID: "synthetic-speaker",
-      startMs: 0,
-      endMs: 1000,
-      rawText: unicode.mixed,
-      text: unicode.low,
-      state: "final",
-      model: "synthetic-model",
-      createdAt: now,
-    })
-    meeting.putReference("baseline-meeting", reference)
-    meeting.putFinding({
+    put(
+      "segments",
+      {
+        id: "baseline-segment",
+        meetingID: "baseline-meeting",
+        sequence: 1,
+        source: "remote",
+        speakerID: "synthetic-speaker",
+        startMs: 0,
+        endMs: 1000,
+        rawText: unicode.mixed,
+        text: unicode.low,
+        state: "final",
+        model: "synthetic-model",
+        createdAt: now,
+      },
+      { sequence: 1, state: "final", original_text: unicode.low },
+    )
+    meeting
+      .query("INSERT INTO knowledge_references (meeting_id,server,target,data) VALUES (?,?,?,?)")
+      .run("baseline-meeting", reference.server, reference.target, JSON.stringify(reference))
+    put("findings", {
       id: "baseline-finding",
       meetingID: "baseline-meeting",
       kind: "decision",
@@ -600,7 +635,7 @@ function buildMeeting(root: string) {
       status: "confirmed",
       createdAt: now,
     })
-    meeting.putCheckpoint({
+    put("checkpoints", {
       id: "baseline-checkpoint",
       meetingID: "baseline-meeting",
       throughSequence: 1,
@@ -609,7 +644,7 @@ function buildMeeting(root: string) {
       createdAt: now,
       latencyMs: 1,
     })
-    meeting.putProposal({
+    put("proposals", {
       id: "baseline-proposal",
       meetingID: "baseline-meeting",
       server: reference.server,
@@ -625,7 +660,7 @@ function buildMeeting(root: string) {
       status: "pending",
       createdAt: now,
     })
-    meeting.putPlan({
+    put("plans", {
       meetingID: "baseline-meeting",
       content: unicode.mixed,
       findingIds: ["baseline-finding"],
@@ -633,7 +668,7 @@ function buildMeeting(root: string) {
       status: "proposed",
       createdAt: now,
     })
-    meeting.putApproval({
+    put("approvals", {
       id: "baseline-approval",
       meetingID: "baseline-meeting",
       targetID: "baseline-finding",
@@ -641,7 +676,7 @@ function buildMeeting(root: string) {
       detail: unicode.low,
       createdAt: now,
     })
-    meeting.putJob({
+    put("jobs", {
       id: "baseline-job",
       meetingID: "baseline-meeting",
       kind: "analysis",

@@ -52,6 +52,8 @@ Run from the repository root:
 
 ```sh
 bun run --cwd extensions/meeting test:unit
+bun run --cwd extensions/meeting typecheck
+~/.cache/ycoding/cargo-gate.sh bun run --cwd extensions/meeting test:integration
 ~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-core --test 'meeting_*'
 ~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-runtime --test production --test meeting_clients
 ~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-runtime --test meeting_import --test launcher
@@ -64,3 +66,15 @@ its bridge. Its local protocol worker substitutes only speech inference; it
 checks exact embedded assets, native/view credential separation, capture and
 finalization, transcript rendering, and shutdown cleanup. It does not prove
 native audio capture or Windows behavior.
+
+The source launcher (`bun run extensions/meeting/script/dev.ts <project>`) starts
+a private Rust runtime with `--meeting` and attaches the source TUI with its
+terminal plugin. It requires a built `rust/target/debug/ycoding-runtime`, or
+`YCODING_RUNTIME_EXECUTABLE`. The integration fixtures use this launcher in both
+normal and beta channels and prove a nonempty live MCP registry round trip.
+
+`bun run --cwd extensions/meeting test:integration:chrome` uses the real Rust
+runtime and browser-owned capture with controlled speech/model/media fixtures.
+Set `YCODING_TEST_ISOLATED_BROWSER_CHROME` to Chrome for Testing. The optional-state
+display case omits only read-only diagnostics; capture, controls and persistence
+remain Rust-owned. No native picker, live Meet call or actual model is proved.

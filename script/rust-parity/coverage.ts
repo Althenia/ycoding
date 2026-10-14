@@ -102,13 +102,13 @@ export async function coverageReport(repository: string, core: Tables, meeting: 
     return { table, rows: rows.length, status: "populated", evidence }
   })
   const meetingCoverage = Object.entries(meeting).map(([table, rows]): TableCoverage => {
-    if (!rows.length) throw new Error(`${table}: missing populated Meeting runtime coverage`)
+    if (!rows.length) throw new Error(`${table}: missing populated Meeting baseline coverage`)
     return {
       table,
       rows: rows.length,
       status: "populated",
       evidence:
-        "extensions/meeting/src/store.ts:212,267,350–398 (MeetingStore createMeeting/putSegment/putFinding/putCheckpoint/putProposal/putPlan/putApproval/putJob/putReference)",
+        "packages/core/test/rust-baseline/scenario.ts buildMeeting (direct SQLite Unicode/record fixture); extensions/meeting/test/fixture/stable-meeting/snapshot.json (committed stable schema)",
     }
   })
   return {

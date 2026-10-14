@@ -11,6 +11,52 @@ use ycoding_core::meeting::pcm::{AudioChunk, AudioSource};
 type Chunks = Arc<Mutex<Vec<AudioChunk>>>;
 type Gaps = Arc<Mutex<Vec<Gap>>>;
 
+#[tokio::test]
+async fn one_hour_of_packets_stays_bounded_and_preserves_the_terminal_timestamp() {
+    bounded(async {
+        let windows = Arc::new(Mutex::new(Vec::new()));
+        let recorded = windows.clone();
+        let audio = AudioProcessor::new(Options {
+            chunk_seconds: 15.0,
+            overlap_seconds: 2.0,
+            sample_rate: 16_000,
+            vad: false,
+            max_buffered_seconds: Some(60.0),
+            on_chunk: Arc::new(move |chunk| {
+                let recorded = recorded.clone();
+                Box::pin(async move {
+                    recorded.lock().unwrap().push((
+                        chunk.start_ms,
+                        chunk.start_ms + chunk.samples.len() as f64 / 16.0,
+                    ));
+                    Ok(())
+                })
+            }),
+            on_gap: Arc::new(|_| panic!("Unexpected gap")),
+        })
+        .unwrap();
+        for sequence in 0..3600 {
+            audio
+                .push(packet(
+                    sequence,
+                    sequence as f64 * 1000.0,
+                    16_000,
+                    vec![0.1; 16_000],
+                ))
+                .await
+                .unwrap();
+            assert!(audio.stats().buffered_seconds <= 60.0);
+        }
+        audio.close().await.unwrap();
+        let windows = windows.lock().unwrap();
+        assert_eq!(windows.first().unwrap().0, 0.0);
+        assert_eq!(windows.last().unwrap().1, 3_600_000.0);
+        assert!(windows.windows(2).all(|pair| pair[1].0 <= pair[0].1));
+        assert_eq!(audio.stats().backlog, 0);
+    })
+    .await;
+}
+
 async fn bounded<T>(work: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(20), work)
         .await

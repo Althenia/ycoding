@@ -365,7 +365,7 @@ Session grants name `create`, `get`, `prompt`, `generate`, `command`, `synthetic
 
 Replacement and shutdown stop intake, cancel/drain owned calls, revoke registrations, and join child cleanup. A lost transmitted call has an explicit unknown outcome; the supervisor does not restart or replay it. See the [process-extension contract](../specs/process-extension-v5.md) for supported families, schemas, limits, and deadlines.
 
-The opt-in Rust Meeting service is composed by the backend, not loaded through this process-extension channel. Its TUI entrypoint is presentation-only. `/meeting start` exposes the consent-led live page, and the backend registers `meeting_history` and a restricted analysis agent for Meeting-enabled Locations. See [Meeting capture](./configuration.md#meeting-capture).
+The opt-in Rust Meeting service is composed by the backend, not loaded through this process-extension channel. The private Meeting package exports only `./tui` presentation and `./discovery` bridge clients; it has no runtime plugin entrypoint. `/meeting start` exposes the consent-led live page, and the backend registers `meeting_history` and a restricted analysis agent for Meeting-enabled Locations. See [Meeting capture](./configuration.md#meeting-capture).
 
 ### Ordered enablement and removal
 

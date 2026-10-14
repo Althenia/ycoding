@@ -1,40 +1,40 @@
 import { expect, test } from "bun:test"
-import { spawn } from "node:child_process"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import path from "node:path"
-import { createInterface } from "node:readline"
-import { launchEnvironment } from "../script/dev"
+import { startBackend } from "./fixture/runtime"
+import { startMeetingRuntime } from "../script/dev"
 
-const root = path.resolve(import.meta.dir, "../../..")
+test.each(["local", "beta"])(
+  "the source launcher owns a Rust Meeting runtime from an ordinary project directory (%s)",
+  async (channel) => {
+    const backend = await startBackend(channel)
+    try {
+      expect(backend.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/view#key=[a-f0-9]{64}$/)
+      const page = await fetch(backend.url)
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain("/view/app.js")
+      expect((await fetch(`${backend.origin}/view/state`)).status).toBe(401)
+      const initial = await backend.status()
+      expect(initial.health?.status).toBe("unloaded")
+      expect(initial.analysis.status).toBe("idle")
+      if (channel === "local") {
+        expect(initial.meeting).toBeUndefined()
+        expect(initial.meetings).toEqual([])
+      }
+      await backend.control({ action: "start", title: "Rust source launcher" })
+      expect((await backend.status()).meeting).toMatchObject({ title: "Rust source launcher", status: "ready" })
+      expect((await backend.status()).health?.status).toBe("ready")
+      expect(await backend.status()).not.toHaveProperty("pairing")
+    } finally {
+      await backend.stop()
+    }
+    await expect(fetch(`${backend.origin}/view/state`)).rejects.toThrow()
+  },
+  60000,
+)
 
-test("the source launcher's private server starts from an ordinary project directory", async () => {
-  const project = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-project-"))
-  const data = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-data-"))
-  const launch = await launchEnvironment()
-  const server = spawn(
-    process.execPath,
-    [path.join(root, "packages/cli/src/index.ts"), "serve", "--stdio", "--port", "0"],
-    {
-      cwd: project,
-      env: { ...launch.env, XDG_DATA_HOME: data, YCODING_PASSWORD: "launcher-test" },
-      stdio: ["pipe", "pipe", "ignore"],
-    },
-  )
-  const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()))
-  try {
-    const ready = await new Promise<string>((resolve, reject) => {
-      createInterface({ input: server.stdout }).once("line", resolve)
-      server.once("exit", () => reject(new Error("Standalone server exited before reporting readiness")))
-    })
-    expect(JSON.parse(ready)).toMatchObject({ url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/) })
-  } finally {
-    server.stdin.end()
-    const timer = setTimeout(() => server.kill("SIGKILL"), 10000)
-    await exited
-    clearTimeout(timer)
-    await Promise.all(
-      [project, data, launch.directory].map((directory) => rm(directory, { recursive: true, force: true })),
-    )
-  }
-}, 60000)
+test("the source launcher reports an unavailable Rust executable without starting a fallback backend", async () => {
+  await expect(
+    startMeetingRuntime({
+      env: { PATH: process.env.PATH, YCODING_RUNTIME_EXECUTABLE: "/nonexistent/ycoding-runtime" },
+    }),
+  ).rejects.toThrow()
+})

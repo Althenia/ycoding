@@ -69,7 +69,12 @@ export async function fingerprint(file: string) {
 
 export async function sourceFingerprint(repository: string) {
   const files: { file: string; sha256: string }[] = []
-  for (const directory of ["packages/core/src", "packages/schema/src", "extensions/meeting/src"])
+  for (const directory of [
+    "packages/core/src",
+    "packages/schema/src",
+    "packages/core/test/rust-baseline",
+    "extensions/meeting/test/fixture/stable-meeting",
+  ])
     for await (const file of new Bun.Glob("**/*").scan({
       cwd: path.join(repository, directory),
       onlyFiles: true,
@@ -168,7 +173,7 @@ export async function freezeBaseline(root: string) {
         normalization,
         files: files.sort((left, right) => (left.file < right.file ? -1 : 1)),
         boundary:
-          "Real TS Core/Meeting file stores and projectors. External provider response is deterministic fixture replay; network is denied. No native capture, browser, actual model, user state or credential discovery.",
+          "Real TS Core file stores and projectors. Meeting uses the committed stable schema with direct SQLite Unicode/record fixtures, not a TS Meeting runtime. External provider response is deterministic fixture replay; network is denied. No native capture, browser, actual model, user state or credential discovery.",
       },
       null,
       2,

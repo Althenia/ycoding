@@ -162,6 +162,114 @@ async fn seed(service: &MeetingService, meeting: &str) {
 
 type Seen = Arc<Mutex<Vec<(String, String)>>>;
 
+#[tokio::test]
+async fn ask_keeps_fifty_results_per_meeting_and_does_not_leak_history_across_selection_or_restart()
+{
+    bounded(async {
+        let directory = Directory::new();
+        let seen = Seen::default();
+        let (start, _) = options(&directory, Some(answering(&seen, "Advisory answer")));
+        let service = MeetingService::start(start).await.unwrap();
+        let key = view_key(&directory.0).await;
+        let meeting = armed(&service, &directory).await;
+        seed(&service, &meeting).await;
+        for index in 0..52 {
+            assert_eq!(
+                send(
+                    service.url(),
+                    &key,
+                    "/view/ask",
+                    Some(json!({ "question": format!("Question {index}") }))
+                )
+                .await
+                .0,
+                200
+            );
+        }
+        let (_, state) = send(service.url(), &key, "/view/state", None).await;
+        assert_eq!(state["ask"]["history"].as_array().unwrap().len(), 50);
+        assert_eq!(state["ask"]["history"][0]["question"], "Question 2");
+        service
+            .runtime()
+            .database()
+            .create_meeting("other", "Other", "other-session")
+            .await
+            .unwrap();
+        let control = Control::connect(&directory.0).unwrap();
+        control
+            .send(&json!({ "action": "select", "meetingID": "other" }))
+            .await
+            .unwrap();
+        assert_eq!(
+            send(service.url(), &key, "/view/state", None).await.1["ask"]["history"],
+            json!([])
+        );
+        control
+            .send(&json!({ "action": "select", "meetingID": meeting }))
+            .await
+            .unwrap();
+        assert_eq!(
+            send(service.url(), &key, "/view/state", None).await.1["ask"]["history"]
+                .as_array()
+                .unwrap()
+                .len(),
+            50
+        );
+        service.shutdown().await.unwrap();
+        let (options, _) = options(&directory, Some(answering(&seen, "Restarted")));
+        let reopened = MeetingService::start(options).await.unwrap();
+        Control::connect(&directory.0)
+            .unwrap()
+            .send(&json!({ "action": "select", "meetingID": meeting }))
+            .await
+            .unwrap();
+        let key = view_key(&directory.0).await;
+        assert_eq!(
+            send(reopened.url(), &key, "/view/state", None).await.1["ask"]["history"],
+            json!([])
+        );
+        reopened.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn ask_labels_omitted_earlier_evidence_and_refuses_an_unrepresentable_bounded_input() {
+    bounded(async {
+        let directory = Directory::new();
+        let seen = Seen::default();
+        let (mut options, _) = options(&directory, Some(answering(&seen, "Advisory answer")));
+        options.config.analysis.max_characters = 64000;
+        let service = MeetingService::start(options).await.unwrap();
+        let key = view_key(&directory.0).await;
+        let meeting = armed(&service, &directory).await;
+        for sequence in 1..=502 {
+            service.runtime().database().put_segment(&json!({
+                "id": format!("s-{sequence}"), "meetingID": meeting, "sequence": sequence,
+                "source": "remote", "speakerID": "remote", "startMs": sequence * 1000,
+                "endMs": sequence * 1000 + 900, "rawText": "Evidence", "text": "Evidence", "state": "final",
+                "model": "fixture", "createdAt": "2026-01-01T00:00:00.000Z",
+            })).await.unwrap();
+        }
+        assert_eq!(send(service.url(), &key, "/view/ask", Some(json!({ "question": "What evidence is available?" }))).await.0, 200);
+        let prompt = seen.lock().unwrap()[0].1.clone();
+        assert!(prompt.contains("\"omittedEarlierEvidence\":true"));
+        assert!(prompt.encode_utf16().count() <= 64000);
+        service.runtime().database().create_meeting("large", "Large", "large-session").await.unwrap();
+        service.runtime().database().put_segment(&json!({
+            "id": "large", "meetingID": "large", "sequence": 1, "source": "remote", "speakerID": "remote",
+            "startMs": 0, "endMs": 900, "rawText": "x".repeat(65000), "text": "x".repeat(65000),
+            "state": "final", "model": "fixture", "createdAt": "2026-01-01T00:00:00.000Z",
+        })).await.unwrap();
+        Control::connect(&directory.0).unwrap().send(&json!({ "action": "select", "meetingID": "large" })).await.unwrap();
+        let (status, result) = send(service.url(), &key, "/view/ask", Some(json!({ "question": "What does this say?" }))).await;
+        assert_eq!(status, 502);
+        assert_eq!(result["error"], "answer_failed");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        service.shutdown().await.unwrap();
+    }).await;
+}
+
 fn answering(seen: &Seen, reply: &'static str) -> Generate {
     let seen = seen.clone();
     Arc::new(move |session, prompt| {

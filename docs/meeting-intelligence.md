@@ -1,38 +1,33 @@
 # Meeting intelligence
 
-The opt-in Meeting live page captures consented browser-tab audio, transcribes locally, and uses YCoding's existing Session generation and MCP registry for evidence-backed analysis. Its runtime and native TUI plugins own processing and review. See [configuration](./configuration.md), [runtime](./runtime.md), and [repository resources](./repository-resources.md).
+The opt-in Meeting live page captures consented browser-tab audio, transcribes locally, and uses YCoding's existing Session generation and MCP registry for evidence-backed analysis. The Rust runtime owns processing and persistence; its native TUI plugin and live page provide review and control through the private HTTP bridge. See [configuration](./configuration.md), [runtime](./runtime.md), and [repository resources](./repository-resources.md).
 
 ## Installation and startup
 
-Use this checkout's runtime; its plugin API includes the required Location-scoped MCP domain. Capture runs in the live page; the browser-control extension is independent.
+Use this checkout's Rust runtime with `--meeting` enabled. Capture runs in the live page; the browser-control extension is independent.
 
 ```sh
 bun install
-bun run --cwd extensions/meeting model doctor
-bun run --cwd extensions/meeting model list
 bun run --cwd extensions/meeting build
 ```
 
-The Python executable must have `torch`, `transformers`, `numpy`, and `huggingface_hub`. Doctor reports installed versions and hardware availability. Prepare a dedicated Python environment explicitly; package installation downloads the speech runtime, separately from model weights:
+The Python executable must have `torch`, `transformers`, `numpy`, and `huggingface_hub`. Prepare a dedicated Python environment explicitly; package installation downloads the speech runtime, separately from model weights:
 
 ```sh
 python3 -m venv extensions/meeting/.venv
 extensions/meeting/.venv/bin/python -m pip install torch transformers numpy huggingface_hub
-export YCODING_MEETING_PYTHON="$PWD/extensions/meeting/.venv/bin/python"
-bun run --cwd extensions/meeting model doctor
+extensions/meeting/.venv/bin/python -c 'import torch, transformers, numpy, huggingface_hub; print(torch.__version__, transformers.__version__, numpy.__version__)'
 ```
 
-Select that same absolute executable through `transcription.pythonExecutable` in the runtime plugin options; the model CLI environment variable does not configure the plugin. On Windows use `extensions/meeting/.venv/Scripts/python.exe`. Audio-file testing requires `ffmpeg`. Plugin loading installs nothing and downloads no models.
+Select that same absolute executable through `transcription.pythonExecutable` in the Meeting directory's `settings.json`, or with `/meeting configure` in the source TUI. On Windows use `extensions/meeting/.venv/Scripts/python.exe`. Starting Meeting installs nothing and downloads no models.
 
 The default is `biodatlab/whisper-th-large-v3-combined`, approximately 3.22 GB of weights. Review size and license before authorizing its download:
 
 ```sh
-bun run --cwd extensions/meeting model install biodatlab/whisper-th-large-v3-combined --authorize-download
-bun run --cwd extensions/meeting model test /path/to/consented-audio.wav --reference=/path/to/reference.txt
 bun run extensions/meeting/script/dev.ts /path/to/project
 ```
 
-Development startup launches the source TUI with a private server and temporary plugin configuration, without overwriting global configuration. Run it from any directory and pass the project path; it supplies the Solid JSX preload to both the TUI and its private server. `TMPDIR` must not contain whitespace. YCoding still owns stored provider profiles. Custom global provider settings may need a normal installation rather than this isolated configuration. Quit the TUI normally to stop its private server and remove the temporary configuration.
+Development startup launches a private Rust runtime with `--meeting`, then attaches the source TUI with its Meeting TUI plugin and Solid JSX preload. It uses temporary terminal configuration without overwriting global configuration. Run it from any directory and pass the project path; `TMPDIR` must not contain whitespace. Build `ycoding-runtime` in `rust/target/debug` first, or set `YCODING_RUNTIME_EXECUTABLE` to that executable. YCoding owns stored provider profiles. Custom global provider settings may need a normal installation rather than this isolated configuration. Quit the TUI normally to stop the private runtime and remove its temporary configuration. Use `/meeting models` to inspect local availability and `/meeting model-install biodatlab/whisper-th-large-v3-combined confirm-download` to authorize the selected download explicitly.
 
 ### `ycoding meeting`
 
@@ -42,7 +37,7 @@ The native command starts the embedded Rust backend with Meeting enabled and pre
 
 The live page is served only on the numeric loopback address and authenticated by the per-bridge view key in its URL fragment. Start, Live and Review form one reading sheet with consent-led capture, runtime health and sources, processing metrics (buffered seconds, backlog and processed seconds), transcript, summary, findings and Ask AI. Operational details and findings are disclosures; values the runtime does not report display as unreported. Its controls start page-owned capture, stop and finalize after confirmation, and retry failed audio without restarting capture.
 
-The installed executable cannot load Meeting's Solid TUI plugin, so the `/meeting` TUI commands require the source launcher. A source-run TUI with the Solid preload can instead use persistent configuration: preserve existing configuration entries and add the absolute `extensions/meeting/src/plugin.ts` path to the project's runtime `plugins` array, and the absolute `extensions/meeting/src/tui.tsx` path to global `cli.json` `plugins`. Restart that source runtime. The runtime plugin's `options` hold the configuration below; there is no top-level `meeting` key.
+The installed executable cannot load Meeting's Solid TUI plugin, so the `/meeting` TUI commands require the source launcher. A source-run TUI with the Solid preload can use persistent terminal configuration: preserve existing global `cli.json` entries and add the absolute `extensions/meeting/src/tui.tsx` path to its `plugins` array. Its attached Rust backend must start with `--meeting`. Meeting reads the configuration below from its channel-local `settings.json`; there is no top-level `meeting` key or Meeting runtime-plugin entry.
 
 The alternative multilingual model is `openai/whisper-large-v3`, under the **same Hugging Face backend**, not an OpenAI API. Its default safetensors weights are approximately 3.09 GB and require separate authorization. Models stay outside Git in a configurable cache. Inference uses local files, safetensors, and no model-supplied Python code. Neither default speech model requires a paid API key.
 
@@ -79,7 +74,7 @@ Capture returns 200 with `{accepted:true}` for new Start and active Heartbeat, `
 
 ## Configuration
 
-Plugin options use camelCase JSON/JSONC:
+Meeting `settings.json` uses camelCase JSON:
 
 ```json
 {
@@ -103,11 +98,11 @@ Plugin options use camelCase JSON/JSONC:
 
 `device` accepts `auto`, `cuda`, `mps`, or `cpu`; explicit unavailable devices fail. CPU selection reports a performance warning. This is **windowed chunk inference**, not token-level speech streaming. Disabling `streaming.enabled` prevents live capture. VAD is an energy threshold, not a neural speech detector or diarization system.
 
-`cacheDir`, `pythonExecutable`, and `requestTimeoutMs` belong to `transcription`. Model-management commands accept `YCODING_MEETING_CACHE`, `YCODING_MEETING_PYTHON`, `YCODING_MEETING_MODEL`, and `YCODING_MEETING_DEVICE`. Validated runtime changes are saved in the meeting data directory's `settings.json`; saved settings override initial plugin options. Put no credentials in these options.
+`cacheDir`, `pythonExecutable`, and `requestTimeoutMs` belong to `transcription`. Validated `/meeting configure` changes are saved in the Meeting data directory's `settings.json`; the service reads saved settings before opening the database. Put no credentials in these settings. `storage.provider` retains the strict wire value `"sqlite"`; the Rust runtime persists Meeting records in `meetings.redb`.
 
 Model switches drain and finalize healthy old-model audio before unloading. When inference has failed, an explicitly selected replacement processes the retained window without discarding it. Explicit retry replaces an unhealthy worker before processing retained audio. Streaming geometry changes require stopped capture. A null fallback target selects no fallback; an explicitly configured fallback appears in health and transcript model attribution. No smaller checkpoint is selected silently.
 
-The transcription module exports `registerModel`, `registerProvider`, `createProvider`, `listModels`, `getModelCompatibility`, and `installModel`. A plugin composition can register another backend without changing analysis. Hugging Face model registration declares a Whisper architecture; the worker verifies actual cached metadata before loading. Other registered providers own their model identifiers and compatibility. No whisper.cpp conversion or API speech backend is advertised.
+The runtime supports the built-in Hugging Face provider and the two Whisper model identifiers above. Its worker verifies cached model metadata before loading. Dynamic model/provider registration, whisper.cpp conversion and API speech backends are not supported.
 
 `analysis.model: "inherit"` inherits the source Session's model and profile binding through runtime Session creation, or uses normal YCoding resolution when none is supplied. Starting from a Session uses that Session unless the command explicitly names another one. The source Session must belong to the current Location. Overrides use `{providerID, id, variant?, profile?}`. Existing Claude Code and ChatGPT sign-in flows own authentication; no credentials are scraped and no second provider client is added.
 
@@ -152,13 +147,15 @@ Bounded retrieval is cached by server/capability/query; references persist indep
 
 ## Persistence, privacy and recovery
 
-Each canonical Location has an owner-only directory under `$XDG_DATA_HOME/ycoding/meeting`, defaulting to `~/.local/share/ycoding/meeting`. Beta installations use `ycoding-beta/meeting` under the same data base. Native control discovery follows the installation channel; both channels use the first 32 lowercase hexadecimal characters of the canonical Location path's SHA-256 as the directory key. A separate SQLite database owns meeting metadata, transcripts, findings, summaries, plans, references, proposals, approvals and processing jobs. Schema initialization is transactional; future/unrelated schemas are rejected. The YCoding Session database is not migrated.
+Each canonical Location has an owner-only directory under `$XDG_DATA_HOME/ycoding/meeting`, defaulting to `~/.local/share/ycoding/meeting`. Beta installations use `ycoding-beta/meeting` under the same data base. Native control discovery follows the installation channel; both channels use the first 32 lowercase hexadecimal characters of the canonical Location path's SHA-256 as the directory key. A separate `meetings.redb` owns meeting metadata, transcripts, findings, summaries, plans, references, proposals, approvals and processing jobs.
+
+The first beta start imports an existing stable `ycoding/meeting/<location-key>/meetings.sqlite` through private scratch, preserving the source database and sidecar bytes. Verified history is published atomically into `ycoding-beta/meeting/<location-key>/meetings.redb` with `stable-import-v1.json`; restarts retain the selected beta store. Import failure publishes no partial destination or completion marker, logs a Location-scoped diagnostic, and leaves other runtime services available. Settings remain channel-local and are not imported. Meeting history import is separate from the YCoding Session store's first-start import.
 
 Raw audio is not stored. A packet acknowledgement means bounded **volatile admission**, not durable audio recovery. A crash can lose untranscribed audio while preserving completed transcripts and partial analysis. Recovery marks formerly recording meetings interrupted; re-arming and fresh live-page consent are required. A failed window can be retried only while retained in the process.
 
 The bridge binds numeric loopback, checks exact Host and same-origin page requests, bounds payloads and separates native control from view/capture authority. The native descriptor has owner-only permissions. The view key appears only in the native-issued URL fragment, not in a query or server log; keep the full page address private. No audio is sent to an external speech service. Transcript-derived analysis text goes to the selected existing AI provider under its privacy terms.
 
-`retentionDays` removes expired inactive meetings; null retains history until explicit deletion. Model weights are independent of meeting retention. To uninstall, stop capture, remove both plugin configuration entries and restart the runtime. Delete local meeting directories/model caches only after separately confirming those data deletions.
+`retentionDays` removes expired inactive meetings; null retains history until explicit deletion. Model weights are independent of meeting retention. To disable Meeting, stop capture, start the backend without `--meeting`, and remove its terminal plugin entry if configured. Delete local Meeting directories/model caches only after separately confirming those data deletions.
 
 ## Limitations and troubleshooting
 
@@ -176,10 +173,11 @@ The bridge binds numeric loopback, checks exact Host and same-origin page reques
 ```sh
 bun run --cwd extensions/meeting test:unit
 bun run --cwd extensions/meeting test:integration
-bun test --cwd packages/core test/meeting-mcp.integration.test.ts test/meeting-plugin.integration.test.ts
+~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-core --test 'meeting_*'
+~/.cache/ycoding/cargo-gate.sh cargo test --manifest-path rust/Cargo.toml --locked -p ycoding-runtime --test meeting_clients --test meeting_import --test launcher
 bun run --cwd extensions/meeting typecheck
 python3 -m unittest discover -s extensions/meeting/python -p 'test_*.py'
 bun run --cwd extensions/meeting test:integration:chrome
 ```
 
-MCP tests use the real client/registry and a disposable local server, with deterministic extraction at the model boundary. Plugin smoke uses the real supervisor. The launcher test starts the source launcher's private server from an ordinary project directory with the launcher environment, as the TUI does. TUI tests render the native page and the start command's live page address. Bridge integration checks authenticated capture, strict messages, Host/Origin/size boundaries, removed routes and heartbeat expiry. Runtime-state integration sends capture through `/view/capture` and retains inference failure/retry, duplicate sequence, backlog and finalization assertions. The separate Chrome suite requires `YCODING_TEST_ISOLATED_BROWSER_CHROME` pointing to installed Chrome for Testing; it exercises the real live page, capture tracks and bridge using controlled browser media, not the live Google Meet application or real speech inference. The model test command performs actual local inference; reference evaluation separates Thai-only NFC character error rate from case-insensitive English technical-term recall. Verify operating-system microphone permission, native picker behavior, playback and actual Meet hangup separately in a consented call.
+MCP integration runs the real Rust client/registry against a disposable local MCP process with deterministic extraction at the external model boundary. The launcher tests start the private Rust runtime from an ordinary project directory in normal and beta channels. TUI tests render the native page and the start command's live page address. Rust bridge/runtime suites cover authenticated capture, strict messages, Host/Origin/size boundaries, heartbeat expiry, inference failure/retry, duplicate sequences, backlog, finalization and restart. The separate Chrome suite requires `YCODING_TEST_ISOLATED_BROWSER_CHROME` pointing to installed Chrome for Testing; it exercises the real live page and Rust runtime using controlled browser media, local speech-worker and model stand-ins. Its Unreported-display case omits only optional diagnostics from a real state response. It does not exercise live Google Meet or actual speech inference. Verify operating-system microphone permission, native picker behavior, playback, representative Thai-English accuracy and actual Meet hangup separately in a consented call.

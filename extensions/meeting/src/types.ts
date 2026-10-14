@@ -95,25 +95,6 @@ export interface EngineeringPlan {
   createdAt: string
 }
 
-export interface Approval {
-  id: string
-  meetingID: string
-  targetID: string
-  decision: "approve" | "reject" | "correct"
-  detail: string
-  createdAt: string
-}
-
-export interface ProcessingJob {
-  id: string
-  meetingID: string
-  kind: "transcription" | "analysis" | "knowledge"
-  status: "pending" | "running" | "done" | "failed" | "interrupted"
-  attempts: number
-  error?: string
-  updatedAt: string
-}
-
 export interface MeetingView {
   meeting?: Meeting
   meetings: Meeting[]

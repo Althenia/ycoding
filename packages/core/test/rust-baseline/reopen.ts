@@ -1,6 +1,7 @@
 import { lstat, readdir, realpath } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 const root = process.argv[2]
 if (
@@ -21,7 +22,6 @@ process.env.YCODING_TEST_HOME = path.join(root, "home")
 process.env.TMPDIR = root
 const { Effect } = await import("effect")
 const { Database } = await import("@ycoding-ai/core/database/database")
-const { MeetingStore } = await import("../../../../extensions/meeting/src/store")
 await Effect.runPromise(
   Database.Service.pipe(
     Effect.flatMap((database) => database.db.run("PRAGMA wal_checkpoint(TRUNCATE)")),
@@ -29,14 +29,30 @@ await Effect.runPromise(
     Effect.scoped,
   ),
 )
-const meeting = new MeetingStore(path.join(root, "meetings.sqlite"))
-meeting.getMeeting("baseline-meeting")
-meeting.segments("baseline-meeting")
-meeting.findings("baseline-meeting")
-meeting.checkpoints("baseline-meeting")
-meeting.proposals("baseline-meeting")
-meeting.plan("baseline-meeting")
-meeting.approvals("baseline-meeting")
-meeting.jobs("baseline-meeting")
-meeting.references("baseline-meeting")
-meeting.close()
+{
+  const { Database } = await import("bun:sqlite")
+  const meeting = new Database(`${pathToFileURL(path.join(root, "meetings.sqlite")).href}?immutable=1`, {
+    readonly: true,
+    strict: true,
+  })
+  try {
+    for (const table of [
+      "meetings",
+      "segments",
+      "findings",
+      "checkpoints",
+      "proposals",
+      "plans",
+      "approvals",
+      "jobs",
+      "knowledge_references",
+    ])
+      if (meeting.query(`SELECT data FROM ${table}`).all().length !== 1)
+        throw new Error(`Incomplete Meeting baseline: ${table}`)
+    if (meeting.query<{ integrity_check: string }, []>("PRAGMA integrity_check").get()?.integrity_check !== "ok")
+      throw new Error("Corrupt Meeting baseline")
+    if (meeting.query("PRAGMA foreign_key_check").all().length) throw new Error("Invalid Meeting baseline references")
+  } finally {
+    meeting.close()
+  }
+}

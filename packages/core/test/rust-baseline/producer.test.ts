@@ -105,6 +105,23 @@ describe("WP-001 / HARNESS-01 F-STORE", () => {
     const meeting = JSON.parse(exported.meeting.meetings[0].data)
     expect(meeting.title).toBe(values[3])
     expect(JSON.parse(exported.meeting.proposals[0].data).suggestedContent).toBe(values[2])
+    expect(JSON.parse(exported.meeting.segments[0].data)).toMatchObject({
+      rawText: values[3],
+      text: values[2],
+      state: "final",
+      sequence: 1,
+    })
+    expect(exported.meeting.segments[0].original_text).toBe("low:\ufffd\ufffd\ufffd")
+    expect(JSON.parse(exported.meeting.findings[0].data).summary).toBe(values[0])
+    expect(JSON.parse(exported.meeting.checkpoints[0].data)).toMatchObject({
+      summary: values[1],
+      throughSequence: 1,
+      final: true,
+    })
+    expect(JSON.parse(exported.meeting.knowledge_references[0].data).content).toBe(values[1])
+    expect(JSON.parse(exported.meeting.plans[0].data).content).toBe(values[3])
+    expect(JSON.parse(exported.meeting.approvals[0].data).detail).toBe(values[2])
+    expect(JSON.parse(exported.meeting.jobs[0].data)).toMatchObject({ status: "done", attempts: 1 })
   })
 
   test("preserves real provider terminal Steps, both promoted deliveries, form settlement, instructions, skill and attachment bytes", async () => {
@@ -185,6 +202,13 @@ describe("WP-001 / HARNESS-01 F-STORE", () => {
     expect(provenance.sourceRevision).toMatch(/^[0-9a-f]{40}$/)
     expect(provenance.sourceFingerprint.sha256).toBe(fixture.sourceFingerprint)
     expect(provenance.sourceFingerprint).toEqual(await sourceFingerprint(path.resolve(import.meta.dir, "../../../..")))
+    expect(provenance.sourceFingerprint.files.map((entry: { file: string }) => entry.file)).toContain(
+      "extensions/meeting/test/fixture/stable-meeting/snapshot.json",
+    )
+    expect(provenance.sourceFingerprint.files.map((entry: { file: string }) => entry.file)).toContain(
+      "packages/core/test/rust-baseline/scenario.ts",
+    )
+    expect(provenance.boundary).toContain("direct SQLite Unicode/record fixtures")
     for (const file of provenance.files) expect(await fingerprint(path.join(fixture.root, file.file))).toBe(file.sha256)
     await verifyCopy(fixture.root, provenance.files)
     const exported = await Bun.file(path.join(fixture.root, "semantic-export.json")).json()

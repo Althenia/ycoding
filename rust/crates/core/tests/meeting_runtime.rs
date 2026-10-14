@@ -192,6 +192,51 @@ fn silent() -> Script {
     script(|_| async { Ok(Vec::new()) })
 }
 
+#[tokio::test]
+async fn model_switch_drains_healthy_audio_before_disposal_and_preserves_model_attribution() {
+    bounded(async {
+        let models = Arc::new(Mutex::new(Vec::new()));
+        let recorded = models.clone();
+        let fixture = fixture(script(move |call| {
+            let recorded = recorded.clone();
+            async move {
+                assert!(call.healthy.load(Ordering::SeqCst));
+                recorded.lock().unwrap().push(call.model);
+                Ok(said(
+                    call.chunk.start_ms,
+                    call.chunk.start_ms + 400.0,
+                    "Speech",
+                ))
+            }
+        }))
+        .await;
+        let old = arm(&fixture.runtime).await;
+        fixture
+            .runtime
+            .capture(CaptureMessage::Audio {
+                capture_id: "capture".into(),
+                source: AudioSource::Remote,
+                sequence: 0,
+                start_ms: 0.0,
+                sample_rate: 16000,
+                samples: vec![0.2; 8000],
+            })
+            .await
+            .unwrap();
+        assert!(models.lock().unwrap().is_empty());
+        let view = fixture
+            .runtime
+            .control(json!({ "action": "model-select", "model": ALTERNATE_MODEL }))
+            .await
+            .unwrap();
+        assert_eq!(models.lock().unwrap().as_slice(), &[DEFAULT_MODEL]);
+        assert_eq!(segments(&fixture, &old)[0]["model"], DEFAULT_MODEL);
+        assert_eq!(view["health"]["model"], ALTERNATE_MODEL);
+        fixture.runtime.close().await.unwrap();
+    })
+    .await;
+}
+
 fn audio(sequence: u64, start_ms: f64) -> CaptureMessage {
     CaptureMessage::Audio {
         capture_id: "capture".into(),

@@ -48,7 +48,6 @@
       "dependencies": {
         "@opentui/core": "catalog:",
         "@opentui/solid": "catalog:",
-        "@ycoding-ai/client": "workspace:*",
         "@ycoding-ai/plugin": "workspace:*",
         "@ycoding-ai/tui": "workspace:*",
         "solid-js": "catalog:",
