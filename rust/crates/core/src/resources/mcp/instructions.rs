@@ -19,16 +19,26 @@ pub fn summaries_by(
     servers: &[Summary],
     tools: &[(LosslessString, LosslessString)],
     permissions: Option<&[permission::Rule]>,
+    compare: impl FnMut(&LosslessString, &LosslessString) -> Ordering,
+) -> Vec<Summary> {
+    summaries_with_capabilities_by(servers, tools, permissions, &Default::default(), compare)
+}
+pub fn summaries_with_capabilities_by(
+    servers: &[Summary],
+    tools: &[(LosslessString, LosslessString)],
+    permissions: Option<&[permission::Rule]>,
+    capabilities: &crate::resources::config::capabilities::ConfigCapabilities,
     mut compare: impl FnMut(&LosslessString, &LosslessString) -> Ordering,
 ) -> Vec<Summary> {
     let Some(permissions) = permissions else {
         return Vec::new();
     };
-    if policy::evaluate(&"execute".into(), &"*".into(), permissions)
-        .effect
-        .0
-        .as_str()
-        == Some("deny")
+    if !capabilities.allows_tool(&"execute".into())
+        || policy::evaluate(&"execute".into(), &"*".into(), permissions)
+            .effect
+            .0
+            .as_str()
+            == Some("deny")
     {
         return Vec::new();
     }
@@ -37,6 +47,7 @@ pub fn summaries_by(
         .filter(|server| {
             tools.iter().any(|tool| {
                 tool.0 == server.server
+                    && capabilities.allows_tool(&super::tool_name(&tool.0, &tool.1))
                     && policy::evaluate(
                         &super::tool_name(&tool.0, &tool.1),
                         &"*".into(),

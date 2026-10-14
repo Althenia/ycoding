@@ -46,6 +46,68 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn excluded_mcp_server_never_starts_on_boot_add_or_connect() {
+    let fixture = Fixture::new();
+    let marker = fixture.0.join("started");
+    let config = json!({"type":"local","command":["bun","-e","await Bun.write(process.argv[1], 'started')",marker]});
+    for capabilities in [
+        json!({"mcp":{"enabled":false}}),
+        json!({"mcp":{"allow":["allowed*"],"deny":["allowed-blocked"]}}),
+    ] {
+        let entries = [Entry::Document {path:None,info:parse_json(&json!({"capabilities":capabilities,"mcp":{"servers":{"excluded":config,"allowed-blocked":config}}}).to_string()).unwrap()}];
+        let service = Service::new(
+            &entries,
+            fixture.0.clone(),
+            "1".into(),
+            BTreeMap::new(),
+            Hooks::default(),
+        )
+        .unwrap();
+        assert!(service.tools().await.unwrap().is_empty());
+        assert!(!marker.exists(), "an excluded configured process started");
+        assert!(
+            service
+                .servers()
+                .unwrap()
+                .iter()
+                .all(|server| server.status == Status::Disabled)
+        );
+        service
+            .add(
+                "excluded-later",
+                ServerConfig::decode(&parse_json(&config.to_string()).unwrap()).unwrap(),
+            )
+            .await
+            .unwrap();
+        for name in ["excluded", "excluded-later", "allowed-blocked"] {
+            service.connect(name).await.unwrap();
+        }
+        assert!(service.tools().await.unwrap().is_empty());
+        assert!(service.prompts().is_empty());
+        assert!(service.instructions().await.unwrap().is_empty());
+        assert!(service.skill_catalog().await.unwrap().is_empty());
+        assert_eq!(
+            service.resource_catalog().await.unwrap(),
+            json!({"resources":[],"templates":[]})
+        );
+        assert!(!marker.exists(), "an excluded add/connect process started");
+        assert!(
+            service
+                .servers()
+                .unwrap()
+                .iter()
+                .all(|server| server.status == Status::Disabled)
+        );
+        if capabilities["mcp"]["enabled"] != false {
+            service.add("allowed", fixture.config(true)).await.unwrap();
+            service.connect("allowed").await.unwrap();
+            assert_eq!(service.tools().await.unwrap().len(), 3);
+        }
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn configured_servers_start_in_background_and_disabled_servers_do_not_block_queries() {
     let fixture = Fixture::new();
     let config = fixture.config(true);

@@ -6,6 +6,7 @@ use ycoding_schema::{
 };
 
 pub struct Definitions {
+    pub capabilities: crate::resources::config::capabilities::ConfigCapabilities,
     pub timeout: TimeoutConfig,
     pub servers: Vec<(LosslessString, ServerConfig)>,
 }
@@ -28,6 +29,7 @@ pub fn from_entries(entries: &[Entry]) -> Result<Definitions, DecodeError> {
         })
         .collect::<Vec<_>>();
     let mut definitions = Definitions {
+        capabilities: crate::resources::config::capabilities::ConfigCapabilities::resolve(entries),
         timeout: TimeoutConfig {
             startup: None,
             catalog: None,
@@ -45,7 +47,7 @@ pub fn from_entries(entries: &[Entry]) -> Result<Definitions, DecodeError> {
             continue;
         };
         for (name, value) in servers.iter() {
-            let config = definitions.resolve(ServerConfig::decode(value)?);
+            let config = definitions.resolve_server(name, ServerConfig::decode(value)?);
             if let Some(existing) = definitions
                 .servers
                 .iter_mut()
@@ -61,6 +63,16 @@ pub fn from_entries(entries: &[Entry]) -> Result<Definitions, DecodeError> {
 }
 
 impl Definitions {
+    pub fn resolve_server(&self, name: &LosslessString, config: ServerConfig) -> ServerConfig {
+        let mut config = self.resolve(config);
+        if !self.capabilities.mcp.allows(name) {
+            match &mut config {
+                ServerConfig::Local(config) => config.disabled = Some(true),
+                ServerConfig::Remote(config) => config.disabled = Some(true),
+            }
+        }
+        config
+    }
     pub fn resolve(&self, mut config: ServerConfig) -> ServerConfig {
         let timeout = match &mut config {
             ServerConfig::Local(config) => &mut config.timeout,

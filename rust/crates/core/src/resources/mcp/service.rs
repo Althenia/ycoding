@@ -105,7 +105,12 @@ impl Service {
             let name = name
                 .to_utf8()
                 .map_err(|_| Error::Connect("Invalid MCP server name".into()))?;
-            let (authentication, registration) = registration(&name, config, &hooks)?;
+            let (authentication, registration) =
+                if definitions.capabilities.mcp.allows(&name.as_str().into()) {
+                    registration(&name, config, &hooks)?
+                } else {
+                    (Authentication::default(), None)
+                };
             slots.insert(name, slot(config.clone(), authentication, registration));
         }
         let service = Self(Arc::new(Inner {
@@ -246,7 +251,7 @@ impl Service {
         if self.0.closed.load(Ordering::Acquire) {
             return Err(Error::Closed);
         }
-        let config = self.0.definitions.resolve(config);
+        let config = self.0.definitions.resolve_server(&name.into(), config);
         let slot = {
             let mut slots = self.0.slots.lock().map_err(|_| Error::Closed)?;
             if !slots.contains_key(name) {
@@ -265,7 +270,11 @@ impl Service {
         state.config = config;
         state.removed = false;
         slot.ready.send_replace(false);
-        let registered = registration(name, &state.config, &self.0.hooks);
+        let registered = if self.0.definitions.capabilities.mcp.allows(&name.into()) {
+            registration(name, &state.config, &self.0.hooks)
+        } else {
+            Ok((Authentication::default(), None))
+        };
         match registered {
             Ok((authentication, registration)) => {
                 slot.authentication.send_replace(authentication);
@@ -646,6 +655,12 @@ async fn ready(slot: &Slot) -> Result<(), Error> {
 async fn start(inner: &Arc<Inner>, name: &str, slot: &Arc<Slot>, state: &mut State) {
     if inner.closed.load(Ordering::Acquire) {
         slot.ready.send_replace(true);
+        return;
+    }
+    if !inner.definitions.capabilities.mcp.allows(&name.into()) {
+        slot.view.send_replace(empty_view(Status::Disabled));
+        slot.ready.send_replace(true);
+        inner.publish(Event::StatusChanged(name.into()));
         return;
     }
     slot.view.send_replace(empty_view(Status::Pending));

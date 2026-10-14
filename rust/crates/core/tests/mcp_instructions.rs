@@ -12,6 +12,47 @@ fn rule(action: &str) -> permission::Rule {
 }
 
 #[test]
+fn mcp_guidance_requires_execute_and_an_allowed_server_tool() {
+    use ycoding_core::resources::config::{Entry, capabilities::ConfigCapabilities};
+    let servers = [instructions::Summary {
+        server: "docs".into(),
+        instructions: "Guide".into(),
+    }];
+    let tools = [
+        ("docs".into(), "lookup".into()),
+        ("docs".into(), "secret".into()),
+    ];
+    for (config, rules, visible) in [
+        (r#"{}"#, vec![], true),
+        (r#"{"tools":{"allow":["docs_lookup"]}}"#, vec![], true),
+        (r#"{"tools":{"deny":["docs_secret"]}}"#, vec![], true),
+        (r#"{"tools":{"deny":["execute"]}}"#, vec![], false),
+        (r#"{"tools":{"enabled":false}}"#, vec![], false),
+        (r#"{"tools":{"allow":[]}}"#, vec![], false),
+        (r#"{"tools":{"deny":["docs_*"]}}"#, vec![], false),
+        (
+            r#"{"tools":{"allow":["docs_lookup"]}}"#,
+            vec![rule("docs_lookup")],
+            false,
+        ),
+        (r#"{}"#, vec![rule("execute")], false),
+    ] {
+        let policy = ConfigCapabilities::resolve(&[Entry::Document {
+            path: None,
+            info: parse_json(&format!(r#"{{"capabilities":{config}}}"#)).unwrap(),
+        }]);
+        let actual = instructions::summaries_with_capabilities_by(
+            &servers,
+            &tools,
+            Some(&rules),
+            &policy,
+            |a, b| a.cmp(b),
+        );
+        assert_eq!(actual.len(), usize::from(visible), "{config}");
+    }
+}
+
+#[test]
 fn instructions_only_include_servers_with_an_accessible_tool() {
     let servers = [
         instructions::Summary {

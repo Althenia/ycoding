@@ -61,6 +61,18 @@ selection before active-skill, resource and MCP handling, so catalog exclusion
 also prevents explicit loads. Builtin `ycoding` and `report` IDs participate in
 selection like other skills.
 
+The MCP manager captures capability selection at boot. Excluded configured or
+runtime-added servers remain Disabled, do not register authentication, and cannot
+start through connect. Their tool, prompt, resource, skill and instruction
+catalogs remain empty. Ordinary configured `disabled` servers still support an
+explicit connect when the capability selector permits them. Unrelated config
+reloads do not replace the boot-owned MCP selection.
+
+MCP guidance uses `mcp::instructions::summaries_with_capabilities_by` with current
+tool selection and effective permissions. A server contributes guidance only
+when `execute` is usable and one of its tool names passes both checks; the tool
+allow list does not independently exclude the `execute` wrapper.
+
 ## Session movement
 
 Session movement adopts a destination Project's previous artifact scope in its
