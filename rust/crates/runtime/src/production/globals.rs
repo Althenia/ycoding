@@ -9,60 +9,6 @@ use ycoding_core::{
     ycoding_store::Client,
 };
 
-#[cfg(test)]
-mod frontend_helper_tests {
-    use super::{ComputerClient, helper_application};
-    use std::path::Path;
-    use ycoding_core::platform::computer::{
-        service::Invoke,
-        types::{Code, Outcome, Owner, Request},
-    };
-
-    #[test]
-    fn frontend_helper_uses_installed_directory_not_runtime_extraction_directory() {
-        let root = std::env::temp_dir().join("ycoding-helper-path");
-        let frontend = root.join("installed").join("ycoding");
-        let runtime = root.join("cache/bin/runtime/version/digest/ycoding-runtime");
-        let application = helper_application(Some(frontend.to_str().unwrap())).unwrap();
-        assert_eq!(
-            application,
-            frontend
-                .parent()
-                .unwrap()
-                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
-        );
-        assert_ne!(
-            application,
-            runtime
-                .parent()
-                .unwrap()
-                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
-        );
-        assert!(application.starts_with(Path::new(&root.join("installed"))));
-    }
-
-    #[tokio::test]
-    async fn missing_frontend_flag_reports_helper_unavailable_without_a_launch() {
-        let error = helper_application(None).unwrap_err();
-        let client = ComputerClient::Unavailable(error);
-        let (_, signal) = tokio::sync::watch::channel(false);
-        let result = client
-            .invoke(
-                Request::list(Owner {
-                    session_id: "ses_fixture".into(),
-                    call_id: "call_fixture".into(),
-                }),
-                signal,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(result.code, Code::HelperUnavailable);
-        assert_eq!(result.outcome, Some(Outcome::NotStarted));
-        assert!(result.message.contains("--frontend-executable"));
-        client.shutdown().await.unwrap();
-    }
-}
-
 pub(super) struct Globals {
     pub composition: Composition,
     pub catalog: Arc<catalog::models_dev::Service>,
@@ -423,5 +369,59 @@ impl ComputerClient {
             Self::Ready(client) => client.shutdown().await,
             Self::Unavailable(_) => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod frontend_helper_tests {
+    use super::{ComputerClient, helper_application};
+    use std::path::Path;
+    use ycoding_core::platform::computer::{
+        service::Invoke,
+        types::{Code, Outcome, Owner, Request},
+    };
+
+    #[test]
+    fn frontend_helper_uses_installed_directory_not_runtime_extraction_directory() {
+        let root = std::env::temp_dir().join("ycoding-helper-path");
+        let frontend = root.join("installed").join("ycoding");
+        let runtime = root.join("cache/bin/runtime/version/digest/ycoding-runtime");
+        let application = helper_application(Some(frontend.to_str().unwrap())).unwrap();
+        assert_eq!(
+            application,
+            frontend
+                .parent()
+                .unwrap()
+                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
+        );
+        assert_ne!(
+            application,
+            runtime
+                .parent()
+                .unwrap()
+                .join(ycoding_core::platform::computer::macos::HELPER_APPLICATION)
+        );
+        assert!(application.starts_with(Path::new(&root.join("installed"))));
+    }
+
+    #[tokio::test]
+    async fn missing_frontend_flag_reports_helper_unavailable_without_a_launch() {
+        let error = helper_application(None).unwrap_err();
+        let client = ComputerClient::Unavailable(error);
+        let (_, signal) = tokio::sync::watch::channel(false);
+        let result = client
+            .invoke(
+                Request::list(Owner {
+                    session_id: "ses_fixture".into(),
+                    call_id: "call_fixture".into(),
+                }),
+                signal,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(result.code, Code::HelperUnavailable);
+        assert_eq!(result.outcome, Some(Outcome::NotStarted));
+        assert!(result.message.contains("--frontend-executable"));
+        client.shutdown().await.unwrap();
     }
 }

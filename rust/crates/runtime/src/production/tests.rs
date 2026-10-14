@@ -15,8 +15,12 @@ use ycoding_core::{
         context::Context,
         policy::{Effect, helper::Role, questions::Admission},
     },
-    ycoding_schema::{DomainEncode, form, parse_json, question, session},
-    ycoding_store::{Metadata, Options, Store, project, resources::Secret, session::SessionTable},
+    ycoding_schema::{DomainDecode, DomainEncode, form, parse_json, question, session},
+    ycoding_store::{
+        Metadata, Options, Store, project,
+        resources::{Request, RequestTable, Secret},
+        session::{Document, SessionTable},
+    },
 };
 
 #[path = "../../tests/support/catalog.rs"]
@@ -1319,6 +1323,246 @@ async fn bootstrap_rejects_invalid_roots_and_unavailable_catalog_without_install
         );
     }
     assert!(execution::Execution::global().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() {
+    let root = std::env::temp_dir().join(format!(
+        "composition-analytics-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let roots = config::Roots::development(&root).unwrap();
+    roots.initialize().unwrap();
+    let directory = root.join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(roots.config.join("ycoding.json"), "{}").unwrap();
+    std::fs::write(directory.join("ycoding.json"), "{}").unwrap();
+    let store = Store::initialize(
+        root.join("store.redb"),
+        Options::core(),
+        ycoding_core::ycoding_store::import::catalog(
+            ycoding_core::ycoding_store::import::DatabaseKind::Core,
+        ),
+        Metadata::new([3; 16], 1),
+    )
+    .unwrap();
+    let placement = directory.to_str().unwrap().to_owned();
+    store
+        .submit(move |tx| {
+            project::ProjectTable::insert(
+                tx,
+                &project::Project {
+                    id: "prj_one".into(),
+                    worktree: placement.clone().into(),
+                    vcs: None,
+                    name: None,
+                    icon_url: None,
+                    icon_url_override: None,
+                    icon_color: None,
+                    time_created: 1,
+                    time_updated: 1,
+                    time_initialized: None,
+                    sandboxes: vec![],
+                    commands: None,
+                },
+            )?;
+            let mut row = catalog_fixture::record("ses_one");
+            row.directory = placement.into();
+            row.time_updated = crate::ids::now_millis();
+            SessionTable::insert(tx, &row)?;
+            RequestTable::insert(
+                tx,
+                &Request {
+                    id: "req_one".into(),
+                    session_id: "ses_one".into(),
+                    input_id: None,
+                    assistant_message_id: None,
+                    connection_identity_digest: None,
+                    source: "step".into(),
+                    agent: "god".into(),
+                    model: Document::from_domain(
+                        &ycoding_core::ycoding_schema::model::Ref {
+                            provider_id: ycoding_core::ycoding_schema::provider::Id(
+                                "openai".into(),
+                            ),
+                            id: "gpt-runtime".into(),
+                            profile: None,
+                            variant: None,
+                        },
+                    )
+                    .unwrap(),
+                    route_id: "compatible".into(),
+                    prompt_cache_key: "namespace_fixture".into(),
+                    system_digest: "system".into(),
+                    tool_digest: "tools".into(),
+                    request: 1,
+                    attempts: 1,
+                    invalidation: "first-request".into(),
+                    continuation: "full".into(),
+                    cache_read_reported: None,
+                    timing: None,
+                    cost: Some(0.75),
+                    tokens: Document::new(
+                        parse_json(
+                            r#"{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}"#,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                    time_created: row.time_updated,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let client = store.client();
+    let sessions = Service::new(client.clone());
+    let start = |client: Client| {
+        let credentials = credential::Service::new(client.clone());
+        let production = Production {
+            configuration: config::LoadOptions {
+                directory: directory.clone(),
+                roots: roots.clone(),
+                project: true,
+                file: None,
+                content: None,
+                env: BTreeMap::from([("OPENAI_API_KEY".into(), "environment-key".into())]),
+            },
+            catalog: models_dev::Options {
+                source: "https://models.dev".into(),
+                cache: roots.cache.join("models.json"),
+                file: None,
+                bundled: Some(parse_json(MODELS).unwrap()),
+                fetch: false,
+                user_agent: "ycoding-test".into(),
+            },
+            cursor: None,
+            steer: None,
+            ripgrep: "rg".into(),
+            meeting: false,
+        };
+        let globals = globals::Globals::start(
+            client.clone(),
+            &production,
+            credentials.clone(),
+            Feed::attach(&client),
+            Arc::new(git::Service::new(16 * 1024 * 1024)),
+            true,
+        );
+        (globals, credentials)
+    };
+    let report = |sessions: &Service| {
+        sessions.usage_report_all(
+            &ycoding_core::ycoding_schema::provider_request::ReportInput::decode(
+                &parse_json(r#"{"group":"session"}"#).unwrap(),
+            )
+            .unwrap(),
+            None,
+        )
+    };
+    let (healthy, credentials) = start(client.clone());
+    let healthy = healthy.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        match report(&sessions) {
+            Ok(report) => {
+                assert_eq!(report.total.logical.get(), 1);
+                break;
+            }
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("healthy rebuild must complete: {error:?}"),
+        }
+    }
+    healthy.close().await.unwrap();
+    healthy.composition.close().unwrap();
+    credentials.shutdown().await.unwrap();
+
+    let analytics = roots.data.join("analytics");
+    let derived = std::fs::read_dir(&analytics)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "duckdb")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !derived.is_empty(),
+        "healthy start must build the derived DB"
+    );
+    // A non-owned entry makes the private derived-DB directory unusable: every
+    // rebuild/report attempt fails until an operator removes it.
+    std::fs::write(analytics.join("foreign-file"), b"not an owned generation").unwrap();
+
+    let (restarted, credentials) = start(client.clone());
+    let restarted = restarted.expect("analytics outage must not fail production startup");
+    let session_id = session::Id::new("ses_one").unwrap();
+    assert!(
+        sessions.get(&session_id).unwrap().is_some(),
+        "canonical Session read must work during the analytics outage"
+    );
+    assert_eq!(
+        sessions.usage_all(None).unwrap().logical.get(),
+        1,
+        "canonical usage summary stays on redb during the analytics outage"
+    );
+    let event = ycoding_core::ycoding_schema::event::Id::new("evt_analytics_outage").unwrap();
+    sessions
+        .admit_input(ycoding_core::session::pending::Request {
+            id: ycoding_core::ycoding_schema::session_message::Id::from_event(&event),
+            session_id: session_id.clone(),
+            input: ycoding_core::ycoding_schema::session_pending::Message::decode(
+                &parse_json(r#"{"type":"user","delivery":"steer","data":{"text":"Keep working"}}"#)
+                    .unwrap(),
+            )
+            .unwrap(),
+            event_id: event,
+            created: crate::ids::now_millis(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        sessions.pending_list(&session_id).unwrap().len() == 1,
+        "Session admission must commit during the analytics outage"
+    );
+    assert!(
+        report(&sessions).is_err(),
+        "report reads must expose the analytics outage explicitly, not serve data"
+    );
+
+    std::fs::remove_dir_all(&analytics).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let recovered = loop {
+        match report(&sessions) {
+            Ok(report) => break report,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("rebuild must complete after the fault clears: {error:?}"),
+        }
+    };
+    assert_eq!(recovered.row_count.get(), 1);
+    assert_eq!(recovered.total.logical.get(), 1);
+    assert_eq!(recovered.rows.len(), 1);
+    assert_eq!(recovered.rows[0].key.as_str(), Some("ses_one"));
+    assert_eq!(
+        report(&sessions).unwrap(),
+        recovered,
+        "recovered reports must be stable"
+    );
+    restarted.close().await.unwrap();
+    restarted.composition.close().unwrap();
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 struct Sleep {

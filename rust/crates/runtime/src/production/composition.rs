@@ -36,37 +36,11 @@ impl Composition {
         let task = std::thread::Builder::new()
             .name("ycoding-composition".into())
             .spawn(move || {
-                let analytics = reports
-                    .map(|(client, directory)| {
-                        let engine = ycoding_core::ycoding_store::analytics::reports::start(
-                            client.clone(),
-                            directory,
-                        )
-                        .map_err(|_| unavailable("analytics owner"))?;
-                        let pending = client
-                            .snapshot()
-                            .map_err(|_| unavailable("analytics purge fence"))?
-                            .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])
-                            .map_err(|_| unavailable("analytics purge fence"))?
-                            .is_some_and(|delivery| {
-                                delivery.purge_all || !delivery.purges.is_empty()
-                            });
-                        if pending {
-                            engine.purge().map_err(|_| unavailable("analytics purge"))?;
-                        }
-                        engine
-                            .rebuild()
-                            .map_err(|_| unavailable("analytics rebuild"))?;
-                        Ok::<_, Failure>(engine)
-                    })
-                    .transpose();
-                let analytics = match analytics {
-                    Ok(analytics) => analytics,
-                    Err(error) => {
-                        let _ = ready.send(Err(error));
-                        return Ok(());
-                    }
-                };
+                // Analytics is derived and rebuildable: starting its owner must never gate
+                // readiness. Purge/rebuild run on the maintainer below; while they fail,
+                // report reads return the analytics error instead of data.
+                let analytics =
+                    reports.and_then(|(client, directory)| start_analytics(client, directory));
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
                     .enable_all()
@@ -84,10 +58,8 @@ impl Composition {
                         let _ = ready.send(Err(unavailable("composition runtime")));
                     }
                 }
-                if let Some(analytics) = analytics {
-                    analytics
-                        .shutdown()
-                        .map_err(|_| unavailable("analytics shutdown"))?;
+                if let Some(mut maintainer) = analytics {
+                    maintainer.stop();
                 }
                 Ok(())
             })
@@ -131,6 +103,117 @@ impl Composition {
         }
         Ok(())
     }
+}
+
+struct Maintainer {
+    stop: std::sync::mpsc::Sender<()>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl Maintainer {
+    fn stop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(task) = self.task.take() {
+            let _ = task.join();
+        }
+    }
+}
+
+impl Drop for Maintainer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn start_analytics(
+    client: ycoding_core::ycoding_store::Client,
+    directory: std::path::PathBuf,
+) -> Option<Maintainer> {
+    let (stop, stopped) = std::sync::mpsc::channel();
+    match std::thread::Builder::new()
+        .name("ycoding-analytics-rebuild".into())
+        .spawn(move || maintain(client, directory, stopped))
+    {
+        Ok(task) => Some(Maintainer {
+            stop,
+            task: Some(task),
+        }),
+        Err(error) => {
+            tracing::error!(
+                "analytics maintainer failed to start ({error}); report reads remain unavailable"
+            );
+            None
+        }
+    }
+}
+
+fn maintain(
+    client: ycoding_core::ycoding_store::Client,
+    directory: std::path::PathBuf,
+    stopped: std::sync::mpsc::Receiver<()>,
+) {
+    let engine = loop {
+        match ycoding_core::ycoding_store::analytics::reports::start(
+            client.clone(),
+            directory.clone(),
+        ) {
+            Ok(engine) => break engine,
+            Err(error) => {
+                tracing::error!(
+                    "analytics owner failed to start ({error:?}); report reads remain unavailable"
+                );
+                if wait_stop(&stopped) {
+                    return;
+                }
+            }
+        }
+    };
+    let handle = engine.handle();
+    let mut stop_requested = false;
+    loop {
+        match attempt(&client, &handle) {
+            Ok(()) => break,
+            Err(error) => {
+                tracing::error!(
+                    "analytics purge/rebuild failed ({error:?}); report reads remain unavailable until it succeeds"
+                );
+                if wait_stop(&stopped) {
+                    stop_requested = true;
+                    break;
+                }
+            }
+        }
+    }
+    if !stop_requested {
+        // Keep the engine serving report reads until composition stops or drops us.
+        let _ = stopped.recv();
+    }
+    if let Err(error) = engine.shutdown() {
+        tracing::error!("analytics shutdown failed ({error:?})");
+    }
+}
+
+fn wait_stop(stopped: &std::sync::mpsc::Receiver<()>) -> bool {
+    match stopped.recv_timeout(std::time::Duration::from_secs(1)) {
+        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+    }
+}
+
+fn attempt(
+    client: &ycoding_core::ycoding_store::Client,
+    handle: &ycoding_core::ycoding_store::analytics::Handle,
+) -> Result<(), ycoding_core::ycoding_store::analytics::Error> {
+    let pending = client
+        .snapshot()?
+        .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])?
+        .is_some_and(|delivery| delivery.purge_all || !delivery.purges.is_empty());
+    if pending {
+        handle.purge()?;
+        return Ok(());
+    }
+    handle.rebuild()?;
+    Ok(())
 }
 
 impl Drop for Composition {

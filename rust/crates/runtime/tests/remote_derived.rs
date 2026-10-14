@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod connector_support;
 mod remote_derived_support;
 mod support;
