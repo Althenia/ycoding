@@ -76,6 +76,7 @@ export async function harness(
     role: "agent" | "client" = "client",
     overrides: Partial<RelayConnection> = {},
     budgets?: Options["budgets"],
+    handshake = true,
   ) {
     const peer = new Connection({
       role: role === "agent" ? PeerRole.AGENT : PeerRole.REMOTE_CLIENT,
@@ -95,7 +96,7 @@ export async function harness(
       credentialExpiresAt: 1_000_000,
       ...overrides,
     })
-    if (close.some((entry) => entry.id === id)) return peer
+    if (!handshake || close.some((entry) => entry.id === id)) return peer
     peer.start(now)
     await send(id)
     receive(id)

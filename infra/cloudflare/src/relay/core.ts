@@ -788,7 +788,7 @@ export function createRelay(deps: RelayDeps) {
         statusBytes = bytes
         await Promise.all(
           [...peers.values()]
-            .filter((client) => client.identity.role === "client")
+            .filter((client) => client.identity.role === "client" && client.connection.state === "established")
             .map(async (client) => {
               if (await authorize(client, false)) forward(peer, frame, client, frame.body)
             }),
@@ -1161,8 +1161,18 @@ export function createRelay(deps: RelayDeps) {
     const peer = peers.get(connectionID)
     if (!peer) return
     peer.seenAt = deps.monotonic()
+    const established = peer.connection.state === "established"
     const received = receiveBinary(peer.connection, data, deps.monotonic())
     decisions(peer, received.decisions)
+    if (
+      !established &&
+      peer.identity.role === "client" &&
+      peer.connection.state === "established" &&
+      (await authorize(peer, false)) &&
+      statusBytes
+    ) {
+      queued(peer, { case: "control", value: decodeStrict(ControlSchema, statusBytes) })
+    }
     receipts()
     const tasks: Promise<void>[] = []
     for (const entry of received.decisions) {

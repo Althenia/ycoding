@@ -286,6 +286,55 @@ test("fanout does not credit a status until every authorized recipient consumes 
   expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
 })
 
+test.each(["hello", "confirm"])(
+  "status skips a client in %s and replays only the latest cache after establishment",
+  async (phase) => {
+    const h = await harness()
+    const agent = await h.attach("agent", "agent")
+    await h.attach("established")
+    const joining = await h.attach("joining", "client", {}, undefined, false)
+    if (phase === "confirm") {
+      joining.start(0)
+      await h.send("joining")
+      h.receive("joining")
+    }
+    for (const session of ["ses_old", "ses_latest"]) {
+      const body: Frame["body"] = {
+        case: "control",
+        value: create(ControlSchema, { kind: { case: "status", value: { running: [session], attention: [] } } }),
+      }
+      agent.enqueue(body, frameReservation(body), 0)
+      await h.send("agent")
+    }
+    expect(h.close).toEqual([])
+    expect(h.receive("joining")).toEqual([])
+    const live = h
+      .receive("established")
+      .flatMap((entry) =>
+        entry.frame?.body.case === "control" && entry.frame.body.value.kind.case === "status"
+          ? [entry.frame.body.value.kind.value.running]
+          : [],
+      )
+    expect(live).toEqual([["ses_old"], ["ses_latest"]])
+    if (phase === "hello") {
+      joining.start(0)
+      await h.send("joining")
+      h.receive("joining")
+    }
+    await h.send("joining")
+    const replay = h
+      .receive("joining")
+      .flatMap((entry) =>
+        entry.frame?.body.case === "control" && entry.frame.body.value.kind.case === "status"
+          ? [entry.frame.body.value.kind.value.running]
+          : [],
+      )
+    expect(replay).toEqual([["ses_latest"]])
+    expect(h.relay.connection("joining")!.state).toBe("established")
+    expect(h.close).toEqual([])
+  },
+)
+
 test("aggregate reservation caps retained input and every socket-handed fanout frame before per-peer windows exhaust", async () => {
   const h = await harness()
   const agent = await h.attach("agent", "agent")
