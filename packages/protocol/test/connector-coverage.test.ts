@@ -104,11 +104,59 @@ test("all connector fields, presence, associations and constraints match the bou
       message.fields.flatMap((field) => field.constraints?.domainObligations ?? []),
     ),
   )
+  const rustObligations: Record<string, readonly (readonly [string, string])[]> = {
+    "packages/cli/src/remote-operations.ts#run": [
+      ["rust/crates/runtime/src/dispatch.rs", "pub async fn invoke_remote"],
+      ["rust/crates/runtime/src/dispatch.rs", "crate::connector::operations::authorize"],
+      ["rust/crates/runtime/src/connector/operations.rs", "pub(crate) fn authorize"],
+    ],
+    "packages/cli/src/remote-operations.ts#boundedActivity": [
+      ["rust/crates/runtime/src/remote_derived/session.rs", "fn bounded(value: &str, maximum: usize)"],
+      ["rust/crates/runtime/src/remote_derived/session.rs", "bounded(&text, 80)"],
+    ],
+  }
   for (const source of [...sources].filter(
     (item) => item.startsWith("packages/remote/") || item.startsWith("packages/cli/"),
   )) {
-    const [file, symbol] = source.split("#")
-    expect(await Bun.file(path.resolve(import.meta.dir, "../../..", file!)).text(), source).toContain(symbol!)
+    const successors = rustObligations[source]
+    expect(successors, source).toBeDefined()
+    for (const [file, symbol] of successors)
+      expect(await Bun.file(path.resolve(import.meta.dir, "../../..", file)).text(), source).toContain(symbol)
+  }
+})
+
+test("spec admission table matches the connector inventory, descriptor roles and mutation classes", async () => {
+  const spec = await Bun.file(path.resolve(import.meta.dir, "../../../specs/wire-connector.md")).text()
+  const rows = spec.split("\n").flatMap((line) => {
+    const cells = line.split("|").map((cell) => cell.trim())
+    if (cells.length !== 8) return []
+    const source = cells[1]
+    const name = cells[2]
+    const id = cells[3]
+    const admissionClass = cells[4]
+    const roles = cells[5]
+    const mutation = cells[6]
+    if (!source || !name || !id || !admissionClass || !roles || !mutation) return []
+    if (!/^\d+$/.test(id) || !["S", "C", "N"].includes(roles)) return []
+    if (mutation !== "READ" && mutation !== "MUTATION") return []
+    return [{ source, name, id: Number(id), admissionClass, roles, mutation }]
+  })
+  const inventory: Record<string, readonly [number, string, string, string]> = {
+    ...connectorOperations,
+    ...noticeOperations,
+  }
+  expect(rows).toHaveLength(Object.keys(inventory).length)
+  const rolesByCode: Record<string, PeerRole[]> = {
+    S: [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY],
+    C: [PeerRole.REMOTE_CLIENT, PeerRole.RELAY],
+    N: [PeerRole.REMOTE_CLIENT],
+  }
+  for (const row of rows) {
+    expect(inventory[row.source], row.source).toEqual([row.id, row.name, row.admissionClass, row.mutation])
+    const descriptor = operations.find((item) => item.operationId === row.id)!
+    expect(descriptor.diagnosticName, row.source).toBe(row.name)
+    expect(descriptor.mutation, row.source).toBe(row.mutation === "READ" ? MutationClass.READ : MutationClass.MUTATION)
+    expect(descriptor.roles, row.source).toEqual(rolesByCode[row.roles])
   }
 })
 
