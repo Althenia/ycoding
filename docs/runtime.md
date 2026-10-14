@@ -787,6 +787,8 @@ Artifact stages are:
 
 Versions preserve content digests, provenance, parent versions, state transitions, and fallback identity. Manual destructive or cross-scope operations use preview/confirmation tokens. Trash, restore, revert, promotion, disable, shadow, and fork operations are explicit store operations.
 
+Crash reconciliation resumes an owned filesystem commit journal after content activation begins, preserving its operation and version identities, exact bytes, digests, and provenance. Earlier filesystem phases compensate before preparing the interrupted commit again. Repeated reconciliation preserves revisions and records each recovered automatic write once; unrelated occupied destinations remain collisions.
+
 Automatic creation is governed by per-kind and accounting caps. Plugin automatic creation is currently disabled by a zero automatic cap.
 
 Artifact learning is non-punitive: after the primary task is complete and validated, an artifact may capture a safer reusable rule from a validated repeated mistake, failed approach, or repository gotcha. One-off failures and transient task state are not artifact material.

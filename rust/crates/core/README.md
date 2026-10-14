@@ -3071,6 +3071,10 @@ cross-process reconciliation and artifact locks across reservation, availability
 and finalization, preserves hook errors, and compensates failed finalization.
 Successful finalization retains available bytes if journal cleanup fails;
 transaction enumeration and cleanup expose the retained finalization journals.
+Filesystem-phase recovery resumes the retained journal at `Available` after
+activating content and its marker; only compensated, removed stages prepare
+again. Store finalization preserves the original version, digest, provenance,
+revision transition, and automatic-write identity across repeated reconciliation.
 Callers supply an existing scope marker and retain responsibility for durable
 artifact revisions, lifecycle decisions, quota accounting, and confirmations.
 

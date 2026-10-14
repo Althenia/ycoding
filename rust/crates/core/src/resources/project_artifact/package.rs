@@ -779,7 +779,15 @@ fn prepare_or_resume_commit<'a>(
         return Ok(prepared);
     }
     reconcile_prepared_commit(input.root, &prepared.metadata, filesystem)?;
-    prepare_commit(input, filesystem)
+    if !exists(&prepared.metadata.stage_root) {
+        return prepare_commit(input, filesystem);
+    }
+    let metadata = read_commit_journal(input.root, &prepared.metadata.stage_root, filesystem)
+        .ok_or_else(|| failure("ReconciliationRequired"))?;
+    Ok(PreparedCommit {
+        metadata,
+        ..prepared
+    })
 }
 fn compensate_commit_failure<E>(
     attempt: TransactionError<E>,

@@ -4,7 +4,11 @@ use std::ops::{Bound, ControlFlow};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use ycoding_core::resources::project_artifact::{
-    adapter, filesystem::Hooks, package, source_registry::Registry, store,
+    adapter,
+    filesystem::{Hooks, Mutation},
+    package,
+    source_registry::Registry,
+    store,
 };
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, parse_json, project, project_artifact,
@@ -18,9 +22,12 @@ const SCOPE: &str = "pas_base";
 const STORAGE: &str = "00000000-0000-4000-8000-000000000061";
 const OTHER_SCOPE: &str = "pas_other";
 const OTHER_STORAGE: &str = "00000000-0000-4000-8000-000000000062";
+const SETTLED_V1: &str = "pav_settled-v1";
+const SETTLED_V1_BODY: &str = "Settled first version body.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Crash {
+    Filesystem,
     RedbOpen,
     RedbCommitted,
 }
@@ -32,9 +39,19 @@ struct Case {
     session: &'static str,
     body: &'static str,
     crash: Option<Crash>,
+    update: bool,
 }
 
-const CASES: [Case; 3] = [
+const CASES: [Case; 5] = [
+    Case {
+        artifact: "crash-fs",
+        version: "pav_crash-fs",
+        operation: "pop_crash-fs",
+        session: "ses_acct",
+        body: "Filesystem phase crash body.",
+        crash: Some(Crash::Filesystem),
+        update: false,
+    },
     Case {
         artifact: "crash-redb-open",
         version: "pav_crash-redb-open",
@@ -42,6 +59,7 @@ const CASES: [Case; 3] = [
         session: "ses_acct",
         body: "Open redb transaction crash body.",
         crash: Some(Crash::RedbOpen),
+        update: false,
     },
     Case {
         artifact: "crash-redb-done",
@@ -50,6 +68,16 @@ const CASES: [Case; 3] = [
         session: "ses_acct",
         body: "Committed redb journal crash body.",
         crash: Some(Crash::RedbCommitted),
+        update: false,
+    },
+    Case {
+        artifact: "settled",
+        version: "pav_settled-v2",
+        operation: "pop_settled-update",
+        session: "ses_upd",
+        body: "Settled second version body.",
+        crash: Some(Crash::Filesystem),
+        update: true,
     },
     Case {
         artifact: "orphan-create",
@@ -58,6 +86,7 @@ const CASES: [Case; 3] = [
         session: "ses_orphan",
         body: "Orphan journal body.",
         crash: None,
+        update: false,
     },
 ];
 const AVAILABLE_ORPHAN: (&str, &str, &str) =
@@ -128,13 +157,27 @@ fn baseline_sql() -> String {
          INSERT INTO project_artifact_scope VALUES ('{OTHER_SCOPE}','project','{OTHER_STORAGE}',0,0);
          INSERT INTO project_artifact_project_scope (scope_id,project_id) VALUES ('{OTHER_SCOPE}','prj_other');"
     ));
+    let v1 = digest_of(CASES[3].artifact, SETTLED_V1_BODY);
+    sql.push_str(&format!(
+        "BEGIN; PRAGMA defer_foreign_keys=ON;
+         INSERT INTO project_artifact VALUES ('{SCOPE}','skill','settled',0,'trial','{SETTLED_V1}',NULL,NULL,NULL,0,0);
+         INSERT INTO project_artifact_version (id,scope_id,kind,artifact_id,state,content_digest,content_relpath,source,time_created,time_state_changed)
+           VALUES ('{SETTLED_V1}','{SCOPE}','skill','settled','trial','{v1}','SKILL.md','user',0,0);
+         COMMIT;"
+    ));
     for case in &CASES {
         let target = text(&package::sha256(&case.content()).as_lossless().clone());
+        let expected = if case.update {
+            format!("0,'{SETTLED_V1}','{v1}'")
+        } else {
+            "NULL,NULL,NULL".to_owned()
+        };
         sql.push_str(&format!(
             "INSERT INTO project_artifact_operation (id,scope_id,kind,artifact_id,operation,request_fingerprint,expected_revision,expected_version_id,expected_digest,target_version_id,target_digest,automatic_session_id,automatic_insight_digest,phase,time_created,time_updated)
-             VALUES ('{}','{SCOPE}','skill','{}','create','{}',NULL,NULL,NULL,'{}','{target}','{}','{}','preparing',{T0},{T0});",
+             VALUES ('{}','{SCOPE}','skill','{}','{}','{}',{expected},'{}','{target}','{}','{}','preparing',{T0},{T0});",
             case.operation,
             case.artifact,
+            if case.update { "update" } else { "create" },
             text(&digest(&format!("request-{}", case.operation))),
             case.version,
             case.session,
@@ -283,8 +326,8 @@ fn kind() -> project_artifact::Kind {
 }
 
 #[test]
-fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_bytes_and_accounting()
-{
+fn test_061_imported_journal_crash_at_filesystem_and_redb_phases_reconciles_twice_with_exact_bytes_and_accounting()
+ {
     let fixture = Fixture::new();
     let layout = &fixture.0;
     let source = create_baseline(layout);
@@ -320,6 +363,29 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
     assert_eq!(scope.id.as_lossless().as_str(), Some(SCOPE));
     assert_eq!(scope.storage_id.as_lossless().as_str(), Some(STORAGE));
     let root = layout.scope_root(&scope.storage_id);
+    let settled = &CASES[3];
+    let v1_content = adapter::render(&settled.definition(SETTLED_V1_BODY));
+    let v1_marker = package::marker(package::MarkerInput {
+        scope_id: scope.id.clone(),
+        storage_id: scope.storage_id.clone(),
+        kind: kind(),
+        id: id(settled.artifact),
+        version_id: id(SETTLED_V1),
+        content: v1_content.clone(),
+    });
+    package::commit(
+        package::CommitInput {
+            root: &root,
+            marker: &v1_marker,
+            content: &v1_content,
+            expected_version_id: None,
+            operation_id: None,
+            standard: None,
+            no_overwrite: false,
+        },
+        &Hooks::default(),
+    )
+    .unwrap();
     drop(service);
     store.shutdown().unwrap();
 
@@ -363,13 +429,28 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
             case.artifact
         );
     }
-    assert!(crashed.artifacts.is_empty());
+    assert_eq!(crashed.artifacts.len(), 1);
+    assert_eq!(crashed.artifacts[0].artifact_id.as_str(), Some("settled"));
+    assert_eq!(crashed.artifacts[0].revision, 0);
+    assert_eq!(
+        crashed.artifacts[0].current_version_id.as_str(),
+        Some(SETTLED_V1)
+    );
+    assert!(crashed.writes.is_empty());
     let transactions = package::read_commit_transactions(&root, &Hooks::default()).unwrap();
-    assert_eq!(transactions.len(), 2);
+    assert_eq!(transactions.len(), 4);
     for transaction in &transactions {
+        let case = CASES
+            .iter()
+            .find(|case| case.operation == transaction.operation_id)
+            .unwrap();
         assert_eq!(
             transaction.phase,
-            package::CommitPhase::Finalizing,
+            if case.crash == Some(Crash::Filesystem) {
+                package::CommitPhase::ActivatingContent
+            } else {
+                package::CommitPhase::Finalizing
+            },
             "{} filesystem phase after the kill",
             transaction.operation_id
         );
@@ -393,7 +474,10 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
             .is_empty()
     );
 
-    for case in &CASES[..2] {
+    assert_eq!(settled_journal.artifacts.len(), 4);
+    assert_eq!(settled_journal.versions.len(), 5);
+    assert_eq!(settled_journal.writes.len(), 4);
+    for case in &CASES[..4] {
         let marker = package::marker(package::MarkerInput {
             scope_id: scope.id.clone(),
             storage_id: scope.storage_id.clone(),
@@ -408,19 +492,31 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
             details.current_version.content_digest,
             marker.content_digest
         );
-        assert_eq!(details.artifact.revision.get(), 0);
+        assert_eq!(
+            details.artifact.revision.get(),
+            if case.update { 1 } else { 0 }
+        );
+        assert_eq!(details.versions.len(), if case.update { 2 } else { 1 });
+        assert_eq!(
+            details.current_version.parent_version_id,
+            case.update.then(|| id(SETTLED_V1))
+        );
+        assert_eq!(
+            details.current_version.provenance.source.encode(),
+            JsonValue::String("agent".into())
+        );
         assert_eq!(
             details.artifact.stage.encode(),
             JsonValue::String("trial".into())
         );
         assert_eq!(
-            std::fs::read_to_string(package::active_content_path(
+            std::fs::read(package::active_content_path(
                 &root,
                 &marker.kind,
                 &marker.id
             ))
             .unwrap(),
-            text(&case.content())
+            text(&case.content()).as_bytes()
         );
         assert!(
             package::read_active(&root, &marker.kind, &marker.id, &Hooks::default()).unwrap()
@@ -442,8 +538,8 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
                 scope_id: SCOPE.into(),
                 session_id: case.session.into(),
                 insight_digest: case.insight(),
-                operation: "create".into(),
-                result: "created".into(),
+                operation: if case.update { "update" } else { "create" }.into(),
+                result: if case.update { "updated" } else { "created" }.into(),
                 version_id: marker.version_id.as_lossless().clone(),
                 content_digest: marker.content_digest.as_lossless().clone(),
                 time_created: T0,
@@ -451,7 +547,35 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
         );
     }
 
-    let orphan = &CASES[2];
+    let artifact = settled_journal
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id.as_str() == Some(settled.artifact))
+        .unwrap();
+    assert_eq!(
+        artifact.fallback_version_id.as_ref(),
+        Some(v1_marker.version_id.as_lossless())
+    );
+    let previous = settled_journal
+        .versions
+        .iter()
+        .find(|version| version.id == *v1_marker.version_id.as_lossless())
+        .unwrap();
+    assert_eq!(previous.state.as_str(), Some("superseded"));
+    assert_eq!(
+        previous.content_digest,
+        *v1_marker.content_digest.as_lossless()
+    );
+    assert_eq!(
+        std::fs::read(package::version_content_path(&root, &v1_marker)).unwrap(),
+        text(&v1_content).as_bytes()
+    );
+    assert_eq!(
+        std::fs::read_to_string(package::version_marker_path(&root, &v1_marker)).unwrap(),
+        ycoding_schema::stringify_json(&v1_marker.encode())
+    );
+
+    let orphan = &CASES[4];
     assert_eq!(
         settled_journal.operation(orphan.operation).phase.as_str(),
         Some("aborted")
@@ -496,14 +620,6 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
     };
     assert_eq!(
         service
-            .write_automatic(probe("ses_acct", "extra-acct"))
-            .unwrap()
-            .remaining
-            .session,
-        0.0
-    );
-    assert_eq!(
-        service
             .write_automatic(probe("ses_acct", "extra-denied"))
             .unwrap_err()
             .code
@@ -520,7 +636,7 @@ fn test_061_imported_journal_crash_at_redb_phases_reconciles_twice_with_exact_by
             written.remaining.project_artifacts,
             written.remaining.versions
         ),
-        (2.0, 6.0, 28.0, 15.0)
+        (2.0, 5.0, 27.0, 15.0)
     );
     drop(service);
     store.shutdown().unwrap();
@@ -555,6 +671,19 @@ fn report_flow_crash_child() {
         version_id: id(case.version),
         content: content.clone(),
     });
+    let previous = case
+        .update
+        .then(|| id::<project_artifact::VersionId>(SETTLED_V1));
+    let active = package::active_content_path(&root, &marker.kind, &marker.id);
+    let before = |mutation: &Mutation<'_>| {
+        if crash == Crash::Filesystem
+            && mutation.operation == "rename"
+            && mutation.destination == Some(active.as_path())
+        {
+            barrier();
+        }
+        Ok(())
+    };
     let client = store.client();
     let finalize = |_: &package::CommitTransactionMetadata| -> Result<(), Infallible> {
         let operation = case.operation;
@@ -583,12 +712,15 @@ fn report_flow_crash_child() {
             root: &root,
             marker: &marker,
             content: &content,
-            expected_version_id: None,
+            expected_version_id: previous.as_ref(),
             operation_id: Some(case.operation),
             standard: None,
             no_overwrite: false,
         },
-        &Hooks::default(),
+        &Hooks {
+            before_mutation: Some(&before),
+            ..Default::default()
+        },
         &package::TransactionHooks {
             reserve: None,
             finalize: Some(&finalize),
