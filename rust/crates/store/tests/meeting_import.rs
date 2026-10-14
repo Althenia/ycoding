@@ -113,9 +113,11 @@ fn literal_sqlite_generator_is_byte_identical_and_import_preserves_all_reopened_
     );
     drop(snapshot);
     store.shutdown().unwrap();
-    let candidate = std::fs::read(test.candidate()).unwrap();
-    assert!(test.import().is_err());
-    assert_eq!(std::fs::read(test.candidate()).unwrap(), candidate);
+    assert_eq!(test.import().unwrap(), report);
+    assert_eq!(
+        import::sealed(&test.candidate(), DatabaseKind::Meeting).unwrap(),
+        (Metadata::new([7; 16], 4), report)
+    );
     assert_eq!(std::fs::read(test.source()).unwrap(), before);
     #[cfg(unix)]
     {
@@ -227,7 +229,7 @@ fn importer_rejects_invalid_documents_identity_types_references_and_versions_wit
         drop(db);
         let before = std::fs::read(test.source()).unwrap();
         assert!(test.import().is_err(), "accepted {sql}");
-        assert!(!test.candidate().exists());
+        assert!(import::sealed(&test.candidate(), DatabaseKind::Meeting).is_err());
         assert_eq!(std::fs::read(test.source()).unwrap(), before);
     }
 }
@@ -260,7 +262,8 @@ fn import_cancellation_panic_offline_wal_and_reopened_corruption_fail_closed() {
             },
         );
         assert!(matches!(result, Err(import::Error::Cancelled)));
-        assert!(!test.candidate().exists());
+        assert!(test.candidate().exists());
+        assert_eq!(test.import().unwrap().tables.len(), 9);
         assert_eq!(std::fs::read(test.source()).unwrap(), before);
     }
     let test = Fixture::new();
@@ -275,7 +278,7 @@ fn import_cancellation_panic_offline_wal_and_reopened_corruption_fail_closed() {
         |_| panic!("synthetic callback panic"),
     );
     assert!(matches!(result, Err(import::Error::Interrupted)));
-    assert!(!test.candidate().exists());
+    assert!(test.candidate().exists());
     std::fs::write(
         test.0.join("meetings.sqlite-wal"),
         b"synthetic-uncheckpointed",
@@ -314,7 +317,7 @@ fn import_cancellation_panic_offline_wal_and_reopened_corruption_fail_closed() {
             ..
         })
     ));
-    assert!(!test.candidate().exists());
+    assert!(import::sealed(&test.candidate(), DatabaseKind::Meeting).is_err());
 }
 
 #[test]

@@ -10,6 +10,7 @@ type ProgressFn<'a> = &'a mut dyn FnMut(Progress) -> ControlFlow<()>;
 pub(super) struct Mapping {
     pub(super) name: &'static str,
     pub(super) columns: &'static [&'static str],
+    pub(super) reset: fn(&Store) -> Result<(), Error>,
     pub(super) load: fn(&Connection, &Store, ProgressFn<'_>) -> Result<TableSummary, Error>,
     pub(super) validate: fn(&Connection, &Store, ProgressFn<'_>) -> Result<(), Error>,
     pub(super) verify:
@@ -29,6 +30,7 @@ macro_rules! mapping {
         Mapping {
             name:$name,
             columns:&[$(column!($field)),*],
+            reset: reset::<$module::$table>,
             load:|db,store,progress| load::<$module::$table>(db,store,progress,|row| Ok($module::$record { $($field:row.field(column!($field))?),* })),
             validate:|db,store,progress| validate::<$module::$table>(db,store,progress,|row| Ok($module::$record { $($field:row.field(column!($field))?),* }),$module::$table::put),
             verify:|db,snapshot,expected,progress| verify::<$module::$table>(db,snapshot,expected,progress,|row| Ok($module::$record { $($field:row.field(column!($field))?),* })),
@@ -211,6 +213,23 @@ where
         write::<T>(store, batch, put)?;
     }
     Ok(summary)
+}
+
+pub(super) fn reset<T: TableSpec>(store: &Store) -> Result<(), Error> {
+    loop {
+        let removed = store
+            .submit(|tx| {
+                let rows = tx.scan::<T>(Bound::Unbounded, Bound::Unbounded, 128)?;
+                for row in &rows {
+                    tx.delete::<T>(&T::primary_key(row))?;
+                }
+                Ok(rows.len())
+            })?
+            .wait()?;
+        if removed == 0 {
+            return Ok(());
+        }
+    }
 }
 
 pub(super) fn validate<T: TableSpec>(

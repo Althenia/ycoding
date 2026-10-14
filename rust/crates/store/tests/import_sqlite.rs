@@ -275,7 +275,7 @@ fn existing_candidate_is_refused_without_touching_it() {
 }
 
 #[test]
-fn rejected_checks_and_foreign_keys_name_the_source_row_and_remove_candidate() {
+fn rejected_checks_and_foreign_keys_name_the_source_row_without_sealing_candidate() {
     for (sql, table, reason) in [
         (
             "INSERT INTO credential (id,label,value,generation,account_generation,time_created,time_updated) VALUES ('c','synthetic','{\"type\":\"key\",\"key\":\"synthetic-test-only\"}',-1,0,0,0)",
@@ -305,7 +305,7 @@ fn rejected_checks_and_foreign_keys_name_the_source_row_and_remove_candidate() {
         assert!(error.contains(table), "{error}");
         assert!(error.contains(reason), "{error}");
         assert!(error.contains("row 1"), "{error}");
-        assert!(!candidate.exists());
+        assert!(import::sealed(&candidate, DatabaseKind::Core).is_err());
         assert!(!error.contains("synthetic-test-only"));
     }
 }
@@ -336,7 +336,7 @@ fn unrepresentable_numeric_and_null_types_fail_closed_without_coercion() {
         assert!(error.contains("data_migration"), "{error}");
         assert!(error.contains(column), "{error}");
         assert!(error.contains(reason), "{error}");
-        assert!(!candidate.exists());
+        assert!(import::sealed(&candidate, DatabaseKind::Core).is_err());
         assert_eq!(before, std::fs::read(&source).unwrap());
     }
 }
@@ -398,7 +398,7 @@ fn deleted_sqlite_autoincrement_high_water_is_seeded_before_new_insert() {
 }
 
 #[test]
-fn interruption_at_each_owned_boundary_removes_candidate() {
+fn interruption_at_each_owned_boundary_preserves_and_resumes_candidate() {
     for phase in [
         Progress::Created,
         Progress::Loaded("migration"),
@@ -422,12 +422,31 @@ fn interruption_at_each_owned_boundary_removes_candidate() {
             ),
             Err(import::Error::Cancelled)
         ));
-        assert!(!candidate.exists());
+        assert!(candidate.exists());
+        let report = import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Continue(()),
+        )
+        .unwrap();
+        assert_eq!(
+            report
+                .tables
+                .iter()
+                .map(|table| table.rows)
+                .collect::<Vec<_>>(),
+            [1, 1]
+        );
+        assert_eq!(
+            import::sealed(&candidate, DatabaseKind::Bootstrap)
+                .unwrap()
+                .1,
+            report
+        );
     }
 }
 
 #[test]
-fn reopen_verification_detects_changed_record_and_removes_candidate() {
+fn reopen_verification_detects_changed_record_without_sealing_candidate() {
     let fixture = Fixture::new();
     drop(fixture.create(DatabaseKind::Bootstrap));
     let source = fixture.source();
@@ -461,7 +480,7 @@ fn reopen_verification_detects_changed_record_and_removes_candidate() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("digest"));
-    assert!(!candidate.exists());
+    assert!(import::sealed(&candidate, DatabaseKind::Bootstrap).is_err());
 }
 
 #[test]
@@ -578,7 +597,7 @@ fn unsupported_inventory_format_and_uncheckpointed_wal_are_refused() {
 }
 
 #[test]
-fn panicking_progress_is_reported_and_owned_candidate_is_removed() {
+fn panicking_progress_is_reported_and_owned_candidate_can_resume() {
     let fixture = Fixture::new();
     drop(fixture.create(DatabaseKind::Bootstrap));
     let source = fixture.source();
@@ -595,8 +614,13 @@ fn panicking_progress_is_reported_and_owned_candidate_is_removed() {
         ),
         Err(import::Error::Interrupted)
     ));
-    assert!(!candidate.exists());
-    assert_eq!(std::fs::read_dir(&fixture.0).unwrap().count(), 1);
+    assert!(candidate.exists());
+    import::stage(
+        fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    assert!(import::sealed(&candidate, DatabaseKind::Bootstrap).is_ok());
 }
 
 #[test]
@@ -692,11 +716,11 @@ fn missing_reopened_index_membership_is_detected_against_source() {
         },
     );
     assert!(result.unwrap_err().to_string().contains("index membership"));
-    assert!(!candidate.exists());
+    assert!(import::sealed(&candidate, DatabaseKind::Core).is_err());
 }
 
 #[test]
-fn changed_source_fingerprint_after_verification_discards_candidate() {
+fn changed_source_fingerprint_after_verification_rejects_candidate_resume() {
     let fixture = Fixture::new();
     drop(fixture.create(DatabaseKind::Bootstrap));
     let source = fixture.source();
@@ -719,5 +743,237 @@ fn changed_source_fingerprint_after_verification_discards_candidate() {
             .to_string()
             .contains("source fingerprint changed")
     );
+    assert!(candidate.exists());
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Continue(())
+        ),
+        Err(import::Error::SourceChanged)
+    ));
+    assert!(import::sealed(&candidate, DatabaseKind::Bootstrap).is_err());
+}
+
+#[test]
+fn table_checkpoint_resume_preserves_multi_batch_rows_and_publishes_provenance_after_verification()
+{
+    for count in [0, 1, 127, 128, 129, 257] {
+        let fixture = Fixture::new();
+        let db = fixture.create(DatabaseKind::Core);
+        db.execute_batch(rows()).unwrap();
+        for row in 0..count {
+            db.execute(
+                "INSERT INTO migration VALUES (?1,?2)",
+                (format!("synthetic-{row:04}"), row),
+            )
+            .unwrap();
+        }
+        drop(db);
+        let source = fixture.source();
+        let candidate = fixture.candidate();
+        let before = std::fs::read(&source).unwrap();
+        let result = import::stage(
+            fixture.request(DatabaseKind::Core, &source, &candidate),
+            |phase| {
+                if matches!(
+                    phase,
+                    Progress::Rows {
+                        table: "migration",
+                        rows: 128
+                    }
+                ) || phase == Progress::Loaded("migration")
+                {
+                    return ControlFlow::Break(());
+                }
+                ControlFlow::Continue(())
+            },
+        );
+        assert!(matches!(result, Err(import::Error::Cancelled)));
+        let report = import::stage(
+            fixture.request(DatabaseKind::Core, &source, &candidate),
+            |phase| {
+                if phase == Progress::Verifying {
+                    let store = Store::open(
+                        &candidate,
+                        Options::core(),
+                        import::catalog(DatabaseKind::Core),
+                    )
+                    .unwrap();
+                    let snapshot = store.snapshot().unwrap();
+                    assert!(
+                        snapshot
+                            .get::<import::ProvenanceTable>(&[])
+                            .unwrap()
+                            .is_none()
+                    );
+                    drop(snapshot);
+                    store.shutdown().unwrap();
+                }
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            report
+                .tables
+                .iter()
+                .find(|table| table.name == "migration")
+                .unwrap()
+                .rows,
+            count + 4
+        );
+        assert_eq!(
+            import::sealed(&candidate, DatabaseKind::Core).unwrap().1,
+            report
+        );
+        assert_eq!(std::fs::read(source).unwrap(), before);
+    }
+}
+
+#[test]
+fn malformed_checkpoint_and_wrong_identity_are_refused_without_replacing_candidate() {
+    let fixture = Fixture::new();
+    drop(fixture.create(DatabaseKind::Bootstrap));
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Break(())
+        ),
+        Err(import::Error::Cancelled)
+    ));
+    let before = std::fs::read(&candidate).unwrap();
+    let mut request = fixture.request(DatabaseKind::Bootstrap, &source, &candidate);
+    request.metadata = Metadata::new([8; 16], 1);
+    assert!(matches!(
+        import::stage(request, |_| ControlFlow::Continue(())),
+        Err(import::Error::Checkpoint(_))
+    ));
+    std::fs::write(
+        candidate.with_file_name("candidate.redb.import-v1"),
+        b"unknown checkpoint",
+    )
+    .unwrap();
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Continue(())
+        ),
+        Err(import::Error::Checkpoint(_))
+    ));
+    assert_eq!(std::fs::read(candidate).unwrap(), before);
+}
+
+#[test]
+fn missing_checkpoint_candidate_is_refused_without_creating_an_empty_replacement() {
+    let fixture = Fixture::new();
+    drop(fixture.create(DatabaseKind::Bootstrap));
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |phase| if phase == Progress::Loaded("migration") {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        ),
+        Err(import::Error::Cancelled)
+    ));
+    std::fs::remove_file(&candidate).unwrap();
+    assert!(matches!(
+        import::stage(
+            fixture.request(DatabaseKind::Bootstrap, &source, &candidate),
+            |_| ControlFlow::Continue(())
+        ),
+        Err(import::Error::Checkpoint("checkpoint candidate is missing"))
+    ));
     assert!(!candidate.exists());
+}
+
+#[test]
+fn interrupted_import_child() {
+    let Ok(root) = std::env::var("YCODING_IMPORT_CHILD_ROOT") else {
+        return;
+    };
+    let fixture = Fixture(PathBuf::from(root));
+    let phase = std::env::var("YCODING_IMPORT_CHILD_PHASE").unwrap();
+    import::stage(
+        fixture.request(
+            DatabaseKind::Bootstrap,
+            &fixture.source(),
+            &fixture.candidate(),
+        ),
+        |current| {
+            if format!("{current:?}") == phase {
+                use std::io::{Read, Write};
+                println!("IMPORT-CHECKPOINT");
+                std::io::stdout().flush().unwrap();
+                std::io::stdin().read_exact(&mut [0]).unwrap();
+            }
+            ControlFlow::Continue(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn hard_process_death_at_import_checkpoints_resumes_without_duplicate_records() {
+    for phase in [
+        "Created",
+        "Rows { table: \"migration\", rows: 128 }",
+        "Loaded(\"migration\")",
+        "Validating",
+        "Verifying",
+        "Verified(\"migration\")",
+        "Complete",
+    ] {
+        let fixture = Fixture::new();
+        let db = fixture.create(DatabaseKind::Bootstrap);
+        for row in 0..257 {
+            db.execute(
+                "INSERT INTO migration VALUES (?1,?2)",
+                (format!("synthetic-{row}"), row),
+            )
+            .unwrap();
+        }
+        drop(db);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "interrupted_import_child", "--nocapture"])
+            .env("YCODING_IMPORT_CHILD_ROOT", &fixture.0)
+            .env("YCODING_IMPORT_CHILD_PHASE", phase)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                if line.unwrap() == "IMPORT-CHECKPOINT" {
+                    sender.send(()).unwrap();
+                    break;
+                }
+            }
+        });
+        let ready = receiver.recv_timeout(std::time::Duration::from_secs(30));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        reader.join().unwrap();
+        ready.unwrap();
+        let report = import::stage(
+            fixture.request(
+                DatabaseKind::Bootstrap,
+                &fixture.source(),
+                &fixture.candidate(),
+            ),
+            |_| ControlFlow::Continue(()),
+        )
+        .unwrap();
+        assert_eq!(report.tables[0].rows, 258);
+        assert!(import::sealed(&fixture.candidate(), DatabaseKind::Bootstrap).is_ok());
+    }
 }

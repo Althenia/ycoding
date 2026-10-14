@@ -72,6 +72,10 @@ impl Fixture {
                 std::fs::copy(baseline.join(name), self.stable.join(name)).unwrap();
             }
         }
+        if !wal {
+            assert!(std::process::Command::new("python3").args(["-c", "import sqlite3,sys;db=sqlite3.connect(sys.argv[1]);db.execute('PRAGMA journal_mode=WAL');db.close()"])
+                .arg(self.source()).status().unwrap().success());
+        }
     }
 
     fn stable_files(&self) -> Vec<Option<Vec<u8>>> {
@@ -163,15 +167,6 @@ impl Fixture {
         assert!(!self.marker().exists());
         assert!(!self.beta.join("bridge.json").exists());
         assert!(!self.beta.join("runtime.lock").exists());
-        assert!(
-            !std::fs::read_dir(self.directory.0.join("tmp/ycoding-beta"))
-                .unwrap()
-                .any(|entry| entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("stable-import-"))
-        );
     }
 
     fn finish(&self, mut runtime: Runtime) -> String {
@@ -207,9 +202,21 @@ async fn beta_first_start_imports_the_ts_meeting_store_and_serves_retained_histo
             assert_eq!(report.importer_version, 1);
             assert_eq!(report.tables.len(), 9);
             assert!(report.tables.iter().all(|table| table.rows == 1));
+            let ycoding_core::ycoding_schema::JsonValue::Object(marker) = read(&fixture.marker())
+            else {
+                panic!("selection is not an object");
+            };
             assert_eq!(
-                std::fs::read_to_string(fixture.marker()).unwrap(),
-                "{\"complete\":true,\"version\":1,\"imported\":true}\n"
+                marker.get(&"version".into()),
+                Some(&ycoding_core::ycoding_schema::JsonValue::Number(2.0))
+            );
+            assert_eq!(
+                marker.get(&"sealed".into()),
+                Some(&ycoding_core::ycoding_schema::JsonValue::Bool(true))
+            );
+            assert_eq!(
+                marker.get(&"imported".into()),
+                Some(&ycoding_core::ycoding_schema::JsonValue::Bool(true))
             );
             #[cfg(unix)]
             {
@@ -241,9 +248,16 @@ async fn beta_first_start_imports_the_ts_meeting_store_and_serves_retained_histo
 async fn absent_source_is_decided_once_and_does_not_import_later_stable_history() {
     let fixture = Fixture::new();
     fixture.finish(fixture.start().await);
+    let ycoding_core::ycoding_schema::JsonValue::Object(marker) = read(&fixture.marker()) else {
+        panic!("selection is not an object");
+    };
     assert_eq!(
-        std::fs::read_to_string(fixture.marker()).unwrap(),
-        "{\"complete\":true,\"version\":1,\"imported\":false}\n"
+        marker.get(&"sealed".into()),
+        Some(&ycoding_core::ycoding_schema::JsonValue::Bool(true))
+    );
+    assert_eq!(
+        marker.get(&"imported".into()),
+        Some(&ycoding_core::ycoding_schema::JsonValue::Bool(false))
     );
     fixture.materialize(false);
     let before = fixture.stable_files();
@@ -320,7 +334,14 @@ async fn invalid_completion_or_missing_imported_store_is_not_replaced() {
         std::fs::create_dir_all(&fixture.beta).unwrap();
         std::fs::write(fixture.marker(), marker).unwrap();
         let diagnostics = fixture.finish(fixture.start().await);
-        assert!(diagnostics.contains("invalid beta import marker or missing imported store"));
+        assert!(
+            diagnostics.contains(if marker.contains("version") {
+                "unsupported v1 import marker"
+            } else {
+                "Invalid beta import selection"
+            }),
+            "{diagnostics}"
+        );
         assert!(!fixture.file().exists());
         assert!(!fixture.beta.join("bridge.json").exists());
         assert_eq!(std::fs::read_to_string(fixture.marker()).unwrap(), marker);
@@ -340,7 +361,10 @@ async fn an_existing_unmarked_store_without_provenance_is_never_overwritten() {
         .unwrap();
     database.close().await.unwrap();
     let diagnostics = fixture.finish(fixture.start().await);
-    assert!(diagnostics.contains("beta store has no completed import provenance"));
+    assert!(
+        diagnostics.contains("Invalid beta import selection"),
+        "{diagnostics}"
+    );
     assert!(!fixture.beta.join("bridge.json").exists());
     assert!(!fixture.marker().exists());
     let database = MeetingDatabase::open(&fixture.file()).unwrap();

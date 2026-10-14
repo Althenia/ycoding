@@ -17,6 +17,9 @@ use ycoding_core::ycoding_schema::{
 use ycoding_core::ycoding_store::{Metadata, Options, Store, import};
 use ycoding_protocol::connection::Budgets;
 
+mod activation;
+pub use activation::ImportError;
+
 include!(concat!(env!("OUT_DIR"), "/bundled_models.rs"));
 
 pub const BETA_NAMESPACE: &str = "ycoding-beta";
@@ -81,6 +84,7 @@ pub enum LaunchError {
     Usage(String),
     Message(String),
     Io(io::Error),
+    Import(ImportError),
 }
 
 impl fmt::Display for LaunchError {
@@ -88,6 +92,7 @@ impl fmt::Display for LaunchError {
         match self {
             Self::Usage(message) | Self::Message(message) => formatter.write_str(message),
             Self::Io(error) => write!(formatter, "{error}"),
+            Self::Import(error) => error.fmt(formatter),
         }
     }
 }
@@ -1016,86 +1021,7 @@ pub(crate) fn import_stable(
     scratch_root: &Path,
     kind: import::DatabaseKind,
 ) -> Result<(), LaunchError> {
-    if marker.try_exists()? {
-        return match std::fs::read_to_string(marker)?.as_str() {
-            "{\"complete\":true,\"version\":1,\"imported\":true}\n" if file.try_exists()? => Ok(()),
-            "{\"complete\":true,\"version\":1,\"imported\":false}\n" => Ok(()),
-            _ => Err(message(
-                "invalid beta import marker or missing imported store",
-            )),
-        };
-    }
-    if file.try_exists()? {
-        let store = Store::open(
-            file,
-            if kind == import::DatabaseKind::Meeting {
-                Options::meeting()
-            } else {
-                Options::core()
-            },
-            import::catalog(kind),
-        )
-        .map_err(|_| unsupported_store())?;
-        let verified = store
-            .snapshot()
-            .map_err(message)?
-            .get::<import::ProvenanceTable>(&[])
-            .map_err(message)?
-            .is_some();
-        store.shutdown().map_err(message)?;
-        if !verified {
-            return Err(message("beta store has no completed import provenance"));
-        }
-    } else if source.try_exists()? {
-        let scratch = scratch_root.join(format!("stable-import-{}", source_epoch()?));
-        std::fs::create_dir(&scratch)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
-        }
-        let candidate = file.with_file_name(format!(".stable-import-{}.redb", source_epoch()?));
-        let copied = scratch.join("source.sqlite");
-        let result = (|| {
-            import::copy_source(source, &copied).map_err(message)?;
-            import::stage(
-                import::Request {
-                    source: &copied,
-                    candidate: &candidate,
-                    kind,
-                    metadata: metadata()?,
-                },
-                |_| std::ops::ControlFlow::Continue(()),
-            )
-            .map_err(message)?;
-            std::fs::rename(&candidate, file)?;
-            #[cfg(unix)]
-            std::fs::File::open(
-                file.parent()
-                    .ok_or_else(|| message("import target has no parent"))?,
-            )?
-            .sync_all()?;
-            Ok::<_, LaunchError>(())
-        })();
-        let cleanup = std::fs::remove_dir_all(&scratch)
-            .and_then(|()| {
-                if candidate.try_exists()? {
-                    std::fs::remove_file(&candidate)?;
-                }
-                Ok(())
-            })
-            .map_err(LaunchError::from);
-        result.and(cleanup)?;
-    }
-    write_private(
-        marker,
-        if file.try_exists()? {
-            b"{\"complete\":true,\"version\":1,\"imported\":true}\n"
-        } else {
-            b"{\"complete\":true,\"version\":1,\"imported\":false}\n"
-        },
-    )?;
-    Ok(())
+    activation::activate(source, file, marker, scratch_root, kind, |_| Ok(()))
 }
 
 fn source_epoch() -> Result<String, LaunchError> {

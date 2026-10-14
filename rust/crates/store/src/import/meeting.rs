@@ -1,4 +1,4 @@
-use super::mappings::{Mapping, load, validate, verify};
+use super::mappings::{Mapping, load, reset, validate, verify};
 use crate::meeting;
 
 macro_rules! mapping {
@@ -6,6 +6,7 @@ macro_rules! mapping {
         Mapping {
             name: $name,
             columns: &[$(stringify!($field)),*],
+            reset: reset::<meeting::$table>,
             load: |db, store, progress| load::<meeting::$table>(db, store, progress, |row| Ok(meeting::$record { $($field: row.field(stringify!($field))?),* })),
             validate: |db, store, progress| validate::<meeting::$table>(db, store, progress, |row| Ok(meeting::$record { $($field: row.field(stringify!($field))?),* }), meeting::$table::put),
             verify: |db, snapshot, expected, progress| verify::<meeting::$table>(db, snapshot, expected, progress, |row| Ok(meeting::$record { $($field: row.field(stringify!($field))?),* })),
@@ -17,6 +18,7 @@ macro_rules! child_mapping {
         Mapping {
             name: $name,
             columns: &["id", "meeting_id", "data"],
+            reset: reset::<meeting::$table>,
             load: |db, store, progress| {
                 load::<meeting::$table>(db, store, progress, |row| {
                     Ok(meeting::Record {

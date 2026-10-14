@@ -412,9 +412,11 @@ schema=open(sys.argv[2]).read()
 for sql in re.findall(r'`((?:\\.|[^`])*)`',schema): db.executescript(sql.replace('\\`','`'))
 db.executescript("CREATE TABLE migration(id TEXT PRIMARY KEY,time_completed INTEGER NOT NULL);CREATE TABLE database_format(id TEXT PRIMARY KEY,time_created INTEGER NOT NULL);INSERT INTO database_format VALUES('current-2026-08-04',0);")
 db.commit()
-if sys.argv[3]=='wal': db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA wal_autocheckpoint=0')
+db.execute('PRAGMA journal_mode=WAL')
+if sys.argv[3]=='wal': db.execute('PRAGMA wal_autocheckpoint=0')
 db.execute("INSERT INTO project(id,worktree,time_created,time_updated,sandboxes) VALUES('prj_imported','/synthetic',1,2,'[]')")
 db.commit()
+if sys.argv[3]=='plain': db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
 print('ready',flush=True)
 sys.stdin.read()
 db.close()
@@ -617,15 +619,13 @@ fn beta_marker_rejects_invalid_completion_or_missing_imported_store() {
 }
 
 #[test]
-fn beta_absent_source_decision_survives_retry_before_store_creation() {
+fn beta_absent_source_decision_survives_restart_and_marker_loss() {
     let directory = Directory::new();
     let marker = directory.0.join("state/ycoding-beta/stable-import-v1.json");
-    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
-    std::fs::write(
-        marker,
-        "{\"complete\":true,\"version\":1,\"imported\":false}\n",
-    )
-    .unwrap();
+    let (mut first, _, _, _) = service(&directory, "beta");
+    first.signal("-TERM");
+    assert!(first.wait().success());
+    std::fs::remove_file(marker).unwrap();
     let mut source = stable_fixture(&directory, false);
     let (mut runtime, _, _, _) = service(&directory, "beta");
     runtime.signal("-TERM");

@@ -1,3 +1,4 @@
+mod checkpoint;
 pub(crate) mod digest;
 mod mappings;
 mod meeting;
@@ -47,6 +48,10 @@ pub enum Error {
     Sqlite(rusqlite::Error),
     Store(crate::Error),
     Source(&'static str),
+    SourceChanged,
+    SourceBusy,
+    JournalMode,
+    Checkpoint(&'static str),
     Row {
         table: &'static str,
         row: u64,
@@ -71,6 +76,10 @@ impl std::fmt::Display for Error {
             Self::Sqlite(_) => f.write_str("import SQLite read or schema failure"),
             Self::Store(error) => write!(f, "import store: {error}"),
             Self::Source(reason) => write!(f, "unsupported import source: {reason}"),
+            Self::SourceChanged => f.write_str("import source fingerprint changed; start a new candidate generation"),
+            Self::SourceBusy => f.write_str("stable YCoding is writing; close it and retry"),
+            Self::JournalMode => f.write_str("stable SQLite has no recoverable on-disk journal evidence; provide a WAL snapshot or a valid file rollback journal"),
+            Self::Checkpoint(reason) => write!(f, "invalid import checkpoint: {reason}"),
             Self::Row {
                 table,
                 row,
@@ -148,9 +157,6 @@ pub fn stage(
     source.execute_batch("BEGIN")?;
     validate_source(&source, request.kind)?;
     request.metadata.validate()?;
-    if request.candidate.try_exists()? {
-        return Err(Error::Source("candidate already exists"));
-    }
     if request.kind == DatabaseKind::Meeting {
         crate::meeting::private_parent(request.candidate)?;
     }
@@ -159,31 +165,95 @@ pub fn stage(
     } else {
         Options::core()
     };
-    let staging = Staging::new(request.candidate)?;
-    let mut linked = false;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let store = Store::initialize(
-            &staging.file,
-            options,
-            catalog(request.kind),
-            request.metadata,
-        )?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staging.file, std::fs::Permissions::from_mode(0o600))?;
+    let mut lock_path = request.candidate.as_os_str().to_os_string();
+    lock_path.push(".import-lock");
+    let mut lock_options = std::fs::OpenOptions::new();
+    lock_options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        lock_options.mode(0o600);
+    }
+    let lease = lock_options.open(lock_path)?;
+    lease
+        .try_lock()
+        .map_err(|_| Error::Checkpoint("candidate is already being imported"))?;
+    let mut checkpoint_state = match checkpoint::Checkpoint::read(request.candidate)? {
+        Some(value) => {
+            if value.kind != request.kind || value.metadata != request.metadata {
+                return Err(Error::Checkpoint("candidate identity mismatch"));
+            }
+            if (
+                value.report.source_fingerprint.as_str(),
+                value.report.source_bytes,
+            ) != (before.0.as_str(), before.1)
+            {
+                return Err(Error::SourceChanged);
+            }
+            value
         }
-        std::fs::hard_link(&staging.file, request.candidate)?;
-        linked = true;
+        None if request.candidate.try_exists()? => {
+            return Err(Error::Source("candidate already exists"));
+        }
+        None => checkpoint::Checkpoint::new(&request, before.clone()),
+    };
+    if !request.candidate.try_exists()?
+        && (!checkpoint_state.report.tables.is_empty()
+            || checkpoint_state.validated != 0
+            || checkpoint_state.sealed)
+    {
+        return Err(Error::Checkpoint("checkpoint candidate is missing"));
+    }
+    checkpoint_state.save(request.candidate)?;
+    let staging = Staging::new(request.candidate)?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let store = if request.candidate.try_exists()? {
+            Store::open(request.candidate, options, catalog(request.kind))?
+        } else {
+            let store = Store::initialize(
+                &staging.file,
+                options,
+                catalog(request.kind),
+                request.metadata.clone(),
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&staging.file, std::fs::Permissions::from_mode(0o600))?;
+            }
+            std::fs::hard_link(&staging.file, request.candidate)?;
+            #[cfg(unix)]
+            std::fs::File::open(request.candidate.parent().unwrap_or(Path::new(".")))?
+                .sync_all()?;
+            store
+        };
+        if store.metadata() != &request.metadata {
+            return Err(Error::Checkpoint("database identity mismatch"));
+        }
         checkpoint(&mut progress, Progress::Created)?;
-        let mut tables = Vec::new();
-        for mapping in mappings::tables(request.kind) {
-            tables.push((mapping.load)(&source, &store, &mut progress)?);
+        {
+            let snapshot = store.snapshot()?;
+            for (mapping, expected) in mappings::tables(request.kind)
+                .iter()
+                .zip(&checkpoint_state.report.tables)
+            {
+                (mapping.verify)(&source, &snapshot, expected, &mut progress)?;
+            }
+        }
+        for mapping in &mappings::tables(request.kind)[checkpoint_state.report.tables.len()..] {
+            (mapping.reset)(&store)?;
+            checkpoint_state
+                .report
+                .tables
+                .push((mapping.load)(&source, &store, &mut progress)?);
+            checkpoint_state.save(request.candidate)?;
             checkpoint(&mut progress, Progress::Loaded(mapping.name))?;
         }
         checkpoint(&mut progress, Progress::Validating)?;
-        for mapping in mappings::tables(request.kind) {
+        for mapping in &mappings::tables(request.kind)[checkpoint_state.validated..] {
             (mapping.validate)(&source, &store, &mut progress)?;
+            checkpoint_state.validated += 1;
+            checkpoint_state.save(request.candidate)?;
         }
         let latency_high_water = latency_sequence(&source, request.kind)?;
         if request.kind == DatabaseKind::Core {
@@ -192,17 +262,8 @@ pub fn stage(
                 .submit(move |tx| resources::seed_latency_sequence(tx, seed))?
                 .wait()?;
         }
-        let report = Report {
-            source_fingerprint: before.0.clone(),
-            source_bytes: before.1,
-            importer_version: 1,
-            tables,
-            latency_high_water,
-        };
-        let provenance = report.clone();
-        store
-            .submit(move |tx| tx.put::<ProvenanceTable>(&provenance))?
-            .wait()?;
+        checkpoint_state.report.latency_high_water = latency_high_water;
+        let report = checkpoint_state.report.clone();
         store.shutdown()?;
         checkpoint(&mut progress, Progress::Verifying)?;
         let store = Store::open(request.candidate, options, catalog(request.kind))?;
@@ -230,7 +291,9 @@ pub fn stage(
                 });
             }
         }
-        if snapshot.get::<ProvenanceTable>(&[])?.as_ref() != Some(&report) {
+        if checkpoint_state.sealed
+            && snapshot.get::<ProvenanceTable>(&[])?.as_ref() != Some(&report)
+        {
             return Err(Error::Verification {
                 table: "import_provenance",
                 reason: "provenance mismatch",
@@ -239,81 +302,200 @@ pub fn stage(
         drop(snapshot);
         store.shutdown()?;
         if digest::file(request.source)? != before {
-            return Err(Error::Source("source fingerprint changed during import"));
+            return Err(Error::SourceChanged);
+        }
+        if !checkpoint_state.sealed {
+            let store = Store::open(request.candidate, options, catalog(request.kind))?;
+            let provenance = report.clone();
+            store
+                .submit(move |tx| tx.put::<ProvenanceTable>(&provenance))?
+                .wait()?;
+            store.shutdown()?;
+            checkpoint_state.sealed = true;
+            checkpoint_state.save(request.candidate)?;
         }
         checkpoint(&mut progress, Progress::Complete)?;
         Ok(report)
     }))
     .unwrap_or(Err(Error::Interrupted));
-    let result = match staging.remove() {
+    match staging.remove() {
         Ok(()) => result,
         Err(cleanup) => Err(Error::Cleanup {
             original: Box::new(result.err().unwrap_or(Error::Source("staging cleanup"))),
             cleanup,
         }),
-    };
-    if result.is_err()
-        && linked
-        && let Err(cleanup) = std::fs::remove_file(request.candidate)
-    {
-        return Err(Error::Cleanup {
-            original: Box::new(result.err().ok_or(Error::Interrupted)?),
-            cleanup,
-        });
     }
-    result
+}
+
+pub fn resume_metadata(candidate: &Path) -> Result<Metadata, Error> {
+    checkpoint::Checkpoint::read(candidate)?
+        .map(|state| state.metadata)
+        .ok_or(Error::Checkpoint("checkpoint is missing"))
+}
+
+pub fn sealed(candidate: &Path, kind: DatabaseKind) -> Result<(Metadata, Report), Error> {
+    let state = checkpoint::Checkpoint::read(candidate)?
+        .ok_or(Error::Checkpoint("checkpoint is missing"))?;
+    if state.kind != kind || !state.sealed {
+        return Err(Error::Checkpoint("candidate is not sealed"));
+    }
+    let store = Store::open(
+        candidate,
+        if kind == DatabaseKind::Meeting {
+            Options::meeting()
+        } else {
+            Options::core()
+        },
+        catalog(kind),
+    )?;
+    let snapshot = store.snapshot()?;
+    if store.metadata() != &state.metadata
+        || snapshot.get::<ProvenanceTable>(&[])?.as_ref() != Some(&state.report)
+    {
+        return Err(Error::Checkpoint("candidate seal mismatch"));
+    }
+    drop(snapshot);
+    store.shutdown()?;
+    Ok((state.metadata, state.report))
 }
 
 pub fn copy_source(source: &Path, copy: &Path) -> Result<(), Error> {
-    if copy.try_exists()? {
+    copy_source_observed(source, copy, || Ok(()))
+}
+
+fn copy_source_observed(
+    source: &Path,
+    copy: &Path,
+    mut copied: impl FnMut() -> Result<(), Error>,
+) -> Result<(), Error> {
+    let targets = source_files(copy);
+    if targets
+        .iter()
+        .any(|file| std::fs::symlink_metadata(file).is_ok())
+    {
         return Err(Error::Source("copy already exists"));
     }
-    let files = ["", "-wal", "-journal"]
+    for _ in 0..3 {
+        let before = fingerprint_files(source)?;
+        if before[0].is_none() {
+            return Err(Error::Source("source is missing"));
+        }
+        for ((from, to), fingerprint) in source_files(source).iter().zip(&targets).zip(&before) {
+            if fingerprint.is_some() {
+                let mut input = std::fs::File::open(from)?;
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut output = options.open(to)?;
+                std::io::copy(&mut input, &mut output)?;
+                output.sync_all()?;
+            }
+        }
+        copied()?;
+        let private = fingerprint_files(copy)?;
+        let after = fingerprint_files(source)?;
+        if before == private && private == after {
+            require_journal(copy)?;
+            return recover_copy(copy);
+        }
+        for file in targets
+            .iter()
+            .chain(std::iter::once(&sidecar(copy, "-shm")))
+        {
+            match std::fs::remove_file(file) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Err(Error::SourceBusy)
+}
+
+pub fn source_fingerprint(source: &Path) -> Result<String, Error> {
+    let mut digest = digest::Digest::new();
+    for (suffix, fingerprint) in ["", "-wal", "-journal"]
         .into_iter()
-        .map(|suffix| {
-            let mut from = source.as_os_str().to_os_string();
-            from.push(suffix);
-            let mut to = copy.as_os_str().to_os_string();
-            to.push(suffix);
-            (PathBuf::from(from), PathBuf::from(to))
-        })
-        .collect::<Vec<_>>();
-    let before = files
+        .zip(fingerprint_files(source)?)
+    {
+        digest.record(
+            suffix.as_bytes(),
+            &match fingerprint {
+                Some((hash, bytes)) => {
+                    [vec![1], bytes.to_be_bytes().to_vec(), hash.into_bytes()].concat()
+                }
+                None => vec![0],
+            },
+        );
+    }
+    Ok(digest.finish())
+}
+
+pub fn file_fingerprint(file: &Path) -> Result<(String, i64), Error> {
+    digest::file(file)
+}
+
+fn sidecar(file: &Path, suffix: &str) -> PathBuf {
+    let mut name = file.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn source_files(source: &Path) -> [PathBuf; 3] {
+    [
+        source.to_path_buf(),
+        sidecar(source, "-wal"),
+        sidecar(source, "-journal"),
+    ]
+}
+
+fn fingerprint_files(source: &Path) -> Result<Vec<Option<(String, i64)>>, Error> {
+    source_files(source)
         .iter()
-        .map(|(from, _)| {
-            if from.try_exists()? {
-                digest::file(from).map(Some)
-            } else {
-                Ok(None)
-            }
+        .map(|file| match std::fs::symlink_metadata(file) {
+            Ok(info) if info.is_file() => digest::file(file).map(Some),
+            Ok(_) => Err(Error::Source("source member is not a regular file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
         })
-        .collect::<Result<Vec<_>, Error>>()?;
-    if before[0].is_none() {
-        return Err(Error::Source("source is missing"));
+        .collect()
+}
+
+fn require_journal(copy: &Path) -> Result<(), Error> {
+    use std::io::Read;
+    let mut header = [0; 100];
+    std::fs::File::open(copy)?
+        .read_exact(&mut header)
+        .map_err(|_| Error::Source("SQLite header is truncated"))?;
+    if &header[..16] != b"SQLite format 3\0" {
+        return Err(Error::Source("SQLite header is invalid"));
     }
-    for ((from, to), fingerprint) in files.iter().zip(&before) {
-        if let Some(fingerprint) = fingerprint {
-            std::fs::copy(from, to)?;
-            #[cfg(unix)]
+    if header[18..20] == [2, 2] {
+        return Ok(());
+    }
+    if header[18..20] != [1, 1] {
+        return Err(Error::JournalMode);
+    }
+    let mut journal = [0; 28];
+    match std::fs::File::open(sidecar(copy, "-journal")) {
+        Ok(mut file) => {
+            if file.read_exact(&mut journal).is_ok()
+                && journal[..8] == [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]
             {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(to, std::fs::Permissions::from_mode(0o600))?;
+                return Ok(());
             }
-            if digest::file(to)? != *fingerprint {
-                return Err(Error::Source("source changed during copy"));
-            }
+            Err(Error::JournalMode)
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Error::JournalMode),
+        Err(error) => Err(error.into()),
     }
-    for ((from, _), fingerprint) in files.iter().zip(&before) {
-        let after = if from.try_exists()? {
-            Some(digest::file(from)?)
-        } else {
-            None
-        };
-        if after != *fingerprint {
-            return Err(Error::Source("source changed during copy"));
-        }
-    }
+}
+
+fn recover_copy(copy: &Path) -> Result<(), Error> {
     let db = Connection::open_with_flags(
         copy,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -330,6 +512,8 @@ pub fn copy_source(source: &Path, copy: &Path) -> Result<(), Error> {
     }
     db.execute_batch("PRAGMA journal_mode=DELETE")?;
     db.close().map_err(|(_, error)| Error::Sqlite(error))?;
+    #[cfg(unix)]
+    std::fs::File::open(copy.parent().unwrap_or(Path::new(".")))?.sync_all()?;
     Ok(())
 }
 
@@ -524,5 +708,126 @@ impl Staging {
             Err(error) => return Err(error),
         }
         std::fs::remove_dir(self.directory)
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{Connection, Error, copy_source, copy_source_observed, source_fingerprint};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Directory(PathBuf);
+    impl Directory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "ycoding-copy-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn nonpersistent_and_ambiguous_rollback_modes_are_refused() {
+        for mode in ["MEMORY", "OFF", "DELETE"] {
+            let directory = Directory::new();
+            let source = directory.0.join("source.sqlite");
+            let db = Connection::open(&source).unwrap();
+            db.execute_batch(&format!("PRAGMA journal_mode={mode}; CREATE TABLE synthetic(id INTEGER); INSERT INTO synthetic VALUES(1);")).unwrap();
+            let before = std::fs::read(&source).unwrap();
+            assert!(matches!(
+                copy_source(&source, &directory.0.join("copy.sqlite")),
+                Err(Error::JournalMode)
+            ));
+            assert_eq!(std::fs::read(source).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn a_real_wal_writer_causes_bounded_retry_and_typed_refusal() {
+        use std::io::{BufRead, BufReader, Write};
+        let directory = Directory::new();
+        let source = directory.0.join("source.sqlite");
+        let script = "import sqlite3,sys\ndb=sqlite3.connect(sys.argv[1])\ndb.execute('PRAGMA journal_mode=WAL')\ndb.execute('PRAGMA wal_autocheckpoint=0')\ndb.execute('CREATE TABLE synthetic(id INTEGER)')\ndb.commit()\nprint('ready',flush=True)\nfor line in sys.stdin:\n db.execute('INSERT INTO synthetic VALUES(1)');db.commit();print('written',flush=True)\ndb.close()";
+        let mut child = std::process::Command::new("python3")
+            .args(["-c", script])
+            .arg(&source)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        let mut attempts = 0;
+        let result = copy_source_observed(&source, &directory.0.join("copy.sqlite"), || {
+            attempts += 1;
+            child.stdin.as_mut().unwrap().write_all(b"write\n")?;
+            child.stdin.as_mut().unwrap().flush()?;
+            line.clear();
+            output.read_line(&mut line)?;
+            assert_eq!(line.trim(), "written");
+            Ok(())
+        });
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        assert!(matches!(result, Err(Error::SourceBusy)));
+        assert_eq!(attempts, 3);
+        assert!(!directory.0.join("copy.sqlite").exists());
+        copy_source(&source, &directory.0.join("copy.sqlite")).unwrap();
+        assert_eq!(
+            Connection::open(directory.0.join("copy.sqlite"))
+                .unwrap()
+                .query_row("SELECT count(*) FROM synthetic", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn file_rollback_journal_recovers_only_the_private_copy() {
+        use std::io::{BufRead, BufReader};
+        let directory = Directory::new();
+        let source = directory.0.join("source.sqlite");
+        let script = "import sqlite3,sys\ndb=sqlite3.connect(sys.argv[1])\ndb.executescript('PRAGMA journal_mode=DELETE; PRAGMA cache_size=1; CREATE TABLE synthetic(id INTEGER, value BLOB); INSERT INTO synthetic VALUES(1,zeroblob(100000));')\ndb.execute('BEGIN IMMEDIATE')\nfor value in range(2,50): db.execute('INSERT INTO synthetic VALUES(?,zeroblob(100000))',(value,))\nprint('ready',flush=True)\nsys.stdin.read()\ndb.rollback();db.close()";
+        let mut child = std::process::Command::new("python3")
+            .args(["-c", script])
+            .arg(&source)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        let before = source_fingerprint(&source).unwrap();
+        let copy = directory.0.join("copy.sqlite");
+        let result = copy_source(&source, &copy);
+        let after = source_fingerprint(&source).unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        result.unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            Connection::open(copy)
+                .unwrap()
+                .query_row("SELECT count(*) FROM synthetic", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 }
