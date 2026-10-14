@@ -277,17 +277,20 @@ async fn retention_boundary_read_write_housekeeping_and_ten_thousand_cap() {
     service.prune().await.unwrap();
     assert!(service.list(None, None).await.unwrap().data.is_empty());
     let value = Document::from_domain(&sample()).unwrap();
-    store
-        .client()
-        .submit(move |tx| {
-            for _ in 0..MAX_ROWS {
-                resources::append_latency(tx, RETENTION_MS + 1, &value)?;
-            }
-            Ok(())
-        })
-        .unwrap()
-        .await
-        .unwrap();
+    for offset in (0..MAX_ROWS).step_by(1000) {
+        let value = value.clone();
+        store
+            .client()
+            .submit(move |tx| {
+                for _ in offset..(offset + 1000).min(MAX_ROWS) {
+                    resources::append_latency(tx, RETENTION_MS + 1, &value)?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .await
+            .unwrap();
+    }
     service.append(vec![sample(), sample()]).await.unwrap();
     let snapshot = store.client().snapshot().unwrap();
     let rows = snapshot

@@ -1063,6 +1063,7 @@ async fn production_flow() {
             "question",
             "read",
             "shell",
+            "skill",
             "subagent",
             "subagent_control",
             "subagent_report",
