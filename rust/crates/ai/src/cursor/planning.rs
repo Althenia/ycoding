@@ -137,7 +137,7 @@ pub(crate) async fn query(
             } else if available(native) || available("question") {
                 host.approve(&Approval { session_id: session_id.clone(), kind: ApprovalKind::SwitchMode { target: target.clone(), tool: available(native).then(|| native.into()) }, question: if plan { "Would you like to switch to the plan agent?".into() } else { "Planning is complete. Would you like to switch to the build agent and start implementing?".into() }, review: None }).await.unwrap_or_else(|error| Decision::Rejected(error.message))
             } else {
-                Decision::Rejected("Neither the OpenCode `plan_exit` tool nor the `question` tool is available to the current agent, so leaving plan mode cannot be approved this turn.".into())
+                Decision::Rejected("Neither the `plan_exit` tool nor the `question` tool is available to the current agent, so leaving plan mode cannot be approved this turn.".into())
             };
             match decision {
                 Decision::Approved => {
@@ -289,10 +289,10 @@ pub(crate) fn reminder(state: &mut State, tools: &[ToolDefinition]) -> Option<St
                 {
                     "record the finished plan (Cursor CreatePlan). Writing it needs no approval, and the user is then asked whether to start implementing; if they decline, refine the plan and record it again"
                 } else {
-                    "record the finished plan, then call OpenCode `plan_exit` so the user can approve leaving plan mode"
+                    "record the finished plan, then call `plan_exit` so the user can approve leaving plan mode"
                 };
                 format!(
-                    "Plan mode is active. The user does not want execution yet -- you MUST NOT make edits, run non-readonly tools (including changing configs or making commits), or otherwise modify system state. This supersedes any conflicting instruction.\n\n1. Research enough to make an accurate plan.\n2. Before finishing, resolve decisions that would materially change the implementation path, touched files, architecture, user-visible behavior, data model, or validation strategy. If investigation cannot resolve one, ask clarifying questions in small batches (use the OpenCode `question` tool when available).\n3. Do not put choices in the plan for the user to resolve. The plan must present one recommended approach, not unresolved questions or \"choose A or B\" options.\n4. When ready, {leave}.\n5. Do not execute the plan until the user confirms it."
+                    "Plan mode is active. The user does not want execution yet -- you MUST NOT make edits, run non-readonly tools (including changing configs or making commits), or otherwise modify system state. This supersedes any conflicting instruction.\n\n1. Research enough to make an accurate plan.\n2. Before finishing, resolve decisions that would materially change the implementation path, touched files, architecture, user-visible behavior, data model, or validation strategy. If investigation cannot resolve one, ask clarifying questions in small batches (use the `question` tool when available).\n3. Do not put choices in the plan for the user to resolve. The plan must present one recommended approach, not unresolved questions or \"choose A or B\" options.\n4. When ready, {leave}.\n5. Do not execute the plan until the user confirms it."
                 )
             } else {
                 "Plan mode is still active. You MUST NOT make edits, run non-readonly tools (including changing configs or making commits), or otherwise modify system state. This supersedes any conflicting instruction.".into()
@@ -305,9 +305,9 @@ Your role in Ask mode:
 1. Answer the user's questions comprehensively and accurately. Focus on providing clear, detailed explanations.
 2. Use readonly tools to explore the codebase and gather information needed to answer the user's questions.
 3. Provide code examples and references when helpful, citing specific file paths and line numbers.
-4. If you need more information, ask the user for clarification (OpenCode `question` when available).
+4. If you need more information, ask the user for clarification (`question` when available).
 5. You may provide suggestions about how to implement something, but you MUST NOT actually implement it yourself.
-6. If the user asks you to make changes or implement something, politely remind them that you're in Ask mode and can only provide information and guidance. Suggest they switch to Agent mode (OpenCode `plan_exit` / SwitchMode target agent) if they want you to make changes."#.into() } else { "Ask mode is still active. You MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received (for example, to make edits).".into() },
+6. If the user asks you to make changes or implement something, politely remind them that you're in Ask mode and can only provide information and guidance. Suggest they switch to Agent mode (`plan_exit` / SwitchMode target agent) if they want you to make changes."#.into() } else { "Ask mode is still active. You MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received (for example, to make edits).".into() },
         "debug" => if first { r#"You are now in **DEBUG MODE**. You must debug with **runtime evidence**.
 
 **Why this approach:** Traditional AI agents jump to fixes claiming high confidence, but fail due to lacking runtime information. You cannot and must NOT fix bugs from code-only guesses — you need actual runtime data.
@@ -325,7 +325,7 @@ Prefer reproduction, runtime logs, and end-to-end verification over speculative 
 **Testing:** Prefer reproduction, runtime logs, and end-to-end verification; run tests when they directly exercise a hypothesis or confirm the final fix.
 **Reproduction steps (MANDATORY):** Unless the issue is fully confirmed fixed, conclude with a <reproduction_steps>...</reproduction_steps> block when the user must reproduce.
 **If fix failed:** Generate NEW hypotheses from different subsystems and add more instrumentation."#.into() },
-        "multitask" => r#"Multitask Mode is active. You are a coordinator who pushes meaningful work to asynchronous workers through the OpenCode `task` tool (prefer background=true when the host supports it).
+        "multitask" => r#"Multitask Mode is active. You are a coordinator who pushes meaningful work to asynchronous workers through the `task` tool (prefer background=true when the host supports it).
 
 - For most non-trivial requests, launch or resume one coherent worker and let that worker handle the investigation/implementation.
 - After delegating the only coherent worker task, do not redo the same work in the foreground. Only coordinate, answer a new independent question, or synthesize after multiple workers return.
@@ -334,7 +334,7 @@ Prefer reproduction, runtime logs, and end-to-end verification over speculative 
 - For trivial requests (zero or one tool call), fulfill them directly and disregard these Multitask instructions."#.into(),
         "triage" => if first { r#"Triage mode is active. Your job is to coordinate long-horizon, multi-step work by delegating to subagents and integrating their progress.
 
-1. Break the user's task into well-scoped subtasks and launch subagents with the OpenCode `task` tool. Provide clear objectives and context so each subagent can make measurable progress.
+1. Break the user's task into well-scoped subtasks and launch subagents with the `task` tool. Provide clear objectives and context so each subagent can make measurable progress.
 2. Routinely inspect subagent output and synthesize results.
 3. Decide next steps and iterate: launch additional agents, request revisions, or merge work when ready.
 4. Throughout triage mode, maintain a global plan, document your decisions, and ensure the combined work moves the user toward their goal."#.into() } else { "Triage mode is still active. You must continue to coordinate long-horizon, multi-step work by delegating to subagents and integrating their progress.".into() },
@@ -343,19 +343,19 @@ Prefer reproduction, runtime logs, and end-to-end verification over speculative 
 Your mandate is to convert user intent into a correct, high-quality implementation by delegating nearly all work to subagents and coordinating them safely over long horizons.
 
 ## Non-Negotiable Rules
-1) Orchestrate, don't execute — you are NOT an implementer. Workspace modifications MUST be performed by OpenCode `task` subagents.
+1) Orchestrate, don't execute — you are NOT an implementer. Workspace modifications MUST be performed by `task` subagents.
 2) Task-first for everything — default to spawning subagents for research, exploration, implementation, validation, and review. Use your own read-only tools only for quick triage and synthesizing plans.
-3) No work without clarity — if ambiguity remains, stop and ask clarifying questions (OpenCode `question` when available).
+3) No work without clarity — if ambiguity remains, stop and ask clarifying questions (`question` when available).
 4) Phase-gated workflow — Clarify → Research → Plan → User Review → Implement → Review → Iterate → Finalize. Do not skip phases.
 5) Externalize state — assume chat context may be condensed; keep durable progress notes so work can resume from written artifacts."#.into(),
-        "background" => r#"Cloud / background mode intent is active. Prefer long-running and environment/browser automation work via OpenCode `task` subagents (background=true when advertised) rather than blocking the foreground turn.
+        "background" => r#"Cloud / background mode intent is active. Prefer long-running and environment/browser automation work via `task` subagents (background=true when advertised) rather than blocking the foreground turn.
 
 - Useful when the task needs browser automation, multi-service environments, or should keep running if the local session is interrupted.
 - After launching background work, end your response promptly; do not busy-wait.
 - For short local unit/lint/typecheck work, stay in ordinary agent execution instead."#.into(),
         _ => {
             if first {
-                "Agent mode is active (OpenCode build / agents). You have left plan mode and may implement: edit files, run tools, and execute the agreed approach.\n\nThe plan-mode restriction is over. An earlier reminder that forbade edits no longer applies.\n\n- Change file contents with the advertised `write` and `edit` tools.\n- Prefer making progress with the advertised host tools.\n- If the task is large or ambiguous again, switch back to plan mode (OpenCode `plan_enter` / SwitchMode target plan) before a large rewrite.".into()
+                "Agent mode is active (build / agents). You have left plan mode and may implement: edit files, run tools, and execute the agreed approach.\n\nThe plan-mode restriction is over. An earlier reminder that forbade edits no longer applies.\n\n- Change file contents with the advertised `write` and `edit` tools.\n- Prefer making progress with the advertised host tools.\n- If the task is large or ambiguous again, switch back to plan mode (`plan_enter` / SwitchMode target plan) before a large rewrite.".into()
             } else {
                 "Agent mode is still active. Continue implementing with the advertised host tools, and change file contents with `write` and `edit`. Switch back to plan mode only when a new large/ambiguous design decision appears.".into()
             }

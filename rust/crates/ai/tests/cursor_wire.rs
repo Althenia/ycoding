@@ -1,4 +1,4 @@
-use ycoding_ai::cursor::{framing, protobuf, request, wire};
+use ycoding_ai::cursor::{HOST_TOOL_NAMESPACE, framing, protobuf, request, wire};
 use ycoding_schema::{JsonValue, parse_json, stringify_json};
 
 fn bytes(text: &str) -> Vec<u8> {
@@ -194,13 +194,13 @@ fn cursor_run_seed_variants_and_resume_match_javascript_bytes() {
         ("fast".into(), "true".into()),
     ];
     let tool = request::Descriptor {
-        name: "opencode-read".into(),
+        name: format!("{HOST_TOOL_NAMESPACE}-read").into(),
         description: "Read".into(),
         input_schema: parse_json(
             "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
         )
         .unwrap(),
-        provider: "opencode".into(),
+        provider: HOST_TOOL_NAMESPACE.into(),
         tool_name: "read".into(),
     };
     variant.descriptors = vec![tool.clone()];

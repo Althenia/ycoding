@@ -574,7 +574,13 @@ fn builtin_account_methods_register_browser_device_remote_and_env_contracts() {
             assert!(draft.methods(&id.into()).iter().any(|candidate|matches!(candidate,ycoding_schema::integration::Method::OAuth(candidate) if candidate.id.as_lossless().as_str()==Some(method))),"{id}/{method}");
         }
     }
-    for id in ["xai", "github-copilot", "opencode", "google", "runpod"] {
+    for id in [
+        "xai",
+        "github-copilot",
+        model::DROPPED_UPSTREAM_PROVIDER_ID,
+        "google",
+        "runpod",
+    ] {
         assert!(draft.methods(&id.into()).is_empty(), "{id}");
     }
 }

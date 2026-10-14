@@ -1151,8 +1151,9 @@ impl Stream {
                             Error::output("Cursor MCP request is missing its arguments")
                         })?;
                         let name = if let Some(name) = call.tool_name {
-                            if let Some(provider) =
-                                call.provider.filter(|provider| provider != "opencode")
+                            if let Some(provider) = call
+                                .provider
+                                .filter(|provider| provider != super::HOST_TOOL_NAMESPACE)
                             {
                                 if name.starts_with(&format!("{provider}_")) {
                                     name
@@ -1163,7 +1164,7 @@ impl Stream {
                                 name
                             }
                         } else if let Some((provider, name)) = call.name.split_once('-') {
-                            if provider == "opencode" {
+                            if provider == super::HOST_TOOL_NAMESPACE {
                                 name.to_owned()
                             } else {
                                 format!("{provider}_{name}")
@@ -1228,7 +1229,7 @@ impl Stream {
                         }) else {
                             let mut error = Vec::new();
                             protobuf::write_string(&mut error, 1, &path.into())?;
-                            protobuf::write_string(&mut error, 2, &self.ground("This OpenCode agent cannot write binary file content. Do not retry this write with the same bytes.").into())?;
+                            protobuf::write_string(&mut error, 2, &self.ground("This agent cannot write binary file content. Do not retry this write with the same bytes.").into())?;
                             let mut result = Vec::new();
                             protobuf::write_bytes(&mut result, 5, &error)?;
                             self.reply(&exec, &exec.result(3, &result, Some(0))?)
@@ -1566,7 +1567,7 @@ fn descriptor(tool: &ToolDefinition, servers: &[String]) -> Descriptor {
                 .filter(|bare| !bare.is_empty())
                 .map(|bare| (server.as_str(), bare))
         })
-        .unwrap_or(("opencode", name.as_str()));
+        .unwrap_or((super::HOST_TOOL_NAMESPACE, name.as_str()));
     Descriptor {
         name: format!("{}-{}", identity.0, identity.1).into(),
         description: tool.description.clone(),

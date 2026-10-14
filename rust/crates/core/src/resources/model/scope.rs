@@ -101,7 +101,7 @@ pub(crate) fn dropped_provider_id(id: &LosslessString) -> bool {
                 | "llmgateway"
                 | "mistral"
                 | "nvidia"
-                | "opencode"
+                | super::DROPPED_UPSTREAM_PROVIDER_ID
                 | "opencode-go"
                 | "perplexity"
                 | "runpod"

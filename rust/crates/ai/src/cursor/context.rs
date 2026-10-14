@@ -111,8 +111,8 @@ pub(crate) fn mcp_state(exec: &Exec, context: &[u8]) -> Result<Vec<u8>, Error> {
     let catalogs = if nested.is_empty() {
         let mut groups: Vec<(String, Vec<&[u8]>)> = Vec::new();
         for definition in &flat {
-            let provider =
-                text(&protobuf::fields(definition)?, 4)?.unwrap_or_else(|| "opencode".into());
+            let provider = text(&protobuf::fields(definition)?, 4)?
+                .unwrap_or_else(|| super::HOST_TOOL_NAMESPACE.into());
             if let Some(group) = groups.iter_mut().find(|group| group.0 == provider) {
                 group.1.push(definition);
                 continue;

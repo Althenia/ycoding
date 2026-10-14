@@ -484,7 +484,7 @@ impl Catalog {
             return None;
         }
         let record = self.providers.iter().find(|p| &p.provider.id == provider)?;
-        if provider.0 == "opencode".into()
+        if provider.0 == super::model::DROPPED_UPSTREAM_PROVIDER_ID.into()
             && let Some(m) = record
                 .models
                 .iter()

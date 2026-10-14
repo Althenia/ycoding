@@ -21,3 +21,5 @@ pub mod transport;
 pub mod unary;
 pub mod usage;
 pub mod wire;
+
+pub const HOST_TOOL_NAMESPACE: &str = "opencode"; // YCODING_EXTERNAL_OPENCODE: Cursor host-tool namespace; matches the vendored TS Cursor provider wire names (packages/core/src/cursor/provider/protocol/tools.js).

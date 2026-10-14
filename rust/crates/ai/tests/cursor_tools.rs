@@ -6,7 +6,7 @@ use ycoding_ai::{
     Error,
     auth::{Auth, Credential},
     cursor::{
-        framing, headers,
+        HOST_TOOL_NAMESPACE, framing, headers,
         observations::{self, ReadObservation, ReadPath, ReadRequest},
         protobuf, provider,
         request::Descriptor,
@@ -250,7 +250,7 @@ async fn cursor_todo_read_refresh_and_direct_write_seed_complete_ordered_display
         let output = r#"{"todos":[{"id":"host-b","content":"Build","status":"pending","priority":"high"},{"id":"other","content":"Keep","status":"TODO_STATUS_PENDING","priority":"low"},{"id":"host-b","content":"Build","status":"pending","priority":"high"},{"id":"plan","content":"Synthetic","status":"completed","priority":"high"}]}"#;
         let name = if read { "todoread" } else { "todowrite" };
         let input = if read { "{}" } else { output };
-        let mut mcp = bytes(1, format!("opencode-{name}").as_bytes());
+        let mut mcp = bytes(1, format!("{HOST_TOOL_NAMESPACE}-{name}").as_bytes());
         let ycoding_schema::JsonValue::Object(fields) = ycoding_schema::parse_json(input).unwrap()
         else {
             panic!("object required");
@@ -288,8 +288,8 @@ async fn cursor_todo_read_refresh_and_direct_write_seed_complete_ordered_display
         protobuf::write_bytes(&mut plan, 2, &bytes(17, &bytes(1, &bytes(1, b"# Plan")))).unwrap();
         tool_flows(vec![
             Flow { query: bytes(2, &exec), tool: tool(name), input, output, error: false, initial_replies: vec![], replies: vec![bytes(2, &[vec![8, 8], bytes(11, &bytes(1, &[bytes(1, &bytes(1, &bytes(1, output.as_bytes()))), vec![16, 0]].concat()))].concat()), bytes(5, &bytes(1, &[8, 8]))] },
-            Flow { query: bytes(2, &[vec![8, 9], bytes(11, &bytes(1, b"opencode-todoread"))].concat()), tool: tool("todoread"), input: "{}", output: "List was capped", error: false, initial_replies: vec![], replies: vec![bytes(2, &[vec![8, 9], bytes(11, &bytes(1, &[bytes(1, &bytes(1, &bytes(1, b"List was capped"))), vec![16, 0]].concat()))].concat()), bytes(5, &bytes(1, &[8, 9]))] },
-            Flow { query: bytes(2, &[vec![8, 10], bytes(11, &bytes(1, b"opencode-todoread"))].concat()), tool: tool("todoread"), input: "{}", output: "[]", error: true, initial_replies: vec![], replies: vec![bytes(2, &[vec![8, 10], bytes(11, &bytes(2, &bytes(1, b"[]")))].concat()), bytes(5, &bytes(1, &[8, 10]))] },
+            Flow { query: bytes(2, &[vec![8, 9], bytes(11, &bytes(1, format!("{HOST_TOOL_NAMESPACE}-todoread").as_bytes()))].concat()), tool: tool("todoread"), input: "{}", output: "List was capped", error: false, initial_replies: vec![], replies: vec![bytes(2, &[vec![8, 9], bytes(11, &bytes(1, &[bytes(1, &bytes(1, &bytes(1, b"List was capped"))), vec![16, 0]].concat()))].concat()), bytes(5, &bytes(1, &[8, 9]))] },
+            Flow { query: bytes(2, &[vec![8, 10], bytes(11, &bytes(1, format!("{HOST_TOOL_NAMESPACE}-todoread").as_bytes()))].concat()), tool: tool("todoread"), input: "{}", output: "[]", error: true, initial_replies: vec![], replies: vec![bytes(2, &[vec![8, 10], bytes(11, &bytes(2, &bytes(1, b"[]")))].concat()), bytes(5, &bytes(1, &[8, 10]))] },
             Flow { query: bytes(1, &bytes(3, &plan)), tool: tool("todowrite"), input: r##"{"todos":[{"id":"plan","content":"# Plan","status":"completed","priority":"high"}]}"##, output: "ok", error: false, initial_replies: vec![], replies: vec![] },
             Flow { query: bytes(1, &bytes(3, &completed)), tool: tool("todowrite"), input: r#"{"todos":[{"id":"host-b","content":"Rename","status":"in_progress","priority":"high"},{"id":"other","content":"Keep","status":"pending","priority":"low"},{"id":"new","content":"New","status":"completed","priority":"medium"}]}"#, output: "ok", error: false, initial_replies: vec![], replies: vec![] }
         ]).await;
@@ -358,7 +358,8 @@ async fn cursor_question_sync_and_async_preserve_option_identity_and_original_ar
 
 #[tokio::test]
 async fn cursor_headless_interactions_ack_environment_and_reject_ui_only_queries() {
-    let reason = "This Cursor interaction requires UI approval and is not available through the OpenCode provider.";
+    let reason =
+        "This Cursor interaction requires UI approval and is not available through this provider.";
     let queries = [2, 8, 9, 10, 11, 13, 14]
         .into_iter()
         .map(|variant| {
@@ -369,7 +370,7 @@ async fn cursor_headless_interactions_ack_environment_and_reject_ui_only_queries
                     &[
                         bytes(
                             1,
-                            b"Environment replacement is not supported by the OpenCode provider.",
+                            b"Environment replacement is not supported by this provider.",
                         ),
                         bytes(2, &[]),
                     ]
@@ -495,7 +496,7 @@ async fn cursor_mcp_read_maps_host_file_path_and_omits_protobuf_zero_ranges() {
     let value = protobuf::encode_value(&input).unwrap();
     let value = protobuf::fields(&value).unwrap();
     let entries = protobuf::fields(value[0].bytes().unwrap()).unwrap();
-    let mut mcp = bytes(1, b"opencode-read");
+    let mut mcp = bytes(1, format!("{HOST_TOOL_NAMESPACE}-read").as_bytes());
     for entry in entries {
         protobuf::write_bytes(&mut mcp, 2, entry.bytes().unwrap()).unwrap();
     }
@@ -545,10 +546,10 @@ async fn cursor_native_pi_edit_refuses_multiple_replacements_without_host_execut
 #[tokio::test]
 async fn cursor_nested_mcp_catalog_rehydrates_full_definitions_and_preserves_base_fields() {
     let definition = Descriptor {
-        name: "opencode-read".into(),
+        name: format!("{HOST_TOOL_NAMESPACE}-read").into(),
         description: "read".into(),
         input_schema: ycoding_schema::parse_json(r#"{"type":"object"}"#).unwrap(),
-        provider: "opencode".into(),
+        provider: HOST_TOOL_NAMESPACE.into(),
         tool_name: "read".into(),
     };
     let mut filesystem = vec![8, 1];
@@ -614,7 +615,7 @@ async fn cursor_nested_mcp_catalog_rehydrates_full_definitions_and_preserves_bas
 #[tokio::test]
 async fn cursor_question_is_rejected_when_execution_is_disabled() {
     let (query, _) = question_query(false);
-    let reason = "The OpenCode `question` tool is not available to the current agent, so questions cannot be shown to the user this turn. State the question in your reply instead.";
+    let reason = "The `question` tool is not available to the current agent, so questions cannot be shown to the user this turn. State the question in your reply instead.";
     let reply = bytes(
         6,
         &[
@@ -744,10 +745,10 @@ fn mcp_state_result(definitions: &[Descriptor]) -> Vec<u8> {
 async fn cursor_mcp_state_and_request_context_use_the_run_advertisement_and_filter_servers() {
     let definitions = [
         Descriptor {
-            name: "opencode-read".into(),
+            name: format!("{HOST_TOOL_NAMESPACE}-read").into(),
             description: "read".into(),
             input_schema: ycoding_schema::parse_json(r#"{"type":"object"}"#).unwrap(),
-            provider: "opencode".into(),
+            provider: HOST_TOOL_NAMESPACE.into(),
             tool_name: "read".into(),
         },
         Descriptor {
@@ -830,8 +831,8 @@ async fn cursor_mcp_state_and_request_context_use_the_run_advertisement_and_filt
 #[tokio::test]
 async fn cursor_tool_choice_none_keeps_advertisement_but_denies_execution() {
     let mut args = Vec::new();
-    protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
-    protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+    protobuf::write_string(&mut args, 1, &format!("{HOST_TOOL_NAMESPACE}-read").into()).unwrap();
+    protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
     protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
     let reason = "The requested host tool is not available for this step; use an advertised tool";
     let reply = exec(11, &bytes(2, &bytes(1, reason.as_bytes())));
@@ -867,8 +868,8 @@ async fn cursor_tool_choice_none_keeps_advertisement_but_denies_execution() {
 #[tokio::test]
 async fn cursor_tool_refusal_carries_the_request_context_workspace_root() {
     let mut args = Vec::new();
-    protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
-    protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+    protobuf::write_string(&mut args, 1, &format!("{HOST_TOOL_NAMESPACE}-read").into()).unwrap();
+    protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
     protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
     let reason = "The requested host tool is not available for this step; use an advertised tool\nWorkspace root: \"/work/space\". Resolve workspace paths against exactly this root; never invent an absolute prefix, and verify uncertain paths with an available tool before using them.";
     let reply = exec(11, &bytes(2, &bytes(1, reason.as_bytes())));

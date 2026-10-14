@@ -12,6 +12,7 @@ pub use providers::ProviderContext;
 mod route;
 pub(crate) use route::from_catalog_model_base;
 pub use route::{ClaudeHost, from_catalog_model, from_catalog_model_with_claude};
+pub const DROPPED_UPSTREAM_PROVIDER_ID: &str = "opencode"; // YCODING_EXTERNAL_OPENCODE: external models.dev provider ID, kept recognizable so the unsupported-provider diagnostic works.
 pub fn account_identity(credential: &credential::Info) -> LosslessString {
     let material = super::catalog::object(&[
         ("integrationID", credential.integration_id().encode()),

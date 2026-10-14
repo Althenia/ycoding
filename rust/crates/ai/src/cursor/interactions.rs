@@ -67,7 +67,7 @@ pub(crate) fn query(
         } else if !can_save_image {
             rejected(
                 2,
-                "This OpenCode agent cannot save a generated image, so generating one would produce nothing. Describe the image in your reply instead.",
+                "This agent cannot save a generated image, so generating one would produce nothing. Describe the image in your reply instead.",
             )?
         } else {
             let mut approved = Vec::new();
@@ -120,7 +120,7 @@ pub(crate) fn query(
         if !can_question {
             return Ok(Action::Reply(question_rejection(
                 id,
-                "The OpenCode `question` tool is not available to the current agent, so questions cannot be shown to the user this turn. State the question in your reply instead.",
+                "The `question` tool is not available to the current agent, so questions cannot be shown to the user this turn. State the question in your reply instead.",
             )?));
         }
         return Ok(Action::Question(Question {
@@ -132,7 +132,8 @@ pub(crate) fn query(
             call_id: text(&body, 2)?,
         }));
     }
-    let reason = "This Cursor interaction requires UI approval and is not available through the OpenCode provider.";
+    let reason =
+        "This Cursor interaction requires UI approval and is not available through this provider.";
     let result = match variant.number {
         2 | 9 | 11 | 14 => rejected(2, reason)?,
         10 => rejected(3, reason)?,
@@ -142,7 +143,7 @@ pub(crate) fn query(
             protobuf::write_string(
                 &mut failure,
                 1,
-                &"Environment replacement is not supported by the OpenCode provider.".into(),
+                &"Environment replacement is not supported by this provider.".into(),
             )?;
             protobuf::write_string(&mut failure, 2, &"".into())?;
             wrap(2, &failure)?

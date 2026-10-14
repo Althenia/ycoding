@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use ycoding_ai::{
     auth::{Auth, Credential},
-    cursor::{framing, headers, persistence, protobuf, provider, transport},
+    cursor::{HOST_TOOL_NAMESPACE, framing, headers, persistence, protobuf, provider, transport},
     llm::{FinishReason, Message, Part, Request, ToolDefinition, ToolResult, ToolResultValue},
     route::Executor,
 };
@@ -340,9 +340,9 @@ async fn tool_continuation(retain_finished_stream: bool, session_headers: bool) 
                     observed.extend(decoder.push(&bytes));
                 }
                 let mut args = Vec::new();
-                protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
+                protobuf::write_string(&mut args, 1, &format!("{HOST_TOOL_NAMESPACE}-read").into()).unwrap();
                 protobuf::write_string(&mut args, 3, &"server-call".into()).unwrap();
-                protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+                protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
                 protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
                 let mut exec = Vec::new();
                 protobuf::write_varint(&mut exec, 1, 7).unwrap();
@@ -454,8 +454,13 @@ async fn cursor_fresh_input_cancels_held_exec_drains_and_preserves_conversation_
                     if index == 0 {
                         *conversation.lock().unwrap() = id.to_vec();
                         let mut args = Vec::new();
-                        protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
-                        protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+                        protobuf::write_string(
+                            &mut args,
+                            1,
+                            &format!("{HOST_TOOL_NAMESPACE}-read").into(),
+                        )
+                        .unwrap();
+                        protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
                         protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
                         let mut exec = Vec::new();
                         protobuf::write_varint(&mut exec, 1, 7).unwrap();
@@ -794,9 +799,9 @@ async fn cursor_held_run_sends_client_heartbeats_until_the_tool_result_arrives()
                     observed.extend(decoder.push(&bytes));
                 }
                 let mut args = Vec::new();
-                protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
+                protobuf::write_string(&mut args, 1, &format!("{HOST_TOOL_NAMESPACE}-read").into()).unwrap();
                 protobuf::write_string(&mut args, 3, &"server-call".into()).unwrap();
-                protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+                protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
                 protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
                 let mut exec = Vec::new();
                 protobuf::write_varint(&mut exec, 1, 7).unwrap();
@@ -1052,9 +1057,14 @@ async fn cursor_held_run_past_the_hard_cap_is_closed_and_the_continuation_starts
                         .unwrap();
                     if index == 0 {
                         let mut args = Vec::new();
-                        protobuf::write_string(&mut args, 1, &"opencode-read".into()).unwrap();
+                        protobuf::write_string(
+                            &mut args,
+                            1,
+                            &format!("{HOST_TOOL_NAMESPACE}-read").into(),
+                        )
+                        .unwrap();
                         protobuf::write_string(&mut args, 3, &"server-call".into()).unwrap();
-                        protobuf::write_string(&mut args, 4, &"opencode".into()).unwrap();
+                        protobuf::write_string(&mut args, 4, &HOST_TOOL_NAMESPACE.into()).unwrap();
                         protobuf::write_string(&mut args, 5, &"read".into()).unwrap();
                         let mut exec = Vec::new();
                         protobuf::write_varint(&mut exec, 1, 7).unwrap();

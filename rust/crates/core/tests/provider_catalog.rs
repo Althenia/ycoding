@@ -9,8 +9,8 @@ use std::{
 use tracing::instrument::WithSubscriber;
 use ycoding_core::resources::{
     auth::Preparation,
-    catalog::{AccountCatalog, Catalog},
-    model::Resolver,
+    catalog::{AccountCatalog, Catalog, models_dev},
+    model::{DROPPED_UPSTREAM_PROVIDER_ID, Resolver},
 };
 use ycoding_schema::{DomainDecode, model, parse_json, provider};
 
@@ -27,7 +27,7 @@ fn reference(provider: &str, id: &str, profile: &str) -> model::Ref {
 async fn dropped_saved_accounts_never_discover_or_reintroduce_providers() {
     let fixture = Fixture::new(Vec::new()).await;
     let (store, credentials) = store();
-    for (time, id) in ["opencode", "github-copilot", "xai"]
+    for (time, id) in [DROPPED_UPSTREAM_PROVIDER_ID, "github-copilot", "xai"]
         .into_iter()
         .enumerate()
     {
@@ -43,7 +43,7 @@ async fn dropped_saved_accounts_never_discover_or_reintroduce_providers() {
             .unwrap();
     }
     let mut accounts = AccountCatalog::new(Preparation::default(), BTreeMap::new()).unwrap();
-    for id in ["opencode", "github-copilot", "xai"] {
+    for id in [DROPPED_UPSTREAM_PROVIDER_ID, "github-copilot", "xai"] {
         accounts.endpoints.insert(id.into(), fixture.base.clone());
     }
     let composition =
@@ -56,6 +56,41 @@ async fn dropped_saved_accounts_never_discover_or_reintroduce_providers() {
     assert!(fixture.finish().await.is_empty());
     credentials.shutdown().await.unwrap();
     store.shutdown().unwrap();
+}
+
+#[test]
+fn externally_registered_upstream_provider_retains_small_model_selection() {
+    let mut record = Catalog::new(
+        models_dev::normalize(
+            &parse_json(include_str!(
+                "../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .providers
+    .remove(0);
+    record.provider.id = provider::Id(DROPPED_UPSTREAM_PROVIDER_ID.into());
+    record.models.truncate(1);
+    let selected = &mut record.models[0];
+    selected.provider_id = record.provider.id.clone();
+    selected.id = "gpt-5-nano".into();
+    selected.enabled = true;
+    selected.status = "active".into();
+    selected.cost.clear();
+    selected.capabilities.input.clear();
+    selected.capabilities.output.clear();
+    let mut catalog = Catalog::default();
+    catalog.providers.push(record);
+    let selected = catalog
+        .small(&provider::Id(DROPPED_UPSTREAM_PROVIDER_ID.into()), 0.0)
+        .unwrap();
+    assert_eq!(selected.id, "gpt-5-nano".into());
+    assert_eq!(
+        selected.provider_id,
+        provider::Id(DROPPED_UPSTREAM_PROVIDER_ID.into())
+    );
 }
 
 #[tokio::test]

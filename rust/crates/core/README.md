@@ -2637,10 +2637,10 @@ RS256 before token exchange. Metadata reads require `Metadata-Flavor: Google`.
 AI bearer auth. ADC shapes other than authorized-user, service-account, and metadata
 credentials are rejected; vendor-specific ADC extensions are not supplied.
 
-`auth::opencode::Console` implements device polling, custom server normalization,
-concurrent user/org enrichment, and metadata-preserving refresh. Organization
-selection compares names first and IDs on ties using the compiled ICU4X root
-collation, matching Bun's default `en-US` `localeCompare` ordering.
+`auth::muse::register` adds the `muse` integration with a remote `device` OAuth
+method, a Meta Model API key method, and a `META_API_KEY` environment method.
+The device method polls through `Client::start_device` with `DeviceFlow::Muse`
+and retains the attempt's expiry; it does not register an OAuth refresh handler.
 
 `auth::integration::Registry` rebuilds ordered scoped transforms, preserves method
 identity, and restores previous registrations on disposal. Stored active profiles
@@ -2805,8 +2805,8 @@ publishing initial model availability; it does not borrow disk Claude accounts.
 now, force).await` returns `Result<Composition, models_dev::Error>`. It retains
 configured OpenAI-model discovery and provider account inventories, performs
 credential preparation before discovery, applies provider transforms to public
-and account models, then applies project configuration to both. Remote OpenCode
-accounts start from the provider baseline, never another account's models.
+and account models, then applies project configuration to both. Account inventories
+are scoped to credential identity and account generation.
 Same-account discovery failures retain inventories except Copilot; a Copilot
 failure clears that account's inventory. Removed/replaced accounts cannot select
 retained models. Unknown Daybreak programs are excluded.
