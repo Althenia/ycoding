@@ -568,7 +568,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
         "OpenRouter\nPay as you go",
         "Balance",
         "$38.42",
-        "GitHub Copilot",
+        "Cursor",
         "AI credits",
         "Provider distribution",
         "Breakdown",

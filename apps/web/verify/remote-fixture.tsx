@@ -842,8 +842,8 @@ const fixtureUsageProviders = (now: number) => [
     ],
   },
   {
-    providerID: "github-copilot",
-    label: "GitHub Copilot",
+    providerID: "cursor",
+    label: "Cursor",
     profile: "Pro",
     status: "available",
     source: "provider_internal_api",
@@ -860,7 +860,7 @@ const fixtureUsageReport = (input: Readonly<Record<string, unknown>> | undefined
     const month = [
       { key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", ...usageMetrics(6, 18.4) },
       { key: "openrouter/deepseek-v4", label: "openrouter/deepseek-v4", ...usageMetrics(3, 5.2) },
-      { key: "github-copilot/gpt-4o", label: "github-copilot/gpt-4o", ...usageMetrics(1, 2.7) },
+      { key: "cursor/gpt-4o", label: "cursor/gpt-4o", ...usageMetrics(1, 2.7) },
     ]
     return { data: { group, rows: month, total: usageMetrics(10, 26.3), rowCount: month.length } }
   }

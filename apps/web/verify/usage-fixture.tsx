@@ -78,8 +78,8 @@ const providers: UsageProvider[] = [
     ],
   },
   {
-    providerID: "github-copilot",
-    label: "Copilot",
+    providerID: "cursor",
+    label: "Cursor",
     status: "stale",
     source: "local_client_rpc",
     stability: "client_contract",
@@ -193,8 +193,8 @@ const monthlyRows: UsageReportRow[] = [
   },
   {
     ...rows[0]!,
-    key: "github-copilot/gpt-4o",
-    label: "github-copilot/gpt-4o",
+    key: "cursor/gpt-4o",
+    label: "cursor/gpt-4o",
     cost: undefined,
     costProvenance: undefined,
   },
@@ -221,7 +221,7 @@ const entries = (input: UsageReportInput): UsageReportRow[] =>
         ...rows[index % 30]!,
         key:
           input.group === "model"
-            ? `${["openai", "anthropic", "openrouter", "github-copilot"][index % 4]}/${encodeURIComponent(sample[index % sample.length]!.toLowerCase().replaceAll(" ", "-"))}-${index + 1}`
+            ? `${["openai", "anthropic", "openrouter", "cursor"][index % 4]}/${encodeURIComponent(sample[index % sample.length]!.toLowerCase().replaceAll(" ", "-"))}-${index + 1}`
             : `${input.group}-${index}`,
         label:
           input.group === "model"

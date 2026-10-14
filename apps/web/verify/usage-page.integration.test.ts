@@ -148,7 +148,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
           await page.evaluate<string[]>(
             `[...document.querySelectorAll('.usage-provider h3')].map(item => item.textContent.trim())`,
           ),
-        ).toEqual(["Codex", "Claude", "Copilot", "OpenRouter", "Provider with an error"])
+        ).toEqual(["Codex", "Claude", "Cursor", "OpenRouter", "Provider with an error"])
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider')?.innerText ?? ''`)).not.toContain(
           "provider api",
         )

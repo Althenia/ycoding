@@ -377,7 +377,7 @@ describe("remote navigation", () => {
             readonly heading: string
             readonly providers: readonly string[]
             readonly openRouter: string
-            readonly copilot: string
+            readonly cursor: string
             readonly activeNav: readonly string[]
             readonly placeholders: readonly string[]
             readonly overflow: boolean
@@ -391,7 +391,7 @@ describe("remote navigation", () => {
               heading: document.querySelector(".usage-page h1")?.textContent.trim() ?? "",
               providers: [...document.querySelectorAll(".usage-provider h3")].map((item) => item.textContent.trim()),
               openRouter: card("OpenRouter"),
-              copilot: card("GitHub Copilot"),
+              cursor: card("Cursor"),
               activeNav: [...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(visible).map((link) => link.textContent.trim()),
               placeholders: [...document.querySelectorAll(".usage-page *")].filter((element) => element.children.length === 0 && ["-", "_", "—", "–"].includes(element.textContent.trim())).map((element) => element.outerHTML),
               overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -401,11 +401,11 @@ describe("remote navigation", () => {
             }
           })()`)
           expect(report.heading).toBe("Usage")
-          expect(report.providers).toEqual(["Codex", "OpenRouter", "GitHub Copilot"])
+          expect(report.providers).toEqual(["Codex", "OpenRouter", "Cursor"])
           expect(report.openRouter).toContain("Balance")
           expect(report.openRouter).toContain("$38.42")
-          expect(report.copilot).toContain("AI credits")
-          expect(report.copilot.toLowerCase()).not.toContain("premium")
+          expect(report.cursor).toContain("AI credits")
+          expect(report.cursor.toLowerCase()).not.toContain("premium")
           expect(report.activeNav).toEqual(["Usage"])
           expect(report.placeholders).toEqual([])
           expect(report.overflow).toBe(false)
@@ -414,7 +414,7 @@ describe("remote navigation", () => {
             summary: report.operations["usage.get"],
           }).toEqual({ providers: 1, summary: 1 })
           expect(report.operations["usage.report"]).toBe(3)
-          expect(report.distribution).toEqual(["Codex", "OpenRouter", "GitHub Copilot"])
+          expect(report.distribution).toEqual(["Codex", "OpenRouter", "Cursor"])
           expect(report.provenanceText).toBe(false)
           if ((width === 390 && theme === "light") || (width === 1440 && theme === "dark"))
             await capture(page, `usage-${width}-${theme}`)
