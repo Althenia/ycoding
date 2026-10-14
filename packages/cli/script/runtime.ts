@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import path from "node:path"
+import { modelsSource } from "./generate"
 
 export async function buildRuntime(target: { os: string; arch: string; abi?: string }) {
   if (target.os !== process.platform || target.arch !== process.arch || target.abi === "musl")
@@ -18,7 +19,7 @@ export async function buildRuntime(target: { os: string; arch: string; abi?: str
       "--bin",
       "ycoding-runtime",
     ],
-    { cwd: root, stdio: "inherit" },
+    { cwd: root, stdio: "inherit", env: { ...process.env, YCODING_BUNDLED_MODELS_PATH: path.resolve(modelsSource) } },
   )
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`Rust payload build failed (${result.status ?? result.signal})`)

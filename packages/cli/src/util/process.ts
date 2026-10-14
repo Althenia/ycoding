@@ -1,4 +1,18 @@
 import path from "node:path"
+import { Effect } from "effect"
+
+export const waitForAbort = (signal: AbortSignal) =>
+  Effect.callback<never, Error>((resume) => {
+    const abort = () => resume(Effect.fail(new Error("Aborted", { cause: signal.reason })))
+    if (signal.aborted) return abort()
+    signal.addEventListener("abort", abort, { once: true })
+    return Effect.sync(() => signal.removeEventListener("abort", abort))
+  })
+
+export function requireNativeMeeting() {
+  if (!process.versions.bun)
+    throw new Error("Meeting requires the native ycoding executable; it is not supported by the Node CLI.")
+}
 
 export function selfCommand() {
   const runtime = path.basename(process.execPath, path.extname(process.execPath)).toLowerCase()

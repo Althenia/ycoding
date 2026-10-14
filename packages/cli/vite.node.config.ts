@@ -42,20 +42,6 @@ function runtimeRequirePlugin(): Plugin {
   }
 }
 
-function nativeOnlyMeetingPlugin(): Plugin {
-  return {
-    name: "ycoding:native-only-meeting",
-    enforce: "pre",
-    transform(code) {
-      const transformed = code.replace(
-        /\bimport\(\s*["']@ycoding-ai\/meeting\/(?:plugin|discovery)["']\s*\)/g,
-        'Promise.reject(new Error("Meeting requires the native ycoding executable; it is not supported by the Node CLI."))',
-      )
-      return transformed === code ? undefined : transformed
-    },
-  }
-}
-
 const resolve = {
   alias: [
     { find: /^solid-js\/store$/, replacement: "solid-js/store/dist/store.js" },
@@ -80,36 +66,6 @@ function nodePrelude(input: NodeBuildInput) {
     input.target.platform === "darwin"
       ? `${input.target.nodePtyPackage}/prebuilds/darwin-${input.target.arch}/spawn-helper`
       : undefined
-  const promiseModule = `const sdk = globalThis[Symbol.for("ycoding.plugin.promise")]
-if (!sdk) throw new Error("YCoding Promise plugin SDK is unavailable")
-export const Agent = sdk.Agent
-export const Command = sdk.Command
-export const Connection = sdk.Connection
-export const Credential = sdk.Credential
-export const Integration = sdk.Integration
-export const Model = sdk.Model
-export const Plugin = sdk.Plugin
-export const Provider = sdk.Provider
-export const Reference = sdk.Reference
-export const Skill = sdk.Skill`
-  const effectModule = promiseModule
-    .replace("ycoding.plugin.promise", "ycoding.plugin.effect")
-    .replace("Promise plugin", "Effect plugin")
-  const effectPluginModule = `const sdk = globalThis[Symbol.for("ycoding.plugin.effect")]
-if (!sdk) throw new Error("YCoding Effect plugin SDK is unavailable")
-export const define = sdk.Plugin.define`
-  const effectToolModule = `const sdk = globalThis[Symbol.for("ycoding.plugin.effect")]
-if (!sdk) throw new Error("YCoding Effect plugin SDK is unavailable")
-export const Tool = sdk.Tool
-export const Failure = sdk.Tool.Failure
-export const RegistrationError = sdk.Tool.RegistrationError
-export const make = sdk.Tool.make
-export const validateName = sdk.Tool.validateName
-export const registrationEntries = sdk.Tool.registrationEntries
-export const withPermission = sdk.Tool.withPermission
-export const permission = sdk.Tool.permission
-export const definition = sdk.Tool.definition
-export const settle = sdk.Tool.settle`
   return `#!/usr/bin/env -S node ${nodeExecArgv.join(" ")}
 import __cjs_mod__ from "node:module"
 import { chmodSync as __ocChmod, existsSync as __ocExists, lstatSync as __ocLstat, mkdirSync as __ocMkdir, renameSync as __ocRename, rmSync as __ocRm, writeFileSync as __ocWrite } from "node:fs"
@@ -120,30 +76,6 @@ import { fileURLToPath as __ocFileURLToPath } from "node:url"
 const __filename = import.meta.filename
 const __dirname = import.meta.dirname
 const require = __cjs_mod__.createRequire(import.meta.url)
-const __ocPluginModules = ${JSON.stringify({
-    "@ycoding-ai/plugin": "ycoding:plugin",
-    "@ycoding-ai/plugin/effect": "ycoding:plugin-effect",
-    "@ycoding-ai/plugin/effect/plugin": "ycoding:plugin-effect-plugin",
-    "@ycoding-ai/plugin/effect/tool": "ycoding:plugin-effect-tool",
-  })}
-const __ocPluginSources = ${JSON.stringify({
-    "ycoding:plugin": promiseModule,
-    "ycoding:plugin-effect": effectModule,
-    "ycoding:plugin-effect-plugin": effectPluginModule,
-    "ycoding:plugin-effect-tool": effectToolModule,
-  })}
-__cjs_mod__.registerHooks({
-  resolve(__ocSpecifier, __ocContext, __ocNextResolve) {
-    const __ocUrl = __ocPluginModules[__ocSpecifier]
-    return __ocUrl ? { url: __ocUrl, shortCircuit: true } : __ocNextResolve(__ocSpecifier, __ocContext)
-  },
-  load(__ocUrl, __ocContext, __ocNextLoad) {
-    const __ocSource = __ocPluginSources[__ocUrl]
-    return __ocSource
-      ? { format: "module", source: __ocSource, shortCircuit: true }
-      : __ocNextLoad(__ocUrl, __ocContext)
-  },
-})
 const __ocUid = typeof process.getuid === "function" ? process.getuid() : undefined
 const __ocCacheRoot = __ocPath.join(__ocTmpdir(), \`ycoding-node-\${__ocUid ?? "user"}\`)
 if (__ocIsSea()) {
@@ -192,6 +124,7 @@ export type NodeBuildInput = {
   readonly models: string
   readonly assetHash: string
   readonly target: NodeTarget
+  readonly runtimePayload?: string
 }
 
 export function mainConfig(input: NodeBuildInput): UserConfig {
@@ -200,7 +133,6 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     plugins: [
       rawTextPlugin(),
       runtimeRequirePlugin(),
-      nativeOnlyMeetingPlugin(),
       solid({
         solid: {
           generate: "universal",
@@ -211,6 +143,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     resolve,
     esbuild: { jsx: "automatic" },
     define: {
+      YCODING_RUNTIME_PAYLOAD: input.runtimePayload === undefined ? "undefined" : JSON.stringify(input.runtimePayload),
       YCODING_VERSION: JSON.stringify(input.version),
       YCODING_CLI_NAME: JSON.stringify(NODE_BINARY),
       YCODING_MODELS_DEV: input.models,

@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { FrontendPaths } from "../src/paths"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../src/version"
 import { expect, test } from "bun:test"
 import { Effect, FileSystem, Scope } from "effect"
 import fs from "node:fs/promises"

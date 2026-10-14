@@ -2,7 +2,7 @@ import { Cause, Effect, Exit, Option } from "effect"
 import { Service } from "@ycoding-ai/client/effect/service"
 import type { YCodingClient } from "@ycoding-ai/client/promise"
 import { frontendClient } from "../../../services/client"
-import { AppProcess } from "@ycoding-ai/core/process"
+import { waitForAbort } from "../../../util/process"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServiceConfig } from "../../../services/service-config"
@@ -19,7 +19,7 @@ export default Runtime.handler(
       (value) => request(() => value.close()).pipe(Effect.ignore),
     )
     const exit = yield* login(timeline, Option.getOrUndefined(input.url)).pipe(
-      Effect.raceFirst(AppProcess.waitForAbort(timeline.signal)),
+      Effect.raceFirst(waitForAbort(timeline.signal)),
       Effect.exit,
     )
     if (Exit.isSuccess(exit)) return

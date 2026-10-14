@@ -1,26 +1,28 @@
-import { YCoding } from "@ycoding-ai/client/promise"
-import { Service } from "@ycoding-ai/client/effect/service"
 import { Effect, Option } from "effect"
 import path from "node:path"
 import { setTimeout } from "node:timers/promises"
 import { MeetingCommand } from "../meeting"
 import { Runtime } from "../../framework/runtime"
 import { Standalone } from "../../services/standalone"
-import { selfCommand } from "../../util/process"
+import { requireNativeMeeting } from "../../util/process"
+import { runtimeExecutable } from "../../runtime-executable"
+import { frontendClient } from "../../services/client"
+import { connectControl } from "../../services/meeting"
 
 type Control = (input: unknown) => Promise<unknown>
 
 export default Runtime.handler(
   MeetingCommand,
   Effect.fn("cli.meeting")(function* (input) {
+    yield* Effect.sync(requireNativeMeeting)
     const directory = path.resolve(Option.getOrElse(input.directory, () => process.cwd()))
-    const { connectControl } = yield* Effect.promise(() => import("@ycoding-ai/meeting/discovery"))
     const attached = yield* Effect.promise(() => reachable(() => connectControl(directory)))
     if (attached)
       return yield* present(attached, input.open, `Using the meeting runtime already running for ${directory}`)
 
-    const endpoint = yield* Standalone.start({ command: [...selfCommand(), "serve", "--meeting"] })
-    const client = YCoding.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    const executable = yield* Effect.tryPromise(runtimeExecutable)
+    const endpoint = yield* Standalone.start({ command: [executable, "--meeting"] })
+    const client = yield* frontendClient(endpoint)
     yield* Effect.tryPromise(() => client.agent.list({ location: { directory } }))
     const control = yield* Effect.tryPromise(() => controllable(() => connectControl(directory)))
     yield* Effect.addFinalizer(() => Effect.promise(() => finalize(control)))

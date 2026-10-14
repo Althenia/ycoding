@@ -4,3 +4,4 @@
 - Keep TUI Session views on `@ycoding-ai/client` contracts and location-scoped data in `packages/tui/src/context/data.tsx`; do not add a second Session-state authority.
 - Preserve established TUI behavior unless the task intentionally changes it.
 - Load the `ycoding` skill before interactively running, debugging, or verifying the CLI, TUI, or server.
+- Keep production CLI imports and dependencies free of Core, Server, Meeting and Plugin packages; run `test/frontend-boundary.test.ts` after changing the frontend graph.

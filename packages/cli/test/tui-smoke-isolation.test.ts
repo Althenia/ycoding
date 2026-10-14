@@ -96,7 +96,7 @@ Bun.spawnSync = (args, options) => spawnSync([process.execPath, ${JSON.stringify
         .split("\n")
         .map((line) => JSON.parse(line))
       expect(calls.map((call) => call.args)).toEqual([
-        ["remote", "status"],
+        ["remote", "status", "--standalone"],
         ["serve", "--stdio", "--port", "0"],
       ])
       const remote = calls[0].env

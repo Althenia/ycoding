@@ -1,5 +1,3 @@
-import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { Global } from "@ycoding-ai/core/global"
 import { run } from "@ycoding-ai/tui"
 import { Context, Deferred, Effect, FileSystem, Option } from "effect"
 import { Config } from "../../config"
@@ -84,5 +82,5 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
     },
     terminalHandoff: () => preflight.finish(),
     log,
-  }).pipe(Effect.provide(LayerNode.compile(Global.node)))
+  })
 })

@@ -8,7 +8,15 @@ import { prepareRunFile } from "../../src/run/run"
 describe("run file preparation", () => {
   test("keeps -f text, image, PDF, SVG, and Excel inputs as file URIs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "ycoding-run-files-"))
-    const names = ["note.txt", "image.png", "document.pdf", "diagram.svg", "legacy.xls", "workbook.xlsx"]
+    const names = [
+      "note.txt",
+      "image.png",
+      "document.pdf",
+      "diagram.svg",
+      "legacy.xls",
+      "workbook.xlsx",
+      "unknown.ycoding-smoke",
+    ]
     try {
       await Promise.all(names.map((name) => Bun.write(path.join(root, name), `content:${name}`)))
 
@@ -24,6 +32,7 @@ describe("run file preparation", () => {
         "image/svg+xml",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",
       ])
     } finally {
       await rm(root, { recursive: true, force: true })

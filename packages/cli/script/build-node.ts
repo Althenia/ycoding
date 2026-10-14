@@ -21,6 +21,7 @@ import {
   verifyPackagedComputerHelper,
 } from "./computer-use"
 import { copyChromeExtension } from "./chrome-extension"
+import { buildRuntime } from "./runtime"
 
 const NODE_VERSION = "26.4.0"
 const dir = path.resolve(import.meta.dirname, "..")
@@ -82,7 +83,15 @@ for (const target of targets) {
   const assets = await collectNodeAssets(target)
   await rm("dist-node", { recursive: true, force: true })
   const assetHash = await hashNodeAssets(assets)
-  const input = { version: Script.version, channel: Script.channel, models: modelsData, assetHash, target }
+  const runtimePayload = await buildRuntime({ os: target.platform, arch: target.arch })
+  const input = {
+    version: Script.version,
+    channel: Script.channel,
+    models: modelsData,
+    assetHash,
+    target,
+    runtimePayload,
+  }
   await build(mainConfig(input))
   await copyNodeAssets(assets)
 
@@ -214,7 +223,12 @@ async function smoke(output: string, target: NodeTarget) {
     await mkdir(path.join(contents, "MacOS"), { recursive: true })
     await mkdir(path.join(contents, "_CodeSignature"))
     await mkdir(path.join(contents, "Resources"))
-    for (const file of ["Info.plist", `MacOS/${COMPUTER_HELPER_BINARY}`, "_CodeSignature/CodeResources", "Resources/YCoding.icns"]) {
+    for (const file of [
+      "Info.plist",
+      `MacOS/${COMPUTER_HELPER_BINARY}`,
+      "_CodeSignature/CodeResources",
+      "Resources/YCoding.icns",
+    ]) {
       await copyFile(path.join(path.dirname(output), app, "Contents", file), path.join(contents, file))
     }
   }

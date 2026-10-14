@@ -1,6 +1,7 @@
 import { Effect, Option } from "effect"
 import { writeFile } from "node:fs/promises"
 import { ServerProcess } from "../../server-process"
+import { requireNativeMeeting } from "../../util/process"
 
 export interface Input {
   readonly service: boolean
@@ -12,6 +13,7 @@ export interface Input {
 
 export const runServe = Effect.fnUntraced(function* (input: Input) {
   if (input.service && input.stdio) return yield* Effect.fail(new Error("--service and --stdio cannot be combined"))
+  if (input.meeting) yield* Effect.sync(requireNativeMeeting)
   return yield* ServerProcess.run({
     mode: input.service ? "service" : input.stdio ? "stdio" : "default",
     hostname: Option.getOrUndefined(input.hostname),

@@ -81,14 +81,20 @@ describe("CLI frontend import boundaries", () => {
 
       expect(graph).toContain("packages/cli/src/commands/handlers/tui.ts")
       expect(graph.some((file) => file.startsWith("packages/tui/src/"))).toBe(true)
-      expect(graph.some((file) => file.startsWith("packages/server/src/"))).toBe(true)
+      expect(
+        graph.filter(
+          (file) =>
+            /^packages\/(?:core|server)\//.test(file) ||
+            (file.startsWith("packages/plugin/") && !file.startsWith("packages/plugin/src/tui/")),
+        ),
+      ).toEqual([])
+      expect(graph.filter((file) => file.startsWith("extensions/meeting/src/"))).toEqual([])
       expect(graph).not.toContain("packages/cli/src/commands/commands.ts")
       const retained = new Set([
         "ai",
         "cli",
         "client",
         "codemode",
-        "core",
         "effect-drizzle-sqlite",
         "effect-sqlite-node",
         "http-recorder",
@@ -98,7 +104,6 @@ describe("CLI frontend import boundaries", () => {
         "remote",
         "schema",
         "script",
-        "server",
         "simulation",
         "tui",
       ])

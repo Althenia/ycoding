@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
-import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
-import { AppProcess } from "@ycoding-ai/core/process"
-import { Effect } from "effect"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { listHelperWindows } from "./fixture/computer-helper"
 import {
   buildComputerHelper,
   computerHelperBuild,
@@ -42,7 +39,15 @@ describe("macOS computer helper packaging", () => {
         expect(identifier.stdout.toString().trim()).toBe("app.ycoding.computer-use")
         const executable = Bun.spawnSync(["/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-", plist])
         expect(executable.stdout.toString().trim()).toBe("ycoding-computer-use")
-        const automation = Bun.spawnSync(["/usr/bin/plutil", "-extract", "NSAppleEventsUsageDescription", "raw", "-o", "-", plist])
+        const automation = Bun.spawnSync([
+          "/usr/bin/plutil",
+          "-extract",
+          "NSAppleEventsUsageDescription",
+          "raw",
+          "-o",
+          "-",
+          plist,
+        ])
         expect(automation.exitCode).toBe(0)
         expect(automation.stdout.toString().trim()).toContain("YCoding Computer Use")
         const icon = Bun.spawnSync(["/usr/bin/plutil", "-extract", "CFBundleIconFile", "raw", "-o", "-", plist])
@@ -70,13 +75,7 @@ describe("macOS computer helper packaging", () => {
       const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-placement-"))
       try {
         await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
-        const listed = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-          const processes = yield* AppProcess.Service
-          const invoke = MacOSComputer.invokeWith(processes, "darwin", path.join(bin, "YCoding Computer Use.app"))
-          yield* Effect.addFinalizer(invoke.shutdown)
-          return yield* invoke({ action: "desktop.list", owner: { sessionID: "ses_placement", callID: "call_placement" } },
-            new AbortController().signal)
-        })).pipe(Effect.provide(LayerNode.compile(AppProcess.node))))
+        const listed = await listHelperWindows(path.join(bin, "YCoding Computer Use.app"))
         expect(listed).toMatchObject({ status: "ok", action: "desktop.list" })
         const windows = (listed.apps ?? []).flatMap((app) => app.windows)
         for (const window of windows) {
@@ -103,7 +102,7 @@ describe("macOS computer helper packaging", () => {
       application: "/tmp/bin/YCoding Computer Use.app",
       target: "arm64-apple-macosx13.0",
     })
-    expect(arm64?.application).toBe(MacOSComputer.applicationPath("/tmp/bin/ycoding"))
+    expect(arm64?.application).toBe("/tmp/bin/YCoding Computer Use.app")
     expect(computerHelperBuild({ platform: "darwin", arch: "x64" }, "/tmp/bin")).toMatchObject({
       application: "/tmp/bin/YCoding Computer Use.app",
       target: "x86_64-apple-macosx13.0",
@@ -111,7 +110,9 @@ describe("macOS computer helper packaging", () => {
   })
 
   test("signs with a configured stable identity and a secure timestamp, otherwise ad hoc", () => {
-    expect(signingArguments("/tmp/bin/YCoding Computer Use.app", "Developer ID Application: Example (TEAM123456)")).toEqual([
+    expect(
+      signingArguments("/tmp/bin/YCoding Computer Use.app", "Developer ID Application: Example (TEAM123456)"),
+    ).toEqual([
       "/usr/bin/codesign",
       "--force",
       "--sign",

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { V5ClientError, YCoding } from "@ycoding-ai/client/v5"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import { InstallationVersion } from "../src/version"
 import path from "node:path"
 import { createMiniConnection, mergeInput as mergeInteractiveInput, resolveMiniTarget } from "../src/mini"
 import { mergeInput as mergeNonInteractiveInput, parseRunModel } from "../src/run/run"

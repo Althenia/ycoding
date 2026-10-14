@@ -53,7 +53,7 @@ function eventStream(...events: ReadonlyArray<Record<string, unknown>>) {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
 }
 
-function streamResponse(input: {
+export function streamResponse(input: {
   index: number
   content: string
   cached?: number
@@ -64,43 +64,25 @@ function streamResponse(input: {
   const cacheWrite = input.cacheWrite ?? (input.index === 1 ? 100 : 0)
   const prompt = input.prompt ?? (input.index === 1 ? 1000 : 1200)
   const id = `runtime-smoke-${input.index}`
-  const chunks = [
+  return eventStream(
+    { type: "response.output_text.delta", item_id: `${id}-message`, delta: input.content },
     {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [
-        {
-          index: 0,
-          delta: { role: "assistant", content: input.content },
-          finish_reason: null,
-          native_finish_reason: null,
+      type: "response.completed",
+      response: {
+        id,
+        usage: {
+          input_tokens: prompt,
+          output_tokens: 10,
+          total_tokens: prompt + 10,
+          input_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
+          output_tokens_details: { reasoning_tokens: 5 },
         },
-      ],
-    },
-    {
-      id,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model: MODEL_ID,
-      provider: "Smoke",
-      choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop", native_finish_reason: "stop" }],
-      usage: {
-        prompt_tokens: prompt,
-        completion_tokens: 10,
-        total_tokens: prompt + 10,
-        cost: 0.001,
-        prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: cacheWrite },
-        completion_tokens_details: { reasoning_tokens: 5 },
       },
     },
-  ]
-  return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n"
+  )
 }
 
-function toolCallResponse(input: {
+export function toolCallResponse(input: {
   index: number
   callID: string
   name: string
@@ -110,58 +92,30 @@ function toolCallResponse(input: {
   cacheWrite: number
 }) {
   const id = `runtime-smoke-${input.index}`
-  return (
-    eventStream(
-      {
+  const item = {
+    type: "function_call",
+    id: `${id}-function`,
+    call_id: input.callID,
+    name: input.name,
+    arguments: JSON.stringify(input.arguments),
+  }
+  return eventStream(
+    { type: "response.output_item.added", item: { ...item, arguments: "" } },
+    { type: "response.function_call_arguments.delta", item_id: item.id, delta: item.arguments },
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
         id,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
-        model: MODEL_ID,
-        provider: "Smoke",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              role: "assistant",
-              content: null,
-              tool_calls: [
-                {
-                  index: 0,
-                  id: input.callID,
-                  type: "function",
-                  function: { name: input.name, arguments: JSON.stringify(input.arguments) },
-                },
-              ],
-            },
-            finish_reason: null,
-            native_finish_reason: null,
-          },
-        ],
-      },
-      {
-        id,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
-        model: MODEL_ID,
-        provider: "Smoke",
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: "" },
-            finish_reason: "tool_calls",
-            native_finish_reason: "tool_calls",
-          },
-        ],
         usage: {
-          prompt_tokens: input.prompt,
-          completion_tokens: 10,
+          input_tokens: input.prompt,
+          output_tokens: 10,
           total_tokens: input.prompt + 10,
-          cost: 0.001,
-          prompt_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
-          completion_tokens_details: { reasoning_tokens: 5 },
+          input_tokens_details: { cached_tokens: input.cached, cache_write_tokens: input.cacheWrite },
+          output_tokens_details: { reasoning_tokens: 5 },
         },
       },
-    ) + "data: [DONE]\n\n"
+    },
   )
 }
 
@@ -304,7 +258,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       })
       const index = requests.length
 
-      if (url.pathname.endsWith("/responses")) {
+      if (url.pathname === "/openai/v1/responses") {
         const input = Array.isArray(body.input) ? body.input : []
         const serializedInput = JSON.stringify(input)
         const previousResponseID = typeof body.previous_response_id === "string" ? body.previous_response_id : undefined
@@ -333,9 +287,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         })
       }
 
-      const messages = Array.isArray(body.messages) ? body.messages : []
+      if (url.pathname !== "/api/v1/responses") return new Response("Unexpected provider route", { status: 404 })
+      const messages = Array.isArray(body.input) ? body.input : []
       const toolResults = messages.filter(
-        (message) => typeof message === "object" && message !== null && "role" in message && message.role === "tool",
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "function_call_output",
       ).length
       if (text.includes("runtime-smoke-tool-chain")) {
         if (toolResults === 0)
@@ -433,7 +392,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       providers: {
         openrouter: {
           name: "OpenRouter",
-          package: "aisdk:@openrouter/ai-sdk-provider",
+          package: "@ycoding-ai/ai/providers/openrouter",
           settings: { baseURL: providerUrl },
           models: {
             [MODEL_ID]: {
@@ -582,17 +541,27 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })
+    await client.session.wait({ sessionID: session.id })
     await eventually(async () =>
       (await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined,
     )
     phase = "second prompt"
     await client.session.prompt({ sessionID: session.id, text: "Second turn" })
+    await client.session.wait({ sessionID: session.id })
     const diagnostics = await eventually(async () => {
       const value = await client.session.diagnostics({ sessionID: session.id })
       return value?.tokens.cacheRead === 900 ? value : undefined
     })
 
-    if (requests.length < 2) throw new Error(`Expected at least two provider requests, got ${requests.length}`)
+    if (requests.length < 2) {
+      for await (const event of client.session.log({ sessionID: session.id, follow: false })) {
+        if (event.type === "session.execution.failed")
+          throw new Error(`Execution failed: ${event.data.error.type}: ${event.data.error.message}`)
+      }
+      throw new Error(
+        `Expected at least two provider requests, got ${requests.length}; diagnostics=${JSON.stringify(diagnostics)}; requests=${JSON.stringify(requests.map((request) => ({ pathname: request.pathname, model: request.model })))}`,
+      )
+    }
     if (diagnostics.tokens.uncachedInput !== 300)
       throw new Error(`Unexpected uncached input: ${diagnostics.tokens.uncachedInput}`)
     if (diagnostics.tokens.cacheRead !== 900) throw new Error(`Unexpected cache read: ${diagnostics.tokens.cacheRead}`)
@@ -879,7 +848,19 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     summary = `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
   } catch (error) {
-    throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })
+    const detail =
+      error instanceof Error
+        ? error.message
+        : typeof error === "object" && error !== null
+          ? JSON.stringify(
+              Object.fromEntries(
+                Object.entries(error).filter(([key]) =>
+                  ["_tag", "message", "reason", "code", "operation"].includes(key),
+                ),
+              ),
+            )
+          : String(error)
+    throw new Error(`Runtime smoke failed during ${phase}: ${detail}`, { cause: error })
   } finally {
     client.transport.close()
     await cleanupRuntimeSmoke(provider, server, root)

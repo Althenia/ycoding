@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createInterface } from "node:readline"
+import { meetingDirectory } from "../src/services/meeting"
 
 const cli = path.resolve(import.meta.dir, "../src/tui.ts")
 const cwd = path.resolve(import.meta.dir, "..")
@@ -16,8 +16,7 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
   const config = path.join(root, "config")
   await Promise.all([mkdir(project), mkdir(data), mkdir(config)])
   const env = { ...process.env, XDG_DATA_HOME: data, YCODING_CONFIG_DIR: config, YCODING_DISABLE_MODELS_FETCH: "1" }
-  const { meetingDirectory } = await import("@ycoding-ai/meeting/discovery")
-  const meeting = await withEnv({ XDG_DATA_HOME: data }, () => meetingDirectory(project))
+  const meeting = await meetingDirectory(project, data)
   await mkdir(meeting, { recursive: true, mode: 0o700 })
   const worker = path.join(root, "worker.cjs")
   await writeFile(worker, protocolWorker, { mode: 0o700 })
@@ -62,10 +61,26 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
     first.kill("SIGINT")
     expect(await exit(first)).toBe(130)
     await expect(stat(path.join(meeting, "bridge.json"))).rejects.toMatchObject({ code: "ENOENT" })
-    const store = new Database(path.join(meeting, "meetings.sqlite"), { readonly: true })
-    const stored = store.query("select data from meetings where id = ?").get(body.meeting?.id ?? "") as { data: string }
-    store.close()
-    expect(JSON.parse(stored.data).status).toBe("stopped")
+    expect((await stat(path.join(meeting, "meetings.redb"))).isFile()).toBe(true)
+    const restarted = run(["meeting", project, "--no-open"], env)
+    try {
+      const address = new URL(
+        await line(
+          restarted,
+          (text) => /^Live page: (http:\/\/127\.0\.0\.1:\d+\/view#key=[0-9a-f]{64})$/.exec(text)?.[1],
+        ),
+      )
+      const restored = await fetch(new URL("/view/state", address), {
+        headers: { authorization: `Bearer ${address.hash.slice("#key=".length)}` },
+      })
+      expect(restored.status).toBe(200)
+      const state = (await restored.json()) as { meetings: { id: string; status: string }[] }
+      expect(state.meetings.find((meeting) => meeting.id === body.meeting?.id)?.status).toBe("stopped")
+      restarted.kill("SIGINT")
+      expect(await exit(restarted)).toBe(130)
+    } finally {
+      if (restarted.exitCode === null) restarted.kill("SIGKILL")
+    }
   } finally {
     if (first.exitCode === null) first.kill("SIGKILL")
     await rm(root, { recursive: true, force: true })
@@ -106,17 +121,4 @@ function line<T>(child: ChildProcessWithoutNullStreams, match: (text: string) =>
 function exit(child: ChildProcessWithoutNullStreams) {
   if (child.exitCode !== null) return Promise.resolve(child.exitCode)
   return new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)))
-}
-
-async function withEnv<T>(values: Record<string, string>, use: () => Promise<T>) {
-  const previous = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
-  Object.assign(process.env, values)
-  try {
-    return await use()
-  } finally {
-    for (const [name, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[name]
-      else process.env[name] = value
-    }
-  }
 }
