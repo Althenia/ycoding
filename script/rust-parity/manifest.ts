@@ -153,8 +153,10 @@ export function resolveOwner(member: Member, rules = ownerRules) {
       (rule.prefix === undefined || member.name.startsWith(rule.prefix)) &&
       !rule.except?.some((prefix) => member.name.startsWith(prefix)),
   )
-  if (matching.length !== 1) throw new Error(`${member.kind}:${member.name}: ${matching.length} runtime owners`)
-  return matching[0]
+  const owner = matching[0]
+  if (matching.length !== 1 || owner === undefined)
+    throw new Error(`${member.kind}:${member.name}: ${matching.length} runtime owners`)
+  return owner
 }
 
 export function reconcileMembers(live: readonly string[], inventory: readonly string[], kind: string) {
@@ -169,9 +171,13 @@ export function reconcileMembers(live: readonly string[], inventory: readonly st
 
 function expand(cell: string) {
   return [...cell.matchAll(/`([^`]+)`/g)].flatMap((match) => {
-    const brace = match[1].match(/^([A-Za-z][A-Za-z0-9.-]*)\.\{([^}]+)\}$/)
-    if (brace) return brace[2].split(",").map((suffix) => `${brace[1]}.${suffix}`)
-    return /^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+$/.test(match[1]) ? [match[1]] : []
+    const value = requiredField(match, 1)
+    const brace = value.match(/^([A-Za-z][A-Za-z0-9.-]*)\.\{([^}]+)\}$/)
+    if (brace)
+      return requiredField(brace, 2)
+        .split(",")
+        .map((suffix) => `${requiredField(brace, 1)}.${suffix}`)
+    return /^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+$/.test(value) ? [value] : []
   })
 }
 
@@ -191,21 +197,24 @@ export async function generateManifest(root: string) {
   const inventoryPath = "specs/wire-operation-inventory.md"
   const inventory = await Bun.file(path.join(root, inventoryPath)).text()
   const local = table(
-    inventory
-      .split("## API Spec: Complete Local Endpoint Inventory")[1]
-      .split("### Explicit local transport/domain exceptions")[0],
+    inventorySection(
+      inventory,
+      "## API Spec: Complete Local Endpoint Inventory",
+      "### Explicit local transport/domain exceptions",
+    ),
   )
   const exceptions = table(
-    inventory
-      .split("### Explicit local transport/domain exceptions")[1]
-      .split("## Complete Remote Operation Inventory")[0],
+    inventorySection(
+      inventory,
+      "### Explicit local transport/domain exceptions",
+      "## Complete Remote Operation Inventory",
+    ),
   )
   const remote = table(
-    inventory.split("## Complete Remote Operation Inventory")[1].split("### Relay-owned notice operations")[0],
+    inventorySection(inventory, "## Complete Remote Operation Inventory", "### Relay-owned notice operations"),
   )
   const connectorSpec = await Bun.file(path.join(root, "specs/wire-connector.md")).text()
-  const allocations = connectorSpec
-    .split("## Remote admission obligations")[0]
+  const allocations = requiredField(connectorSpec.split("## Remote admission obligations"), 0)
     .split("\n")
     .filter((line) => line.startsWith("| "))
     .map((line) =>
@@ -216,14 +225,14 @@ export async function generateManifest(root: string) {
     )
     .filter((cells) => /^\d+$/.test(cells[2] ?? ""))
   for (const row of local) {
-    if (!/^\d+$/.test(row[1]) || Number(row[1]) !== expand(row[2]).length)
-      throw new Error(`endpoint: inventory row count drift ${row[0]}`)
+    if (!/^\d+$/.test(requiredField(row, 1)) || Number(requiredField(row, 1)) !== expand(requiredField(row, 2)).length)
+      throw new Error(`endpoint: inventory row count drift ${requiredField(row, 0)}`)
   }
   for (const row of remote) {
-    if (!/^\d+$/.test(row[1]) || Number(row[1]) !== expand(row[0]).length)
-      throw new Error(`connector: inventory row count drift ${row[0]}`)
+    if (!/^\d+$/.test(requiredField(row, 1)) || Number(requiredField(row, 1)) !== expand(requiredField(row, 0)).length)
+      throw new Error(`connector: inventory row count drift ${requiredField(row, 0)}`)
   }
-  const expected = local.flatMap((row) => expand(row[2]))
+  const expected = local.flatMap((row) => expand(requiredField(row, 2)))
   const sourceMembers: Member[] = []
   for await (const file of new Bun.Glob("*.ts").scan(path.join(root, "packages/protocol/src/groups"))) {
     const source = `packages/protocol/src/groups/${file}`
@@ -233,7 +242,7 @@ export async function generateManifest(root: string) {
     for (const match of text.matchAll(/HttpApiEndpoint\.\w+\(\s*"([^"]+)"/g))
       sourceMembers.push({
         kind: "endpoint",
-        name: match[1],
+        name: requiredField(match, 1),
         group,
         source: `${source}:${text.slice(0, match.index).split("\n").length}`,
       })
@@ -251,22 +260,22 @@ export async function generateManifest(root: string) {
     "endpoint",
   )
   const noticeInventory = expand(
-    inventory.split("### Relay-owned notice operations")[1].split("## Complete Application Event Inventory")[0],
+    inventorySection(inventory, "### Relay-owned notice operations", "## Complete Application Event Inventory"),
   )
   reconcileMembers(notices, noticeInventory, "notice")
   reconcileMembers(
-    [...remote.flatMap((row) => expand(row[0])), ...noticeInventory],
-    allocations.map((row) => row[0]),
+    [...remote.flatMap((row) => expand(requiredField(row, 0))), ...noticeInventory],
+    allocations.map((row) => requiredField(row, 0)),
     "connector source",
   )
   reconcileMembers(
     connector,
-    [...new Set(allocations.map((row) => row[1]).filter((name) => !name.startsWith("notice.")))],
+    [...new Set(allocations.map((row) => requiredField(row, 1)).filter((name) => !name.startsWith("notice.")))],
     "connector",
   )
   reconcileMembers(
     notices,
-    [...new Set(allocations.map((row) => row[1]).filter((name) => name.startsWith("notice.")))],
+    [...new Set(allocations.map((row) => requiredField(row, 1)).filter((name) => name.startsWith("notice.")))],
     "notice",
   )
   const counts = { endpoint: sourceMembers.length, connector: connector.length, notice: notices.length }
@@ -285,13 +294,13 @@ export async function generateManifest(root: string) {
     })),
   )
   const localDisposition = (name: string): Disposition => {
-    const row = exceptions.find((row) => expand(row[0]).includes(name))
-    return (row?.[1].match(/^(RPC|STREAM|EXTERNAL|HTTP|REPLACE|DERIVED)\b/)?.[1] as Disposition) ?? "RPC"
+    const row = exceptions.find((row) => expand(requiredField(row, 0)).includes(name))
+    return (row === undefined ? undefined : parseDisposition(requiredField(row, 1))) ?? "RPC"
   }
   const members = sourceMembers
     .map((member) => {
       const owner = resolveOwner(member)
-      const row = remote.find((row) => expand(row[0]).includes(member.name))
+      const row = remote.find((row) => expand(requiredField(row, 0)).includes(member.name))
       const disposition: Disposition =
         member.kind === "endpoint"
           ? localDisposition(member.name)
@@ -310,7 +319,7 @@ export async function generateManifest(root: string) {
                   ? "REPLACE"
                   : member.name === "usage.report"
                     ? "RPC"
-                    : ((row?.[2].match(/^(RPC|STREAM|EXTERNAL|HTTP|REPLACE|DERIVED)\b/)?.[1] as Disposition) ??
+                    : ((row === undefined ? undefined : parseDisposition(requiredField(row, 2))) ??
                       localDisposition(member.name))
       return {
         ...member,
@@ -329,6 +338,34 @@ export async function generateManifest(root: string) {
     members,
     unresolved: [] as string[],
   }
+}
+
+function requiredField(values: readonly string[], index: number) {
+  const value = values[index]
+  if (value === undefined) throw new Error(`missing inventory field ${index + 1}`)
+  return value
+}
+
+function inventorySection(text: string, start: string, end: string) {
+  const from = text.indexOf(start)
+  if (from === -1) throw new Error(`missing inventory section ${start}`)
+  const to = text.indexOf(end, from + start.length)
+  if (to === -1) throw new Error(`missing inventory section ${end}`)
+  return text.slice(from + start.length, to)
+}
+
+function parseDisposition(value: string) {
+  const name = value.match(/^(RPC|STREAM|EXTERNAL|HTTP|REPLACE|DERIVED)\b/)?.[1]
+  if (
+    name === "RPC" ||
+    name === "STREAM" ||
+    name === "EXTERNAL" ||
+    name === "HTTP" ||
+    name === "REPLACE" ||
+    name === "DERIVED"
+  )
+    return name
+  return undefined
 }
 
 if (import.meta.main) {

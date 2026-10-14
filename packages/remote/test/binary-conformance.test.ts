@@ -434,7 +434,7 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
   const frame = schemas.find((candidate) => candidate.typeName === "ycoding.v5.Frame")
   expect(frame?.oneofs.map((oneof) => oneof.name)).toEqual(["body"])
   expect(new Set(publicEvents.map((event) => `${event.name}:${event.tag}`)).size).toBe(publicEvents.length)
-  const declaredEvents = new Set(publicEvents.map((event) => event.type))
+  const declaredEvents = new Set<string>(publicEvents.map((event) => event.type))
   for (const operation of operations)
     for (const event of operation.eventTypes)
       expect(

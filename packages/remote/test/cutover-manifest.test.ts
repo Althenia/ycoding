@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { PeerRole, operations, publicEvents } from "@ycoding-ai/protocol/v5"
 import { generateManifest } from "../../../script/rust-parity/manifest"
@@ -66,7 +68,7 @@ test("TEST-057 retired source names are migration evidence, never manifest alias
 
 test("TEST-057 public event membership is unique and descriptor-referenced events are declared", () => {
   expect(new Set(publicEvents.map((event) => `${event.name}:${event.tag}`)).size).toBe(publicEvents.length)
-  const declared = new Set(publicEvents.map((event) => event.type))
+  const declared = new Set<string>(publicEvents.map((event) => event.type))
   for (const operation of operations)
     for (const event of operation.eventTypes)
       expect(
@@ -74,3 +76,48 @@ test("TEST-057 public event membership is unique and descriptor-referenced event
         `${operation.diagnosticName} references undeclared event ${event}`,
       ).toBe(true)
 })
+
+test.each([
+  "## API Spec: Complete Local Endpoint Inventory",
+  "### Explicit local transport/domain exceptions",
+  "## Complete Remote Operation Inventory",
+  "### Relay-owned notice operations",
+  "## Complete Application Event Inventory",
+])("TEST-057 inventory rejects missing section %s explicitly", async (heading) => {
+  await withManifestFixture(async (fixture) => {
+    const file = path.join(fixture, "specs/wire-operation-inventory.md")
+    await Bun.write(file, (await Bun.file(file).text()).replace(heading, "## Missing section"))
+    await expect(generateManifest(fixture)).rejects.toThrow("missing inventory section")
+  })
+})
+
+test.each([
+  { name: "endpoint names", pattern: /^\| `agent\.ts:9`[^\n]*$/m, row: "| `agent.ts:9` | 1 |" },
+  {
+    name: "connector disposition",
+    pattern: /^\| `provider\.auth\.\{list,key,begin,status,complete,cancel\}`[^\n]*$/m,
+    row: "| `provider.auth.{list,key,begin,status,complete,cancel}` | 6 |",
+  },
+])("TEST-057 inventory rejects missing $name explicitly", async (input) => {
+  await withManifestFixture(async (fixture) => {
+    const file = path.join(fixture, "specs/wire-operation-inventory.md")
+    await Bun.write(file, (await Bun.file(file).text()).replace(input.pattern, input.row))
+    await expect(generateManifest(fixture)).rejects.toThrow("missing inventory field")
+  })
+})
+
+async function withManifestFixture(run: (fixture: string) => Promise<void>) {
+  const fixture = await mkdtemp(path.join(tmpdir(), "ycoding-manifest-guard-"))
+  try {
+    for (const file of ["specs/wire-operation-inventory.md", "specs/wire-connector.md"])
+      await Bun.write(path.join(fixture, file), Bun.file(path.join(root, file)))
+    for await (const file of new Bun.Glob("*.ts").scan(path.join(root, "packages/protocol/src/groups")))
+      await Bun.write(
+        path.join(fixture, "packages/protocol/src/groups", file),
+        Bun.file(path.join(root, "packages/protocol/src/groups", file)),
+      )
+    await run(fixture)
+  } finally {
+    await rm(fixture, { recursive: true, force: true })
+  }
+}
