@@ -203,6 +203,18 @@ export async function generateManifest(root: string) {
   const remote = table(
     inventory.split("## Complete Remote Operation Inventory")[1].split("### Relay-owned notice operations")[0],
   )
+  const connectorSpec = await Bun.file(path.join(root, "specs/wire-connector.md")).text()
+  const allocations = connectorSpec
+    .split("## Remote admission obligations")[0]
+    .split("\n")
+    .filter((line) => line.startsWith("| "))
+    .map((line) =>
+      line
+        .split("|")
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    )
+    .filter((cells) => /^\d+$/.test(cells[2] ?? ""))
   for (const row of local) {
     if (!/^\d+$/.test(row[1]) || Number(row[1]) !== expand(row[2]).length)
       throw new Error(`endpoint: inventory row count drift ${row[0]}`)
@@ -227,21 +239,37 @@ export async function generateManifest(root: string) {
       })
   }
   const remoteOperations = operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))
-  const connector = remoteOperations.filter((operation) => !operation.diagnosticName.startsWith("notice.")).map((operation) => operation.diagnosticName)
-  const notices = remoteOperations.filter((operation) => operation.diagnosticName.startsWith("notice.")).map((operation) => operation.diagnosticName)
+  const connector = remoteOperations
+    .filter((operation) => !operation.diagnosticName.startsWith("notice."))
+    .map((operation) => operation.diagnosticName)
+  const notices = remoteOperations
+    .filter((operation) => operation.diagnosticName.startsWith("notice."))
+    .map((operation) => operation.diagnosticName)
   reconcileMembers(
     sourceMembers.map((member) => member.name),
     expected,
     "endpoint",
   )
+  const noticeInventory = expand(
+    inventory.split("### Relay-owned notice operations")[1].split("## Complete Application Event Inventory")[0],
+  )
+  reconcileMembers(notices, noticeInventory, "notice")
+  reconcileMembers(
+    [...remote.flatMap((row) => expand(row[0])), ...noticeInventory],
+    allocations.map((row) => row[0]),
+    "connector source",
+  )
+  reconcileMembers(
+    connector,
+    [...new Set(allocations.map((row) => row[1]).filter((name) => !name.startsWith("notice.")))],
+    "connector",
+  )
   reconcileMembers(
     notices,
-    expand(inventory.split("### Relay-owned notice operations")[1].split("## Complete Application Event Inventory")[0]),
+    [...new Set(allocations.map((row) => row[1]).filter((name) => name.startsWith("notice.")))],
     "notice",
   )
   const counts = { endpoint: sourceMembers.length, connector: connector.length, notice: notices.length }
-  if (counts.endpoint !== 198 || counts.connector !== 66 || counts.notice !== 4 || new Set(connector).size !== connector.length)
-    throw new Error(`Baseline counts disagree: ${JSON.stringify(counts)}`)
   sourceMembers.push(
     ...connector.map((name) => ({
       kind: "connector" as const,
@@ -267,20 +295,23 @@ export async function generateManifest(root: string) {
       const disposition: Disposition =
         member.kind === "endpoint"
           ? localDisposition(member.name)
-          : remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming === Streaming.EVENTS || remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming === Streaming.ASSET_BULK
+          : remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming ===
+                Streaming.EVENTS ||
+              remoteOperations.find((operation) => operation.diagnosticName === member.name)?.streaming ===
+                Streaming.ASSET_BULK
             ? "STREAM"
-          : member.kind === "notice"
-            ? member.name === "notice.subscribe"
-              ? "STREAM"
-              : "RPC"
-            : member.name === "workspace.list"
-              ? "DERIVED"
-              : member.name.startsWith("workspace.")
-                ? "REPLACE"
-                : member.name === "usage.report"
-                  ? "RPC"
-                  : ((row?.[2].match(/^(RPC|STREAM|EXTERNAL|HTTP|REPLACE|DERIVED)\b/)?.[1] as Disposition) ??
-                    localDisposition(member.name))
+            : member.kind === "notice"
+              ? member.name === "notice.subscribe"
+                ? "STREAM"
+                : "RPC"
+              : member.name === "workspace.list"
+                ? "DERIVED"
+                : member.name.startsWith("workspace.")
+                  ? "REPLACE"
+                  : member.name === "usage.report"
+                    ? "RPC"
+                    : ((row?.[2].match(/^(RPC|STREAM|EXTERNAL|HTTP|REPLACE|DERIVED)\b/)?.[1] as Disposition) ??
+                      localDisposition(member.name))
       return {
         ...member,
         disposition,
