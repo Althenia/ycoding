@@ -2994,6 +2994,7 @@ export const operations: readonly OperationDescriptor[] = [
     errorTypes: [
       "ycoding.v5.SessionNotFoundError",
       "ycoding.v5.MessageNotFoundError",
+      "ycoding.v5.HistoryPrunedError",
       "ycoding.v5.UnauthorizedError",
       "ycoding.v5.InvalidRequestError",
     ],
@@ -3794,6 +3795,7 @@ export const operations: readonly OperationDescriptor[] = [
     $typeName: "ycoding.v5.OperationDescriptor",
     errorTypes: [
       "ycoding.v5.MessageNotFoundError",
+      "ycoding.v5.HistoryPrunedError",
       "ycoding.v5.SessionNotFoundError",
       "ycoding.v5.SessionBusyError",
       "ycoding.v5.UnknownError",

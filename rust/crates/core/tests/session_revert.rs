@@ -679,7 +679,7 @@ async fn stage_fails_before_publishing_when_the_boundary_is_missing_or_restore_f
     )
     .await;
     assert!(matches!(result, Err(Error::MessageNotFound { .. })));
-    assert_eq!(snapshots.calls(), vec!["capture"]);
+    assert!(snapshots.calls().is_empty());
 
     let snapshots = Recorder::with_captures(&[Some("tree_original")]);
     *snapshots.restore_failure.lock().unwrap() = Some("disk".into());

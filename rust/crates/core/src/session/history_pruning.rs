@@ -86,6 +86,92 @@ pub fn checkpoint_message(checkpoint: &Checkpoint) -> Result<Entry, Error> {
     Ok(entry)
 }
 
+pub(crate) fn checkpoint_in(
+    tx: &mut Write<'_>,
+    id: &session::Id,
+) -> Result<Option<Checkpoint>, Error> {
+    let Some(state) = tx
+        .get::<ContextStateTable>(&key(id.as_lossless()))?
+        .filter(|state| {
+            state.status.as_str() == Some("active") && state.covered_through_seq.is_some()
+        })
+    else {
+        return Ok(None);
+    };
+    let blob = state
+        .manifest_digest
+        .as_ref()
+        .map(|digest| tx.get::<ManifestTable>(&key(digest)))
+        .transpose()?
+        .flatten();
+    let Some(summary) = model_history::summary_from(id, &state, blob.as_ref(), |id| {
+        tx.get::<MessageTable>(&key(id))
+    })?
+    else {
+        return Ok(None);
+    };
+    let mut after = None;
+    let mut ended = None;
+    loop {
+        let jobs = tx.index::<JobTable>(
+            "session_compaction_job_manifest_idx",
+            &key(&summary.digest),
+            after.as_deref(),
+            128,
+        )?;
+        let Some(last) = jobs.last() else { break };
+        after = Some(JobTable::primary_key(last));
+        for job in jobs.into_iter().filter(|job| {
+            job.session_id == *id.as_lossless() && job.status.as_str() == Some("ended")
+        }) {
+            if let Some(time) = job.time_ended
+                && ended.as_ref().is_none_or(|(_, previous)| time > *previous)
+            {
+                ended = Some((job.id, time));
+            }
+        }
+    }
+    Ok(ended.map(|(job, ended)| Checkpoint {
+        through: summary.sequence,
+        manifest_digest: summary.digest,
+        text: summary.text,
+        activated: summary.activated,
+        ended,
+        job,
+        state,
+    }))
+}
+
+pub(crate) fn validate_target(
+    id: &session::Id,
+    message: Option<&Message>,
+    load: impl FnOnce() -> Result<Option<Checkpoint>, Error>,
+) -> Result<Option<Checkpoint>, Error> {
+    if message.is_some_and(|message| message.session_id != *id.as_lossless()) {
+        return Err(Error::Domain {
+            kind: "message_not_found",
+            message: "Message not found",
+        });
+    }
+    let checkpoint = load()?;
+    if checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| message.is_none_or(|message| message.seq <= checkpoint.through))
+    {
+        return Err(Error::Domain {
+            kind: "history_pruned",
+            message: "history through the compaction checkpoint was removed",
+        });
+    }
+    if message.is_none() {
+        return Err(Error::Domain {
+            kind: "message_not_found",
+            message: "Message not found",
+        });
+    }
+    Ok(checkpoint)
+}
+
 /// First sequence of retained canonical history: past the completed legacy checkpoint and the qualifying summary checkpoint.
 pub(crate) fn retained_floor(snapshot: &Snapshot, id: &session::Id) -> Result<Floor, Error> {
     let legacy = super::history::latest_compaction(snapshot, id)?;

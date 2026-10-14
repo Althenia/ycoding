@@ -1525,6 +1525,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.MessageNotFoundError__tag": {
     "1": "MessageNotFoundError",
   },
+  "ycoding.v5.HistoryPrunedError__tag": {
+    "1": "HistoryPrunedError",
+  },
   "ycoding.v5.FormAlreadySettledError__tag": {
     "1": "FormAlreadySettledError",
   },

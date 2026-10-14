@@ -21,6 +21,15 @@ export class MessageDecodeError extends Schema.TaggedErrorClass<MessageDecodeErr
 
 export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorError>()("Session.InvalidCursorError", {}) {}
 
+export class HistoryPrunedError extends Schema.TaggedErrorClass<HistoryPrunedError>()("Session.HistoryPrunedError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+}) {
+  override get message() {
+    return `Message ${this.messageID} is not in the retained history of session ${this.sessionID}; history through the compaction checkpoint was removed`
+  }
+}
+
 export class AttachmentReadError extends Schema.TaggedErrorClass<AttachmentReadError>()("Session.AttachmentReadError", {
   reason: Schema.Literals(["invalid", "not-found", "too-large"]),
 }) {}

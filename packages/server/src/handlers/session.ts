@@ -15,6 +15,7 @@ import {
   AttachmentTooLargeError,
   InvalidCursorError,
   MessageNotFoundError,
+  HistoryPrunedError,
   ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
@@ -479,6 +480,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     message: `Message not found: ${error.messageID}`,
                   }),
               ),
+              Effect.catchTag("Session.HistoryPrunedError", (error) => new HistoryPrunedError({ sessionID: error.sessionID, messageID: error.messageID, message: error.message })),
             ),
           }
         }),
@@ -895,6 +897,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     message: `Session is busy: ${error.sessionID}`,
                   }),
               ),
+              Effect.catchTag("Session.HistoryPrunedError", (error) => new HistoryPrunedError({ sessionID: error.sessionID, messageID: error.messageID, message: error.message })),
               Effect.catchTag("Snapshot.Error", (error) => {
                 const ref = `err_${crypto.randomUUID().slice(0, 8)}`
                 return Effect.logError("failed to stage session revert", { cause: error }).pipe(

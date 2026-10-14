@@ -219,6 +219,10 @@ pub enum Failure {
         session: String,
         message: String,
     },
+    HistoryPruned {
+        session: ycoding_core::ycoding_schema::LosslessString,
+        message: ycoding_core::ycoding_schema::LosslessString,
+    },
     AttachmentNotFound,
     AttachmentTooLarge,
     InvalidCursor(String),
@@ -887,6 +891,31 @@ impl Failure {
                 })
             }
             Failure::MessageNotFound { .. } => invalid("Message not found", "not_found"),
+            Failure::HistoryPruned { session, message }
+                if declared(v5::HistoryPrunedError::full_name()) =>
+            {
+                let diagnostic = ycoding_core::ycoding_schema::LosslessString::from_utf16(
+                    "Message "
+                        .encode_utf16()
+                        .chain(message.code_units())
+                        .chain(" is not in the retained history of session ".encode_utf16())
+                        .chain(session.code_units())
+                        .chain(
+                            "; history through the compaction checkpoint was removed"
+                                .encode_utf16(),
+                        )
+                        .collect(),
+                );
+                encoded(v5::HistoryPrunedError {
+                    tag: 1,
+                    session_id: convert::wire(&session),
+                    message_id: convert::wire(&message),
+                    message: convert::wire(&diagnostic),
+                })
+            }
+            Failure::HistoryPruned { .. } => {
+                invalid("Session history was pruned", "history_pruned")
+            }
             Failure::AttachmentNotFound if declared(v5::AttachmentNotFoundError::full_name()) => {
                 encoded(v5::AttachmentNotFoundError {
                     tag: 1,

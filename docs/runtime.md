@@ -99,6 +99,14 @@ attachment references lost with pruned messages are unavailable through the
 Session. Retried pruned prompt IDs return their first admission unless a later
 committed revert exists.
 
+Fork and revert staging reject missing targets or targets at/below a qualifying
+local checkpoint with `HistoryPrunedError { sessionID, messageID, message }` and
+change no Session or file state, before or after physical pruning. Foreign
+messages remain `MessageNotFoundError`; missing targets without a checkpoint
+remain not found. Forks copy the checkpoint summary and only the retained prefix
+before an optional target, or all retained history without a target. The v5
+contract preserves the typed error; the HTTP contract maps it to 410.
+
 The server permanently deletes idle Session families. A family is one root Session (no parent) plus all of its descendants. It is deleted when the newest activity of every member — the later of `time_updated` and the execution-activity timestamp `time_active` — is older than the configured retention, 7 days by default; set it with the global-only [`session_retention.days`](./configuration.md#session-retention) key. Archive state does not affect retention.
 
 A family is kept whole when any member is pinned, has an active goal, is suspended, has an unconsumed pending input, or is executing in this process's `SessionExecution`, or when a Session outside the family is forked from a member.

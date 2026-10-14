@@ -58,6 +58,7 @@ import {
   AgentNotSelectableError,
   AttachmentReadError,
   InvalidCursorError,
+  HistoryPrunedError,
   MessageDecodeError,
   NotFoundError,
 } from "./error"
@@ -190,7 +191,7 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
   },
 ) {}
 
-export { AttachmentReadError, InvalidCursorError, MessageDecodeError, NotFoundError }
+export { AttachmentReadError, HistoryPrunedError, InvalidCursorError, MessageDecodeError, NotFoundError }
 
 export const MaxAttachmentReadBytes = 10 * 1024 * 1024
 const CompactionHistoryLimit = 100
@@ -270,6 +271,7 @@ export type Error =
   | Command.NotFoundError
   | Command.EvaluationError
   | MessageNotFoundError
+  | HistoryPrunedError
   | SessionGenerate.Error
 
 export interface Interface {
@@ -279,7 +281,7 @@ export interface Interface {
   readonly create: (
     input: CreateInput,
   ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotSelectableError | SessionRunnerModel.Error>
-  readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
+  readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | HistoryPrunedError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly snapshot: (
     sessionID: SessionSchema.ID,
@@ -464,7 +466,7 @@ export interface Interface {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-    }) => Effect.Effect<Session.Revert, NotFoundError | MessageNotFoundError | BusyError | Snapshot.Error>
+    }) => Effect.Effect<Session.Revert, NotFoundError | MessageNotFoundError | HistoryPrunedError | BusyError | Snapshot.Error>
     readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError | Snapshot.Error>
     readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | BusyError>
   }

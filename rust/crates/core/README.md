@@ -147,6 +147,18 @@ Retrying a pruned promoted prompt recovers its original durable admission withou
 recreating pending work. A later committed revert disables recovery; input-kind
 conflicts remain rejected.
 
+Fork and revert staging validate the target against a qualifying checkpoint
+before changing state or accessing snapshots. Missing targets or targets at/below
+the checkpoint return `history_pruned`, even when the row remains. Foreign
+messages stay `message_not_found`; without a checkpoint, missing targets stay
+not found. Fork publication and projection both check the boundary in their
+Store transaction. Forks copy the synthetic checkpoint and only later retained
+rows strictly before their optional target; without a target they copy all
+retained rows. Copied checkpoints need no copied manifest/job and suppress the
+sole-first-user shortcut. Revision 5 encodes rejection as `HistoryPrunedError {
+sessionID, messageID, message }` for `session.fork` and `session.revert.stage`.
+Its v5 payload retains exact UTF-16 identifier and diagnostic-text code units.
+
 ## Derived Session retention and maintenance ownership
 
 `session::cleanups::Cleanups` removes only derived context exclusions, file-change

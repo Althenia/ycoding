@@ -27,6 +27,10 @@ pub enum Error {
         session_id: session::Id,
         message_id: session_message::Id,
     },
+    HistoryPruned {
+        session_id: session::Id,
+        message_id: session_message::Id,
+    },
     SessionNotFound {
         session_id: session::Id,
     },
@@ -44,6 +48,19 @@ impl fmt::Display for Error {
             Self::MessageNotFound { .. } => {
                 formatter.write_str("Revert boundary message not found")
             }
+            Self::HistoryPruned {
+                session_id,
+                message_id,
+            } => write!(
+                formatter,
+                "Message {} is not in the retained history of session {}; history through the compaction checkpoint was removed",
+                String::from_utf16_lossy(
+                    &message_id.as_lossless().code_units().collect::<Vec<_>>()
+                ),
+                String::from_utf16_lossy(
+                    &session_id.as_lossless().code_units().collect::<Vec<_>>()
+                )
+            ),
             Self::SessionNotFound { .. } => formatter.write_str("Session not found"),
             Self::Busy { session_id } => {
                 write!(formatter, "Session {session_id:?} is busy")
@@ -222,13 +239,28 @@ pub fn plan(
     session_id: &session::Id,
     message_id: &session_message::Id,
 ) -> Result<Plan, Error> {
-    let boundary = snapshot
-        .get::<MessageTable>(&key(message_id.as_lossless()))?
-        .filter(|row| &row.session_id == session_id.as_lossless())
-        .ok_or_else(|| Error::MessageNotFound {
+    let boundary = snapshot.get::<MessageTable>(&key(message_id.as_lossless()))?;
+    super::history_pruning::validate_target(session_id, boundary.as_ref(), || {
+        super::history_pruning::checkpoint(snapshot, session_id)
+    })
+    .map_err(|error| match error {
+        StoreError::Domain {
+            kind: "history_pruned",
+            ..
+        } => Error::HistoryPruned {
             session_id: session_id.clone(),
             message_id: message_id.clone(),
-        })?;
+        },
+        StoreError::Domain {
+            kind: "message_not_found",
+            ..
+        } => Error::MessageNotFound {
+            session_id: session_id.clone(),
+            message_id: message_id.clone(),
+        },
+        error => Error::Store(error),
+    })?;
+    let boundary = boundary.expect("validated boundary");
     let assistant = LosslessString::from("assistant");
     let prefix = tuple_key(&[
         KeyPart::String(session_id.as_lossless()),
@@ -284,6 +316,7 @@ pub async fn stage(
     files: bool,
     now: i64,
 ) -> Result<session_revert::Revert, Error> {
+    let next = plan(&service.client.snapshot()?, &session.id, message_id)?;
     let original = match session
         .revert
         .as_ref()
@@ -292,7 +325,6 @@ pub async fn stage(
         Some(original) => Some(original),
         None => snapshots.capture(),
     };
-    let next = plan(&service.client.snapshot()?, &session.id, message_id)?;
     let mut restore = Plan::new();
     if let Some(original) = &original {
         for file in session

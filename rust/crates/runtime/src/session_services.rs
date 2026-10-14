@@ -36,6 +36,16 @@ pub async fn fork(
         .await
         .map_err(|error| match error {
             Error::Domain {
+                kind: "history_pruned",
+                ..
+            } => Failure::HistoryPruned {
+                session: id.as_lossless().clone(),
+                message: boundary
+                    .as_ref()
+                    .map(|id| id.as_lossless().clone())
+                    .unwrap_or_else(|| "".into()),
+            },
+            Error::Domain {
                 kind: "message_not_found",
                 ..
             } => Failure::MessageNotFound {

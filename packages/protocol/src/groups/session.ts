@@ -21,6 +21,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
+  HistoryPrunedError,
   ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
@@ -625,7 +626,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Session.Info }),
-        error: [SessionNotFoundError, MessageNotFoundError],
+        error: [SessionNotFoundError, MessageNotFoundError, HistoryPrunedError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -633,7 +634,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "session.fork",
             summary: "Fork session",
             description:
-              "Create a child session by copying projected history from the parent. When messageID is supplied, copy messages before that boundary.",
+              "Create a child session by copying retained projected history from the parent. When messageID is supplied, copy retained messages before that boundary; targets outside retained history fail with HistoryPrunedError.",
           }),
         ),
     )
@@ -947,7 +948,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID, files: Schema.Boolean.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Session.Revert }),
-        error: [MessageNotFoundError, SessionNotFoundError, SessionBusyError, UnknownError],
+        error: [MessageNotFoundError, HistoryPrunedError, SessionNotFoundError, SessionBusyError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

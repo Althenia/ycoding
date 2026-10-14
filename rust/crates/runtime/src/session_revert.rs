@@ -82,6 +82,10 @@ pub fn failure(error: revert::Error, id: &session::Id) -> Failure {
             session: convert::readable(id.as_lossless()),
             message: convert::readable(message_id.as_lossless()),
         },
+        revert::Error::HistoryPruned { message_id, .. } => Failure::HistoryPruned {
+            session: id.as_lossless().clone(),
+            message: message_id.as_lossless().clone(),
+        },
         revert::Error::Busy { .. } => Failure::SessionBusy(convert::readable(id.as_lossless())),
         _ => Failure::Unavailable("Session revert unavailable".into()),
     }

@@ -384,6 +384,10 @@ enum MessageNotFoundError__tag {
   MESSAGENOTFOUNDERROR__TAG_MESSAGENOTFOUNDERROR = 1;
 }
 
+enum HistoryPrunedError__tag {
+  HISTORYPRUNEDERROR__TAG_HISTORYPRUNEDERROR = 1;
+}
+
 enum FormAlreadySettledError__tag {
   FORMALREADYSETTLEDERROR__TAG_FORMALREADYSETTLEDERROR = 1;
 }
@@ -2631,6 +2635,13 @@ message session_fork_Result {
 
 message MessageNotFoundError {
   required MessageNotFoundError__tag _tag = 1;
+  required LosslessString sessionID = 2;
+  required LosslessString messageID = 3;
+  required LosslessString message = 4;
+}
+
+message HistoryPrunedError {
+  required HistoryPrunedError__tag _tag = 1;
   required LosslessString sessionID = 2;
   required LosslessString messageID = 3;
   required LosslessString message = 4;
@@ -6655,6 +6666,7 @@ service server_session {
       diagnostic_name: "session.fork"
       error_types: "ycoding.v5.SessionNotFoundError"
       error_types: "ycoding.v5.MessageNotFoundError"
+      error_types: "ycoding.v5.HistoryPrunedError"
       error_types: "ycoding.v5.UnauthorizedError"
       error_types: "ycoding.v5.InvalidRequestError"
       roles: LOCAL_CLIENT
@@ -6999,6 +7011,7 @@ service server_session {
       operation_id: 4059
       diagnostic_name: "session.revert.stage"
       error_types: "ycoding.v5.MessageNotFoundError"
+      error_types: "ycoding.v5.HistoryPrunedError"
       error_types: "ycoding.v5.SessionNotFoundError"
       error_types: "ycoding.v5.SessionBusyError"
       error_types: "ycoding.v5.UnknownError"

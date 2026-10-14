@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "e8f661938895b43a5ac119ec534eacf99793f14cf7304e1e06612316b7fa89c0"
+export const CONTRACT_DIGEST = "03ed82fc9cc1926cab3a2a448f0d45c96fb514cf0fd00880e846f2fea19b6054"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -12152,6 +12152,43 @@ export const messages = {
         required: true,
         repeated: false,
         target: "ycoding.v5.MessageNotFoundError__tag",
+      },
+      {
+        tag: 2,
+        name: "sessionID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 3,
+        name: "messageID",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+      {
+        tag: 4,
+        name: "message",
+        type: 11,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.LosslessString",
+      },
+    ],
+  },
+  "ycoding.v5.HistoryPrunedError": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "_tag",
+        type: 14,
+        required: true,
+        repeated: false,
+        target: "ycoding.v5.HistoryPrunedError__tag",
       },
       {
         tag: 2,
@@ -57220,6 +57257,7 @@ export const enums = {
   "ycoding.v5.Session_Message_Compaction_Failed_status": [1],
   "ycoding.v5.Session_Message_Compaction_Failed_code": [1, 2, 3, 4, 5, 6, 7],
   "ycoding.v5.MessageNotFoundError__tag": [1],
+  "ycoding.v5.HistoryPrunedError__tag": [1],
   "ycoding.v5.FormAlreadySettledError__tag": [1],
   "ycoding.v5.FormNotFoundError__tag": [1],
   "ycoding.v5.FormInvalidAnswerError__tag": [1],

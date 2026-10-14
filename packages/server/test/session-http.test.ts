@@ -6,6 +6,26 @@ import { sessionHttp } from "./session-http"
 import { SessionCompaction } from "../../schema/src/session-compaction"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AgentNotSelectableError } from "@ycoding-ai/core/session/error"
+import { HistoryPrunedError } from "@ycoding-ai/core/session/error"
+import { SessionMessage } from "../../schema/src/session-message"
+
+test("fork and revert targets outside retained history map to HTTP 410", async () => {
+  const messageID = SessionMessage.ID.make("msg_pruned")
+  const rejected = new HistoryPrunedError({ sessionID: parentID, messageID })
+  await using http = sessionHttp({
+    fork: () => Effect.fail(rejected),
+    revert: {
+      stage: () => Effect.fail(rejected),
+      clear: () => Effect.die("unused"),
+      commit: () => Effect.die("unused"),
+    },
+  })
+  for (const path of [`/api/session/${parentID}/fork`, `/api/session/${parentID}/revert/stage`]) {
+    const response = await http.json(path, "POST", { messageID })
+    expect(response.status).toBe(410)
+    expect(await response.json()).toEqual({ _tag: "HistoryPrunedError", sessionID: parentID, messageID, message: rejected.message })
+  }
+})
 
 const parentID = Session.ID.make("ses_http_parent")
 const otherID = Session.ID.make("ses_http_other")

@@ -16,11 +16,37 @@ import {
   session_form_cancel_ResultSchema,
   session_create_RequestSchema,
   decodeLossless,
+  HistoryPrunedErrorSchema,
 } from "@ycoding-ai/protocol/v5"
+import { isHistoryPrunedError } from "../src/promise/index.js"
 import { make } from "../src/v5/index.js"
 import { ScriptedPeer } from "./fixture/v5-peer.js"
 
 const endpoint = { url: "http://127.0.0.1:12345" }
+
+test("fork and revert preserve HistoryPrunedError fields and generated guard", async () => {
+  const peer = new ScriptedPeer()
+  const error = { _tag: "HistoryPrunedError", sessionID: "ses_owner", messageID: "msg_pruned", message: "History was compacted" }
+  peer.onRequest = (dispatch) => peer.result(dispatch, {
+    typeName: HistoryPrunedErrorSchema.typeName,
+    payload: encodeStrict(HistoryPrunedErrorSchema, create(HistoryPrunedErrorSchema, {
+      Tag: 1,
+      sessionID: { encoding: { case: "utf8", value: error.sessionID } },
+      messageID: { encoding: { case: "utf8", value: error.messageID } },
+      message: { encoding: { case: "utf8", value: error.message } },
+    })),
+  }, true)
+  const client = make({ endpoint, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  try {
+    for (const action of [() => client.session.fork({ sessionID: error.sessionID, messageID: error.messageID }), () => client.session.revert.stage({ sessionID: error.sessionID, messageID: error.messageID })]) {
+      const rejected = await action().catch((error: unknown) => error)
+      expect(rejected).toEqual(error)
+      expect(isHistoryPrunedError(rejected)).toBe(true)
+    }
+  } finally {
+    client.transport.close()
+  }
+})
 const health = () =>
   encodeStrict(
     health_get_ResultSchema,

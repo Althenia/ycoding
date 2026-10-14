@@ -306,15 +306,30 @@ pub(crate) fn summary(
     id: &session::Id,
     state: &ycoding_store::session::ContextState,
 ) -> Result<Option<Summary>, Error> {
+    let blob = state
+        .manifest_digest
+        .as_ref()
+        .map(|digest| snapshot.get::<ManifestTable>(&key(digest)))
+        .transpose()?
+        .flatten();
+    summary_from(id, state, blob.as_ref(), |id| {
+        snapshot.get::<MessageTable>(&key(id))
+    })
+}
+
+pub(crate) fn summary_from(
+    id: &session::Id,
+    state: &ycoding_store::session::ContextState,
+    blob: Option<&ycoding_store::session::Manifest>,
+    mut message_row: impl FnMut(
+        &ycoding_schema::LosslessString,
+    ) -> Result<Option<ycoding_store::session::Message>, Error>,
+) -> Result<Option<Summary>, Error> {
     let through = state.covered_through_seq.expect("active boundary exists");
     let (Some(digest), Some(activated)) = (&state.manifest_digest, state.time_activated) else {
         return Ok(None);
     };
-    let blob = snapshot.get::<ManifestTable>(&key(digest))?;
-    let Some(summary) = blob
-        .as_ref()
-        .and_then(|blob| field(blob.content.value(), "summary"))
-    else {
+    let Some(summary) = blob.and_then(|blob| field(blob.content.value(), "summary")) else {
         return Ok(None);
     };
     let anchor = field(summary, "coveredThrough");
@@ -331,13 +346,13 @@ pub(crate) fn summary(
         .and_then(|anchor| field(anchor, "messageID"))
         .and_then(text);
     let valid = match (sequence, message, field(summary, "digest")) {
-        (Some(sequence), Some(message), Some(expected)) if sequence <= through => snapshot
-            .get::<MessageTable>(&key(message))?
-            .is_some_and(|row| {
+        (Some(sequence), Some(message), Some(expected)) if sequence <= through => {
+            message_row(message)?.is_some_and(|row| {
                 row.session_id == *id.as_lossless()
                     && row.seq == sequence
                     && hash(&row.data) == *expected
-            }),
+            })
+        }
         _ => false,
     };
     if !valid {

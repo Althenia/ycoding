@@ -4,11 +4,13 @@ use super::{
     store::Service,
 };
 use std::ops::Bound;
-use ycoding_schema::{LosslessString, ObjectDecoder, ObjectEncoder, session, session_message};
+use ycoding_schema::{
+    DomainEncode, LosslessString, ObjectDecoder, ObjectEncoder, session, session_message,
+};
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
     session::{
-        self as tables, ContextState, ContextStateTable, Event, MessageTable, NewEvent,
+        self as tables, ContextState, ContextStateTable, Event, Message, MessageTable, NewEvent,
         PendingTable, Revision, RevisionTable, SessionTable,
     },
     tuple_key,
@@ -41,14 +43,11 @@ impl Service {
                         })?;
                 let through = match &boundary {
                     Some(boundary) => {
-                        tx.get::<MessageTable>(&key(boundary.as_lossless()))?
-                            .filter(|message| &message.session_id == parent.as_lossless())
-                            .ok_or(Error::Domain {
-                                kind: "message_not_found",
-                                message: "Message not found",
-                            })?
-                            .seq
-                            - 1
+                        let message = tx.get::<MessageTable>(&key(boundary.as_lossless()))?;
+                        super::history_pruning::validate_target(&parent, message.as_ref(), || {
+                            super::history_pruning::checkpoint_in(tx, &parent)
+                        })?;
+                        message.expect("validated boundary").seq - 1
                     }
                     None => tx
                         .get::<tables::SequenceTable>(&key(parent.as_lossless()))?
@@ -108,18 +107,17 @@ pub(crate) fn apply(
             kind: "not_found",
             message: "Fork parent Session not found",
         })?;
-    let upper = from
-        .as_ref()
-        .map(|id| {
-            tx.get::<MessageTable>(&key(id.as_lossless()))?
-                .filter(|message| &message.session_id == parent.as_lossless())
-                .map(|message| message.seq)
-                .ok_or(Error::Domain {
-                    kind: "message_not_found",
-                    message: "Fork boundary message not found",
-                })
-        })
-        .transpose()?;
+    let (upper, checkpoint) = match from.as_ref() {
+        Some(id) => {
+            let message = tx.get::<MessageTable>(&key(id.as_lossless()))?;
+            let checkpoint =
+                super::history_pruning::validate_target(&parent, message.as_ref(), || {
+                    super::history_pruning::checkpoint_in(tx, &parent)
+                })?;
+            (Some(message.expect("validated boundary").seq), checkpoint)
+        }
+        None => (None, super::history_pruning::checkpoint_in(tx, &parent)?),
+    };
     row.id = event.aggregate_id.clone();
     row.parent_id = None;
     row.fork_session_id = Some(parent.as_lossless().clone());
@@ -150,7 +148,30 @@ pub(crate) fn apply(
     row.time_pinned = None;
     row.time_suspended = None;
     SessionTable::insert(tx, &row)?;
+    if let Some(checkpoint) = &checkpoint {
+        let entry = super::history_pruning::checkpoint_message(checkpoint)?;
+        MessageTable::insert(
+            tx,
+            &Message {
+                id: session_message::Id::from_event(&random_event_id()?)
+                    .as_lossless()
+                    .clone(),
+                session_id: event.aggregate_id.clone(),
+                type_: "synthetic".into(),
+                seq: entry.seq,
+                time_created: checkpoint.activated,
+                time_updated: checkpoint.activated,
+                data: entry.message.encode(),
+            },
+        )?;
+    }
     let prefix = key(parent.as_lossless());
+    let lower_key = checkpoint.as_ref().map(|checkpoint| {
+        tuple_key(&[
+            KeyPart::String(parent.as_lossless()),
+            KeyPart::I64(checkpoint.through),
+        ])
+    });
     let upper_key =
         upper.map(|seq| tuple_key(&[KeyPart::String(parent.as_lossless()), KeyPart::I64(seq)]));
     let mut after = None;
@@ -158,7 +179,9 @@ pub(crate) fn apply(
         let page = tx.index_range::<MessageTable>(
             "session_message_session_seq_idx",
             IndexQuery {
-                lower: Bound::Unbounded,
+                lower: lower_key
+                    .as_deref()
+                    .map_or(Bound::Unbounded, Bound::Excluded),
                 upper: upper_key
                     .as_deref()
                     .map_or(Bound::Unbounded, Bound::Excluded),
