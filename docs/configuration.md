@@ -198,6 +198,35 @@ Stored provider credentials live in the database, so an `--isolated` run cannot 
 ycoding run --isolated --config eval.jsonc --model openai/gpt-5 "Fix the failing test"
 ```
 
+### JSON run output
+
+`ycoding run --format json` writes one JSON object per line to standard output. Every line has `type`, `timestamp` (epoch milliseconds), and `sessionID`. Besides `text`, `reasoning`, `tool_use`, and `error` lines, the run reports its metrics in three line types. Default text output prints none of them. Fields the runtime does not report are absent, never zero.
+
+- `step_start`: `part.agent` and `part.model` (`providerID`, `id`, and `variant` or `profile` when selected) for the step.
+- `step_finish`: `part.reason`, `part.cost` (USD), and `part.tokens` (`input`, `output`, `reasoning`, `cache.read`, `cache.write`). It adds `part.contextLimit`, `part.contextBreakdown`, and `part.providerCache` only when the step reports them.
+- `run_finish`: exactly one line after the last event, including after an `error` line and after an interrupted run. It is not written when the run fails before the prompt is submitted or when prompt admission fails with an error.
+
+`run_finish` fields:
+
+| Field        | Meaning                                                                                                                                                                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`     | `succeeded`, `failed` (an error line, a failed execution, or a rejected permission, question, form, or guardrail), or `interrupted`.                                                                                                      |
+| `durationMs` | Wall time from just before prompt admission to the end of the run.                                                                                                                                                                        |
+| `steps`      | Ended and failed steps of the run's own Session.                                                                                                                                                                                         |
+| `tokens`     | Token usage summed over those steps, and `cost`, their summed USD cost.                                                                                                                                                                  |
+| `context`    | `limit`, the last positive context window a step reported, and `peakInput`, the largest `input + cache.read + cache.write` of one step. Each is omitted when no step reported it.                                                         |
+| `models`     | Distinct model references the steps used.                                                                                                                                                                                                |
+| `total`      | Provider-request usage of the whole run window: `tokens`, `requests` (`logical` requests, `physical` attempts including retries, and `helpers`, the non-step requests such as titles and compaction), and `cost` with `costProvenance`. |
+| `children`   | One entry per descendant Session: `sessionID`, `kind`, `agent`, `tokens`, `requests`, and `cost` with `costProvenance`, plus `status` for subagents.                                                                                       |
+| `usageError` | Replaces `total` and `children` when the usage reads fail; the other fields are still written.                                                                                                                                           |
+
+`total` and `children` come from the Session usage report of the run's Session, which covers the Session, its subagent Sessions, and their hidden compaction helper Sessions, limited to provider requests recorded from the prompt's admission time to the run's last event. Title requests are recorded under the Session they name. `cost` is absent when no request in scope has a recorded or catalog-estimated price; `costProvenance` is `recorded` or `current_catalog`. A `subagent` child has the task `status` (`starting`, `running`, `waiting`, `cancelling`, `cancelled`, `completed`, `failed`, or `lost`) read at the end of the run and zero usage when it made no request in the window. A `helper` child is a hidden Session without a task record and has no `status`. The run ends when its own Session settles, so background subagents may still be running; `total` and `children` include the requests recorded up to that moment, and a request still in flight reports the usage recorded so far. Exit codes are unchanged.
+
+```json
+{"type":"step_start","timestamp":1791950288605,"sessionID":"ses_1","part":{"type":"step-start","agent":"god","model":{"providerID":"openai","id":"gpt-5"}}}
+{"type":"run_finish","timestamp":1791950288735,"sessionID":"ses_1","status":"succeeded","durationMs":405,"steps":2,"tokens":{"input":110,"output":30,"reasoning":0,"cache":{"read":140,"write":0}},"cost":0.02,"context":{"limit":400000,"peakInput":150},"models":[{"providerID":"openai","id":"gpt-5"}],"total":{"tokens":{"input":110,"output":30,"reasoning":0,"cache":{"read":140,"write":0}},"requests":{"logical":2,"physical":2,"helpers":0},"cost":0.02,"costProvenance":"recorded"},"children":[]}
+```
+
 ## Terminal installation and commands
 
 After the public site and a native release are published, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer applies the same archive checks as `ycoding update`. It checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.

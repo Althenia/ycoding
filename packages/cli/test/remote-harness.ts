@@ -27,7 +27,8 @@ export type ProviderFixture = {
    */
   readonly holdAfter?: number
   readonly settleDelayMs?: number
-  readonly reply?: (request: unknown) => readonly ReturnType<typeof deltaChunk>[]
+  /** Chat-completion frames for one request; may wait to order concurrent Sessions deterministically. */
+  readonly reply?: (request: unknown) => readonly object[] | Promise<readonly object[]>
 }
 
 type ProviderStandIn = {
@@ -42,6 +43,8 @@ type ProviderStandIn = {
 
 export type IsolatedServerOptions = {
   readonly plugins?: readonly string[]
+  /** Extra runtime configuration merged over the provider declaration, for example agents. */
+  readonly config?: Record<string, unknown>
   readonly provider?: ProviderFixture
   readonly remote?: RemoteConnection.Interface
 }
@@ -60,7 +63,7 @@ export async function startServer(directory: string, options: IsolatedServerOpti
     config: {
       directory,
       project: false,
-      content: JSON.stringify({ ...(standIn === undefined ? {} : JSON.parse(providerConfig(standIn))), ...(options.plugins === undefined ? {} : { plugins: options.plugins }) }),
+      content: JSON.stringify({ ...(standIn === undefined ? {} : JSON.parse(providerConfig(standIn))), ...(options.plugins === undefined ? {} : { plugins: options.plugins }), ...options.config }),
     },
     models: { fetch: false },
     fs: { filewatcher: false, fff: false },
@@ -133,7 +136,7 @@ export async function startProviderStandIn(fixture: ProviderFixture) {
       requests.push(body)
       const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
-      const frames = fixture.reply?.(body) ?? [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
+      const frames = (await fixture.reply?.(body)) ?? [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))

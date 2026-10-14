@@ -9,6 +9,7 @@ import type {
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { EOL } from "node:os"
 import { toolOutputText, type MiniToolPart } from "@ycoding-ai/tui/mini/tool"
+import { createRunMetrics, readRunUsage } from "./metrics"
 import { UI } from "./ui"
 
 type Model = {
@@ -82,6 +83,12 @@ export async function runNonInteractivePrompt(input: Input) {
   let blockerRejected = false
   let interrupted = false
   let admission: AbortController | undefined
+  const metrics = createRunMetrics()
+  let submittedAt = Date.now()
+  let admittedAt: number | undefined
+  let lastEventTime: number | undefined
+  let terminal: "succeeded" | "failed" | "interrupted" | undefined
+  let finished = false
 
   const emit = (type: string, timestamp: number, data: Record<string, unknown>) => {
     if (input.format !== "json") return false
@@ -161,6 +168,28 @@ export async function runNonInteractivePrompt(input: Input) {
     await stopForBlocker()
   }
 
+  const runStatus = () => {
+    if (blockerRejected) return "failed"
+    if (terminal === "interrupted" || (terminal === undefined && !emittedError)) return "interrupted"
+    return emittedError || terminal === "failed" ? "failed" : "succeeded"
+  }
+
+  const finishRun = async () => {
+    if (input.format !== "json" || finished) return
+    finished = true
+    const finishedAt = Date.now()
+    const usage = await readRunUsage(input.client, input.sessionID, {
+      from: admittedAt ?? submittedAt,
+      to: (lastEventTime ?? finishedAt) + 1,
+    }).catch((error: unknown) => ({ usageError: error instanceof Error ? error.message : String(error) }))
+    emit("run_finish", finishedAt, {
+      status: runStatus(),
+      durationMs: finishedAt - submittedAt,
+      ...metrics.summary(),
+      ...usage,
+    })
+  }
+
   const consume = async () => {
     while (!controller.signal.aborted) {
       const next = await stream.next().catch((error) => {
@@ -202,6 +231,7 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (!("sessionID" in event.data) || event.data.sessionID !== input.sessionID) continue
       const time = toMillis("created" in event ? event.created : undefined)
+      lastEventTime = time
 
       if (event.type === "session.input.promoted") {
         if (event.data.inputID === messageID) {
@@ -214,17 +244,21 @@ export async function runNonInteractivePrompt(input: Input) {
         event.data.reason === "user" &&
         (interrupted || blockerRejected)
       ) {
+        terminal = "interrupted"
         return
       }
       if (!promoted && event.type !== "session.execution.failed") continue
 
       if (event.type === "session.step.started") {
+        metrics.started(event.data.model)
         const part = {
           id: partID(event.id),
           sessionID: input.sessionID,
           messageID: event.data.assistantMessageID,
           type: "step-start",
           snapshot: event.data.snapshot,
+          agent: event.data.agent,
+          model: event.data.model,
         }
         if (!emit("step_start", time, { part }) && input.format !== "json") {
           UI.empty()
@@ -437,6 +471,7 @@ export async function runNonInteractivePrompt(input: Input) {
       }
 
       if (event.type === "session.step.ended") {
+        metrics.settled(event.data)
         const part = {
           id: partID(event.id),
           sessionID: input.sessionID,
@@ -446,11 +481,15 @@ export async function runNonInteractivePrompt(input: Input) {
           snapshot: event.data.snapshot,
           cost: event.data.cost,
           tokens: event.data.tokens,
+          contextLimit: event.data.contextLimit,
+          contextBreakdown: event.data.contextBreakdown,
+          providerCache: event.data.providerCache,
         }
         emit("step_finish", time, { part })
         continue
       }
       if (event.type === "session.step.failed") {
+        metrics.settled(event.data)
         if (interrupted || blockerRejected) continue
         emittedError = true
         process.exitCode = 1
@@ -458,6 +497,7 @@ export async function runNonInteractivePrompt(input: Input) {
         continue
       }
       if (event.type === "session.execution.failed") {
+        terminal = "failed"
         if (!emittedError && !blockerRejected) {
           emittedError = true
           process.exitCode = 1
@@ -466,6 +506,7 @@ export async function runNonInteractivePrompt(input: Input) {
         return
       }
       if (event.type === "session.execution.interrupted") {
+        terminal = "interrupted"
         if (event.data.reason === "user" && interrupted) process.exitCode = 130
         if (event.data.reason !== "user" && !emittedError) {
           emittedError = true
@@ -475,7 +516,10 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         return
       }
-      if (event.type === "session.execution.succeeded") return
+      if (event.type === "session.execution.succeeded") {
+        terminal = "succeeded"
+        return
+      }
     }
   }
 
@@ -514,6 +558,7 @@ export async function runNonInteractivePrompt(input: Input) {
     const prepared = input.files.map(prepareFile)
     if (interrupted) return
     submitted = true
+    submittedAt = Date.now()
     completed = consume()
     admission = new AbortController()
     const response = await input.client.session
@@ -537,7 +582,11 @@ export async function runNonInteractivePrompt(input: Input) {
         throw error
       })
     admission = undefined
-    if (!response) return
+    if (!response) {
+      await finishRun()
+      return
+    }
+    admittedAt = response.timeCreated
     if (interrupted) await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
 
     const [permissions, questions, forms, guardrails, globals] = await Promise.all([
@@ -565,6 +614,7 @@ export async function runNonInteractivePrompt(input: Input) {
         : []),
     ])
     await completed
+    await finishRun()
   } finally {
     process.off("SIGINT", interrupt)
     controller.abort()
