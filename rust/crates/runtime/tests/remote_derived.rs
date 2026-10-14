@@ -1553,6 +1553,31 @@ async fn active_family_summaries_are_sanitized_and_status_projects_roots() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn root_only_family_activity_crosses_the_real_connector_socket() {
+    let fixture = Fixture::new().await;
+    let mut harness = Harness::new(fixture.environment(true)).await;
+    let activity: v5::SessionFamilyActivityResult = harness
+        .ask(
+            NAMES[10],
+            session_scope(&fixture.root),
+            v5::SessionFamilyActivityRequest {
+                payload: v5::SessionFamilyActivityRequestPayload {
+                    session_i_ds: v5::SessionFamilyActivityRequestPayloadSessionIDs {
+                        items: vec![],
+                    },
+                },
+            },
+        )
+        .await;
+    assert_eq!(activity.data.items.len(), 1);
+    assert_eq!(units(&activity.data.items[0].session_id), fixture.root);
+    assert!(!activity.data.items[0].executing);
+    assert!(activity.data.items[0].activity.is_none());
+    harness.close().await;
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn command_auth_cancels_and_expired_oauth_attempts_cannot_be_polled() {
     let mut fixture = Fixture::new().await;
     let id = fixture.integration.clone();

@@ -523,7 +523,7 @@ message session_family_activity_Request_payload {
 }
 
 message session_family_activity_Request_payload_sessionIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 count_min: 1 count_max: 128 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/remote/src/index.ts#validOperationInput" utf16_min: 1 utf16_max: 128 count_min: 0 count_max: 128 }];
 }
 
 message session_family_activity_Request {

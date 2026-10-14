@@ -44,7 +44,10 @@ test("notice cursors identify one positive safe integer without aliases", () => 
   for (const id of ["ntc_0", "ntc_01", "ntc_9007199254740993", "ntc_1.0", "ntc_-1"])
     expect(noticeSequence(id)).toBeUndefined()
   for (const id of ["ntc_0", "ntc_01", "ntc_9007199254740993"])
-    expect(parseClientMessage(JSON.stringify({ type: "request", id: "req", operation: "notice.read", input: { ids: [id] } })).ok).toBe(false)
+    expect(
+      parseClientMessage(JSON.stringify({ type: "request", id: "req", operation: "notice.read", input: { ids: [id] } }))
+        .ok,
+    ).toBe(false)
 })
 
 test("scoped attachment chunks stay within the client frame and require ordered upload fields", () => {
@@ -52,7 +55,14 @@ test("scoped attachment chunks stay within the client frame and require ordered 
   const frame = { type: "request", id: "req_1", operation: "session.attachment.upload", sessionID: "ses_1", input }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
   expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
-  for (const change of [{ index: -1 }, { data: "!" }, { data: "YQ==" }, { uploadID: "../other" }, { last: "true" }, { extra: true }])
+  for (const change of [
+    { index: -1 },
+    { data: "!" },
+    { data: "YQ==" },
+    { uploadID: "../other" },
+    { last: "true" },
+    { extra: true },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, ...change } })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, data: "A".repeat(28_001) } })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...input, data: "A".repeat(28_000) } })).ok).toBe(true)
@@ -60,23 +70,51 @@ test("scoped attachment chunks stay within the client frame and require ordered 
 })
 
 test("windowed snapshot and managed attachment reads admit only scoped bounded inputs", () => {
-  const snapshot = { type: "request", id: "req_window", operation: "session.snapshot", sessionID: "ses_1", input: { limit: 200, before: "cursor_1" } }
+  const snapshot = {
+    type: "request",
+    id: "req_window",
+    operation: "session.snapshot",
+    sessionID: "ses_1",
+    input: { limit: 200, before: "cursor_1" },
+  }
   expect(parseClientMessage(JSON.stringify(snapshot))).toMatchObject({ ok: true, value: snapshot })
-  for (const input of [{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { before: "cursor" }, { limit: 1, before: "x".repeat(257) }, { limit: 1, extra: true }])
+  for (const input of [
+    { limit: 0 },
+    { limit: 201 },
+    { limit: 1.5 },
+    { before: "cursor" },
+    { limit: 1, before: "x".repeat(257) },
+    { limit: 1, extra: true },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...snapshot, input })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...snapshot, input: undefined })).ok).toBe(true)
   const attachment = { ...snapshot, operation: "session.attachment.read", input: { digest: "a".repeat(64) } }
   expect(parseClientMessage(JSON.stringify(attachment))).toMatchObject({ ok: true, value: attachment })
-  for (const input of [{ digest: "A".repeat(64) }, { digest: "../x" }, { digest: "a".repeat(64), path: "file:///secret" }, {}])
+  for (const input of [
+    { digest: "A".repeat(64) },
+    { digest: "../x" },
+    { digest: "a".repeat(64), path: "file:///secret" },
+    {},
+  ])
     expect(parseClientMessage(JSON.stringify({ ...attachment, input })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...attachment, sessionID: undefined })).ok).toBe(false)
-  expect(requireSession("session.attachment.read" as typeof remoteOperations[number])).toBe(true)
+  expect(requireSession("session.attachment.read" as (typeof remoteOperations)[number])).toBe(true)
 })
 
 test("one-message stream requests accept only an indexed Session message ID", () => {
-  const frame = { type: "request", id: "req_message", operation: "session.message.stream", sessionID: "ses_1", input: { messageID: "msg_1" } }
+  const frame = {
+    type: "request",
+    id: "req_message",
+    operation: "session.message.stream",
+    sessionID: "ses_1",
+    input: { messageID: "msg_1" },
+  }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
-  for (const input of [{ messageID: "../x" }, { messageID: "msg_1", offset: 1 }, { messageID: "msg_1", path: "/private" }])
+  for (const input of [
+    { messageID: "../x" },
+    { messageID: "msg_1", offset: 1 },
+    { messageID: "msg_1", path: "/private" },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
@@ -84,31 +122,68 @@ test("compaction history is a read-only Session-scoped operation with no caller 
   const request = { type: "request", id: "req_compactions", operation: "session.compaction.list", sessionID: "ses_1" }
   expect(parseClientMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request })
   expect(parseRelayToAgentMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request })
-  expect(parseClientMessage(JSON.stringify({ ...request, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
+  expect(parseClientMessage(JSON.stringify({ ...request, sessionID: undefined }))).toMatchObject({
+    ok: false,
+    error: { code: "session_required" },
+  })
   for (const input of [{ limit: 1 }, { directory: "/tmp" }, { workspaceID: "wsp_1" }, {}])
     expect(parseClientMessage(JSON.stringify({ ...request, input })).ok).toBe(false)
 })
 
 test("manual compaction admits only a Session and a stable compaction ID", () => {
-  const frame = { type: "request", id: "req_compact", operation: "session.compact", sessionID: "ses_1", input: { id: "cmp_web_1" } }
+  const frame = {
+    type: "request",
+    id: "req_compact",
+    operation: "session.compact",
+    sessionID: "ses_1",
+    input: { id: "cmp_web_1" },
+  }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
   expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
-  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
-  for (const input of [undefined, {}, { id: "msg_wrong" }, { id: "cmp_" }, { id: "cmp_web_1", directory: "/private" }, { id: "cmp_web_1", workspaceID: "wsp_other" }])
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({
+    ok: false,
+    error: { code: "session_required" },
+  })
+  for (const input of [
+    undefined,
+    {},
+    { id: "msg_wrong" },
+    { id: "cmp_" },
+    { id: "cmp_web_1", directory: "/private" },
+    { id: "cmp_web_1", workspaceID: "wsp_other" },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
 test("prompt skills are optional bounded nonempty IDs inside the closed prompt input", () => {
-  const frame = { type: "request", id: "req_skills", operation: "session.prompt", sessionID: "ses_1", input: { id: "msg_1", text: "Review", delivery: "queue", skills: ["audit", "test"] } }
+  const frame = {
+    type: "request",
+    id: "req_skills",
+    operation: "session.prompt",
+    sessionID: "ses_1",
+    input: { id: "msg_1", text: "Review", delivery: "queue", skills: ["audit", "test"] },
+  }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
   expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
   for (const skills of [[], ["x".repeat(128)], Array.from({ length: 200 }, (_, index) => `skill_${index}`)])
     expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(true)
-  for (const skills of ["audit", null, [""], [" "], [1], [{ id: "audit" }], ["x".repeat(129)], Array.from({ length: 201 }, () => "audit")]) {
+  for (const skills of [
+    "audit",
+    null,
+    [""],
+    [" "],
+    [1],
+    [{ id: "audit" }],
+    ["x".repeat(129)],
+    Array.from({ length: 201 }, () => "audit"),
+  ]) {
     expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(false)
     expect(parseRelayToAgentMessage(JSON.stringify({ ...frame, input: { ...frame.input, skills } })).ok).toBe(false)
   }
-  expect(parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, metadata: { skills: [{ id: "audit" }] } } })).ok).toBe(false)
+  expect(
+    parseClientMessage(JSON.stringify({ ...frame, input: { ...frame.input, metadata: { skills: [{ id: "audit" }] } } }))
+      .ok,
+  ).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...frame, input: { text: "No skills" } })).ok).toBe(true)
 })
 
@@ -120,7 +195,13 @@ test("machine keep-awake controls are global and accept only the explicit enable
     expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
     expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
   }
-  for (const input of [undefined, {}, { enabled: "true" }, { enabled: true, directory: "/private" }, { enabled: true, workspaceID: "wsp_other" }])
+  for (const input of [
+    undefined,
+    {},
+    { enabled: "true" },
+    { enabled: true, directory: "/private" },
+    { enabled: true, workspaceID: "wsp_other" },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
@@ -133,54 +214,136 @@ test("machine telemetry consent controls are global and strictly versioned", () 
     expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
     expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
   }
-  for (const input of [undefined, {}, { enabled: true }, { enabled: true, noticeVersion: 2 }, { enabled: true, noticeVersion: 1, extra: true }])
+  for (const input of [
+    undefined,
+    {},
+    { enabled: true },
+    { enabled: true, noticeVersion: 2 },
+    { enabled: true, noticeVersion: 1, extra: true },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...write, input })).ok).toBe(false)
   expect(parseClientMessage(JSON.stringify({ ...read, input: {} })).ok).toBe(false)
 })
 
 test("machine latency ingest and reads accept only bounded anonymous samples for the connected device", () => {
-  const sample = { kind: "request", at: "2026-10-04T12:00:00.000Z", operation: "session.list", outcome: "ok", queueMs: 5, settlementMs: 20, totalMs: 25 }
+  const sample = {
+    kind: "request",
+    at: "2026-10-04T12:00:00.000Z",
+    operation: "session.list",
+    outcome: "ok",
+    queueMs: 5,
+    settlementMs: 20,
+    totalMs: 25,
+  }
   const task = { kind: "long-task", at: sample.at, durationMs: 70 }
-  const append = { type: "request", id: "req_latency", operation: "machine.latency.append", input: { samples: [sample, task] } }
-  const list = { type: "request", id: "req_latency_list", operation: "machine.latency.list", input: { limit: 200, before: "cursor_1" } }
+  const append = {
+    type: "request",
+    id: "req_latency",
+    operation: "machine.latency.append",
+    input: { samples: [sample, task] },
+  }
+  const list = {
+    type: "request",
+    id: "req_latency_list",
+    operation: "machine.latency.list",
+    input: { limit: 200, before: "cursor_1" },
+  }
   for (const frame of [append, list, { ...list, input: undefined }]) {
     expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true })
     expect(parseRelayToAgentMessage(JSON.stringify(frame))).toMatchObject({ ok: true })
     expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: "ses_1" })).ok).toBe(false)
   }
-  for (const input of [undefined, {}, { samples: [] }, { samples: Array.from({ length: 21 }, () => sample) },
-    { samples: [sample], directory: "/private" }, { samples: [{ ...sample, input: { text: "private" } }] },
-    { samples: [{ ...sample, operation: "machine.latency.append" }] }, { samples: [{ ...sample, operation: "account.read" }] },
+  for (const input of [
+    undefined,
+    {},
+    { samples: [] },
+    { samples: Array.from({ length: 21 }, () => sample) },
+    { samples: [sample], directory: "/private" },
+    { samples: [{ ...sample, input: { text: "private" } }] },
+    { samples: [{ ...sample, operation: "machine.latency.append" }] },
+    { samples: [{ ...sample, operation: "account.read" }] },
     { samples: [{ ...sample, operation: "session.list", totalMs: -1 }] },
-    { samples: [{ ...sample, settlementMs: 600_001 }] }, { samples: [{ ...sample, at: "yesterday" }] },
-    { samples: [{ ...task, attribution: "/private" }] }, { samples: [{ ...task, durationMs: 0 }] }])
+    { samples: [{ ...sample, settlementMs: 600_001 }] },
+    { samples: [{ ...sample, at: "yesterday" }] },
+    { samples: [{ ...task, attribution: "/private" }] },
+    { samples: [{ ...task, durationMs: 0 }] },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...append, input })).ok).toBe(false)
-  for (const input of [{ limit: 0 }, { limit: 201 }, { before: "" }, { before: "x".repeat(257) }, { limit: 1, workspace: "/private" }, {}])
-    expect(parseClientMessage(JSON.stringify({ ...list, input })).ok).toBe(input !== undefined && Object.keys(input).length === 0)
+  for (const input of [
+    { limit: 0 },
+    { limit: 201 },
+    { before: "" },
+    { before: "x".repeat(257) },
+    { limit: 1, workspace: "/private" },
+    {},
+  ])
+    expect(parseClientMessage(JSON.stringify({ ...list, input })).ok).toBe(
+      input !== undefined && Object.keys(input).length === 0,
+    )
 })
 
 test("machine latency accepts exact web client samples and rejects other client surfaces", () => {
-  const sample = { kind: "client", at: "2026-10-04T12:00:00.000Z", surface: "web", metric: "stream.delay", durationMs: 12 }
-  const append = { type: "request", id: "req_client_latency", operation: "machine.latency.append", input: { samples: [sample] } }
+  const sample = {
+    kind: "client",
+    at: "2026-10-04T12:00:00.000Z",
+    surface: "web",
+    metric: "stream.delay",
+    durationMs: 12,
+  }
+  const append = {
+    type: "request",
+    id: "req_client_latency",
+    operation: "machine.latency.append",
+    input: { samples: [sample] },
+  }
   expect(parseClientMessage(JSON.stringify(append))).toMatchObject({ ok: true })
-  for (const bad of [{ ...sample, surface: "tui" }, { ...sample, metric: "private" }, { ...sample, extra: true }, { ...sample, durationMs: -1 }])
+  for (const bad of [
+    { ...sample, surface: "tui" },
+    { ...sample, metric: "private" },
+    { ...sample, extra: true },
+    { ...sample, durationMs: -1 },
+  ])
     expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [bad] } })).ok).toBe(false)
-  const requestSample = { kind: "request", at: sample.at, operation: "machine.telemetry.consent.get", outcome: "ok", queueMs: 0, totalMs: 0 }
+  const requestSample = {
+    kind: "request",
+    at: sample.at,
+    operation: "machine.telemetry.consent.get",
+    outcome: "ok",
+    queueMs: 0,
+    totalMs: 0,
+  }
   expect(parseClientMessage(JSON.stringify({ ...append, input: { samples: [requestSample] } })).ok).toBe(false)
 })
 
 test("captured changes is a read-only Session-scoped paged operation without caller placement", () => {
   const frame = { type: "request", id: "req_changes", operation: "session.capturedChanges.list", sessionID: "ses_root" }
   expect(parseClientMessage(JSON.stringify(frame))).toMatchObject({ ok: true, value: frame })
-  expect(parseRelayToAgentMessage(JSON.stringify({ ...frame, input: { cursor: "opaque_cursor" } }))).toMatchObject({ ok: true })
-  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({ ok: false, error: { code: "session_required" } })
-  for (const input of [{ directory: "/private" }, { workspaceID: "wsp_other" }, { cursor: "" }, { cursor: "x".repeat(257) }, { limit: 1 }, {}])
+  expect(parseRelayToAgentMessage(JSON.stringify({ ...frame, input: { cursor: "opaque_cursor" } }))).toMatchObject({
+    ok: true,
+  })
+  expect(parseClientMessage(JSON.stringify({ ...frame, sessionID: undefined }))).toMatchObject({
+    ok: false,
+    error: { code: "session_required" },
+  })
+  for (const input of [
+    { directory: "/private" },
+    { workspaceID: "wsp_other" },
+    { cursor: "" },
+    { cursor: "x".repeat(257) },
+    { limit: 1 },
+    {},
+  ])
     expect(parseClientMessage(JSON.stringify({ ...frame, input })).ok).toBe(false)
 })
 
 test("Team operations stay root-scoped with bounded child, shell, side-chat, and economics inputs", () => {
-  const request = (operation: string, input?: unknown) => ({ type: "request", id: "team_1", sessionID: "ses_root", operation,
-    ...(input === undefined ? {} : { input }) })
+  const request = (operation: string, input?: unknown) => ({
+    type: "request",
+    id: "team_1",
+    sessionID: "ses_root",
+    operation,
+    ...(input === undefined ? {} : { input }),
+  })
   for (const [operation, input] of [
     ["session.subagent.cancel", { childID: "ses_child" }],
     ["session.pin", undefined],
@@ -209,7 +372,8 @@ test("Team operations stay root-scoped with bounded child, shell, side-chat, and
     ["session.team.economics", { sessionIDs: [] }],
     ["session.team.economics", { sessionIDs: ["ses_child", "ses_child"] }],
     ["session.team.economics", { sessionIDs: Array.from({ length: 16 }, (_, index) => `ses_${index}`) }],
-  ] as const) expect(parseClientMessage(JSON.stringify(request(operation, input))).ok).toBe(false)
+  ] as const)
+    expect(parseClientMessage(JSON.stringify(request(operation, input))).ok).toBe(false)
 })
 
 test("cancel frames carry the sender's own correlation ID on both control surfaces", () => {
@@ -222,9 +386,16 @@ test("cancel frames carry the sender's own correlation ID on both control surfac
 
 test("push subscription input admits only bounded known push services and key shapes", () => {
   const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true }
-  const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) }, categories }
+  const input = {
+    endpoint: "https://fcm.googleapis.com/fcm/send/abc",
+    keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) },
+    categories,
+  }
   expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
-  expect(parsePushEndpoint({ endpoint: input.endpoint })).toMatchObject({ ok: true, value: { endpoint: input.endpoint } })
+  expect(parsePushEndpoint({ endpoint: input.endpoint })).toMatchObject({
+    ok: true,
+    value: { endpoint: input.endpoint },
+  })
   const renewal = { endpoint: "https://web.push.apple.com/renewed", keys: input.keys, replaces: input.endpoint }
   expect(parsePushSubscription(renewal)).toEqual({ ok: true, value: renewal })
   for (const invalid of [
@@ -234,42 +405,90 @@ test("push subscription input admits only bounded known push services and key sh
     { ...input, categories: { "agent-completed": true, "approval-requested": true } },
     { ...input, categories: { ...categories, "machine-offline": "yes" } },
     { ...input, categories: { ...categories, test: true } },
-  ]) expect(parsePushSubscription(invalid).ok).toBe(false)
-  for (const endpoint of ["https://updates.push.services.mozilla.com/wpush/abc", "https://web.push.apple.com/Q", "https://foo.push.apple.com/Q", "https://foo.notify.windows.com/WNS"])
+  ])
+    expect(parsePushSubscription(invalid).ok).toBe(false)
+  for (const endpoint of [
+    "https://updates.push.services.mozilla.com/wpush/abc",
+    "https://web.push.apple.com/Q",
+    "https://foo.push.apple.com/Q",
+    "https://foo.notify.windows.com/WNS",
+  ])
     expect(parsePushSubscription({ ...input, endpoint }).ok).toBe(true)
-  for (const endpoint of ["http://fcm.googleapis.com/send", "https://fcm.googleapis.com.evil.example/send",
-    "https://evil.example/send", "https://user@fcm.googleapis.com/send", "https://fcm.googleapis.com:8443/send"])
+  for (const endpoint of [
+    "http://fcm.googleapis.com/send",
+    "https://fcm.googleapis.com.evil.example/send",
+    "https://evil.example/send",
+    "https://user@fcm.googleapis.com/send",
+    "https://fcm.googleapis.com:8443/send",
+  ])
     expect(parsePushSubscription({ ...input, endpoint }).ok).toBe(false)
   for (const invalid of [
     { ...input, keys: { ...input.keys, auth: "short" } },
     { ...input, keys: { ...input.keys, p256dh: "short" } },
     { ...input, extra: "untrusted" },
-  ]) expect(parsePushSubscription(invalid).ok).toBe(false)
+  ])
+    expect(parsePushSubscription(invalid).ok).toBe(false)
 })
 
 test("push test responses report only the push service outcome and its HTTP status", () => {
-  for (const value of [{ outcome: "accepted", status: 201 }, { outcome: "rejected", status: 403 }, { outcome: "expired", status: 410 }, { outcome: "unreachable" }] as const)
+  for (const value of [
+    { outcome: "accepted", status: 201 },
+    { outcome: "rejected", status: 403 },
+    { outcome: "expired", status: 410 },
+    { outcome: "unreachable" },
+  ] as const)
     expect(parsePushTestResponse(value)).toEqual({ ok: true, value })
-  for (const value of [{ outcome: "delivered", status: 201 }, { outcome: "accepted" }, { outcome: "unreachable", status: 0 },
-    { outcome: "accepted", status: 201, endpoint: "https://fcm.googleapis.com/fcm/send/abc" }, { outcome: "rejected", status: 99 }])
+  for (const value of [
+    { outcome: "delivered", status: 201 },
+    { outcome: "accepted" },
+    { outcome: "unreachable", status: 0 },
+    { outcome: "accepted", status: 201, endpoint: "https://fcm.googleapis.com/fcm/send/abc" },
+    { outcome: "rejected", status: 99 },
+  ])
     expect(parsePushTestResponse(value).ok).toBe(false)
 })
 
 test("usage operations are global and validate refresh and bounded ReportInput", () => {
   for (const [operation, input] of [
-    ["usage.providers", { refresh: true }], ["usage.providers", {}], ["usage.providers", undefined],
+    ["usage.providers", { refresh: true }],
+    ["usage.providers", {}],
+    ["usage.providers", undefined],
     ["usage.summary", undefined],
     ["usage.report", { group: "model", from: 0, to: 100, offset: 0, limit: 200, sort: "cost", order: "desc" }],
     ["usage.report", { group: "day", timeZone: "America/New_York" }],
-  ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, ...(input === undefined ? {} : { input }) }))).toMatchObject({ ok: true })
+  ] as const)
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "request", id: "r", operation, ...(input === undefined ? {} : { input }) }),
+      ),
+    ).toMatchObject({ ok: true })
   for (const [operation, input] of [
-    ["usage.providers", { refresh: "true" }], ["usage.providers", { refresh: true, raw: true }],
-    ["usage.summary", {}], ["usage.report", {}], ["usage.report", { group: "model", limit: 201 }],
-    ["usage.report", { group: "hour", from: 10, to: 10 }], ["usage.report", { group: "model", sort: "secret" }],
-    ["usage.report", { group: "day", timeZone: "" }], ["usage.report", { group: "day", timeZone: 42 }],
-  ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    ["usage.providers", { refresh: "true" }],
+    ["usage.providers", { refresh: true, raw: true }],
+    ["usage.summary", {}],
+    ["usage.report", {}],
+    ["usage.report", { group: "model", limit: 201 }],
+    ["usage.report", { group: "hour", from: 10, to: 10 }],
+    ["usage.report", { group: "model", sort: "secret" }],
+    ["usage.report", { group: "day", timeZone: "" }],
+    ["usage.report", { group: "day", timeZone: 42 }],
+  ] as const)
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, input }))).toMatchObject({
+      ok: false,
+      error: { code: "invalid_message" },
+    })
   for (const operation of ["usage.providers", "usage.summary", "usage.report"])
-    expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, sessionID: "ses_1", input: operation === "usage.report" ? { group: "model" } : undefined })).ok).toBe(false)
+    expect(
+      parseClientMessage(
+        JSON.stringify({
+          type: "request",
+          id: "r",
+          operation,
+          sessionID: "ses_1",
+          input: operation === "usage.report" ? { group: "model" } : undefined,
+        }),
+      ).ok,
+    ).toBe(false)
 })
 
 const jwk = {
@@ -281,12 +500,15 @@ const jwk = {
 
 describe("remote envelope: request", () => {
   test("requires a Session and no input for the todo read", () => {
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.todo.list","sessionID":"ses_1"}')).toMatchObject({ ok: true })
+    expect(
+      parseClientMessage('{"type":"request","id":"a","operation":"session.todo.list","sessionID":"ses_1"}'),
+    ).toMatchObject({ ok: true })
     for (const request of [
       { operation: "session.todo.list" },
       { operation: "session.todo.list", sessionID: "ses_1", input: {} },
       { operation: "session.todo.list", sessionID: "ses_1", input: { directory: "/other" } },
-    ]) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", ...request })).ok).toBe(false)
+    ])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", ...request })).ok).toBe(false)
     expect(requireSession("session.todo.list" as RemoteOperation)).toBe(true)
   })
   test("round-trips a bounded session operation", () => {
@@ -300,7 +522,13 @@ describe("remote envelope: request", () => {
     const parsed = parseClientMessage(encoded)
     expect(parsed).toEqual({
       ok: true,
-      value: { type: "request", id: "req_1", operation: "session.prompt", sessionID: "ses_1", input: { text: "hello" } },
+      value: {
+        type: "request",
+        id: "req_1",
+        operation: "session.prompt",
+        sessionID: "ses_1",
+        input: { text: "hello" },
+      },
     })
   })
 
@@ -316,12 +544,16 @@ describe("remote envelope: request", () => {
       ok: true,
       value: { type: "request", id: "a", operation: "workspace.list" },
     })
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"workspace.list","input":{"sessionsOnly":true}}')).toMatchObject({
+    expect(
+      parseClientMessage('{"type":"request","id":"a","operation":"workspace.list","input":{"sessionsOnly":true}}'),
+    ).toMatchObject({
       ok: true,
       value: { operation: "workspace.list", input: { sessionsOnly: true } },
     })
     expect(
-      parseClientMessage('{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1"}}'),
+      parseClientMessage(
+        '{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1"}}',
+      ),
     ).toMatchObject({
       ok: true,
       value: { operation: "session.create", input: { id: "ses_new", workspace: "wsp_1" } },
@@ -334,7 +566,8 @@ describe("remote envelope: request", () => {
       '{"type":"request","id":"a","operation":"session.create","input":{"id":"bad","workspace":"wsp_1"}}',
       '{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"wsp_1","directory":"/tmp"}}',
       `{"type":"request","id":"a","operation":"session.create","input":{"id":"ses_new","workspace":"${"w".repeat(129)}"}}`,
-    ]) expect(parseClientMessage(frame)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    ])
+      expect(parseClientMessage(frame)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("validates catalog, file find, model and agent operation inputs", () => {
@@ -348,11 +581,27 @@ describe("remote envelope: request", () => {
       ["session.switchAgent", { agent: "build" }, "ses_1"],
       ["session.command", { command: "test", files: [{ uri: "file:///work/a.ts" }] }, "ses_1"],
       ["session.skill", { skill: "test", resume: false }, "ses_1"],
-      ["session.create", { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } }],
-      ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "openai", id: "gpt", profile: "work" } }],
-      ["session.prompt", { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false }, "ses_1"],
+      [
+        "session.create",
+        { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } },
+      ],
+      [
+        "session.create",
+        { id: "ses_new", workspace: "wsp_1", model: { providerID: "openai", id: "gpt", profile: "work" } },
+      ],
+      [
+        "session.prompt",
+        { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false },
+        "ses_1",
+      ],
     ] as const) {
-      const request = { type: "request", id: "a", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
+      const request = {
+        type: "request",
+        id: "a",
+        operation,
+        ...(sessionID === undefined ? {} : { sessionID }),
+        ...(input === undefined ? {} : { input }),
+      }
       expect(parseClientMessage(JSON.stringify(request))).toMatchObject({ ok: true })
     }
     for (const [operation, input] of [
@@ -361,9 +610,22 @@ describe("remote envelope: request", () => {
       ["workspace.file.find", { workspace: "wsp_1", query: "" }],
       ["workspace.file.find", { workspace: "wsp_1", query: "x", limit: 51 }],
       ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "a", id: "b", secret: "x" } }],
-    ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
-    expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.switchModel", sessionID: "ses_1", input: { model: { providerID: "a", id: "b", profile: "" } } })))
-      .toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    ] as const)
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({
+        ok: false,
+        error: { code: "invalid_message" },
+      })
+    expect(
+      parseClientMessage(
+        JSON.stringify({
+          type: "request",
+          id: "a",
+          operation: "session.switchModel",
+          sessionID: "ses_1",
+          input: { model: { providerID: "a", id: "b", profile: "" } },
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("validates session.prediction memory and hint and classifies the operation as a mutation", () => {
@@ -401,9 +663,19 @@ describe("remote envelope: request", () => {
       { memory: ["repository"], hint: 1 },
       { memory: ["repository"], directory: "/work" },
       { hint: "only" },
-    ]) expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    ])
+      expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
     expect(parseClientMessage(frame())).toMatchObject({ ok: false, error: { code: "invalid_message" } })
-    expect(parseClientMessage(JSON.stringify({ type: "request", id: "pred_1", operation: "session.prediction", input: { memory: ["repository"] } }))).toMatchObject({
+    expect(
+      parseClientMessage(
+        JSON.stringify({
+          type: "request",
+          id: "pred_1",
+          operation: "session.prediction",
+          input: { memory: ["repository"] },
+        }),
+      ),
+    ).toMatchObject({
       ok: false,
       error: { code: "session_required" },
     })
@@ -443,8 +715,18 @@ describe("remote envelope: request", () => {
       { mode: "start", memory: [] },
       { mode: "start", intent: "Open", memory: [], hint: "no" },
       { mode: "start", intent: "Open" },
-    ]) expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
-    expect(parseClientMessage(JSON.stringify({ type: "request", id: "prompt_1", operation: "session.promptGenerate", input: { mode: "start", intent: "Open", memory: [] } }))).toMatchObject({
+    ])
+      expect(parseClientMessage(frame(input))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(
+      parseClientMessage(
+        JSON.stringify({
+          type: "request",
+          id: "prompt_1",
+          operation: "session.promptGenerate",
+          input: { mode: "start", intent: "Open", memory: [] },
+        }),
+      ),
+    ).toMatchObject({
       ok: false,
       error: { code: "session_required" },
     })
@@ -453,11 +735,49 @@ describe("remote envelope: request", () => {
   })
 
   test("admits only bounded parent-scoped subagent page inputs", () => {
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}')).toMatchObject({ ok: true })
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}')).toMatchObject({ ok: true })
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.family.activity","sessionID":"ses_parent","input":{"sessionIDs":["ses_child"]}}')).toMatchObject({ ok: true })
-    for (const input of [undefined, { sessionIDs: ["ses_child", "ses_child"] }, { sessionIDs: ["ses_parent"] }, { sessionIDs: Array.from({ length: 16 }, (_, i) => `ses_${i}`) }, { sessionIDs: ["../../etc/passwd"] }]) {
-      const frame = { type: "request", id: "a", operation: "session.family.activity", sessionID: "ses_parent", ...(input === undefined ? {} : { input }) }
+    expect(
+      parseClientMessage('{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent"}'),
+    ).toMatchObject({ ok: true })
+    expect(
+      parseClientMessage(
+        '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":"page_2"}}',
+      ),
+    ).toMatchObject({ ok: true })
+    expect(
+      parseClientMessage(
+        '{"type":"request","id":"a","operation":"session.family.activity","sessionID":"ses_parent","input":{"sessionIDs":["ses_child"]}}',
+      ),
+    ).toMatchObject({ ok: true })
+    expect(
+      parseClientMessage(
+        '{"type":"request","id":"a","operation":"session.family.activity","sessionID":"ses_parent","input":{"sessionIDs":[]}}',
+      ),
+    ).toMatchObject({ ok: true })
+    expect(
+      parseClientMessage(
+        JSON.stringify({
+          type: "request",
+          id: "a",
+          operation: "session.family.activity",
+          sessionID: "ses_parent",
+          input: { sessionIDs: Array.from({ length: 15 }, (_, index) => `ses_${index}`) },
+        }),
+      ).ok,
+    ).toBe(true)
+    for (const input of [
+      undefined,
+      { sessionIDs: ["ses_child", "ses_child"] },
+      { sessionIDs: ["ses_parent"] },
+      { sessionIDs: Array.from({ length: 16 }, (_, i) => `ses_${i}`) },
+      { sessionIDs: ["../../etc/passwd"] },
+    ]) {
+      const frame = {
+        type: "request",
+        id: "a",
+        operation: "session.family.activity",
+        sessionID: "ses_parent",
+        ...(input === undefined ? {} : { input }),
+      }
       expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
     }
     for (const raw of [
@@ -465,7 +785,8 @@ describe("remote envelope: request", () => {
       '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"limit":11}}',
       '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"directory":"/other"}}',
       '{"type":"request","id":"a","operation":"session.subagent.list","sessionID":"ses_parent","input":{"cursor":""}}',
-    ]) expect(parseClientMessage(raw).ok).toBe(false)
+    ])
+      expect(parseClientMessage(raw).ok).toBe(false)
   })
 
   test("rejects malformed frames, unknown operations, and unknown keys", () => {
@@ -480,20 +801,24 @@ describe("remote envelope: request", () => {
     expect(
       parseClientMessage('{"type":"request","id":"a","operation":"session.evil.operation","sessionID":"ses_1"}'),
     ).toMatchObject({ ok: false, error: { code: "unknown_operation" } })
-    expect(
-      parseClientMessage('{"type":"request","id":"a","operation":"session.list","extra":true}'),
-    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.list","extra":true}')).toMatchObject({
+      ok: false,
+      error: { code: "invalid_message" },
+    })
     expect(parseClientMessage('{"type":"request","id":"a b","operation":"session.list"}')).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
     })
-    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.get","sessionID":"nope"}')).toMatchObject({
+    expect(
+      parseClientMessage('{"type":"request","id":"a","operation":"session.get","sessionID":"nope"}'),
+    ).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
     })
-    expect(
-      parseClientMessage('{"type":"request","id":"a","operation":"session.list","input":[1,2]}'),
-    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseClientMessage('{"type":"request","id":"a","operation":"session.list","input":[1,2]}')).toMatchObject({
+      ok: false,
+      error: { code: "invalid_message" },
+    })
   })
 
   test("rejects requests above the client frame bound", () => {
@@ -520,12 +845,16 @@ describe("remote envelope: response", () => {
       parseAgentMessage(
         serializeResponse({ type: "response", id: "a", ok: false, error: { code: "internal_error", message: "boom" } }),
       ),
-    ).toEqual({ ok: true, value: { type: "response", id: "a", ok: false, error: { code: "internal_error", message: "boom" } } })
+    ).toEqual({
+      ok: true,
+      value: { type: "response", id: "a", ok: false, error: { code: "internal_error", message: "boom" } },
+    })
   })
 
-  test("rejects mixed success/error shapes and unknown error codes", () => {    expect(parseAgentMessage('{"type":"response","id":"a","ok":true,"error":{"code":"internal_error","message":"m"}}')).toMatchObject(
-      { ok: false, error: { code: "invalid_message" } },
-    )
+  test("rejects mixed success/error shapes and unknown error codes", () => {
+    expect(
+      parseAgentMessage('{"type":"response","id":"a","ok":true,"error":{"code":"internal_error","message":"m"}}'),
+    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
     expect(parseAgentMessage('{"type":"response","id":"a","ok":false}')).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
@@ -578,7 +907,9 @@ describe("remote envelope: chunked responses", () => {
       ),
     ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
     expect(
-      parseAgentMessage('{"type":"response","id":"a","ok":false,"error":{"code":"internal_error","message":"m"},"chunk":{"index":0,"last":true}}'),
+      parseAgentMessage(
+        '{"type":"response","id":"a","ok":false,"error":{"code":"internal_error","message":"m"},"chunk":{"index":0,"last":true}}',
+      ),
     ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 })
@@ -590,12 +921,20 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
   })
 
   test("accepts session events and rejects inventory-shaped invalidations", () => {
-    expect(parseAgentMessage(serializeEvent({ type: "event", sessionID: "ses_1", event: { type: "step.started" } }))).toEqual({
+    expect(
+      parseAgentMessage(serializeEvent({ type: "event", sessionID: "ses_1", event: { type: "step.started" } })),
+    ).toEqual({
       ok: true,
       value: { type: "event", sessionID: "ses_1", event: { type: "step.started" } },
     })
-    expect(parseAgentMessage(serializeSessions({ type: "sessions" }))).toEqual({ ok: true, value: { type: "sessions" } })
-    expect(parseAgentMessage('{"type":"event","event":{}}')).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseAgentMessage(serializeSessions({ type: "sessions" }))).toEqual({
+      ok: true,
+      value: { type: "sessions" },
+    })
+    expect(parseAgentMessage('{"type":"event","event":{}}')).toMatchObject({
+      ok: false,
+      error: { code: "invalid_message" },
+    })
     expect(parseAgentMessage('{"type":"sessions","sessionIDs":["nope"]}')).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
@@ -621,11 +960,13 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
       value: { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
     })
     expect(
-      parseRelayToAgentMessage(JSON.stringify({
-        type: "subscriptions",
-        clientID: "client-1",
-        sessionIDs: Array.from({ length: RemoteLimits.maxSubscriptionsPerClient + 1 }, (_, index) => `ses_${index}`),
-      })).ok,
+      parseRelayToAgentMessage(
+        JSON.stringify({
+          type: "subscriptions",
+          clientID: "client-1",
+          sessionIDs: Array.from({ length: RemoteLimits.maxSubscriptionsPerClient + 1 }, (_, index) => `ses_${index}`),
+        }),
+      ).ok,
     ).toBe(false)
   })
 
@@ -640,9 +981,10 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
       ok: false,
       error: { code: "invalid_message" },
     })
-    expect(
-      parseAgentMessage('{"type":"request","id":"a","operation":"session.list"}'),
-    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(parseAgentMessage('{"type":"request","id":"a","operation":"session.list"}')).toMatchObject({
+      ok: false,
+      error: { code: "invalid_message" },
+    })
     const oversized = serializeEvent({
       type: "event",
       sessionID: "ses_1",
@@ -723,9 +1065,9 @@ describe("remote operations", () => {
       "usage.summary",
       "usage.report",
       "machine.keepAwake.get",
-    "machine.keepAwake.set",
-    "machine.telemetry.consent.get",
-    "machine.telemetry.consent.set",
+      "machine.keepAwake.set",
+      "machine.telemetry.consent.get",
+      "machine.telemetry.consent.set",
       "machine.latency.append",
       "machine.latency.list",
     ])
@@ -737,7 +1079,11 @@ describe("remote operations", () => {
     expect(requireSession("session.prompt")).toBe(true)
     expect(requireSession("session.subagent.list")).toBe(true)
     expect(requireSession("session.family.activity")).toBe(true)
-    expect(parseAgentMessage('{"type":"response","id":"r","ok":false,"error":{"code":"subagent_read_only","message":"Managed subagent"}}')).toMatchObject({ ok: true })
+    expect(
+      parseAgentMessage(
+        '{"type":"response","id":"r","ok":false,"error":{"code":"subagent_read_only","message":"Managed subagent"}}',
+      ),
+    ).toMatchObject({ ok: true })
     expect(requireSession("session.goal.stop")).toBe(true)
     expect(requireSession("session.compact")).toBe(true)
     expect(requireSession("machine.keepAwake.get")).toBe(false)
@@ -746,7 +1092,9 @@ describe("remote operations", () => {
     expect(requireSession("machine.latency.list")).toBe(false)
     expect(RemoteProtocolVersion).toBe(4)
     expect(RemoteWebSocketPath).toEqual({ client: "/ws/v4/client", agent: "/ws/v4/agent" })
-    expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
+    expect(
+      parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok,
+    ).toBe(false)
   })
 
   test("validates a complete bounded unique status frame on the agent surface", () => {
@@ -755,29 +1103,50 @@ describe("remote operations", () => {
     expect(parseAgentMessage(JSON.stringify(status))).toEqual({ ok: true, value: status })
     expect(parseClientMessage(JSON.stringify(status)).ok).toBe(false)
     expect(parseAgentMessage(JSON.stringify({ ...status, outstanding: ["ses_c"] }))).toEqual({
-      ok: true, value: { ...status, outstanding: ["ses_c"] },
+      ok: true,
+      value: { ...status, outstanding: ["ses_c"] },
     })
     expect(parseAgentMessage(JSON.stringify({ ...status, attention: ["ses_b", "ses_c"], failed: ["ses_c"] }))).toEqual({
-      ok: true, value: { ...status, attention: ["ses_b", "ses_c"], failed: ["ses_c"] },
+      ok: true,
+      value: { ...status, attention: ["ses_b", "ses_c"], failed: ["ses_c"] },
     })
     for (const frame of [
       { type: "status", running: [], attention: ["ses_b"], failed: ["ses_c"] },
       { type: "status", running: [], attention: ["ses_b"], failed: ["ses_b", "ses_b"] },
       { type: "status", running: [], attention: ["ses_b"], failed: ["not-session"] },
       { type: "status", running: [], attention: ["ses_b"], failed: "ses_b" },
-      { type: "status", running: [], attention: Array.from({ length: 500 }, (_, index) => `ses_${index}`), failed: Array.from({ length: 501 }, (_, index) => `ses_${index}`) },
+      {
+        type: "status",
+        running: [],
+        attention: Array.from({ length: 500 }, (_, index) => `ses_${index}`),
+        failed: Array.from({ length: 501 }, (_, index) => `ses_${index}`),
+      },
       { type: "status", running: ["ses_a", "ses_a"], attention: [] },
       { type: "status", running: ["ses_a"], attention: ["not-session"] },
       { type: "status", running: [], attention: [], secret: "x" },
       { type: "status", running: Array.from({ length: 501 }, (_, index) => `ses_${index}`), attention: [] },
       { type: "status", running: [], attention: [], outstanding: ["ses_a", "ses_a"] },
-      { type: "status", running: [], attention: [], outstanding: Array.from({ length: 501 }, (_, index) => `ses_${index}`) },
-    ]) expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
+      {
+        type: "status",
+        running: [],
+        attention: [],
+        outstanding: Array.from({ length: 501 }, (_, index) => `ses_${index}`),
+      },
+    ])
+      expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
   })
 
   test("carries bounded alert details only for attention roots", () => {
-    const status = { type: "status" as const, running: [], attention: ["ses_b", "ses_c"], failed: ["ses_c"],
-      details: [{ sessionID: "ses_b", title: "Fix login", need: "permission" as const }, { sessionID: "ses_c", title: "Ship release" }] }
+    const status = {
+      type: "status" as const,
+      running: [],
+      attention: ["ses_b", "ses_c"],
+      failed: ["ses_c"],
+      details: [
+        { sessionID: "ses_b", title: "Fix login", need: "permission" as const },
+        { sessionID: "ses_c", title: "Ship release" },
+      ],
+    }
     expect(parseAgentMessage(serializeStatus(status))).toEqual({ ok: true, value: status })
     expect(parseRelayToClientMessage(serializeStatus(status))).toEqual({ ok: true, value: status })
     for (const need of ["permission", "question", "review"] as const)
@@ -792,8 +1161,16 @@ describe("remote operations", () => {
       [{ sessionID: "ses_b", title: "x".repeat(RemoteLimits.maxAlertTitleChars + 1) }],
       [{ sessionID: "ses_b", prompt: "private" }],
       { sessionID: "ses_b" },
-    ]) expect(parseAgentMessage(JSON.stringify({ ...status, details })).ok).toBe(false)
-    expect(parseAgentMessage(JSON.stringify({ ...status, details: [{ sessionID: "ses_b", title: "😀".repeat(RemoteLimits.maxAlertTitleChars) }] })).ok).toBe(true)
+    ])
+      expect(parseAgentMessage(JSON.stringify({ ...status, details })).ok).toBe(false)
+    expect(
+      parseAgentMessage(
+        JSON.stringify({
+          ...status,
+          details: [{ sessionID: "ses_b", title: "😀".repeat(RemoteLimits.maxAlertTitleChars) }],
+        }),
+      ).ok,
+    ).toBe(true)
   })
 
   test("bounds a Session title for an alert", () => {
@@ -837,7 +1214,9 @@ describe("remote operations", () => {
         id: "r",
       })
     }
-    expect(parseClientMessage('{"type":"request","id":"r","operation":"session.permission.approve","sessionID":"ses_1"}')).toEqual({
+    expect(
+      parseClientMessage('{"type":"request","id":"r","operation":"session.permission.approve","sessionID":"ses_1"}'),
+    ).toEqual({
       ok: false,
       error: { code: "unknown_operation", message: "Unknown operation" },
       id: "r",
@@ -865,7 +1244,12 @@ describe("device authentication shapes", () => {
       parseEnrollRequest({ enrollmentID: "enr_1", code: "ABCD-EFGH-JKLM-NPQR-STVW", name: "", publicKey: jwk }),
     ).toMatchObject({ ok: false })
     expect(
-      parseEnrollRequest({ enrollmentID: "enr_1", code: "ABCD-EFGH-JKLM-NPQR-STVW", name: "x".repeat(101), publicKey: jwk }),
+      parseEnrollRequest({
+        enrollmentID: "enr_1",
+        code: "ABCD-EFGH-JKLM-NPQR-STVW",
+        name: "x".repeat(101),
+        publicKey: jwk,
+      }),
     ).toMatchObject({ ok: false })
     expect(
       parseEnrollRequest({
@@ -888,9 +1272,10 @@ describe("device authentication shapes", () => {
   test("parses challenge, token, and refresh requests", () => {
     expect(parseChallengeRequest({ deviceID: "dev_1" })).toEqual({ ok: true, value: { deviceID: "dev_1" } })
     expect(parseChallengeRequest({})).toMatchObject({ ok: false })
-    expect(
-      parseDeviceTokenRequest({ deviceID: "dev_1", challengeID: "chl_1", signature: "AAAA" }),
-    ).toEqual({ ok: true, value: { deviceID: "dev_1", challengeID: "chl_1", signature: "AAAA" } })
+    expect(parseDeviceTokenRequest({ deviceID: "dev_1", challengeID: "chl_1", signature: "AAAA" })).toEqual({
+      ok: true,
+      value: { deviceID: "dev_1", challengeID: "chl_1", signature: "AAAA" },
+    })
     expect(parseDeviceTokenRequest({ deviceID: "dev_1", challengeID: "chl_1" })).toMatchObject({ ok: false })
     expect(parseDeviceRefreshRequest({ deviceID: "dev_1", refreshToken: "token" })).toEqual({
       ok: true,
@@ -912,20 +1297,35 @@ describe("device authentication shapes", () => {
 })
 
 describe("notice log contract", () => {
-  const notice = { id: "ntc_1", category: "approval-requested", sessionID: "ses_a", createdAt: 1_700_000_000_000 } as const
+  const notice = {
+    id: "ntc_1",
+    category: "approval-requested",
+    sessionID: "ses_a",
+    createdAt: 1_700_000_000_000,
+  } as const
   const request = (operation: string, input?: unknown, extra: Record<string, unknown> = {}) =>
     JSON.stringify({ type: "request", id: "req_1", operation, ...(input === undefined ? {} : { input }), ...extra })
 
   test("admits the relay-local notice operations with bounded strict input", () => {
-    expect(parseClientMessage(request("notice.subscribe"))).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "notice.subscribe" } })
-    expect(parseClientMessage(request("notice.readAll"))).toEqual({ ok: true, value: { type: "request", id: "req_1", operation: "notice.readAll" } })
+    expect(parseClientMessage(request("notice.subscribe"))).toEqual({
+      ok: true,
+      value: { type: "request", id: "req_1", operation: "notice.subscribe" },
+    })
+    expect(parseClientMessage(request("notice.readAll"))).toEqual({
+      ok: true,
+      value: { type: "request", id: "req_1", operation: "notice.readAll" },
+    })
     expect(parseClientMessage(request("notice.list", { before: "ntc_51" }))).toEqual({
-      ok: true, value: { type: "request", id: "req_1", operation: "notice.list", input: { before: "ntc_51" } },
+      ok: true,
+      value: { type: "request", id: "req_1", operation: "notice.list", input: { before: "ntc_51" } },
     })
     expect(parseClientMessage(request("notice.read", { ids: ["ntc_1", "ntc_2"] }))).toEqual({
-      ok: true, value: { type: "request", id: "req_1", operation: "notice.read", input: { ids: ["ntc_1", "ntc_2"] } },
+      ok: true,
+      value: { type: "request", id: "req_1", operation: "notice.read", input: { ids: ["ntc_1", "ntc_2"] } },
     })
-    expect(isNoticeRequest({ type: "request", id: "r", operation: "notice.read", input: { ids: ["ntc_1"] } })).toBe(true)
+    expect(isNoticeRequest({ type: "request", id: "r", operation: "notice.read", input: { ids: ["ntc_1"] } })).toBe(
+      true,
+    )
     expect(isNoticeRequest({ type: "request", id: "r", operation: "session.list" })).toBe(false)
     expect(isNoticeRequest({ type: "ping" })).toBe(false)
     const ids = (count: number) => Array.from({ length: count }, (_, index) => `ntc_${index + 1}`)
@@ -949,7 +1349,8 @@ describe("notice log contract", () => {
       request("notice.read", { ids: ["ntc_x"] }),
       request("notice.read", { ids: [1] }),
       request("notice.read", { ids: ["ntc_1"], extra: true }),
-    ]) expect(parseClientMessage(frame).ok).toBe(false)
+    ])
+      expect(parseClientMessage(frame).ok).toBe(false)
   })
 
   test("keeps notice operations off the agent surface and out of the forwarded operation set", () => {
@@ -965,9 +1366,22 @@ describe("notice log contract", () => {
       { type: "notice.cleared" },
       { type: "notice.unavailable" },
       { type: "notice.offline", at: 1_790_000_000_000 },
-      { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice: { ...notice, id: "ntc_2" } }, { kind: "offline", at: 1_790_000_000_000 }] },
-      { type: "notice.present", items: [{ kind: "notice", notice, detail: { title: "Fix login", need: "failed" } },
-        { kind: "notice", notice: { ...notice, id: "ntc_2" }, detail: { need: "question", repeat: true } }, { kind: "notice", notice: { ...notice, id: "ntc_3" }, detail: {} }] },
+      {
+        type: "notice.present",
+        items: [
+          { kind: "notice", notice },
+          { kind: "notice", notice: { ...notice, id: "ntc_2" } },
+          { kind: "offline", at: 1_790_000_000_000 },
+        ],
+      },
+      {
+        type: "notice.present",
+        items: [
+          { kind: "notice", notice, detail: { title: "Fix login", need: "failed" } },
+          { kind: "notice", notice: { ...notice, id: "ntc_2" }, detail: { need: "question", repeat: true } },
+          { kind: "notice", notice: { ...notice, id: "ntc_3" }, detail: {} },
+        ],
+      },
     ]
     for (const frame of frames) {
       expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
@@ -976,19 +1390,24 @@ describe("notice log contract", () => {
       expect(parseClientMessage(JSON.stringify(frame)).ok).toBe(false)
     }
     expect(parseRelayToClientMessage('{"type":"status","running":["ses_a"],"attention":[]}')).toEqual({
-      ok: true, value: { type: "status", running: ["ses_a"], attention: [] },
+      ok: true,
+      value: { type: "status", running: ["ses_a"], attention: [] },
     })
     expect(parseRelayToClientMessage('{"type":"response","id":"r","ok":true,"value":null}')).toEqual({
-      ok: true, value: { type: "response", id: "r", ok: true, value: null },
+      ok: true,
+      value: { type: "response", id: "r", ok: true, value: null },
     })
     expect(parseRelayToClientMessage('{"type":"ping"}')).toEqual({ ok: true, value: { type: "ping" } })
   })
 
   test("rejects malformed or oversized notice frames", () => {
-    const many = Array.from({ length: RemoteLimits.maxNoticeBatch + 1 }, (_, index) => ({ ...notice, id: `ntc_${index}` }))
+    const many = Array.from({ length: RemoteLimits.maxNoticeBatch + 1 }, (_, index) => ({
+      ...notice,
+      id: `ntc_${index}`,
+    }))
     for (const frame of [
       { type: "notice.snapshot", notices: [], total: 0 },
-      { type: "notice.added", notices: [] , total: 0 },
+      { type: "notice.added", notices: [], total: 0 },
       { type: "notice.added", notices: [notice] },
       { type: "notice.added", notices: [notice], total: -1 },
       { type: "notice.added", notices: [notice], total: 1.5 },
@@ -1020,26 +1439,54 @@ describe("notice log contract", () => {
       { type: "notice.present", items: [{ kind: "notice", notice, detail: { repeat: false } }] },
       { type: "notice.present", items: [] },
       { type: "notice.present" },
-      { type: "notice.present", items: [{ kind: "notice", notice }, { kind: "notice", notice }] },
-      { type: "notice.present", items: [{ kind: "offline", at: 5 }, { kind: "offline", at: 5 }] },
+      {
+        type: "notice.present",
+        items: [
+          { kind: "notice", notice },
+          { kind: "notice", notice },
+        ],
+      },
+      {
+        type: "notice.present",
+        items: [
+          { kind: "offline", at: 5 },
+          { kind: "offline", at: 5 },
+        ],
+      },
       { type: "notice.present", items: [{ kind: "offline", at: 0 }] },
       { type: "notice.present", items: [{ kind: "offline", at: 1, deviceID: "dev_1" }] },
-      { type: "notice.present", items: [{ kind: "notice", notice: { ...notice, endpoint: "https://fcm.googleapis.com/fcm/send/abc" } }] },
+      {
+        type: "notice.present",
+        items: [{ kind: "notice", notice: { ...notice, endpoint: "https://fcm.googleapis.com/fcm/send/abc" } }],
+      },
       { type: "notice.present", items: [{ kind: "push", notice }] },
       { type: "notice.present", items: many.map((entry) => ({ kind: "notice", notice: entry })) },
-    ]) expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
+    ])
+      expect(parseRelayToClientMessage(JSON.stringify(frame)).ok).toBe(false)
     expect(parseRelayToClientMessage("not json").ok).toBe(false)
-    expect(parseRelayToClientMessage("x".repeat(RemoteLimits.maxAgentMessageChars + 1))).toMatchObject({ ok: false, error: { code: "message_too_large" } })
+    expect(parseRelayToClientMessage("x".repeat(RemoteLimits.maxAgentMessageChars + 1))).toMatchObject({
+      ok: false,
+      error: { code: "message_too_large" },
+    })
   })
 
   test("validates the page a subscribe or list response carries", () => {
     const page = { notices: [notice, { ...notice, id: "ntc_2" }], next: "ntc_1", total: 7, unavailable: false }
     expect(parseNoticePage(page)).toEqual({ ok: true, value: page })
     expect(parseNoticePage(JSON.parse(JSON.stringify(noticePageValue(page))))).toEqual({ ok: true, value: page })
-    expect(parseNoticePage({ notices: [], total: 0, unavailable: true })).toEqual({ ok: true, value: { notices: [], total: 0, unavailable: true } })
-    const full = Array.from({ length: RemoteLimits.noticePageSize + 1 }, (_, index) => ({ ...notice, id: `ntc_${index}` }))
+    expect(parseNoticePage({ notices: [], total: 0, unavailable: true })).toEqual({
+      ok: true,
+      value: { notices: [], total: 0, unavailable: true },
+    })
+    const full = Array.from({ length: RemoteLimits.noticePageSize + 1 }, (_, index) => ({
+      ...notice,
+      id: `ntc_${index}`,
+    }))
     for (const bad of [
-      null, [], "page", {},
+      null,
+      [],
+      "page",
+      {},
       { notices: [], total: 0 },
       { notices: [], total: -1, unavailable: false },
       { notices: [], total: 0, unavailable: "no" },
@@ -1048,12 +1495,14 @@ describe("notice log contract", () => {
       { notices: full, total: full.length, unavailable: false },
       { notices: [{ ...notice, title: "secret" }], total: 1, unavailable: false },
       { notices: [], total: 0, unavailable: false, extra: 1 },
-    ]) expect(parseNoticePage(bad).ok).toBe(false)
+    ])
+      expect(parseNoticePage(bad).ok).toBe(false)
   })
 
   test("derives the ordering sequence from a notice id only when it is well formed", () => {
     expect(noticeSequence("ntc_42")).toBe(42)
     expect(noticeSequence("ntc_999999999999999")).toBe(999_999_999_999_999)
-    for (const id of ["ntc_", "ntc_x", "ntc_1234567890123456", "ses_1", "ntc_-1", "ntc_1.5"]) expect(noticeSequence(id)).toBeUndefined()
+    for (const id of ["ntc_", "ntc_x", "ntc_1234567890123456", "ses_1", "ntc_-1", "ntc_1.5"])
+      expect(noticeSequence(id)).toBeUndefined()
   })
 })

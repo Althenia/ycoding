@@ -328,6 +328,7 @@ export function connectorContract() {
     [],
   )
   const upload = contract.messages.get("session_attachment_upload_Request_payload")!
+  contract.messages.get("session_family_activity_Request_payload_sessionIDs")!.fields[0].countMin = 0
   upload.fields.find((field) => field.name === "data")!.type = "bytes"
   upload.fields.find((field) => field.name === "data")!.constraints = [
     { "~structural": true, meta: { _tag: "isMinLength", minLength: 1 } },
@@ -347,6 +348,7 @@ export function connectorContract() {
 
 export function connectorFieldConstraints(field: WireField) {
   const constraints = resourceFieldConstraints(field)
+  if (field.countMin !== undefined) constraints.countMin = field.countMin
   return field.constraints.some((rule) => rule.identifier === "Connector.ActivityText")
     ? { ...constraints, codepointsMax: 80 }
     : constraints

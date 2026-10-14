@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "206626f342f424b740f186bfe6d5ac9b412c816be7c4ae37e60d90893a40ecbb"
+export const CONTRACT_DIGEST = "f3a49172ff88798c61c8801cbc68d9c9922691c920aa7d28c2f105cb2cd563d8"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -31846,7 +31846,7 @@ export const messages = {
         constraints: {
           utf16Min: 1,
           utf16Max: 128,
-          countMin: 1,
+          countMin: 0,
           countMax: 128,
           domainObligations: ["packages/remote/src/index.ts#validOperationInput"],
         },

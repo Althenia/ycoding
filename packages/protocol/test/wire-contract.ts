@@ -9,6 +9,7 @@ export type WireField = {
   constraints: readonly Schema.Annotations.Filter[]
   ast?: SchemaAST.AST
   source?: string
+  countMin?: number
 }
 export type WireMessage = { fields: WireField[]; oneof: boolean }
 const identifier = (value: string) => value.replace(/[^a-zA-Z0-9]/g, "_")

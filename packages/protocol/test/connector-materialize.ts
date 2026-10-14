@@ -11,10 +11,11 @@ if (process.argv.includes("--update-obligations")) {
   console.log("updated source owners without changing frozen declarations or structural constraints")
   process.exit(0)
 }
-if (process.argv.includes("--write-new")) {
-  if (await file.exists()) throw new Error("connector.proto already exists; canonical IDs and tags are frozen")
+if (process.argv.includes("--write-new") || process.argv.includes("--write")) {
+  if (!process.argv.includes("--write") && (await file.exists()))
+    throw new Error("connector.proto already exists; canonical IDs and tags are frozen")
   await Bun.write(file, expected)
-  console.log("created canonical connector.proto from the remote contract projection")
+  console.log("wrote canonical connector.proto from the remote contract projection")
   process.exit(0)
 }
 if ((await file.text()) !== expected)
