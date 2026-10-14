@@ -206,6 +206,7 @@ if mode == "family_unsolicited":
 events_seen = 0
 pending_callback = None
 submitted = False
+host_requests = 0
 while True:
     frame = read()
     if 3 in frame:
@@ -244,6 +245,41 @@ while True:
                 "far_interrupt": host_call(call, 9, 9, field(1, "ses_far")),
             }
             send(4, field(1, call) + field(2, field(1, value(summary)) + field(2, field(1, field(1, "done")))))
+            continue
+        if mode == "session_request":
+            request = read_value(execute[4][0])
+            operation = request["op"]
+            session = request.get("session", "ses_one")
+            message = request.get("message", "msg_new")
+            if operation == "create":
+                body = field(1, session)
+                if "parent" in request:
+                    body += field(2, request["parent"])
+                if "agent" in request:
+                    body += field(3, field(1, request["agent"]))
+                if "model" in request:
+                    body += field(4, value(request["model"]))
+                if "ceiling" in request:
+                    body += field(6, value(request["ceiling"]))
+                tag = 10
+            elif operation == "generate":
+                body = field(1, session) + field(2, field(1, "Generate only"))
+                tag = 11
+            elif operation == "command":
+                data = request.get("input", {"type": "user", "data": {"text": ""}, "delivery": "queue"})
+                body = field(1, session) + field(2, message) + field(3, field(1, request.get("command", "test"))) + field(4, field(1, "value")) + field(5, value(data)) + integer(8, 0)
+                tag = 12
+            elif operation == "synthetic":
+                data = request.get("input", {"type": "synthetic", "data": {"text": "Observation", "description": "Observed", "metadata": {"source": "fixture"}}, "delivery": "queue"})
+                body = field(1, session) + field(2, message) + field(3, value(data)) + integer(4, 0)
+                tag = 13
+            else:
+                raise ValueError(operation)
+            if request.get("placement"):
+                body += field(127, "/elsewhere")
+            host_requests += 1
+            result = host_call(call, host_requests, tag, body)
+            send(4, field(1, call) + field(2, field(1, value(result)) + field(2, field(1, field(1, "done")))))
             continue
         if mode == "mcp_flood":
             for request in range(1, 10):

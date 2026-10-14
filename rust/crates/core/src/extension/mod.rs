@@ -4,6 +4,7 @@ pub mod context;
 mod families;
 pub mod provider;
 mod schema;
+mod session;
 mod supervisor;
 pub use activation::Activation;
 pub use families::Resources;
@@ -12,7 +13,8 @@ pub mod v5 {
     include!(concat!(env!("OUT_DIR"), "/ycoding.extension.v5.rs"));
 }
 pub use supervisor::{
-    Configuration, Extension, FamilyGrant, Host, Launch, Options, SessionHost, ToolGrant,
+    Configuration, Extension, FamilyGrant, Host, Launch, Options, SessionHost, SessionServices,
+    ToolGrant,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

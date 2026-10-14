@@ -259,15 +259,29 @@ tool calls to a child through `extension::Host`, only for an owned in-flight cal
 `auth` grants let a child register OAuth methods on an integration `Registry` supplied
 through `extension::Host`; the host drives authorize, callback or submit-code, refresh,
 and label requests over the channel, validates returned credentials, and redacts them
-from `Debug` output. Provider and scoped Session families and Meeting are unsupported by
-this endpoint.
+from `Debug` output. Scoped Session grants admit `create`, `get`, `prompt`,
+`generate`, `command`, `synthetic`, and `interrupt` individually. `SessionHost`
+binds the store and Location; its optional native `SessionServices` resolver
+supplies the Location-owned runner, Session generator, command catalog and
+configuration for command/generation. Production fences that resolver to its
+Location generation. Child-supplied placement is rejected.
+Creation calls `store::Service::create` with `session.created.2`, derives
+placement from the caller or an approved stored parent, and inherits deny
+ceilings from caller, parent and requested ceiling. Existing IDs adopt only
+in-Location Sessions. Generation calls `session::generate::Service::generate`
+for an ephemeral tool-free history answer, without admission or durable answer
+publication. Command calls `runner::Local::command` for evaluation, selection,
+provenance and durable user admission. Synthetic calls `Execution::prompt` for
+durable synthetic admission. Admission keeps the first same-kind input ID and
+honors `resume: false`; all host calls retain the captured parent-call policy.
+Meeting does not use this endpoint.
 See [the channel contract](../../../specs/process-extension-v5.md) for schemas,
 bounds, configuration, failure categories, and lifecycle rules.
 
 From the repository root, run real-child and wire checks with:
 
 ```sh
-CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test extension_auth --test extension_activation --test extension_contract --test extension_families --test extension_mcp --test extension_process --test extension_wire
+CARGO_BUILD_JOBS=3 ~/.cache/ycoding/cargo-gate.sh cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test extension_auth --test extension_activation --test extension_contract --test extension_families --test extension_mcp --test extension_process --test extension_providers --test extension_session --test extension_wire
 ```
 
 ## MCP

@@ -142,6 +142,21 @@ async fn production_flow() {
     )
     .unwrap();
     let catalog_file = roots.cache.join("models.json");
+    let JsonValue::Object(mut project_configuration) =
+        parse_json(&std::fs::read_to_string(root.join("project/ycoding.json")).unwrap()).unwrap()
+    else {
+        panic!()
+    };
+    project_configuration.insert("extensions".into(), parse_json(&format!(r#"[{{"identity":"fixture","executable":"/usr/bin/python3","args":["{}","session_request"],"grants":[{{"family":"tools","namespace":"demo","tools":["echo"],"action":"read","resources":["sessions"]}},{{"family":"session","scopes":["create","generate","command","synthetic"],"action":"read","resources":["sessions"]}}]}}]"#, concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/extension_child.py"))).unwrap());
+    project_configuration.insert(
+        "commands".into(),
+        parse_json(r#"{"extension_test":{"template":"Run $ARGUMENTS"}}"#).unwrap(),
+    );
+    std::fs::write(
+        root.join("project/ycoding.json"),
+        stringify_json(&JsonValue::Object(project_configuration)),
+    )
+    .unwrap();
     std::fs::write(&catalog_file, r#"{"openai":{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime test","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":8192},"cost":{"input":2,"output":3}},"gpt-helper":{"id":"gpt-helper","name":"Helper test","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":false,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":8192},"cost":{"input":1,"output":2}}}}}"#).unwrap();
     let configuration = config::LoadOptions {
         directory: root.join("project"),
@@ -1036,6 +1051,7 @@ async fn production_flow() {
             "browser",
             "computer",
             "decision",
+            "demo_echo",
             "edit",
             "glob",
             "goal",
@@ -1055,7 +1071,8 @@ async fn production_flow() {
             "webfetch",
             "websearch",
             "worktree",
-            "write"
+            "write",
+            "execute"
         ]
     );
     let shell = tools
@@ -1394,6 +1411,75 @@ async fn production_flow() {
         advisory_requests
             .iter()
             .all(|request| !request.contains(r#""name":"conversation_compact""#))
+    );
+
+    let stale = composed
+        .tools
+        .materialize(&[])
+        .invoke(
+            "demo_echo",
+            parse_json(r#"{"op":"generate","session":"ses_production"}"#).unwrap(),
+            Context::new(
+                "ses_production",
+                "god",
+                "msg_extension_tool",
+                "call_extension_stale",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(stale.error.is_none());
+    assert_eq!(
+        stale.output.unwrap().structured,
+        parse_json(r#"{"failure":1}"#).unwrap()
+    );
+    for operation in ["create", "command", "synthetic", "generate"] {
+        let settlement = reloaded.production.as_ref().unwrap().tools.materialize(&[]).invoke(
+            "demo_echo",
+            parse_json(&format!(r#"{{"op":"{operation}","session":"ses_extension","parent":"ses_production","message":"msg_extension_{operation}","command":"extension_test"}}"#)).unwrap(),
+            Context::new("ses_production", "god", "msg_extension_tool", &format!("call_extension_{operation}")).unwrap(),
+        ).await.unwrap();
+        assert!(
+            settlement.error.is_none(),
+            "{operation}: {:?}",
+            settlement.error
+        );
+        let reply = stringify_json(&settlement.output.unwrap().structured);
+        assert!(!reply.contains("failure"), "{operation}: {reply}");
+        if operation == "generate" {
+            assert!(reply.contains("Run the focused tests"), "{reply}");
+            let request = stringify_json(&received.recv().await.unwrap());
+            assert!(request.contains("Generate only"));
+            assert!(!request.contains(r#""tools":[{"#));
+        }
+    }
+    let extension_session = session::Id::new("ses_extension").unwrap();
+    let extension_info = core.sessions.get(&extension_session).unwrap().unwrap();
+    assert_eq!(
+        extension_info.parent_id,
+        Some(session::Id::new("ses_production").unwrap())
+    );
+    assert_eq!(
+        extension_info.location,
+        core.sessions
+            .get(&session::Id::new("ses_production").unwrap())
+            .unwrap()
+            .unwrap()
+            .location
+    );
+    assert_eq!(
+        core.sessions
+            .pending_list(&extension_session)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        core.sessions
+            .latest(&extension_session, "assistant")
+            .unwrap()
+            .is_none()
     );
 
     let platform = composed.platform.clone();

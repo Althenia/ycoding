@@ -83,10 +83,14 @@ message McpCallTool { required string server = 1; required string name = 2; requ
 message SessionGet { required string session = 1; }
 message SessionPrompt { required string session = 1; required string message = 2; required Value input = 3; optional bool resume = 4; }
 message SessionInterrupt { required string session = 1; }
+message SessionCreate { optional string session = 1; optional string parent = 2; optional Text agent = 3; optional Value model = 4; optional Text title = 5; optional Value permission_ceiling = 6; }
+message SessionGenerate { required string session = 1; required Text prompt = 2; }
+message SessionCommand { required string session = 1; required string message = 2; required Text command = 3; required Text arguments = 4; required Value input = 5; optional Text agent = 6; optional Value model = 7; optional bool resume = 8; }
+message SessionSynthetic { required string session = 1; required string message = 2; required Value input = 3; optional bool resume = 4; }
 message HostCall {
   required Call call = 1;
   required uint64 request = 2;
-  oneof operation { McpServers servers = 3; McpTools tools = 4; McpReadResource read_resource = 5; McpCallTool call_tool = 6; SessionGet session_get = 7; SessionPrompt session_prompt = 8; SessionInterrupt session_interrupt = 9; }
+  oneof operation { McpServers servers = 3; McpTools tools = 4; McpReadResource read_resource = 5; McpCallTool call_tool = 6; SessionGet session_get = 7; SessionPrompt session_prompt = 8; SessionInterrupt session_interrupt = 9; SessionCreate session_create = 10; SessionGenerate session_generate = 11; SessionCommand session_command = 12; SessionSynthetic session_synthetic = 13; }
 }
 message HostReply {
   required Call call = 1;

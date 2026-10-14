@@ -1283,6 +1283,33 @@ impl Factory {
                 sessions: Some(ycoding_core::extension::SessionHost {
                     store: Service::new(self.client.clone()),
                     location: reference.clone(),
+                    services: Some(Arc::new({
+                        let locations = self.locations.get().cloned();
+                        let reference = reference.clone();
+                        move || {
+                            let locations = locations
+                                .as_ref()
+                                .and_then(|locations| locations.upgrade())
+                                .ok_or(ycoding_core::extension::Error::Stopped)?;
+                            let services = locations
+                                .location(
+                                    reference.directory.as_lossless(),
+                                    reference.workspace_id.as_ref().map(|id| id.as_lossless()),
+                                )
+                                .map_err(|_| ycoding_core::extension::Error::Stopped)?;
+                            let composed = services
+                                .production
+                                .as_ref()
+                                .filter(|composed| composed.generation == generation)
+                                .ok_or(ycoding_core::extension::Error::Stopped)?;
+                            Ok(ycoding_core::extension::SessionServices {
+                                runner: composed.runner.clone(),
+                                generate: composed.session_generate.clone(),
+                                commands: composed.commands.clone(),
+                                configuration: composed.configuration.clone(),
+                            })
+                        }
+                    })),
                 }),
             },
         ));

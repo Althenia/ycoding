@@ -79,7 +79,16 @@ pub(super) fn valid_scope(family: v5::CapabilityFamily, name: &str) -> bool {
         v5::CapabilityFamily::Providers => {
             name.starts_with("aisdk:") && name.len() <= 256 && !name.chars().any(char::is_control)
         }
-        v5::CapabilityFamily::Session => ["get", "prompt", "interrupt"].contains(&name),
+        v5::CapabilityFamily::Session => [
+            "create",
+            "get",
+            "prompt",
+            "generate",
+            "command",
+            "synthetic",
+            "interrupt",
+        ]
+        .contains(&name),
         v5::CapabilityFamily::Events => {
             ycoding_schema::event_manifest::ALL.contains(&name)
                 && !name.starts_with("credential")
@@ -242,9 +251,21 @@ async fn operation_value(
                 .map_err(|_| execution())?;
             Ok(JsonValue::Null)
         }
+        v5::host_call::Operation::SessionCreate(input) => {
+            super::session::create(shared, context, input).await
+        }
+        v5::host_call::Operation::SessionGenerate(input) => {
+            super::session::generate(shared, context, input, cancelled).await
+        }
+        v5::host_call::Operation::SessionCommand(input) => {
+            super::session::command(shared, context, input).await
+        }
+        v5::host_call::Operation::SessionSynthetic(input) => {
+            super::session::synthetic(shared, context, input).await
+        }
     }
 }
-async fn session_scope<'a>(
+pub(super) async fn session_scope<'a>(
     shared: &'a Shared,
     context: &Context,
     scope: &str,
@@ -257,7 +278,7 @@ async fn session_scope<'a>(
     let reservation = authorize(shared, context, v5::CapabilityFamily::Session, scope).await?;
     Ok((host, reservation))
 }
-fn owned_session(
+pub(super) fn owned_session(
     host: &SessionHost,
     id: &str,
 ) -> Result<(session::Id, session::Info), v5::FailureCode> {

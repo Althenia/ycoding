@@ -42,6 +42,14 @@ pub struct FamilyGrant {
 pub struct SessionHost {
     pub store: crate::session::store::Service,
     pub location: ycoding_schema::location::Ref,
+    pub services: Option<Arc<dyn Fn() -> Result<SessionServices, Error> + Send + Sync>>,
+}
+#[derive(Clone)]
+pub struct SessionServices {
+    pub runner: crate::session::runner::Local,
+    pub generate: Arc<crate::session::generate::Service>,
+    pub commands: Arc<crate::resources::command::Service>,
+    pub configuration: Arc<crate::resources::config::Configuration>,
 }
 // Configured extensions launch while a Location starts, before any Session exists. Explicit
 // configured rules matching a launch or family grant still apply: deny and ask fail closed
