@@ -121,6 +121,8 @@ GET /api/provider/:providerID/usage
 
 Both operations accept the Location query. `refresh=true` requests a source refresh. The response contains normalized snapshots only and never exposes credential IDs, access tokens, API keys, refresh tokens, account emails, or raw provider payloads.
 
+For providers with an adapter, an eligible stored response observation is returned when no credential is selected, including on refresh. After refresh, an observation wins when its timestamp is at least the fetched snapshot's timestamp or the fetched snapshot is `unsupported` with no windows. A newer supported snapshot replaces the observation. Eligibility preserves profile account identity and keeps unbound observations separate from explicit profile requests.
+
 The list uses `Catalog.provider.available()` to enumerate each available configured provider, respecting disabled providers and provider policy. A provider with a quota adapter and several stored credential profiles returns one snapshot per profile; any other provider returns one snapshot, using its active profile when one exists. The list includes connected providers with no selected Session and providers without a quota adapter or usable credential; the latter return explicit `unsupported` snapshots. Independent refreshes run with concurrency bounded to four and preserve successful snapshots alongside per-provider failures. Results are ordered by provider ID, then profile name. `GET /api/provider/:providerID/usage` returns the active profile's snapshot.
 
 ## Durable provider-request usage

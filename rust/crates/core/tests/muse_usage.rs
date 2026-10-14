@@ -13,7 +13,9 @@ use ycoding_core::resources::{
     model::{account_identity, quota},
     muse,
 };
-use ycoding_schema::{DomainDecode, DomainEncode, parse_json, provider, provider_usage};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, parse_json, provider, provider_usage, schema::NonNegativeInt,
+};
 
 fn quota_event() -> &'static str {
     r#"{"type":"response.subscription_usage","subscription":{"tier":"private-tier","window":{"used_percent":0,"resets_at":1791876076,"window_duration_mins":300},"weekly":{"used_percent":0,"resets_at":1792368000}}}"#
@@ -322,4 +324,70 @@ async fn malformed_model_event_is_not_masked_as_quota() {
         .unwrap_err();
     assert_eq!(failure.message, "Invalid provider stream event");
     assert_eq!(fixture.finish().await.len(), 1);
+}
+
+fn observation(used: f64) -> provider_usage::Observation {
+    provider_usage::Observation {
+        provider_id: provider::Id("muse".into()),
+        label: "Muse (Meta)".into(),
+        source: "response_stream".into(),
+        stability: "observed".into(),
+        observed_at: NonNegativeInt::new(200).unwrap(),
+        windows: vec![provider_usage::Window {
+            id: "window".into(),
+            label: "5-hour window".into(),
+            unit: "percent".into(),
+            used: Some(used),
+            limit: None,
+            remaining: None,
+            unlimited: None,
+            reset_at: None,
+            period_seconds: None,
+        }],
+    }
+}
+
+#[tokio::test]
+async fn muse_refresh_keeps_stored_and_unbound_observations_at_later_time() {
+    let (_store, credentials) = store();
+    let saved = credentials
+        .create(
+            "muse-refresh".into(),
+            "muse".into(),
+            None,
+            secret(r#"{"type":"key","key":"fixture"}"#),
+            1,
+        )
+        .await
+        .unwrap();
+    let usage = quota::Service::new(credentials, quota::Endpoints::default()).unwrap();
+    let muse = || provider::Id("muse".into());
+    assert_eq!(
+        usage.get(muse(), Some(saved.id()), true, 100).await,
+        ycoding_ai::muse::unreported(100)
+    );
+    usage
+        .observe(observation(42.0), Some(account_identity(&saved)))
+        .unwrap();
+    let result = usage.get(muse(), Some(saved.id()), true, 300).await;
+    assert_eq!(result.status, "available".into());
+    assert_eq!(result.source, "response_stream".into());
+    assert_eq!(result.stability, "observed".into());
+    assert_eq!(result.updated_at, NonNegativeInt::new(200).unwrap());
+    assert_eq!(result.windows.len(), 1);
+    assert_eq!(result.windows[0].used, Some(42.0));
+    usage.shutdown().await.unwrap();
+
+    let (_store, credentials) = store();
+    let unbound = quota::Service::new(credentials, quota::Endpoints::default()).unwrap();
+    assert_eq!(
+        unbound.get(muse(), None, true, 100).await,
+        ycoding_ai::muse::unreported(100)
+    );
+    unbound.observe(observation(7.0), None).unwrap();
+    let result = unbound.get(muse(), None, true, 300).await;
+    assert_eq!(result.status, "available".into());
+    assert_eq!(result.updated_at, NonNegativeInt::new(200).unwrap());
+    assert_eq!(result.windows[0].used, Some(7.0));
+    unbound.shutdown().await.unwrap();
 }

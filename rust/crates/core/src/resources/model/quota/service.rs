@@ -265,6 +265,12 @@ impl Service {
             );
         }
         let Some(selected) = selected else {
+            if credential_id.is_none()
+                && let Ok(observations) = self.observations.lock()
+                && let Some(observed) = observations.get(&(provider.clone(), None))
+            {
+                return observed.clone();
+            }
             return unavailable(
                 provider,
                 &label,
@@ -361,7 +367,8 @@ impl Service {
         if (profile_source.is_some() || credential_id.is_none())
             && let Ok(observations) = self.observations.lock()
             && let Some(observed) = observations.get(&(provider, profile_source.clone()))
-            && observed.updated_at >= snapshot.updated_at
+            && (observed.updated_at >= snapshot.updated_at
+                || (snapshot.status == "unsupported".into() && snapshot.windows.is_empty()))
         {
             if profile_source.is_some() {
                 let mut observed = observed.clone();
