@@ -55,7 +55,7 @@ const CORE: &[Mapping] = &[
     mapping!(session, TodoTable, Todo, "session_todo", {session_id, content, status, priority, position, time_created, time_updated}),
     mapping!(session, TodoStateTable, TodoState, "session_todo_state", {session_id, revision, digest, time_updated}),
     mapping!(session, FileChangeTable, FileChange, "session_file_change", {session_id, path, patch, additions, deletions, latest_seq}),
-    mapping!(session, TaskTable, Task, "session_task", {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, revision, time_created, time_updated}),
+    mapping!(session, TaskTable, Task, "session_task", {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, owner_pid, owner_started, revision, time_created, time_updated}),
     mapping!(session, NotificationTable, Notification, "session_task_notification", {id, task_session_id, parent_id, type_, revision, excerpt, delivered, time_created, time_delivered}),
     mapping!(session, ManifestTable, Manifest, "compaction_manifest_blob", {digest, schema_version, content, input_tokens, retained_tokens, time_created}),
     mapping!(session, RevisionTable, Revision, "session_context_revision", {session_id, revision, parent_revision, manifest_digest, covered_through_message_id, covered_through_seq, activation_event_id, activation_sequence, time_created}),

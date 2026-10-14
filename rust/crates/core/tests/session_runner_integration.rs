@@ -3440,6 +3440,8 @@ fn child_task(state: &str, revision: i64) -> ycoding_store::session::Task {
         question_data: None,
         question_time: None,
         attempt_started: 0,
+        owner_pid: None,
+        owner_started: None,
         revision,
         time_created: 1,
         time_updated: 1,

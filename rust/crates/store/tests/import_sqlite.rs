@@ -38,6 +38,11 @@ impl Fixture {
                 db.execute_batch(&source[pair[0] + 1..pair[1]].replace("\\`", "`"))
                     .unwrap();
             }
+            db.execute_batch(
+                "ALTER TABLE session_task ADD owner_pid integer;
+                 ALTER TABLE session_task ADD owner_started text;",
+            )
+            .unwrap();
         }
         db.execute_batch(
             "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL);
@@ -85,6 +90,81 @@ fn rows() -> &'static str {
      INSERT INTO credential (id,label,value,active,generation,account_generation,time_created,time_updated) VALUES ('credential','synthetic','{\"type\":\"key\",\"key\":\"synthetic-test-only\",\"metadata\":{\"\\ud800\":-0},\"extra\":\"retained\"}',99,0,1,0,1);
      INSERT INTO event_sequence VALUES ('aggregate',-1,NULL);
      INSERT INTO event VALUES ('event','aggregate',-1,0,'test','{\"empty\":\"\"}');"
+}
+
+#[test]
+fn task_owners_round_trip_through_sqlite_import_and_reopen() {
+    let fixture = Fixture::new();
+    let db = fixture.create(DatabaseKind::Core);
+    db.execute_batch(
+        "INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p','/synthetic',1,1,'[]');
+         INSERT INTO session (id,project_id,directory,title,time_created,time_updated) VALUES ('parent','p','/synthetic','parent',1,1);",
+    )
+    .unwrap();
+    let owners = [
+        ("child_live", Some(42), Some("Wed Oct 14 01:02:03 2026")),
+        ("child_null", None, None),
+        ("child_pid", Some(i64::MIN), None),
+        ("child_started", None, Some("")),
+    ];
+    for (child, pid, started) in owners {
+        db.execute("INSERT INTO session (id,project_id,directory,title,time_created,time_updated) VALUES (?1,'p','/synthetic','child',1,1)", [child]).unwrap();
+        db.execute(
+            "INSERT INTO session_task (session_id,parent_id,parent_assistant_message_id,tool_call_id,input_id,description,agent,model,prompt_digest,background,delivery,state,time_created,time_updated,owner_pid,owner_started)
+             VALUES (?1,'parent','assistant',?1,?1,'task','build','{\"providerID\":\"test\",\"id\":\"test\"}','digest',1,'steer','running',1,1,?2,?3)",
+            rusqlite::params![child, pid, started],
+        ).unwrap();
+    }
+    drop(db);
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    let original = std::fs::read(&source).unwrap();
+    import::stage(
+        fixture.request(DatabaseKind::Core, &source, &candidate),
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    for _ in 0..2 {
+        let store = Store::open(
+            &candidate,
+            Options::core(),
+            import::catalog(DatabaseKind::Core),
+        )
+        .unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let tasks = snapshot
+            .scan::<session::TaskTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap();
+        assert_eq!(tasks.len(), owners.len());
+        for (child, pid, started) in owners {
+            let task = tasks
+                .iter()
+                .find(|task| task.session_id.as_str() == Some(child))
+                .unwrap();
+            assert_eq!(task.owner_pid, pid);
+            assert_eq!(
+                task.owner_started.as_ref().and_then(LosslessString::as_str),
+                started
+            );
+            assert_eq!(task.state.as_str(), Some("running"));
+            assert_eq!(task.revision, 0);
+        }
+        assert!(
+            snapshot
+                .scan::<session::EventTable>(Bound::Unbounded, Bound::Unbounded, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            snapshot
+                .scan::<session::NotificationTable>(Bound::Unbounded, Bound::Unbounded, 1)
+                .unwrap()
+                .is_empty()
+        );
+        drop(snapshot);
+        store.shutdown().unwrap();
+    }
 }
 
 #[test]

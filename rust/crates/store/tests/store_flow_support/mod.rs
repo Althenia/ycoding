@@ -51,6 +51,58 @@ impl Baseline {
                 .starts_with("ycoding-rust-baseline-")
         );
         assert!(root.join("provenance.json").is_file());
+        rusqlite::Connection::open(root.join("data/core.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE session_task ADD owner_pid integer;
+                 ALTER TABLE session_task ADD owner_started text;
+                 UPDATE session_task SET owner_pid = 123, owner_started = 'Wed Oct 14 01:02:03 2026';",
+            )
+            .unwrap();
+        let JsonValue::Object(mut provenance) =
+            parse_json(&std::fs::read_to_string(root.join("provenance.json")).unwrap()).unwrap()
+        else {
+            panic!("provenance must be an object")
+        };
+        let JsonValue::Array(mut files) = provenance.get(&"files".into()).unwrap().clone() else {
+            panic!("provenance files must be an array")
+        };
+        files.retain(|file| {
+            let JsonValue::Object(file) = file else {
+                panic!("file provenance must be an object")
+            };
+            let Some(JsonValue::String(name)) = file.get(&"file".into()) else {
+                panic!("file name must be a string")
+            };
+            !matches!(
+                name.as_str(),
+                Some("data/core.sqlite-wal" | "data/core.sqlite-shm")
+            ) || root.join(name.as_str().unwrap()).is_file()
+        });
+        for file in &mut files {
+            let JsonValue::Object(file) = file else {
+                panic!("file provenance must be an object")
+            };
+            let Some(JsonValue::String(name)) = file.get(&"file".into()) else {
+                panic!("file name must be a string")
+            };
+            if matches!(
+                name.as_str(),
+                Some("data/core.sqlite" | "data/core.sqlite-wal" | "data/core.sqlite-shm")
+            ) {
+                let (digest, bytes) =
+                    ycoding_store::import::file_fingerprint(&root.join(name.as_str().unwrap()))
+                        .unwrap();
+                file.insert("sha256".into(), JsonValue::String(digest.into()));
+                file.insert("bytes".into(), JsonValue::Number(bytes as f64));
+            }
+        }
+        provenance.insert("files".into(), JsonValue::Array(files));
+        std::fs::write(
+            root.join("provenance.json"),
+            stringify_json(&JsonValue::Object(provenance)),
+        )
+        .unwrap();
         Self(root)
     }
 
@@ -65,7 +117,28 @@ impl Baseline {
         else {
             panic!("baseline export must be an object")
         };
-        export.get(&domain.into()).unwrap().clone()
+        let mut value = export.get(&domain.into()).unwrap().clone();
+        if domain == "core" {
+            let JsonValue::Object(tables) = &mut value else {
+                panic!("core export must be an object")
+            };
+            let JsonValue::Array(mut tasks) = tables.get(&"session_task".into()).unwrap().clone()
+            else {
+                panic!("tasks must be an array")
+            };
+            for task in &mut tasks {
+                let JsonValue::Object(fields) = task else {
+                    panic!("task must be an object")
+                };
+                fields.insert("owner_pid".into(), 123i64.cell());
+                fields.insert(
+                    "owner_started".into(),
+                    JsonValue::String("Wed Oct 14 01:02:03 2026".into()),
+                );
+            }
+            tables.insert("session_task".into(), JsonValue::Array(tasks));
+        }
+        value
     }
 }
 
@@ -258,7 +331,7 @@ pub fn core_export(snapshot: &Snapshot) -> JsonValue {
     table!(session, TodoTable, {session_id, content, status, priority, position, time_created, time_updated});
     table!(session, TodoStateTable, {session_id, revision, digest, time_updated});
     table!(session, FileChangeTable, {session_id, path, patch, additions, deletions, latest_seq});
-    table!(session, TaskTable, {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, revision, time_created, time_updated});
+    table!(session, TaskTable, {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, owner_pid, owner_started, revision, time_created, time_updated});
     table!(session, NotificationTable, {id, task_session_id, parent_id, type_, revision, excerpt, delivered, time_created, time_delivered});
     table!(session, ManifestTable, {digest, schema_version, content, input_tokens, retained_tokens, time_created});
     table!(session, RevisionTable, {session_id, revision, parent_revision, manifest_digest, covered_through_message_id, covered_through_seq, activation_event_id, activation_sequence, time_created});

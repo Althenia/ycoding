@@ -580,6 +580,8 @@ fn blocker_task(store: &Client, parent: &str, task: &str, state: &str, notice: b
                     question_data: None,
                     question_time: None,
                     attempt_started: 0,
+                    owner_pid: None,
+                    owner_started: None,
                     revision: 0,
                     time_created: 1,
                     time_updated: 1,

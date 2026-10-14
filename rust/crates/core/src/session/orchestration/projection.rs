@@ -1,3 +1,4 @@
+use crate::platform::shell::ledger;
 use crate::session::{key, projector::record_error};
 use std::ops::Bound;
 use ycoding_schema::{
@@ -22,6 +23,7 @@ pub fn apply(
     let path = JsonPath::default();
     let object = ObjectDecoder::new(&data, &path).map_err(record_error)?;
     let change: Change = object.field("change").map_err(record_error)?;
+    let owner = ledger::current_owner();
     if let Change::Launched {
         parent_id,
         parent_assistant_message_id,
@@ -57,6 +59,8 @@ pub fn apply(
                 question_data: None,
                 question_time: None,
                 attempt_started: 0,
+                owner_pid: owner.map(|owner| i64::from(owner.pid)),
+                owner_started: owner.map(|owner| owner.started.clone().into()),
                 revision: 0,
                 time_created: event.created,
                 time_updated: event.created,
@@ -84,6 +88,8 @@ pub fn apply(
                 row.attempt_started = 0;
             }
             row.state = "running".into();
+            row.owner_pid = owner.map(|owner| i64::from(owner.pid));
+            row.owner_started = owner.map(|owner| owner.started.clone().into());
         }
         Change::Backgrounded => {
             if state != "running" || row.background != 0 {
@@ -119,6 +125,8 @@ pub fn apply(
             }
             row.state = "running".into();
             clear_question(&mut row);
+            row.owner_pid = owner.map(|owner| i64::from(owner.pid));
+            row.owner_started = owner.map(|owner| owner.started.clone().into());
         }
         Change::CancelRequested => {
             if !["starting", "running", "waiting"].contains(&state.as_str()) {

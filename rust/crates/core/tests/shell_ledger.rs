@@ -21,6 +21,32 @@ fn owner() -> Process {
         started: "Thu Jan 1 00:00:00 1970".into(),
     }
 }
+
+#[test]
+fn alive_requires_both_pid_and_exact_start_text_without_group_fallback() {
+    let process = Process {
+        pid: 42,
+        pgid: 43,
+        started: "Wed Oct 14 01:02:03 2026".into(),
+    };
+    let started = LosslessString::from(process.started.clone());
+    let snapshot = [process];
+    assert!(ledger::alive(&snapshot, Some(42), Some(&started)));
+    assert!(!ledger::alive(&snapshot, None, Some(&started)));
+    assert!(!ledger::alive(&snapshot, Some(42), None));
+    assert!(!ledger::alive(&snapshot, Some(43), Some(&started)));
+    assert!(!ledger::alive(
+        &snapshot,
+        Some(42),
+        Some(&"different start".into())
+    ));
+    assert!(!ledger::alive(
+        &snapshot,
+        Some(42),
+        Some(&"Wed Oct 14 01:02:03 2026 ".into())
+    ));
+    assert!(!ledger::alive(&[], Some(42), Some(&started)));
+}
 struct DatabaseFile(std::path::PathBuf);
 impl Drop for DatabaseFile {
     fn drop(&mut self) {

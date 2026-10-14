@@ -540,6 +540,8 @@ fn orchestration_source_tracks_child_task_revisions_and_exposes_the_team_view() 
         question_data: None,
         question_time: None,
         attempt_started: 0,
+        owner_pid: None,
+        owner_started: None,
         revision,
         time_created: 1,
         time_updated: 1,

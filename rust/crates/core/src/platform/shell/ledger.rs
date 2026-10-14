@@ -1,5 +1,5 @@
 use super::super::process::{self, Command, RunOptions};
-use std::{collections::BTreeSet, io, ops::Bound, time::Duration};
+use std::{collections::BTreeSet, io, io::Read, ops::Bound, sync::OnceLock, time::Duration};
 use ycoding_schema::{DomainEncode, JsonValue, LosslessString, shell::Id};
 use ycoding_store::{
     Client, Error, IndexOrder, IndexQuery, KeyPart, Snapshot, TableSpec, Write,
@@ -33,7 +33,11 @@ pub async fn processes() -> io::Result<Vec<Process>> {
     )
     .await?;
     result.require_success()?;
-    Ok(String::from_utf8_lossy(&result.stdout)
+    Ok(parse_processes(&result.stdout))
+}
+
+fn parse_processes(stdout: &[u8]) -> Vec<Process> {
+    String::from_utf8_lossy(stdout)
         .lines()
         .filter_map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
@@ -44,7 +48,44 @@ pub async fn processes() -> io::Result<Vec<Process>> {
                 started: fields[2..].join(" "),
             })
         })
-        .collect())
+        .collect()
+}
+
+pub fn alive(snapshot: &[Process], pid: Option<i64>, started: Option<&LosslessString>) -> bool {
+    pid.zip(started.and_then(LosslessString::as_str))
+        .is_some_and(|(pid, started)| {
+            snapshot
+                .iter()
+                .any(|item| i64::from(item.pid) == pid && item.started == started)
+        })
+}
+
+pub(crate) fn current_owner() -> Option<&'static Process> {
+    static OWNER: OnceLock<Option<Process>> = OnceLock::new();
+    OWNER
+        .get_or_init(|| {
+            let pid = std::process::id();
+            let mut child = std::process::Command::new("ps")
+                .args(["-o", "pid=,pgid=,lstart=", "-p", &pid.to_string()])
+                .env("LC_ALL", "C")
+                .env("TZ", "UTC")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()?;
+            let mut stdout = Vec::new();
+            let read = child.stdout.take()?.take(4097).read_to_end(&mut stdout);
+            let status = child.wait().ok()?;
+            read.ok()?;
+            if !status.success() || stdout.len() > 4096 {
+                return None;
+            }
+            parse_processes(&stdout)
+                .into_iter()
+                .find(|item| item.pid == pid)
+        })
+        .as_ref()
 }
 
 pub async fn identify(pid: u32) -> Option<Process> {
@@ -211,10 +252,7 @@ impl Ledger {
         };
         let mut work = tokio::task::JoinSet::new();
         for mut row in pending {
-            if snapshot.iter().any(|item| {
-                i64::from(item.pid) == row.owner_pid
-                    && item.started == row.owner_started.as_str().unwrap_or_default()
-            }) {
+            if alive(&snapshot, Some(row.owner_pid), Some(&row.owner_started)) {
                 continue;
             }
             let alive = survivors(&row, &snapshot);

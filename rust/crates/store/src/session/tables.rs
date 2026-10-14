@@ -126,7 +126,7 @@ table!(TaskTable, Task, "session_task", {
     input_id: LosslessString, description: LosslessString, agent: LosslessString, model: Document<model::Ref>, prompt_digest: LosslessString,
     background: i64, delivery: LosslessString, state: LosslessString, progress: Option<LosslessString>, progress_time: Option<i64>,
     question_id: Option<LosslessString>, question: Option<LosslessString>, question_data: Option<Document<domain::Json>>, question_time: Option<i64>,
-    attempt_started: i64, revision: i64, time_created: i64, time_updated: i64
+    attempt_started: i64, owner_pid: Option<i64>, owner_started: Option<LosslessString>, revision: i64, time_created: i64, time_updated: i64
 }, r, key(&r.session_id), &[
     IndexDefinition::unique("sqlite_autoindex_session_task_2"), IndexDefinition::unique("session_task_launch_identity_idx"),
     IndexDefinition::secondary("session_task_parent_state_updated_idx")

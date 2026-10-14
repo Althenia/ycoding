@@ -1694,8 +1694,20 @@ parent wake that finds execution closed defers delivery: the admitted input and
 undelivered outbox row stay durable, and the next notifier retries the same input
 identity. It does not emit a dispatch failure or mark the row delivered. Other
 wake and storage failures propagate and retain their retryable outbox state.
-`reconcile_stale` marks active tasks lost with `evt_task_restart_lost_*`
-identifiers; those notifications are delivered by `dispatch_restart_losses`
+Task projection claims the publishing process's PID and exact UTC `ps` start-time
+text on launch, start/restart and question answer. Progress, backgrounding,
+waiting, cancellation, attempt changes and settlement preserve that identity;
+it is an internal projection fact, not durable event or wire data. The process
+identity is captured once by the shell ledger, before ordinary orchestration
+mutations; direct projection uses the same cached identity.
+`reconcile_stale` runs once per open Store client, serializes concurrent startup
+calls and leaves `starting`, `running`, `waiting` and `cancelling` tasks unchanged
+when both owner PID and start-time text match the process list. Missing owners,
+exited owners and reused PIDs become lost with deterministic
+`evt_task_restart_lost_<session>_<revision+1>` identifiers. An empty active-task
+set needs no process listing. Process-list failure warns, changes no task and
+leaves startup reconciliation retryable. A reopened Store starts a fresh check.
+Lost notifications remain undelivered until `dispatch_restart_losses` runs
 when the parent's execution starts, without waking provider work.
 
 `Service::recover` is the explicit post-crash continuation design: it never

@@ -754,6 +754,8 @@ fn task(id: &str) -> session::Task {
         question_data: Some(json()),
         question_time: None,
         attempt_started: -1,
+        owner_pid: Some(i64::MAX),
+        owner_started: Some(LosslessString::from_utf16(vec![0xd800, 0, 0xdfff])),
         revision: 0,
         time_created: i64::MIN,
         time_updated: i64::MAX,
@@ -770,6 +772,32 @@ fn notification(id: &str) -> session::Notification {
         delivered: 0,
         time_created: -1,
         time_delivered: None,
+    }
+}
+
+#[test]
+fn task_owner_codec_preserves_nullable_identity_and_exact_start_text() {
+    for (pid, started) in [
+        (None, None),
+        (Some(i64::MIN), None),
+        (None, Some(LosslessString::from(""))),
+        (
+            Some(42),
+            Some(LosslessString::from("Wed Oct 14 01:02:03 2026")),
+        ),
+        (
+            Some(i64::MAX),
+            Some(LosslessString::from_utf16(vec![0xd800, 0, 0xdfff])),
+        ),
+    ] {
+        let record = session::Task {
+            owner_pid: pid,
+            owner_started: started,
+            ..task("child")
+        };
+        let bytes = session::TaskTable::encode(&record).unwrap();
+        assert_eq!(session::TaskTable::decode(&bytes).unwrap(), record);
+        assert!(session::TaskTable::decode(&bytes[..bytes.len() - 1]).is_err());
     }
 }
 fn input(id: &str, seq: i64) -> session::Pending {

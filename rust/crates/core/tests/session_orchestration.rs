@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use ycoding_core::{
+    platform::shell::ledger,
     process::guardrails::{Guardrails, Limits, Paths, Reservation, Settings},
     session::{
         autonomy::{Goal, Service as Autonomy, YoloLevel},
@@ -16,12 +17,13 @@ use ycoding_core::{
     tools::policy::{Authority, Publisher, permissions::Permissions},
 };
 use ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, model, parse_json, permission, session, session_message,
+    DomainDecode, DomainEncode, JsonValue, LosslessString, model, parse_json, permission, session,
+    session_message,
     session_orchestration::{NotificationType, QuestionId, State},
 };
 use ycoding_store::{
     KeyPart, Store,
-    session::{Document, NewEvent, NotificationTable, SessionTable, TaskTable},
+    session::{Document, EventTable, NewEvent, NotificationTable, SessionTable, TaskTable},
     tuple_key,
 };
 
@@ -922,9 +924,535 @@ async fn team_view_rehydrates_from_durable_state_and_observations_ignore_clocks(
 }
 
 #[tokio::test]
+async fn live_task_owner_survives_startup() {
+    let harness = harness();
+    let child = launched(&harness, "call_live").await;
+    let before = task_row(&harness.store, &child);
+    let woken = harness.recorder.woken();
+    assert_eq!(harness.service.reconcile_stale().await.unwrap(), 0);
+    assert_eq!(task_row(&harness.store, &child), before);
+    assert!(notifications(&harness.store).is_empty());
+    assert_eq!(harness.recorder.woken(), woken);
+}
+
+struct TaskDatabase(std::path::PathBuf);
+
+impl Drop for TaskDatabase {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).unwrap();
+    }
+}
+
+fn persistent_harness(path: &std::path::Path, fresh: bool) -> Harness {
+    let catalog = ycoding_store::import::catalog(ycoding_store::import::DatabaseKind::Core);
+    let store = if fresh {
+        let store = Store::initialize(
+            path,
+            ycoding_store::Options::core(),
+            catalog,
+            ycoding_store::Metadata::new([99; 16], 1),
+        )
+        .unwrap();
+        let seed = support::store();
+        let snapshot = seed.snapshot().unwrap();
+        let project = snapshot
+            .scan::<ycoding_store::project::ProjectTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let sessions = snapshot
+            .scan::<SessionTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap();
+        store
+            .submit(move |tx| {
+                ycoding_store::project::ProjectTable::insert(tx, &project)?;
+                for session in sessions {
+                    SessionTable::insert(tx, &session)?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        store
+    } else {
+        Store::open(path, ycoding_store::Options::core(), catalog).unwrap()
+    };
+    let sessions = store::Service::new(store.client());
+    let recorder = Arc::new(Recorder::default());
+    Harness {
+        service: Service::new(sessions.clone(), recorder.clone()),
+        store,
+        sessions,
+        recorder,
+    }
+}
+
+fn close(harness: Harness) {
+    drop(harness.service);
+    drop(harness.sessions);
+    harness.store.shutdown().unwrap();
+}
+
+async fn set_owner(
+    harness: &Harness,
+    child: &session::Id,
+    pid: Option<i64>,
+    started: Option<&str>,
+) {
+    let mut row = task_row(&harness.store, child);
+    row.owner_pid = pid;
+    row.owner_started = started.map(Into::into);
+    harness
+        .store
+        .submit(move |tx| TaskTable::put(tx, &row))
+        .unwrap()
+        .await
+        .unwrap();
+}
+
+fn restart_events(harness: &Harness) -> Vec<ycoding_store::session::Event> {
+    harness
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<EventTable>(Bound::Unbounded, Bound::Unbounded, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event
+                .id
+                .as_str()
+                .unwrap()
+                .starts_with("evt_task_restart_lost_")
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn live_external_task_owner_survives_reopen_and_is_lost_after_exit() {
+    let path = TaskDatabase(std::env::temp_dir().join(format!(
+            "ycoding-owner-fence-{}-{}.redb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+    let mut owner = tokio::process::Command::new("sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let identity = ledger::identify(owner.id().unwrap()).await.unwrap();
+    let harness = persistent_harness(&path.0, true);
+    let child = launched(&harness, "call_external").await;
+    set_owner(
+        &harness,
+        &child,
+        Some(i64::from(identity.pid)),
+        Some(&identity.started),
+    )
+    .await;
+    let before = task_row(&harness.store, &child);
+    close(harness);
+
+    let harness = persistent_harness(&path.0, false);
+    assert_eq!(harness.service.reconcile_stale().await.unwrap(), 0);
+    assert_eq!(task_row(&harness.store, &child), before);
+    assert!(restart_events(&harness).is_empty());
+    assert!(harness.recorder.woken().is_empty());
+    owner.kill().await.unwrap();
+    owner.wait().await.unwrap();
+    assert_eq!(
+        harness.service.reconcile_stale().await.unwrap(),
+        0,
+        "one check per open Store even after owner exits"
+    );
+    close(harness);
+
+    let harness = persistent_harness(&path.0, false);
+    assert_eq!(harness.service.reconcile_stale().await.unwrap(), 1);
+    assert_eq!(
+        harness.service.get(&id("ses_one"), &child).unwrap().state,
+        State::Lost
+    );
+    assert_eq!(
+        task_row(&harness.store, &child).revision,
+        before.revision + 1
+    );
+    assert_eq!(
+        restart_events(&harness)[0].id,
+        LosslessString::from(format!(
+            "evt_task_restart_lost_{}_{}",
+            child.as_lossless().as_str().unwrap(),
+            before.revision + 1
+        ))
+    );
+    assert_eq!(notifications(&harness.store).len(), 1);
+    assert_eq!(notifications(&harness.store)[0].delivered, 0);
+    assert_eq!(harness.service.dispatch_notifications().await.unwrap(), 0);
+    assert!(harness.recorder.woken().is_empty());
+    close(harness);
+
+    let harness = persistent_harness(&path.0, false);
+    assert_eq!(harness.service.reconcile_stale().await.unwrap(), 0);
+    assert_eq!(restart_events(&harness).len(), 1);
+    assert_eq!(notifications(&harness.store).len(), 1);
+    assert!(harness.recorder.woken().is_empty());
+    close(harness);
+}
+
+#[tokio::test]
+async fn missing_dead_and_reused_pid_owners_become_lost_once() {
+    let harness = harness();
+    let identity = ledger::identify(std::process::id()).await.unwrap();
+    let owners = [
+        ("missing", "starting", None, None),
+        ("dead", "running", Some(2_000_000_000), Some("dead")),
+        (
+            "reused",
+            "waiting",
+            Some(i64::from(identity.pid)),
+            Some("different start"),
+        ),
+        (
+            "partial_pid",
+            "cancelling",
+            Some(i64::from(identity.pid)),
+            None,
+        ),
+        (
+            "partial_started",
+            "running",
+            None,
+            Some(identity.started.as_str()),
+        ),
+    ];
+    let mut children = Vec::new();
+    for (call, state, pid, started) in owners {
+        let child = launched(&harness, call).await;
+        set_owner(&harness, &child, pid, started).await;
+        let mut row = task_row(&harness.store, &child);
+        row.state = state.into();
+        harness
+            .store
+            .submit(move |tx| TaskTable::put(tx, &row))
+            .unwrap()
+            .await
+            .unwrap();
+        children.push(child);
+    }
+    let terminal = launched(&harness, "completed").await;
+    harness
+        .service
+        .settle(&terminal, Settlement::Completed { excerpt: None })
+        .await
+        .unwrap();
+    let before_terminal = task_row(&harness.store, &terminal);
+    let woken = harness.recorder.woken();
+    let revision = orchestration_revision(&harness.store, "ses_one");
+    let other = Service::new(harness.sessions.clone(), harness.recorder.clone());
+    let (first, second) = tokio::join!(harness.service.reconcile_stale(), other.reconcile_stale());
+    assert_eq!(first.unwrap() + second.unwrap(), children.len());
+    for child in &children {
+        let row = task_row(&harness.store, child);
+        assert_eq!(row.state.as_str(), Some("lost"));
+        assert_eq!(row.revision, 2);
+        assert!(restart_events(&harness).iter().any(|event| event.id
+            == LosslessString::from(format!(
+                "evt_task_restart_lost_{}_2",
+                child.as_lossless().as_str().unwrap()
+            ))));
+    }
+    assert_eq!(
+        orchestration_revision(&harness.store, "ses_one"),
+        revision + children.len() as i64
+    );
+    assert_eq!(task_row(&harness.store, &terminal), before_terminal);
+    assert_eq!(restart_events(&harness).len(), children.len());
+    assert_eq!(
+        notifications(&harness.store)
+            .iter()
+            .filter(|notice| notice.type_.as_str() == Some("lost") && notice.delivered == 0)
+            .count(),
+        children.len()
+    );
+    assert_eq!(harness.recorder.woken(), woken);
+    let new = launched(&harness, "new_after_reconciliation").await;
+    set_owner(&harness, &new, None, None).await;
+    let woken_after_launch = harness.recorder.woken();
+    assert_eq!(woken_after_launch.len(), woken.len() + 1);
+    let recreated = Service::new(harness.sessions.clone(), harness.recorder.clone());
+    assert_eq!(
+        recreated
+            .reconcile_stale_with_processes(|| async { panic!("already reconciled") })
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        task_row(&harness.store, &new).state.as_str(),
+        Some("running")
+    );
+    assert_eq!(harness.recorder.woken(), woken_after_launch);
+}
+
+#[tokio::test]
+async fn process_list_failure_defers_reconciliation() {
+    let harness = harness();
+    let child = launched(&harness, "call_unreadable").await;
+    set_owner(&harness, &child, None, None).await;
+    let before = task_row(&harness.store, &child);
+    let parent_revision = orchestration_revision(&harness.store, "ses_one");
+    let woken = harness.recorder.woken();
+    assert_eq!(
+        harness
+            .service
+            .reconcile_stale_with_processes(|| async {
+                Err(std::io::Error::other("ps unavailable"))
+            })
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(task_row(&harness.store, &child), before);
+    assert_eq!(
+        orchestration_revision(&harness.store, "ses_one"),
+        parent_revision
+    );
+    assert!(notifications(&harness.store).is_empty());
+    assert!(restart_events(&harness).is_empty());
+    let retry = Service::new(harness.sessions.clone(), harness.recorder.clone());
+    assert_eq!(
+        retry
+            .reconcile_stale_with_processes(|| async { Ok(Vec::new()) })
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        task_row(&harness.store, &child).state.as_str(),
+        Some("lost")
+    );
+    assert_eq!(harness.recorder.woken(), woken);
+}
+
+#[tokio::test]
+async fn restart_loss_rebuilds_task_projection_and_outbox_from_durable_history() {
+    let original = harness();
+    let child = raw_launch(&original, "ses_two", "call_rebuild").await;
+    raw_change(
+        &original,
+        &child,
+        "evt_rebuild_started",
+        r#"{"type":"started"}"#,
+    )
+    .await
+    .unwrap();
+    set_owner(&original, &child, None, None).await;
+    assert_eq!(original.service.reconcile_stale().await.unwrap(), 1);
+    let mut expected = task_row(&original.store, &child);
+    let expected_notifications = notifications(&original.store);
+    let mut history = original
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<EventTable>(Bound::Unbounded, Bound::Unbounded, 100)
+        .unwrap();
+    history.sort_by_key(|event| event.seq);
+    let rebuilt = harness();
+    rebuilt
+        .store
+        .submit(move |tx| {
+            for event in history {
+                ycoding_core::session::projector::fold(tx, &event)?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let mut actual = task_row(&rebuilt.store, &child);
+    expected.owner_pid = None;
+    expected.owner_started = None;
+    actual.owner_pid = None;
+    actual.owner_started = None;
+    assert_eq!(
+        actual, expected,
+        "ownership is local projection context, not a replayed event fact"
+    );
+    assert_eq!(notifications(&rebuilt.store), expected_notifications);
+    assert_eq!(
+        orchestration_revision(&rebuilt.store, "ses_one"),
+        orchestration_revision(&original.store, "ses_one")
+    );
+    assert!(original.recorder.woken().is_empty());
+    assert!(rebuilt.recorder.woken().is_empty());
+}
+
+#[tokio::test]
+async fn empty_startup_skips_process_listing_and_settles_once() {
+    let harness = harness();
+    assert_eq!(
+        harness
+            .service
+            .reconcile_stale_with_processes(|| async { panic!("no active rows") })
+            .await
+            .unwrap(),
+        0
+    );
+    let child = launched(&harness, "call_after_empty_startup").await;
+    set_owner(&harness, &child, None, None).await;
+    let Harness {
+        service,
+        sessions,
+        store,
+        recorder,
+    } = harness;
+    drop(service);
+    assert_eq!(
+        Service::new(sessions, recorder)
+            .reconcile_stale_with_processes(|| async { panic!("Store already reconciled") })
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(task_row(&store, &child).state.as_str(), Some("running"));
+}
+
+#[tokio::test]
+async fn launch_start_answer_claim_owner_other_changes_preserve_it() {
+    let harness = harness();
+    let child = raw_launch(&harness, "ses_two", "call_claims").await;
+    let identity = ledger::identify(std::process::id()).await.unwrap();
+    let mine = (
+        Some(i64::from(identity.pid)),
+        Some(LosslessString::from(identity.started)),
+    );
+    let owner = || {
+        let row = task_row(&harness.store, &child);
+        (row.owner_pid, row.owner_started)
+    };
+    assert_eq!(owner(), mine);
+    set_owner(&harness, &child, Some(2_000_000_000), Some("dead")).await;
+    raw_change(
+        &harness,
+        &child,
+        "evt_owner_started",
+        r#"{"type":"started"}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owner(), mine);
+    set_owner(&harness, &child, Some(2_000_000_000), Some("dead")).await;
+    let stale = owner();
+    let mut row = task_row(&harness.store, &child);
+    row.background = 0;
+    harness
+        .store
+        .submit(move |tx| TaskTable::put(tx, &row))
+        .unwrap()
+        .await
+        .unwrap();
+    raw_change(
+        &harness,
+        &child,
+        "evt_owner_background",
+        r#"{"type":"backgrounded"}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owner(), stale);
+    raw_change(
+        &harness,
+        &child,
+        "evt_owner_progress",
+        r#"{"type":"progressed","progress":{"text":"still","time":99}}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owner(), stale);
+    step(
+        &harness,
+        &child,
+        "session.step.started",
+        "evt_owner_step_start",
+        r#","agent":"build","model":{"providerID":"local","id":"test"}"#,
+    )
+    .await;
+    assert_eq!(owner(), stale);
+    step(&harness, &child, "session.step.ended", "evt_owner_step_end", r#","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}"#).await;
+    assert_eq!(owner(), stale);
+    raw_change(
+        &harness,
+        &child,
+        "evt_owner_question",
+        r#"{"type":"question_asked","question":{"id":"qst_owner","text":"which?","time":99}}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owner(), stale);
+    raw_change(
+        &harness,
+        &child,
+        "evt_owner_answer",
+        r#"{"type":"question_answered","answer":{"questionID":"qst_owner","text":"this"}}"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owner(), mine);
+    for (index, changes) in [
+        vec![r#"{"type":"lost","excerpt":"gone"}"#],
+        vec![r#"{"type":"cancel_requested"}"#, r#"{"type":"cancelled"}"#],
+        vec![r#"{"type":"completed"}"#],
+        vec![r#"{"type":"failed","error":"boom"}"#],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_owner(&harness, &child, Some(2_000_000_000), Some("dead")).await;
+        for (ordinal, change) in changes.into_iter().enumerate() {
+            raw_change(
+                &harness,
+                &child,
+                &format!("evt_owner_terminal_{index}_{ordinal}"),
+                change,
+            )
+            .await
+            .unwrap();
+            assert_eq!(owner(), stale);
+        }
+        raw_change(
+            &harness,
+            &child,
+            &format!("evt_owner_restart_{index}"),
+            r#"{"type":"started"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(owner(), mine);
+    }
+    let events = harness
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<EventTable>(Bound::Unbounded, Bound::Unbounded, 100)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| !ycoding_schema::stringify_json(&event.data).contains("owner_")),
+        "owner stays out of event payloads"
+    );
+}
+
+#[tokio::test]
 async fn restart_reconciliation_marks_active_tasks_lost_without_waking_the_parent() {
     let harness = harness();
     let running = launched(&harness, "call_1").await;
+    set_owner(&harness, &running, None, None).await;
     let done = launched(&harness, "call_2").await;
     harness
         .service
@@ -1533,7 +2061,10 @@ async fn every_terminal_child_transition_releases_its_subagent_slot() {
                 .cancel(&id("ses_one"), &child)
                 .await
                 .map(|_| ()),
-            _ => harness.service.reconcile_stale().await.map(|_| ()),
+            _ => {
+                set_owner(&harness, &child, None, None).await;
+                harness.service.reconcile_stale().await.map(|_| ())
+            }
         }
         .unwrap();
         assert_eq!(subagents(&guardrails), 0, "{ending}");

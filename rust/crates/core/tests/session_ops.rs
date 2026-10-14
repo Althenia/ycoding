@@ -613,6 +613,8 @@ async fn file_changes_accumulate_counts_keep_latest_patch_and_include_completed_
                         question_data: None,
                         question_time: None,
                         attempt_started: 0,
+                        owner_pid: None,
+                        owner_started: None,
                         revision: 1,
                         time_created: 1,
                         time_updated: 1,

@@ -4,6 +4,7 @@ use super::{
     view::{self, Rendered, TEAM_VIEW_BYTES, task_from_row, truncate_utf8},
 };
 use crate::{
+    platform::shell::ledger,
     process::guardrails::{Guardrails, Reservation},
     session::{
         autonomy, key,
@@ -16,7 +17,7 @@ use crate::{
 use std::{
     collections::BTreeMap,
     ops::Bound,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 use ycoding_schema::{
     DomainDecode, JsonValue, LosslessString, ObjectEncoder, agent, domain, model, permission,
@@ -34,6 +35,29 @@ const QUESTION_BYTES: usize = 8 * 1024;
 const EXCERPT_BYTES: usize = 16 * 1024;
 const RESTART_LOST: &str =
     "The service restarted while the child task was active. Provider execution was not resumed.";
+
+type ReconciliationStates = BTreeMap<usize, Weak<tokio::sync::Mutex<bool>>>;
+
+fn reconciliation_state(client: &ycoding_store::Client) -> Arc<tokio::sync::Mutex<bool>> {
+    static STATES: OnceLock<Mutex<ReconciliationStates>> = OnceLock::new();
+    let mut states = STATES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    states.retain(|_, state| state.strong_count() > 0);
+    let key = std::ptr::from_ref(client.metadata()).addr();
+    if let Some(state) = states.get(&key).and_then(Weak::upgrade) {
+        return state;
+    }
+    let state = Arc::new(tokio::sync::Mutex::new(false));
+    states.insert(key, Arc::downgrade(&state));
+    let retained = state.clone();
+    client.observe_events(move |_| {
+        let _ = &retained;
+        true
+    });
+    state
+}
 
 pub trait Execution: Send + Sync + 'static {
     fn wake(&self, id: &session::Id) -> run_coordinator::Outcome;
@@ -139,16 +163,20 @@ pub struct Service {
     autonomy: autonomy::Service,
     locks: Arc<Mutex<BTreeMap<LosslessString, Arc<tokio::sync::Mutex<()>>>>>,
     held: Arc<Mutex<BTreeMap<LosslessString, Reservation>>>,
+    reconciled: Arc<tokio::sync::Mutex<bool>>,
 }
 
 impl Service {
     pub fn new(sessions: store::Service, execution: Arc<dyn Execution>) -> Self {
+        ledger::current_owner();
+        let reconciled = reconciliation_state(&sessions.client);
         Self {
             autonomy: autonomy::Service::new(sessions.client.clone()),
             sessions,
             execution,
             locks: Arc::default(),
             held: Arc::default(),
+            reconciled,
         }
     }
 
@@ -630,6 +658,18 @@ impl Service {
     }
 
     pub async fn reconcile_stale(&self) -> Result<usize, Error> {
+        self.reconcile_stale_with_processes(ledger::processes).await
+    }
+
+    pub async fn reconcile_stale_with_processes<P, F>(&self, processes: P) -> Result<usize, Error>
+    where
+        P: FnOnce() -> F,
+        F: std::future::Future<Output = std::io::Result<Vec<ledger::Process>>>,
+    {
+        let mut reconciled = self.reconciled.lock().await;
+        if *reconciled {
+            return Ok(0);
+        }
         let mut rows = self
             .sessions
             .client
@@ -639,7 +679,22 @@ impl Service {
             .filter(|row| ACTIVE.contains(&state_of(row).as_str()))
             .collect::<Vec<_>>();
         rows.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        if rows.is_empty() {
+            *reconciled = true;
+            return Ok(0);
+        }
+        let snapshot = match processes().await {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                tracing::warn!("could not list processes; active child tasks were not reconciled");
+                return Ok(0);
+            }
+        };
+        let mut lost = 0;
         for row in &rows {
+            if ledger::alive(&snapshot, row.owner_pid, row.owner_started.as_ref()) {
+                continue;
+            }
             let child_id = session_id(&row.session_id)?;
             let _guard = self.lock(&row.session_id).await;
             self.publish(
@@ -650,8 +705,10 @@ impl Service {
                 Some(restart_lost_id(&row.session_id, row.revision + 1)),
             )
             .await?;
+            lost += 1;
         }
-        Ok(rows.len())
+        *reconciled = true;
+        Ok(lost)
     }
 
     pub(super) fn task(

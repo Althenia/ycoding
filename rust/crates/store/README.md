@@ -142,6 +142,14 @@ The inventory below uses the current `packages/core/src/database/schema.gen.ts` 
 
 ### Records and codec
 
+The unreleased version-1 `session_task` record includes nullable `owner_pid`
+(`i64`) and `owner_started` (lossless string) fields after `attempt_started`.
+Presence tags preserve each SQL NULL independently and start-time text is stored
+without normalization. The SQLite importer requires the exact TS `owner_pid`
+integer and `owner_started` text column inventory and copies both values; it
+neither claims an owner nor publishes events or starts execution. No user-data
+migration or earlier task-record fallback is defined for this unreleased format.
+
 Record codec version 1 begins with byte `01`, followed by each record's declared fields in order. Signed integers use eight-byte big-endian two's-complement values; reals preserve all eight IEEE-754 bytes, including negative zero. Optional values have `00`/`01` presence tags, so SQL NULL is distinct from JSON null, zero, false, and an empty string. Stored integer booleans remain integers; unchecked SQL columns are not narrowed to `bool` or nonnegative counters.
 
 Strings have an eight-byte nonnegative code-unit count and big-endian UTF-16 units. Arrays have a count followed by elements. JSON uses tags `00` null, `01` false, `02` true, `03` real, `04` string, `05` array, and `06` object; objects contain a count and lossless key/value pairs. Decoders reject unknown tags/versions, negative or impossible lengths, duplicate object keys, truncation, and trailing bytes. JSON is represented by `ycoding_schema::JsonValue`, not `serde_json::Value`.
