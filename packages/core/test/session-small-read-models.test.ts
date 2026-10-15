@@ -12,6 +12,9 @@ import { AbsolutePath } from "../src/schema"
 import { SessionMessage } from "../src/session/message"
 import { SessionSchema } from "../src/session/schema"
 import { SessionStore } from "../src/session/store"
+import { SessionEvent } from "../src/session/event"
+import { EventRuntime } from "../src/event"
+import { EventSequenceTable, EventTable } from "../src/event/sql"
 import { SessionTable } from "../src/session/sql"
 import { Skill } from "../src/skill"
 import { Agent } from "../src/agent"
@@ -71,18 +74,32 @@ function run(
   )
 }
 
-const insert = (db: Database.Interface["db"], seq: number, message: SessionMessage.Info) => {
+const insert = (db: Database.Interface["db"], seq: number, message: SessionMessage.Info) => Effect.gen(function* () {
   const { id, type, ...data } = encode(message)
-  return db
+  yield* db
     .run(
       sql`INSERT INTO session_message(id, type, data, seq, session_id, time_created, time_updated)
     VALUES (${id}, ${type}, ${JSON.stringify(data)}, ${seq}, ${sessionID}, 0, 0)`,
     )
     .pipe(Effect.orDie)
-}
+  const event = message.type === "assistant" && message.tokens ? {
+    type: EventRuntime.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable.version),
+    data: Schema.encodeSync(SessionEvent.Step.Ended.data)({ sessionID, assistantMessageID: message.id,
+      finish: message.finish ?? "stop", cost: message.cost ?? Money.USD.zero, tokens: message.tokens }),
+  } : message.type === "compaction" && message.status === "completed" && "reason" in message ? {
+    type: EventRuntime.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version),
+    data: Schema.encodeSync(SessionEvent.Compaction.EndedV1.data)({ sessionID, reason: message.reason,
+      text: message.summary, recent: message.recent }),
+  } : undefined
+  if (!event) return
+  yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq })
+    .onConflictDoUpdate({ target: EventSequenceTable.aggregate_id, set: { seq } }).run().pipe(Effect.orDie)
+  yield* db.insert(EventTable).values({ id: EventRuntime.ID.make(`evt_read_${seq}`), aggregate_id: sessionID,
+    seq, created: 0, type: event.type, data: event.data }).run().pipe(Effect.orDie)
+})
 
 async function readBytes(db: Database.Interface["db"], queries: { sql: string; params: unknown[] }[]) {
-  const reads = queries.filter((query) => /\b(?:from|FROM) ["`]?session_message\b/.test(query.sql))
+  const reads = queries.filter((query) => /\b(?:from|join) ["`]?session_message\b/i.test(query.sql))
   expect(reads.length).toBeGreaterThan(0)
   let bytes = 0
   for (const query of reads) {
@@ -166,6 +183,34 @@ test("diagnostics selects latest values and excludes assistant content", () =>
       expect(yield* store.diagnostics(sessionID, SessionMessage.ID.make("msg_missing"))).toBeUndefined()
     }),
   ))
+
+test("diagnostics seeks each terminal type without scanning an active Step's event range", () =>
+  run((store, db, queries) => Effect.gen(function* () {
+    yield* insert(db, 0, SessionMessage.CompactionCompletedV1.make({
+      id: SessionMessage.ID.make("msg_seek_compaction"), reason: "manual", summary: "summary", recent: "", time: { created },
+    }))
+    yield* insert(db, 1, SessionMessage.Assistant.make({
+      id: SessionMessage.ID.make("msg_seek_active"), agent: Agent.defaultID, model, content: [], time: { created },
+    }))
+    for (let offset = 0; offset < 10_000; offset += 100)
+      yield* db.insert(EventTable).values(Array.from({ length: 100 }, (_, index) => ({
+        id: EventRuntime.ID.make(`evt_seek_${offset + index}`), aggregate_id: sessionID, seq: offset + index + 2,
+        created: 0, type: EventRuntime.versionedType(SessionEvent.Text.Ended.type, SessionEvent.Text.Ended.durable.version),
+        data: { sessionID, assistantMessageID: "msg_seek_active", ordinal: offset + index, text: "output" },
+      }))).run().pipe(Effect.orDie)
+    yield* insert(db, 10_002, SessionMessage.User.make({
+      id: SessionMessage.ID.make("msg_seek_boundary"), text: "boundary", time: { created },
+    }))
+    queries.length = 0
+    expect(yield* store.diagnostics(sessionID, SessionMessage.ID.make("msg_seek_boundary"))).toBeUndefined()
+    const query = queries.find((entry) => entry.sql.includes("json_patch"))
+    expect(query).toBeDefined()
+    const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query!.sql}`, query!.params)
+    expect(plan.filter((row) => row.detail.includes("event_aggregate_type_seq_idx") &&
+      row.detail.includes("aggregate_id=? AND type=? AND seq>? AND seq<?"))).toHaveLength(2)
+    expect(plan.filter((row) => row.detail.includes("event_aggregate_seq_idx"))).toHaveLength(0)
+  })),
+)
 
 test("diagnostics preserves absent optional values, completed compactions and revert boundaries", () =>
   run((store, db) =>

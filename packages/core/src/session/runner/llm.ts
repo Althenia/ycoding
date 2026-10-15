@@ -65,6 +65,7 @@ type StepEnd = {
 
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
+  completeFallback?: () => Effect.Effect<void>
   accountIdentityDigest?: string
   mixedAccountProvenance?: boolean
   contextBreakdown?: ReturnType<typeof SessionContextPressure.breakdown>
@@ -494,7 +495,39 @@ const layer = Layer.effect(
       let firstTextNs: bigint | undefined
       let firstReasoningNs: bigint | undefined
       let firstToolInputNs: bigint | undefined
+      let streamedOutput = ""
       let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
+      let generationUsage: Extract<LLMEvent, { type: "step-finish" }>["usage"]
+      let generationEndedNs: bigint | undefined
+      let generationDiagnosticsPublished = false
+      const publishGenerationDiagnostics = Effect.fnUntraced(function* () {
+        if (generationDiagnosticsPublished) return
+        generationTiming = SessionUsage.generationTiming(generationUsage, {
+          text: firstTextNs,
+          reasoning: firstReasoningNs,
+          toolInput: firstToolInputNs,
+          ended: generationEndedNs ?? (yield* Clock.currentTimeNanos),
+          streamedOutput,
+        })
+        const settlement = publisher.stepSettlement()
+        yield* serialized(events.publish(SessionEvent.DiagnosticsUpdated, {
+          sessionID: session.id,
+          diagnostics: SessionCacheDiagnostics.calculate({
+            model: effective.ref,
+            tokens: settlement?.tokens ?? SessionUsage.tokens(undefined),
+            estimatedCost: settlement ? stepUsage(settlement).cost : Money.USD.zero,
+            contextLimit: effectiveModel.route.defaults.limits?.context,
+            contextBreakdown,
+            routeID: effectiveModel.route.id,
+            providerCache: settlement ? providerCache(settlement) : undefined,
+            generationSpeed: SessionCacheDiagnostics.generationSpeed(
+              yield* providerRequests.recentSteps(session.id),
+              { model: effective.ref, timing: { ...settlement?.timing, ...generationTiming } },
+            ),
+          }),
+        }))
+        generationDiagnosticsPublished = true
+      })
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
@@ -534,44 +567,22 @@ const layer = Layer.effect(
               })
               if (SessionRunnerRetry.isRetryable(failure)) yield* failure
             }
-            if (event.type === "text-delta" && event.text.trim() && firstTextNs === undefined)
+            if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
+              streamedOutput += event.text
+            if (event.type === "text-delta" && event.text.length > 0 && firstTextNs === undefined)
               firstTextNs = yield* Clock.currentTimeNanos
-            if (event.type === "reasoning-delta" && event.text.trim() && firstReasoningNs === undefined)
+            if (event.type === "reasoning-delta" && event.text.length > 0 && firstReasoningNs === undefined)
               firstReasoningNs = yield* Clock.currentTimeNanos
-            if (event.type === "tool-input-delta" && event.text.trim() && firstToolInputNs === undefined)
+            if (event.type === "tool-input-delta" && event.text.length > 0 && firstToolInputNs === undefined)
               firstToolInputNs = yield* Clock.currentTimeNanos
             const receivedNs = yield* Clock.currentTimeNanos
-            yield* publish(event)
             if (LLMEvent.is.stepFinish(event)) {
-              const settlement =
-                publisher.stepSettlement() ??
-                (yield* Effect.die(new Error("Step finish did not produce provider settlement")))
-              const usage = stepUsage(settlement)
-              generationTiming = SessionUsage.generationTiming(event.usage, {
-                text: firstTextNs,
-                reasoning: firstReasoningNs,
-                toolInput: firstToolInputNs,
-                ended: receivedNs,
-              })
-              const speedTiming = { ...settlement.timing, ...generationTiming }
-              yield* serialized(
-                events.publish(SessionEvent.DiagnosticsUpdated, {
-                  sessionID: session.id,
-                  diagnostics: SessionCacheDiagnostics.calculate({
-                    model: effective.ref,
-                    tokens: usage.tokens,
-                    estimatedCost: usage.cost,
-                    contextLimit: effectiveModel.route.defaults.limits?.context,
-                    contextBreakdown,
-                    providerCache: providerCache(settlement),
-                    generationSpeed: SessionCacheDiagnostics.generationSpeed(
-                      yield* providerRequests.recentSteps(session.id),
-                      { model: effective.ref, timing: speedTiming },
-                    ),
-                  }),
-                }),
-              )
+              generationUsage = event.usage
+              generationEndedNs = receivedNs
             }
+            if (LLMEvent.is.providerError(event)) generationEndedNs ??= receivedNs
+            yield* publish(event)
+            if (LLMEvent.is.stepFinish(event)) yield* publishGenerationDiagnostics()
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
               return
@@ -621,6 +632,9 @@ const layer = Layer.effect(
             )
           }),
         ),
+        Effect.onExit(() => Effect.gen(function* () {
+          generationEndedNs ??= yield* Clock.currentTimeNanos
+        })),
         Effect.ensuring(serialized(publisher.flush())),
         Effect.onExit(() => requestTracker.settle()),
       )
@@ -652,26 +666,30 @@ const layer = Layer.effect(
                   : cache && !cache.readReported
                     ? "provider-not-reported"
                     : undefined)
-        return requestTracker.complete({
-          assistantMessageID: publisher.currentMessageID(),
-          connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
-            ? null
-            : requestTrackerState.accountIdentityDigest,
-          tokens: usage.tokens,
-          ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
-          continuation:
-            requestTrackerState.continuationFallback === true
-              ? "fallback"
-              : originalPrepared.continuation.used
-                ? "continued"
-                : "full",
-          ...(invalidation === undefined ? {} : { invalidation }),
-          ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-          ...(settlement?.timing === undefined && generationTiming === undefined
-            ? {}
-            : { timing: { ...settlement?.timing, ...generationTiming } }),
+        return Effect.gen(function* () {
+          yield* publishGenerationDiagnostics()
+          yield* requestTracker.complete({
+            assistantMessageID: publisher.currentMessageID(),
+            connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
+              ? null
+              : requestTrackerState.accountIdentityDigest,
+            tokens: usage.tokens,
+            ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
+            continuation:
+              requestTrackerState.continuationFallback === true || override === "retry-fallback"
+                ? "fallback"
+                : originalPrepared.continuation.used
+                  ? "continued"
+                  : "full",
+            ...(invalidation === undefined ? {} : { invalidation }),
+            ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
+            ...(settlement?.timing === undefined && generationTiming === undefined
+              ? {}
+              : { timing: { ...settlement?.timing, ...generationTiming } }),
+          })
         })
       }
+      requestTrackerState.completeFallback = () => completeProviderRequest(publisher.stepSettlement(), "retry-fallback")
 
       const captureStepEnd = Effect.fnUntraced(function* () {
         const snapshot = yield* snapshots.capture()
@@ -1009,7 +1027,7 @@ const layer = Layer.effect(
       let promoted = false
       const requestTrackerState: AttemptState = { attempts: 0 }
       const completeRetryFallback = () =>
-        requestTrackerState.current?.complete({
+        requestTrackerState.completeFallback?.() ?? requestTrackerState.current?.complete({
           assistantMessageID,
           connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
             ? null
@@ -1067,12 +1085,12 @@ const layer = Layer.effect(
           Effect.onInterrupt(() =>
             assistantMessageID === undefined
               ? Effect.void
-              : events.publish(SessionEvent.Step.Failed, {
+              : completeRetryFallback().pipe(Effect.andThen(events.publish(SessionEvent.Step.Failed, {
                   sessionID,
                   assistantMessageID,
                   error: { type: "aborted", message: "Step interrupted" },
                   contextBreakdown: requestTrackerState.contextBreakdown,
-                }),
+                }))),
           ),
         )
         if (attempt._tag === "Completed")

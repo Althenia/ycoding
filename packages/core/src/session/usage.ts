@@ -5,6 +5,7 @@ import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Money } from "@ycoding-ai/schema/money"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { CatalogModel } from "../model"
+import { Token } from "../util/token"
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
@@ -58,8 +59,21 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
 
 export const generationTiming = (
   usage: Usage | undefined,
+  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint; readonly streamedOutput?: string },
+): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs" | "estimatedTokens" | "estimatedGenerationDurationNs"> | undefined => {
+  const measured = measuredGenerationTiming(usage, times)
+  if (measured?.generatedTokens && ((Number.isSafeInteger(usage?.generationDurationNs) && (usage?.generationDurationNs ?? 0) > 0) || measured.observedGenerationDurationNs)) return measured
+  const start = earliest([times.text, times.reasoning, times.toolInput])
+  const duration = start === undefined ? 0n : times.ended - start
+  const estimatedTokens = Token.estimate(times.streamedOutput ?? "")
+  if (estimatedTokens <= 0 || duration < BigInt(minimumObservedGenerationDurationNs) || duration > BigInt(Number.MAX_SAFE_INTEGER)) return measured
+  return { ...measured, estimatedTokens, estimatedGenerationDurationNs: Number(duration) }
+}
+
+function measuredGenerationTiming(
+  usage: Usage | undefined,
   times: { readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint },
-): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs"> | undefined => {
+): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs"> | undefined {
   const normalized = tokens(usage)
   if (usage?.generationDurationNs !== undefined) return providerTimedTokens(normalized.output + normalized.reasoning)
   const visibleStart = earliest([times.text, times.toolInput])

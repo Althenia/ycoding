@@ -40,10 +40,13 @@ export const GenerationSpeed = Schema.Struct({
   tokens: PositiveInt,
   durationNs: PositiveInt,
   tokensPerSecond: Schema.Finite.check(Schema.isGreaterThan(0)),
+  estimated: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Session.GenerationSpeed" })
 export interface GenerationSpeed extends Schema.Schema.Type<typeof GenerationSpeed> {}
 
 export const GenerationSpeedHistory = Schema.Struct({
+  model: Model.Ref.pipe(optional),
+  unreportedReason: Schema.String.pipe(optional),
   latest: GenerationSpeed.pipe(optional),
   recent: Schema.Array(GenerationSpeed).check(Schema.isMaxLength(8)),
 }).annotate({ identifier: "Session.GenerationSpeedHistory" })

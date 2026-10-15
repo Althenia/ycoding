@@ -1327,7 +1327,10 @@ export type RemoteUsageReportInput = { readonly group: RemoteUsageGroup; readonl
   readonly sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite";
   readonly order?: "asc" | "desc" }
 export type RemoteUsageReportValue = { readonly data: { readonly group: RemoteUsageGroup;
-  readonly rows: readonly (RemoteUsageMetrics & { readonly key: string; readonly label: string })[];
+  readonly rows: readonly (RemoteUsageMetrics & { readonly key: string; readonly label: string;
+    readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string };
+    readonly speed?: { readonly firstOutputP50Ms?: number; readonly firstOutputP95Ms?: number;
+      readonly totalP50Ms?: number; readonly totalP95Ms?: number; readonly outputTokensPerSecond?: number; readonly samples: number } })[];
   readonly total: RemoteUsageMetrics; readonly rowCount: number; readonly nextOffset?: number } }
 
 export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {

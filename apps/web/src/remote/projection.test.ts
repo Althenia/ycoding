@@ -206,6 +206,43 @@ test("live diagnostics replace selected-Session speed and context, then clear on
   expect(contextWindowDisplay(compacted, selected)).toBeUndefined()
 })
 
+test("labels latest estimates and unavailable speed without borrowing an older measurement", () => {
+  const selected = { providerID: "anthropic", id: "claude", profile: "work" }
+  const measured = { model: selected, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
+  const view = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: { generationSpeed: { latest: { ...measured, estimated: true }, recent: [measured] } },
+  })
+  expect(generationSpeedDisplay(view, selected)).toMatchObject({ label: "≈ 80 tok/s", description: expect.stringContaining("Estimated") })
+  expect(generationSpeedDisplay(view, { ...selected, profile: "personal" })).toBeUndefined()
+  const unreported = apply(view, "session.diagnostics.updated", { sessionID: "ses_a",
+    diagnostics: { generationSpeed: { model: selected, recent: [measured], unreportedReason: "No streamed output" } } })
+  expect(generationSpeedDisplay(unreported, selected))
+    .toMatchObject({ label: "unreported", description: "No streamed output" })
+})
+
+test("terminal live diagnostics replace measured speed and restore an interrupted estimate without provider usage", () => {
+  const model = { providerID: "openai", id: "speed-model" }
+  const measured = { model, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
+  const initial = apply(createSessionView("ses_a"), "session.diagnostics.updated", { sessionID: "ses_a",
+    diagnostics: { generationSpeed: { model, latest: measured, recent: [measured] } } })
+  expect(generationSpeedDisplay(initial, model)?.label).toBe("80 tok/s")
+  const failed = apply(initial, "session.step.failed", { sessionID: "ses_a", assistantMessageID: "msg_failed",
+    error: { type: "provider.invalid-request", message: "Invalid request" } })
+  const replaced = apply(failed, "session.diagnostics.updated", { sessionID: "ses_a", diagnostics: {
+    generationSpeed: { model, recent: [measured], unreportedReason: "No usable provider measurement or streamed output window of at least one second" } } })
+  expect(generationSpeedDisplay(replaced, model)?.label).toBe("unreported")
+  const interrupted = apply(replaced, "session.step.failed", { sessionID: "ses_a", assistantMessageID: "msg_interrupted",
+    error: { type: "aborted", message: "Step interrupted" } })
+  const history = { model, latest: { model, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1, estimated: true }, recent: [measured] }
+  const estimated = apply(interrupted, "session.diagnostics.updated", { sessionID: "ses_a", diagnostics: { generationSpeed: history } })
+  expect(generationSpeedDisplay(estimated, model)?.label).toBe("≈ 1 tok/s")
+  const snapshot = readSnapshot({ session: { model }, messages: [{ id: "msg_interrupted", type: "assistant", agent: "build", model,
+    content: [{ type: "text", text: "12345678" }], finish: "error", error: { type: "aborted", message: "Step interrupted" },
+    time: { created: 1, completed: 2001 } }], generationSpeed: history })
+  expect(snapshot?.generationSpeed).toEqual(history)
+  expect(snapshot?.contextWindow).toBeUndefined()
+})
+
 test("ends the elapsed clock on an idle status before the next execution starts", () => {
   const started = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
   const retry = apply(apply(started, "session.step.started", { assistantMessageID: "msg_a" }, 1_100), "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 6_000, error: { code: "rate_limit", message: "Slow down" } }, 2_000)
@@ -660,10 +697,28 @@ describe("snapshot readers", () => {
       generationSpeed: { latest: { ...sample, tokensPerSecond: 0 }, recent: [sample] } })?.generationSpeed).toBeUndefined()
 
     const compacted = readSnapshot({ session: { model: selected }, messages: [assistant,
-      completedCompaction("msg_compaction", "cmp_1", "msg_current", 4, 5)],
-      generationSpeed: { latest: sample, recent: [sample] } })
+      completedCompaction("msg_compaction", "cmp_1", "msg_current", 4, 5)] })
     expect(compacted?.contextWindow).toBeUndefined()
     expect(compacted?.generationSpeed).toBeUndefined()
+  })
+
+  test("restores backend-authoritative post-compaction speed independently of transcript message position", () => {
+    const model = { id: "recovered", providerID: "openai" }
+    const latest = { model, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1, estimated: true }
+    const history = { model, latest, recent: [] }
+    const snapshot = readSnapshot({ session: { model }, messages: [
+      { id: "msg_recovered", type: "assistant", agent: "build", model, content: [{ type: "text", text: "12345678" }],
+        time: { created: 3, completed: 8 } },
+      completedCompaction("msg_compaction", "cmp_1", "msg_recovered", 4, 5),
+    ], generationSpeed: history })
+    expect(snapshot?.generationSpeed).toEqual(history)
+    expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed }, model)?.label).toBe("≈ 1 tok/s")
+    const settledBefore = readSnapshot({ session: { model }, messages: [
+      { id: "msg_before", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Earlier" }],
+        time: { created: 1, completed: 3 } },
+      completedCompaction("msg_compaction", "cmp_1", "msg_before", 4, 5),
+    ] })
+    expect(settledBefore?.generationSpeed).toBeUndefined()
   })
 
   test("keeps only the latest compaction lifecycle without discarding uncompleted history", () => {

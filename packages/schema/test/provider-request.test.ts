@@ -40,6 +40,9 @@ test("encodes optional consent-gated timing and report speed without undefined f
 })
 
 test("decodes content-free provider request records", () => {
+  expect(Schema.decodeUnknownSync(ProviderRequest.Timing)({ estimatedTokens: 12, estimatedGenerationDurationNs: 2_000_000_000 }))
+    .toEqual({ estimatedTokens: 12, estimatedGenerationDurationNs: 2_000_000_000 })
+  expect(() => Schema.decodeUnknownSync(ProviderRequest.Timing)({ estimatedTokens: 0 })).toThrow()
   const decoded = decode(record)
   expect(decoded.source).toBe("step")
   expect(decoded.attempts).toBe(2)

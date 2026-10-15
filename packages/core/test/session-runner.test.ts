@@ -38,6 +38,7 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Form } from "@ycoding-ai/core/form"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
+import type { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
@@ -3274,7 +3275,7 @@ describe("SessionRunnerLLM", () => {
   )
 
   it.effect(
-    "times observed generation from the first counted reasoning delta and hides unreported hidden reasoning",
+    "times observed generation and estimates received output with unreported hidden reasoning",
     () =>
       Effect.gen(function* () {
         const session = yield* setup
@@ -3350,9 +3351,10 @@ describe("SessionRunnerLLM", () => {
         yield* admit(session, "Hidden thinking")
         yield* session.resume(sessionID)
         const hidden = yield* session.diagnostics(sessionID)
-        expect(hidden?.generationSpeed?.latest).toBeUndefined()
+        expect(hidden?.generationSpeed?.latest).toMatchObject({ estimated: true, tokens: 3, durationNs: 2_000_000_000, tokensPerSecond: 1.5 })
         expect(hidden?.generationSpeed?.recent).toHaveLength(1)
         expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(hidden?.generationSpeed)
+        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({ estimatedTokens: 3, estimatedGenerationDurationNs: 2_000_000_000 })
         responses = [
           [
             LLMEvent.stepStart({ index: 0 }),
@@ -3438,6 +3440,34 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("records streamed tool-input estimates without a provider token count", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolInputStart({ id: "estimated-tool", name: "unknown_tool" }),
+          LLMEvent.toolInputDelta({ id: "estimated-tool", name: "unknown_tool", text: '{"path":' }),
+        ]),
+        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.toolInputDelta({ id: "estimated-tool", name: "unknown_tool", text: '"a.ts"}' }),
+          LLMEvent.toolInputEnd({ id: "estimated-tool", name: "unknown_tool" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]))),
+      )
+      responses = [reply.text("Title", "speed-title")]
+      yield* admit(session, "Estimate tool output")
+      yield* session.resume(sessionID)
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID))[0]?.timing).toMatchObject({ estimatedTokens: 4, estimatedGenerationDurationNs: 2_000_000_000 })
+      expect((yield* requests.recentSteps(sessionID))).toHaveLength(2)
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toMatchObject({ unreportedReason: expect.any(String) })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toBeUndefined()
+    }),
+  )
+
   it.effect("omits a buffered output burst instead of reporting an implausible generation rate", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -3484,13 +3514,218 @@ describe("SessionRunnerLLM", () => {
       responses = [reply.text("Title", "speed-title")]
       yield* admit(session, "Buffered output")
       yield* session.resume(sessionID)
-      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toBeUndefined()
-      expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toMatchObject({ recent: [], unreportedReason: expect.any(String) })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toBeUndefined()
       const requests = yield* SessionProviderRequest.Service
       expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({ generatedTokens: 2_355 })
       expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing?.observedGenerationDurationNs).toBeUndefined()
     }),
   )
+
+  it.effect("estimates whitespace and split deltas once from the first received character", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "split-speed" }),
+          LLMEvent.textDelta({ id: "split-speed", text: " " }),
+        ]),
+        Stream.fromEffect(TestClock.adjust("1 second")).pipe(Stream.flatMap(() => Stream.concat(
+          Stream.fromIterable(["a", "b", "c", "d", "e", "f", " "].map((text) => LLMEvent.textDelta({ id: "split-speed", text }))),
+          Stream.fromEffect(TestClock.adjust("1 second")).pipe(Stream.flatMap(() => Stream.fromIterable([
+            LLMEvent.textEnd({ id: "split-speed" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ]))),
+        ))),
+      )
+      yield* admit(session, "Measure split output")
+      yield* session.resume(sessionID)
+      const ledger = yield* SessionProviderRequest.Service
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)?.timing)
+        .toMatchObject({ estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
+        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
+    }),
+  )
+
+  it.effect("excludes a Step settled before compaction completion even when its message follows the compaction row", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      responseStream = Stream.fromEffect(events.publish(SessionEvent.Compaction.StartedV1, {
+        sessionID, reason: "manual", recent: "",
+      })).pipe(Stream.flatMap(() => Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "pre-compaction-speed" }),
+        LLMEvent.textDelta({ id: "pre-compaction-speed", text: "Done" }),
+        LLMEvent.textEnd({ id: "pre-compaction-speed" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 } }),
+        LLMEvent.finish({ reason: "stop" }),
+      ])))
+      yield* admit(session, "Measure before compaction settles")
+      yield* session.resume(sessionID)
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest?.tokensPerSecond).toBe(80)
+      yield* events.publish(SessionEvent.Compaction.EndedV1, { sessionID, reason: "manual", text: "summary", recent: "" })
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
+      expect(yield* session.diagnostics(sessionID)).toBeUndefined()
+    }),
+  )
+
+  it.effect("resets speed output and its observation window after a pre-output retry", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const scheduled = yield* Deferred.make<void>()
+      const unsubscribe = yield* events.listen((event) => event.type === SessionEvent.RetryScheduled.type
+        ? Deferred.succeed(scheduled, undefined) : Effect.void)
+      responseStreams = [
+        Stream.concat(Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "retry-whitespace" }),
+          LLMEvent.textDelta({ id: "retry-whitespace", text: "                " }),
+          LLMEvent.textEnd({ id: "retry-whitespace" }),
+        ]), Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(Stream.flatMap(() => Stream.fail(providerUnavailable())))),
+        Stream.concat(Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "retry-speed" }),
+          LLMEvent.textDelta({ id: "retry-speed", text: "12345678" }),
+        ]), Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.textEnd({ id: "retry-speed" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ])))),
+      ]
+      yield* admit(session, "Measure retried output")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(scheduled)
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+      yield* unsubscribe
+      expect(requests).toHaveLength(2)
+      const ledger = yield* SessionProviderRequest.Service
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({ attempts: 2,
+        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 } })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
+        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed)
+        .toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+    }),
+  )
+
+  it.effect("uses only the overflow-recovery second attempt for generation speed", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      responseStreams = [
+        Stream.concat(Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "overflow-whitespace" }),
+          LLMEvent.textDelta({ id: "overflow-whitespace", text: "                " }),
+          LLMEvent.textEnd({ id: "overflow-whitespace" }),
+        ]), Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(Stream.flatMap(() => Stream.succeed(
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        )))),
+        Stream.concat(Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "overflow-speed" }),
+          LLMEvent.textDelta({ id: "overflow-speed", text: "12345678" }),
+        ]), Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.textEnd({ id: "overflow-speed" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ])))),
+      ]
+      yield* admit(session, "Measure recovered output")
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
+      const ledger = yield* SessionProviderRequest.Service
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({ attempts: 2,
+        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 } })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
+        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed)
+        .toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+    }),
+  )
+
+  it.effect("replaces live measured speed after a raw no-output failed Step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const live: SessionCacheDiagnostics.Info[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+        if (event.type === SessionEvent.DiagnosticsUpdated.type)
+          live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+      }))
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "measured-before-failure" }),
+        LLMEvent.textDelta({ id: "measured-before-failure", text: "Done" }),
+        LLMEvent.textEnd({ id: "measured-before-failure" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 } }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+      yield* admit(session, "Measure before failure")
+      yield* session.resume(sessionID)
+      expect(live.at(-1)?.generationSpeed?.latest?.tokensPerSecond).toBe(80)
+      responseStream = Stream.fail(invalidRequest())
+      yield* admit(session, "Fail without output")
+      yield* session.resume(sessionID).pipe(Effect.exit)
+      const snapshot = yield* session.snapshot(sessionID)
+      expect(snapshot.generationSpeed?.unreportedReason).toBeDefined()
+      expect(live.at(-1)?.generationSpeed?.latest).toBeUndefined()
+      expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
+      yield* unsubscribe
+    }),
+  )
+
+  for (const terminal of ["failure", "provider-error", "interruption", "missing-settlement"] as const)
+    it.effect(`records received-output estimate at ${terminal}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const events = yield* EventRuntime.Service
+        const live: SessionCacheDiagnostics.Info[] = []
+        const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+          if (event.type === SessionEvent.DiagnosticsUpdated.type)
+            live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+        }))
+        currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+        const received = yield* Deferred.make<void>()
+        responseStream = Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: `partial-${terminal}` }),
+            LLMEvent.textDelta({ id: `partial-${terminal}`, text: "12345678" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => terminal === "failure"
+            ? Stream.fail(invalidRequest())
+            : terminal === "provider-error"
+              ? Stream.succeed(LLMEvent.providerError({ message: "Invalid request" }))
+              : terminal === "interruption"
+                ? Stream.fromEffect(Deferred.succeed(received, undefined)).pipe(Stream.flatMap(() => Stream.never))
+                : Stream.empty)),
+        )
+        yield* admit(session, terminal)
+        if (terminal === "interruption") {
+          const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+          yield* Deferred.await(received)
+          yield* session.interrupt(sessionID)
+          const exit = yield* Fiber.await(run)
+          expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        }
+        if (terminal !== "interruption") yield* session.resume(sessionID).pipe(Effect.exit)
+        const requests = yield* SessionProviderRequest.Service
+        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing)
+          .toMatchObject({ estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 })
+        const snapshot = yield* session.snapshot(sessionID)
+        expect(snapshot.generationSpeed?.latest).toMatchObject({ estimated: true, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1 })
+        expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
+        expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(snapshot.generationSpeed)
+        yield* unsubscribe
+      }),
+    )
 
   it.effect("publishes live cache diagnostics before settled local tools finish", () =>
     Effect.gen(function* () {
@@ -7595,6 +7830,12 @@ describe("SessionRunnerLLM", () => {
   it.effect("interrupting the retry backoff publishes the pending step terminal", () =>
     Effect.gen(function* () {
       const session = yield* setup
+      const eventRuntime = yield* EventRuntime.Service
+      const diagnostics: SessionCacheDiagnostics.Info[] = []
+      const unsubscribe = yield* eventRuntime.listen((event) => Effect.sync(() => {
+        if (event.type === SessionEvent.DiagnosticsUpdated.type)
+          diagnostics.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+      }))
       yield* admit(session, "Interrupt retry backoff")
       responseStream = Stream.fail(providerUnavailable())
 
@@ -7614,6 +7855,10 @@ describe("SessionRunnerLLM", () => {
       // session-execution.test.ts and the TUI header reads durable status from here.
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(assistant.time.completed).toBeDefined()
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.unreportedReason).toBeDefined()
+      expect(diagnostics).toHaveLength(1)
+      expect(diagnostics.at(-1)?.generationSpeed).toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+      yield* unsubscribe
       const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
       expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
       expect(

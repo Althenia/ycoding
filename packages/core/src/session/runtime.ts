@@ -13,7 +13,6 @@ import { Provider } from "../provider"
 import { Location } from "../location"
 import { SessionMessage } from "./message"
 import { InstructionState } from "./instruction-state"
-import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionUsage } from "./usage"
@@ -1044,11 +1043,12 @@ const layer = Layer.effect(
               costProvenance: "current_catalog",
             })
       const rows = page.rows.map((item) => {
+        const model = Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(item.model)
         const group = usageReportGroup(
           input.group,
           {
             record: {
-              model: Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(item.model),
+              model,
               agent: Agent.ID.make(item.agent),
               time: DateTime.makeUnsafe(item.time),
             },
@@ -1064,6 +1064,7 @@ const layer = Layer.effect(
         return {
           key: item.key,
           label: group.label,
+          ...(input.group === "model" ? { model } : {}),
           ...usageMetrics(item),
           ...(item.speed === undefined ? {} : { speed: item.speed }),
         }
@@ -1437,12 +1438,7 @@ const layer = Layer.effect(
                 aggregateID: sessionID,
                 ...(sequence < 0 ? {} : { seq: EventRuntime.Seq.make(sequence) }),
               }
-              const generationSpeed = SessionCacheDiagnostics.latestAssistant(
-                history.messages,
-                session.revert?.messageID,
-              )
-                ? SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
-                : undefined
+              const generationSpeed = (yield* store.diagnostics(sessionID, session.revert?.messageID))?.generationSpeed
               return {
                 session,
                 ...history,
@@ -1564,11 +1560,9 @@ const layer = Layer.effect(
         const session = yield* result.get(sessionID)
         const diagnostics = yield* store.diagnostics(sessionID, session.revert?.messageID)
         if (!diagnostics) return diagnostics
-        const generationSpeed = SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID))
         return {
           ...diagnostics,
           requests: yield* providerRequests.summary(sessionID),
-          ...(generationSpeed === undefined ? {} : { generationSpeed }),
         }
       }),
       usage: Effect.fn("Session.usage")(function* (sessionID) {

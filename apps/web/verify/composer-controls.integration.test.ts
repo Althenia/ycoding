@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { launchBrowser } from "./cdp"
 
 const port = 4387
@@ -8,19 +9,18 @@ const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
+let captures: string
 
 beforeAll(async () => {
   server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
-  await mkdir(new URL("../../../.cache/tmp/", import.meta.url), { recursive: true })
+  captures = await mkdtemp(join(tmpdir(), "ycoding-composer-speed-"))
 })
-afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
+afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited; if (captures) await rm(captures, { recursive: true }) })
 
 test("selected Session speed and context share one stable composer row and accessible details", async () => {
-  const captures = join(process.env.TMPDIR ?? new URL("../../../.cache/tmp", import.meta.url).pathname, "web-status-captures")
-  await mkdir(captures, { recursive: true })
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
@@ -90,6 +90,15 @@ test("selected Session speed and context share one stable composer row and acces
       }
       await Bun.write(join(captures, `composer-status-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       if (width === 390) await page.pressEscape()
+      await page.evaluate(`window.composerSetDiagnostics('estimated')`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent?.includes('≈ 6,000 tok/s') === true`)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__mobile-speed')?.textContent ?? ''`)).toBe("≈ 6,000 tok/s")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__speed')?.getAttribute('aria-label') ?? ''`)).toContain("Estimated")
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed-trend') === null`)).toBe(true)
+      await page.evaluate(`window.composerSetDiagnostics('unreported')`)
+      await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent === 'unreported'`)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__mobile-trigger')?.getAttribute('aria-label') ?? ''`)).toContain("No streamed output")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__speed')?.getAttribute('aria-label') ?? ''`)).toContain("No streamed output")
       await page.evaluate(`window.composerSetDiagnostics('mismatch')`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer__speed') === null`)
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__context-trigger,.mini-composer__mount .composer__mobile-context-ring') !== null`)).toBe(false)

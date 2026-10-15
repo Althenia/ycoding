@@ -76,6 +76,14 @@ test("rejects unknown provider cache mechanisms", () => {
   ).toThrow()
 })
 
+test("decodes additive estimated and unreported speed fields", () => {
+  const model = { providerID: "anthropic", id: "claude", profile: "work" }
+  const latest = { model, tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6, estimated: true }
+  expect(decode({ ...diagnostics, generationSpeed: { model, latest, recent: [] } }).generationSpeed)
+    .toMatchObject({ model, latest, recent: [] })
+  expect(decode({ ...diagnostics, generationSpeed: { model, recent: [], unreportedReason: "No streamed output" } }).generationSpeed?.unreportedReason).toBe("No streamed output")
+})
+
 test("decodes optional context breakdown in diagnostics, assistant messages, and both terminal events", () => {
   const contextBreakdown = { system: 1, tools: 2, user: 3, assistant: 4, reasoning: 5, toolCalls: 6, other: 0 }
   expect(decode(diagnostics).contextBreakdown).toBeUndefined()

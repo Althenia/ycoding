@@ -130,7 +130,7 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
     .toSorted((a, b) => a - b)
   const generation = records.flatMap((record) => {
     const sample = SessionCacheDiagnostics.generationSample(record.timing)
-    return sample === undefined ? [] : [sample]
+    return sample === undefined || sample.estimated ? [] : [sample]
   })
   const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
   if (first.length === 0 && total.length === 0 && duration === 0) return undefined
@@ -562,6 +562,12 @@ const layer = Layer.effect(
                             ...(completion.timing.generatedTokens === undefined
                               ? {}
                               : { generatedTokens: completion.timing.generatedTokens }),
+                            ...(completion.timing.estimatedTokens === undefined
+                              ? {}
+                              : { estimatedTokens: completion.timing.estimatedTokens }),
+                            ...(completion.timing.estimatedGenerationDurationNs === undefined
+                              ? {}
+                              : { estimatedGenerationDurationNs: completion.timing.estimatedGenerationDurationNs }),
                             ...(completion.timing.loadDurationNs === undefined
                               ? {}
                               : { loadDurationNs: completion.timing.loadDurationNs }),

@@ -145,12 +145,13 @@ Object.assign(window, { composerSetRetryPhase: (phase: "countdown" | "retrying" 
           : retry
   update({ ...state(), view: next })
 } })
-Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "mismatch") => {
+Object.assign(window, { composerSetDiagnostics: (status: "known" | "unknown" | "mismatch" | "estimated" | "unreported") => {
   const selected = state().selectedSessionInfo?.model
   const model = status === "mismatch" ? { providerID: "anthropic", id: "claude-opus-5-5" } : selected
   const first = model && { model, tokens: 3, durationNs: 1_000_000, tokensPerSecond: 3_000 }
-  const latest = model && { model, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
-  update({ ...state(), view: { ...state().view!, generationSpeed: status === "unknown" || !first || !latest ? undefined : { latest, recent: [first, latest] },
+  const latest = model && { model, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000, ...(status === "estimated" ? { estimated: true } : {}) }
+  update({ ...state(), view: { ...state().view!, generationSpeed: status === "unknown" || !first || !latest ? undefined : status === "unreported"
+    ? { model, recent: [first], unreportedReason: "No streamed output or usable provider measurement" } : { latest, recent: status === "estimated" ? [first] : [first, latest] },
     contextWindow: status === "unknown" || !model ? undefined : { model, used: 74_000, limit: 258_000 } } })
 } })
 

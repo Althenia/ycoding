@@ -102,6 +102,30 @@ test("counts every generated token against a provider-reported generation durati
   })).toEqual({ generatedTokens: 12 })
 })
 
+test("estimates received output when inclusive hidden reasoning prevents measurement", () => {
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 500, outputMayIncludeUnreportedReasoning: true }), {
+    reasoning: 1_000_000_000n, text: 2_000_000_000n, ended: 3_000_000_000n,
+    streamedOutput: "thinking" + "reply   ",
+  })).toEqual({ estimatedTokens: 4, estimatedGenerationDurationNs: 2_000_000_000 })
+})
+
+test("estimates tool-only output without provider counts and rejects buffered or empty output", () => {
+  const times = { toolInput: 1_000_000_000n, ended: 2_000_000_000n, streamedOutput: '{"name":"hello"}' }
+  expect(SessionUsage.generationTiming(undefined, times))
+    .toEqual({ estimatedTokens: 4, estimatedGenerationDurationNs: 1_000_000_000 })
+  expect(SessionUsage.generationTiming(undefined, { ...times, ended: 1_999_999_999n })).toBeUndefined()
+  expect(SessionUsage.generationTiming(undefined, { ...times, streamedOutput: "" })).toBeUndefined()
+  for (const generationDurationNs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
+    expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, generationDurationNs }), times))
+      .toMatchObject({ estimatedTokens: 4, estimatedGenerationDurationNs: 1_000_000_000 })
+})
+
+test("keeps usable provider timing ahead of a received-output estimate", () => {
+  expect(SessionUsage.generationTiming(new Usage({ outputTokens: 120, generationDurationNs: 2_000_000_000 }), {
+    text: 1_000_000_000n, ended: 3_000_000_000n, streamedOutput: "small reply",
+  })).toEqual({ generatedTokens: 120 })
+})
+
 test("falls back to the OpenRouter master price only when provider pricing is unavailable", () => {
   const usage = { input: 1_000, output: 100, reasoning: 50, cache: { read: 0, write: 0 } }
 

@@ -183,6 +183,7 @@ test("renders latest generation speed and bounded trend, then hides it on model 
     const frame = app.captureCharFrame()
     expect(frame).toContain("Speed")
     expect(frame).toContain("6,000 tok/s")
+    expect(frame).not.toContain("≈")
     expect(frame).toContain("▄█")
     expect(frame.indexOf("Cache")).toBeLessThan(frame.indexOf("Speed"))
     select({ providerID: "anthropic", id: "claude-opus-5" })
@@ -191,6 +192,35 @@ test("renders latest generation speed and bounded trend, then hides it on model 
   } finally {
     app.renderer.destroy()
   }
+})
+
+test("replaces live measured speed with interrupted estimates or failed unreported state and rejects a different profile", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"), import("../../../src/context/theme"),
+  ])
+  const [value, update] = createSignal<SessionCacheDiagnostics>(speedDiagnostics)
+  const [selected, select] = createSignal<SessionCacheDiagnostics["model"]>(diagnostics.model)
+  const app = await testRender(() => <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}>
+    <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+      <module.SidebarCacheContent diagnostics={value} selectedModel={selected} />
+    </ThemeProvider></ConfigProvider></TestTuiContexts>, { width: 48, height: 40 })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("6,000 tok/s"))
+    expect(app.captureCharFrame()).not.toContain("≈")
+    update({ ...speedDiagnostics, generationSpeed: {
+      latest: { ...speedDiagnostics.generationSpeed!.latest!, estimated: true }, recent: [] } })
+    await app.waitForFrame((frame) => frame.includes("≈ 6,000 tok/s"))
+    expect(app.captureCharFrame()).not.toContain("▄█")
+    select({ ...diagnostics.model, profile: "other" })
+    await app.waitForFrame((frame) => !frame.includes("Speed"))
+    select(diagnostics.model)
+    update({ ...diagnostics, generationSpeed: { model: diagnostics.model, recent: speedDiagnostics.generationSpeed!.recent,
+      unreportedReason: "No streamed output" } })
+    await app.waitForFrame((frame) => frame.includes("unreported"))
+    expect(app.captureCharFrame()).toContain("No streamed output")
+    expect(app.captureCharFrame()).not.toContain("tok/s")
+  } finally { app.renderer.destroy() }
 })
 
 test("keeps the latest speed on one narrow row without a wrapping trend", async () => {

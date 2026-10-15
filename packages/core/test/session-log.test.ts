@@ -329,6 +329,7 @@ describe("Session.log", () => {
         { totalMs: 200, generatedTokens: 999 },
         undefined,
         { generatedTokens: 2_355, observedGenerationDurationNs: 71_223_792 },
+        { estimatedTokens: 500, estimatedGenerationDurationNs: 2_000_000_000 },
       ]
       for (const [index, timing] of timings.entries())
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
@@ -360,6 +361,7 @@ describe("Session.log", () => {
         samples: 3,
       })
       expect(global.rows).toEqual(local.rows)
+      expect(local.rows[0]?.model).toMatchObject({ providerID: "custom", id: "speed" })
       expect(SessionProviderRequest.reportSpeed([])).toBeUndefined()
       const ledger = yield* SessionProviderRequest.Service
       const absent = (yield* ledger.list(created.id)).slice(3)

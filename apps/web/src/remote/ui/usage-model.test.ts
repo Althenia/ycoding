@@ -119,6 +119,8 @@ test("model breakdown uses the encoded provider and model rather than guessing f
   const providers = [{ providerID: "open/router", label: "OpenRouter · Pay as you go" }]
   expect(modelIdentity("open%2Frouter/deepseek%2Fv4/high", providers)).toEqual({ providerID: "open/router", provider: "OpenRouter", model: "deepseek/v4 · high" })
   expect(modelIdentity("openai/gpt-6-sol", [])).toEqual({ providerID: "openai", provider: "openai", model: "gpt-6-sol" })
+  expect(modelIdentity("openai/gpt-6-sol/high/work", [], { providerID: "openai", id: "gpt-6-sol", variant: "high", profile: "work" })?.model).toBe("gpt-6-sol · high · profile work")
+  expect(modelIdentity("openai/gpt-6-sol/work", [], { providerID: "openai", id: "gpt-6-sol", profile: "work" })?.model).toBe("gpt-6-sol · profile work")
   expect(modelIdentity("model_without_separator", providers)).toBeUndefined()
 })
 

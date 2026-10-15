@@ -1,4 +1,5 @@
 import type { RemoteUsageProvider, RemoteUsageReportInput, RemoteUsageReportValue, RemoteUsageSummaryValue, RemoteUsageTokens } from "@ycoding-ai/remote"
+import type { ModelRefView } from "../projection"
 
 export type UsageProvider = RemoteUsageProvider
 export type UsageWindow = RemoteUsageProvider["windows"][number]
@@ -56,15 +57,19 @@ export function relativeFreshness(updatedAt: number, now: number) {
   return `${Math.floor(elapsed / 86_400_000)}d ago`
 }
 
-export function modelIdentity(key: string, providers: readonly Pick<UsageProvider, "providerID" | "label">[]) {
+export function modelIdentity(key: string, providers: readonly Pick<UsageProvider, "providerID" | "label">[], model?: ModelRefView) {
+  if (model) return { providerID: model.providerID,
+    provider: providerHeading(providers.find((item) => item.providerID === model.providerID) ?? { label: model.providerID }).name,
+    model: `${model.id}${model.variant ? ` · ${model.variant}` : ""}${model.profile ? ` · profile ${model.profile}` : ""}` }
   const parts = key.split("/")
-  if (parts.length < 2 || parts.length > 3) return undefined
+  if (parts.length < 2 || parts.length > 4) return undefined
   const providerID = new URLSearchParams(`id=${parts[0]}`).get("id")
   const modelID = new URLSearchParams(`id=${parts[1]}`).get("id")
   if (!providerID || !modelID) return undefined
   const variant = parts[2] ? new URLSearchParams(`id=${parts[2]}`).get("id") : undefined
+  const profile = parts[3] ? new URLSearchParams(`id=${parts[3]}`).get("id") : undefined
   return { providerID, provider: providerHeading(providers.find((item) => item.providerID === providerID) ?? { label: providerID }).name,
-    model: `${modelID}${variant ? ` · ${variant}` : ""}` }
+    model: `${modelID}${variant ? ` · ${variant}` : ""}${profile ? ` · profile ${profile}` : ""}` }
 }
 
 export const visibleProviders = (providers: readonly UsageProvider[]) => providers.filter((provider) =>
@@ -77,7 +82,7 @@ export function providerDistribution(report: UsageReport | undefined, providers:
   if (report === undefined) return { total: 0, segments: [] as DistributionSegment[] }
   const amount = (row: UsageReportRow) => metric === "spend" ? row.cost ?? 0 : tokenCount(row.tokens)
   const grouped = report.rows.reduce((totals, row) => {
-    const providerID = modelIdentity(row.key, providers)?.providerID ?? "other"
+    const providerID = modelIdentity(row.key, providers, row.model)?.providerID ?? "other"
     totals.set(providerID, (totals.get(providerID) ?? 0) + amount(row))
     return totals
   }, new Map<string, number>())

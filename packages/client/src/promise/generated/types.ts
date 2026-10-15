@@ -245,6 +245,8 @@ export type ProviderRequestTiming = {
   generationDurationNs?: number
   observedGenerationDurationNs?: number
   generatedTokens?: number
+  estimatedTokens?: number
+  estimatedGenerationDurationNs?: number
   loadDurationNs?: number
 }
 
@@ -1667,37 +1669,6 @@ export type TodoUpdated = {
   data: { sessionID: string; todos: Array<SessionTodoInfo> }
 }
 
-export type ProviderRequestReport = {
-  group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
-  rows: Array<{
-    key: string
-    label: string
-    logical: number
-    physical: number
-    helpers: number
-    continued: number
-    fallback: number
-    tokens: TokenUsageInfo
-    cost?: MoneyUSD
-    costProvenance?: "recorded" | "current_catalog"
-    cacheReadReported?: boolean
-    speed?: ProviderRequestSpeed
-  }>
-  total: {
-    logical: number
-    physical: number
-    helpers: number
-    continued: number
-    fallback: number
-    tokens: TokenUsageInfo
-    cost?: MoneyUSD
-    costProvenance?: "recorded" | "current_catalog"
-    cacheReadReported?: boolean
-  }
-  rowCount: number
-  nextOffset?: number
-}
-
 export type SessionPendingSynthetic = {
   admittedSeq: number
   id: string
@@ -2328,7 +2299,13 @@ export type SessionMessageModelSelected = {
   previous?: ModelRef
 }
 
-export type SessionGenerationSpeed = { model: ModelRef; tokens: number; durationNs: number; tokensPerSecond: number }
+export type SessionGenerationSpeed = {
+  model: ModelRef
+  tokens: number
+  durationNs: number
+  tokensPerSecond: number
+  estimated?: boolean
+}
 
 export type ProviderRequestSummary = {
   logical: number
@@ -2377,6 +2354,38 @@ export type SessionOrchestrationTask = {
   revision: number
   time: { created: number; updated: number }
   pinnedAt?: number
+}
+
+export type ProviderRequestReport = {
+  group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+  rows: Array<{
+    key: string
+    label: string
+    model?: ModelRef
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+    speed?: ProviderRequestSpeed
+  }>
+  total: {
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+  }
+  rowCount: number
+  nextOffset?: number
 }
 
 export type CommandInfo = {
@@ -2825,7 +2834,12 @@ export type IsolatedBrowserObservation = {
   instanceID: string
 }
 
-export type SessionGenerationSpeedHistory = { latest?: SessionGenerationSpeed; recent: Array<SessionGenerationSpeed> }
+export type SessionGenerationSpeedHistory = {
+  model?: ModelRef
+  unreportedReason?: string
+  latest?: SessionGenerationSpeed
+  recent: Array<SessionGenerationSpeed>
+}
 
 export type SessionOrchestrationPage = {
   data: Array<SessionOrchestrationTask>

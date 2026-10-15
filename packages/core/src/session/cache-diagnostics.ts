@@ -1,6 +1,8 @@
 export * as SessionCacheDiagnostics from "./cache-diagnostics"
 
 import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
+import { Effect, Schema } from "effect"
+import { and, desc, eq, sql } from "drizzle-orm"
 import { Session } from "@ycoding-ai/schema/session"
 import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { Money } from "@ycoding-ai/schema/money"
@@ -9,8 +11,14 @@ import type { SessionCacheDiagnostics as DiagnosticsSchema } from "@ycoding-ai/s
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { CatalogModel } from "../model"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
-import type { SessionMessage } from "./message"
+import { SessionMessage } from "./message"
 import { SessionUsage } from "./usage"
+import type { Database } from "../database/database"
+import { EventRuntime } from "../event"
+import { EventTable } from "../event/sql"
+import { SessionEvent } from "./event"
+import { SessionMessageTable, SessionProviderRequestTable } from "./sql"
+import { MessageDecodeError } from "./error"
 
 export interface CalculateInput {
   readonly model: CatalogModel.Ref
@@ -152,29 +160,38 @@ export function generationSpeed(
   })
   const newest = recentRecords.at(-1)?.model
   const recent = samples.filter((sample): sample is NonNullable<typeof sample> =>
-    sample !== undefined && newest !== undefined && sample.model.providerID === newest.providerID &&
-    sample.model.id === newest.id && sample.model.variant === newest.variant)
-  if (recent.length === 0) return undefined
+    sample !== undefined && !sample.estimated && newest !== undefined && sample.model.providerID === newest.providerID &&
+    sample.model.id === newest.id && sample.model.variant === newest.variant && sample.model.profile === newest.profile)
+  if (!newest) return undefined
   const latest = samples.at(-1)
-  return { ...(latest === undefined ? {} : { latest }), recent }
+  return { model: newest, ...(latest === undefined
+    ? { unreportedReason: "No usable provider measurement or streamed output window of at least one second" }
+    : { latest }), recent }
 }
 
 export function generationSample(timing: ProviderRequest.Timing | undefined) {
-  const tokens = timing?.generatedTokens
-  if (timing?.generationDurationNs === undefined &&
-    (timing?.observedGenerationDurationNs ?? 0) < SessionUsage.minimumObservedGenerationDurationNs) return undefined
-  const durationNs = timing?.generationDurationNs ?? timing?.observedGenerationDurationNs
-  if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
-    !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) return undefined
-  const tokensPerSecond = tokens * 1_000_000_000 / durationNs
-  if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
-  return { tokens, durationNs, tokensPerSecond }
+  const candidates = [
+    { tokens: timing?.generatedTokens, durationNs: timing?.generationDurationNs ?? timing?.observedGenerationDurationNs,
+      reliable: timing?.generationDurationNs !== undefined || (timing?.observedGenerationDurationNs ?? 0) >= SessionUsage.minimumObservedGenerationDurationNs },
+    { tokens: timing?.estimatedTokens, durationNs: timing?.estimatedGenerationDurationNs, estimated: true,
+      reliable: (timing?.estimatedGenerationDurationNs ?? 0) >= SessionUsage.minimumObservedGenerationDurationNs },
+  ]
+  for (const sample of candidates) {
+    const tokens = sample.tokens
+    const durationNs = sample.durationNs
+    if (!sample.reliable || !Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+      !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) continue
+    const tokensPerSecond = tokens * 1_000_000_000 / durationNs
+    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) continue
+    return { tokens, durationNs, tokensPerSecond, ...(sample.estimated ? { estimated: true } : {}) }
+  }
+  return undefined
 }
 
 export function latestAssistant(
   messages: ReadonlyArray<SessionMessage.Info>,
   boundary?: SessionMessage.ID,
-): (SessionMessage.Assistant & { readonly tokens: TokenUsage.Info }) | undefined {
+): SessionMessage.Assistant | undefined {
   const boundaryIndex = boundary ? messages.findIndex((message) => message.id === boundary) : -1
   if (boundary && boundaryIndex === -1) return undefined
   const end = boundaryIndex === -1 ? messages.length : boundaryIndex
@@ -182,10 +199,80 @@ export function latestAssistant(
     (message, index) => message.type === "compaction" && message.status === "completed" && index < end,
   )
   return messages.findLast(
-    (message, index): message is SessionMessage.Assistant & { readonly tokens: TokenUsage.Info } =>
-      message.type === "assistant" && message.tokens !== undefined && index > compactionIndex && index < end,
+    (message, index): message is SessionMessage.Assistant =>
+      message.type === "assistant" && (message.tokens !== undefined || message.time.completed !== undefined) &&
+      index > compactionIndex && index < end,
   )
 }
+
+export const read = Effect.fn("SessionCacheDiagnostics.read")(function* (
+  db: Database.Interface["db"],
+  sessionID: Session.ID,
+  boundary?: SessionMessage.ID,
+) {
+  const anchor = boundary ? yield* db.select({ seq: SessionMessageTable.seq }).from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, boundary)))
+    .get().pipe(Effect.orDie) : undefined
+  if (boundary && !anchor) return undefined
+  const row = yield* db.get<{ id: string; data: string }>(sql`
+    WITH checkpoint AS MATERIALIZED (
+      SELECT coalesce(max(seq), -1) AS seq FROM ${EventTable}
+      WHERE aggregate_id = ${sessionID} AND type IN (
+        ${EventRuntime.versionedType(SessionEvent.Compaction.EndedV1.type, SessionEvent.Compaction.EndedV1.durable.version)},
+        ${EventRuntime.versionedType(SessionEvent.Compaction.Ended.type, SessionEvent.Compaction.Ended.durable.version)})
+    ), candidates AS (
+      SELECT * FROM (
+        SELECT seq, json_extract(data, '$.assistantMessageID') AS assistantMessageID FROM ${EventTable} INDEXED BY event_aggregate_type_seq_idx
+        WHERE aggregate_id = ${sessionID}
+          AND type = ${EventRuntime.versionedType(SessionEvent.Step.Ended.type, SessionEvent.Step.Ended.durable.version)}
+          AND seq > (SELECT seq FROM checkpoint) AND seq < ${anchor?.seq ?? Number.MAX_SAFE_INTEGER}
+        ORDER BY seq DESC LIMIT 1
+      ) UNION ALL SELECT * FROM (
+        SELECT seq, json_extract(data, '$.assistantMessageID') AS assistantMessageID FROM ${EventTable} INDEXED BY event_aggregate_type_seq_idx
+        WHERE aggregate_id = ${sessionID}
+          AND type = ${EventRuntime.versionedType(SessionEvent.Step.Failed.type, SessionEvent.Step.Failed.durable.version)}
+          AND seq > (SELECT seq FROM checkpoint) AND seq < ${anchor?.seq ?? Number.MAX_SAFE_INTEGER}
+        ORDER BY seq DESC LIMIT 1
+      )
+    ), settlement AS MATERIALIZED (
+      SELECT assistantMessageID FROM candidates ORDER BY seq DESC LIMIT 1
+    )
+    SELECT message.id, json_patch('{}', json_object('id', message.id,
+      'model', json_extract(message.data, '$.model'), 'tokens', json_extract(message.data, '$.tokens'),
+      'cost', json_extract(message.data, '$.cost'), 'diagnostics', json_extract(message.data, '$.diagnostics'))) AS data
+    FROM settlement JOIN ${SessionMessageTable} AS message ON message.id = settlement.assistantMessageID
+    WHERE message.session_id = ${sessionID} AND message.type = 'assistant'
+  `).pipe(Effect.orDie)
+  if (!row) return undefined
+  const assistant = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({
+    id: SessionMessage.ID,
+    model: SessionMessage.Assistant.fields.model,
+    tokens: SessionMessage.Assistant.fields.tokens,
+    cost: SessionMessage.Assistant.fields.cost,
+    diagnostics: SessionMessage.Assistant.fields.diagnostics,
+  })))(row.data).pipe(Effect.mapError(() => new MessageDecodeError({ sessionID, messageID: SessionMessage.ID.make(row.id) })))
+  const records = (yield* db.select({
+    model: SessionProviderRequestTable.model,
+    timing: SessionProviderRequestTable.timing,
+    request: SessionProviderRequestTable.request,
+    assistantMessageID: SessionProviderRequestTable.assistant_message_id,
+  }).from(SessionProviderRequestTable).where(and(
+    eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step"),
+  )).orderBy(desc(SessionProviderRequestTable.request)).limit(8).all().pipe(Effect.orDie)).toReversed()
+  const latest = records.findLast((record) => record.assistantMessageID === assistant.id)
+  return calculate({
+    model: assistant.model,
+    tokens: assistant.tokens ?? SessionUsage.tokens(undefined),
+    estimatedCost: assistant.cost ?? Money.USD.zero,
+    contextLimit: assistant.diagnostics?.contextLimit,
+    contextBreakdown: assistant.diagnostics?.contextBreakdown,
+    providerCache: assistant.diagnostics?.providerCache,
+    generationSpeed: generationSpeed(
+      latest ? records.filter((record) => record.request < latest.request).map((record) => ({ model: record.model, timing: record.timing ?? undefined })) : [],
+      { model: latest?.model ?? assistant.model, timing: latest?.timing ?? undefined },
+    ),
+  })
+})
 
 export function fromMessages(
   messages: ReadonlyArray<SessionMessage.Info>,
@@ -195,7 +282,7 @@ export function fromMessages(
   if (!last) return undefined
   return calculate({
     model: last.model,
-    tokens: last.tokens,
+    tokens: last.tokens ?? SessionUsage.tokens(undefined),
     estimatedCost: last.cost ?? Money.USD.zero,
     contextLimit: last.diagnostics?.contextLimit,
     contextBreakdown: last.diagnostics?.contextBreakdown,

@@ -57,6 +57,8 @@ export const Timing = Schema.Struct({
   generationDurationNs: NonNegativeInt.pipe(optional),
   observedGenerationDurationNs: PositiveInt.pipe(optional),
   generatedTokens: PositiveInt.pipe(optional),
+  estimatedTokens: PositiveInt.pipe(optional),
+  estimatedGenerationDurationNs: PositiveInt.pipe(optional),
   loadDurationNs: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "ProviderRequest.Timing" })
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
@@ -200,6 +202,7 @@ export interface ReportMetrics extends Schema.Schema.Type<typeof ReportMetrics> 
 export const ReportRow = Schema.Struct({
   key: Schema.String,
   label: Schema.String,
+  model: Model.Ref.pipe(optional),
   ...ReportMetricsFields,
   speed: Speed.pipe(optional),
 })

@@ -30,6 +30,8 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Usage reports no longer stall other requests. Each report reads through a separate read-only database connection in steps of at most 10,000 requests, so the TUI, web, and running Sessions keep responding while it runs; on a 9 GB database the summary report dropped from about 7.8 seconds to under half a second. Startup adds three usage indexes once." },
         { tag: "Fixed", text: "A subagent's \"awaiting input\" timer in the TUI header counts from when it asked its question and keeps counting while it waits, instead of showing the time since the subagent started." },
         { tag: "Fixed", text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once." },
+        { tag: "Fixed", text: "Session speed no longer disappears when a provider's output token count is missing or unusable. YCoding then estimates tok/s from the output it streams, marked with ≈ in the TUI sidebar and the web composer; estimates never enter speed trends or Usage report throughput. A failed or interrupted step replaces the previous step's speed, a step retried after compaction shows its own speed, and a step without a usable sample shows unreported with its reason instead of an older rate." },
+        { tag: "Fixed", text: "Session speed and its trend match the selected provider, model, variant, and profile, and the web Usage page labels models whose identity includes a profile correctly." },
       ],
     })
   })

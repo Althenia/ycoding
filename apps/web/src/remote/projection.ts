@@ -41,9 +41,12 @@ type GenerationSpeedSampleView = {
   readonly tokens: number
   readonly durationNs: number
   readonly tokensPerSecond: number
+  readonly estimated?: boolean
 }
 
 type GenerationSpeedHistoryView = {
+  readonly model?: ModelRefView
+  readonly unreportedReason?: string
   readonly latest?: GenerationSpeedSampleView
   readonly recent: readonly GenerationSpeedSampleView[]
 }
@@ -59,7 +62,8 @@ function readGenerationSpeedSample(value: unknown): GenerationSpeedSampleView | 
   const durationNs = positiveInteger(value.durationNs)
   const tokensPerSecond = numberField(value.tokensPerSecond)
   if (!model || tokens === undefined || durationNs === undefined || tokensPerSecond === undefined || tokensPerSecond <= 0) return undefined
-  return { model, tokens, durationNs, tokensPerSecond }
+  if (value.estimated !== undefined && typeof value.estimated !== "boolean") return undefined
+  return { model, tokens, durationNs, tokensPerSecond, ...(value.estimated === true ? { estimated: true } : {}) }
 }
 
 function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undefined {
@@ -68,7 +72,10 @@ function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undef
   if (!recent.every((sample): sample is GenerationSpeedSampleView => sample !== undefined)) return undefined
   const latest = value.latest === undefined ? undefined : readGenerationSpeedSample(value.latest)
   if (value.latest !== undefined && latest === undefined) return undefined
-  return { recent, ...(latest === undefined ? {} : { latest }) }
+  const model = readModelRef(value.model)
+  const unreportedReason = stringField(value.unreportedReason)
+  return { recent, ...(latest === undefined ? {} : { latest }), ...(model ? { model } : {}),
+    ...(unreportedReason ? { unreportedReason } : {}) }
 }
 
 function readContextWindow(model: unknown, used: unknown, limit: unknown): ContextWindowView | undefined {
@@ -95,14 +102,17 @@ const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefin
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed
   const latest = history?.latest
-  if (!latest || !sameModel(latest.model, selected)) return undefined
+  if (!history || !sameModel(latest?.model ?? history.model, selected)) return undefined
+  if (!latest) return { label: "unreported", description: history.unreportedReason ?? "No usable generation measurement" }
   const rate = latest.tokensPerSecond
-  const label = `${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
-  const peak = Math.max(...history.recent.map((sample) => sample.tokensPerSecond))
+  const label = `${latest.estimated ? "≈ " : ""}${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
+  const recent = history.recent.filter((sample) => !sample.estimated && sameModel(sample.model, latest.model))
+  const peak = Math.max(...recent.map((sample) => sample.tokensPerSecond))
   const levels = "▁▂▃▄▅▆▇█"
-  const trend = history.recent.length < 2 ? undefined
-    : history.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
-  return { label, ...(trend === undefined ? {} : { trend }) }
+  const trend = latest.estimated || recent.length < 2 ? undefined
+    : recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
+  const description = latest.estimated ? "Estimated generation speed from received text, thinking and tool-input deltas" : "Latest provider-counted generation speed"
+  return { label, description, ...(trend === undefined ? {} : { trend }) }
 }
 
 const compactTokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
@@ -1706,9 +1716,9 @@ export function readSnapshot(payload: unknown): SessionSnapshot | undefined {
   const messages = visibleTranscript(allMessages)
   const compactionIndex = payload.messages.findLastIndex((item) => isRecord(item) && item.type === "compaction" && item.status === "completed")
   const assistant = payload.messages.findLast((item, index) => index > compactionIndex && isRecord(item) &&
-    item.type === "assistant" && isRecord(item.tokens))
+    item.type === "assistant" && (isRecord(item.tokens) || isRecord(item.time) && numberField(item.time.completed) !== undefined))
   const contextWindow = readAssistantContext(assistant)
-  const generationSpeed = assistant === undefined ? undefined : readGenerationSpeed(payload.generationSpeed)
+  const generationSpeed = readGenerationSpeed(payload.generationSpeed)
   const visibleIDs = new Set(messages.map((message) => message.id))
   return {
     messages,
