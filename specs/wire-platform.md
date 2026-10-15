@@ -24,6 +24,32 @@ IDs are explicit, permanent allocations from the platform range 3000–3999. No 
 
 `browser.connect` and `pty.connect` have EXTERNAL disposition and no application operation ID. Their Chrome-origin first-frame authentication and single-use ticketed PTY WebSocket contracts remain native external boundaries. `pty.connectToken` is a typed issuance operation; its request retains the source's `x-ycoding-ticket: "1"` marker as a closed `headers.x_ycoding_ticket` field, alongside Location, ownership, generation, access and fence inputs.
 
+## Approved non-v5 transport boundaries
+
+Application revision 5 does not encompass every device or media channel. The following three transports are approved current-behavior exceptions. Their domain authority remains in the Rust backend; keeping their codecs does not move execution, persistence, consent or permission policy into a client. They have no application operation IDs, and no replacement v5 device, terminal-byte or Meeting operations are required.
+
+### Chrome device bridge
+
+The paired Chrome extension uses version 4 JSON over the loopback WebSocket `/api/browser/connect`. This channel carries pairing, device state, browser commands/results and capture between the backend browser coordinator and the extension, not application Session RPCs. The extension validates a credential-free HTTP loopback bridge URL; the backend validates the Chrome-extension Origin and bounded first authentication frame, then pairing and bridge ownership. The backend owns Session permission/lease decisions and generation/document/observation fences; Chrome APIs and endpoint safety checks remain extension-owned. Existing `browser.*` application controls use v5 independently of this device channel.
+
+This is a dedicated paired-device boundary, not a remote-client proxy or an alternative application API. Its version 4 device codec is outside the v5 descriptor/digest contract. The strict runtime-to-device v5 requirement in audit row **T4** is **RETIRED-BY-DECISION**; browser-domain safety and lifecycle obligations remain in force. Owners are `extensions/chrome/protocol.js`, `rust/crates/core/src/platform/browser/{protocol,bridge}.rs` and the backend browser socket adapter.
+
+### Raw PTY stream
+
+The local terminal inspector uses `/api/pty/{id}/connect` for replay/output bytes and bounded input. V5 `pty.connectToken` issues a short-lived single-use ticket; v5 creation, inventory, resize and control operations stay typed. Socket admission verifies Origin, ticket scope, PTY and owning Session, backend Location, generation, access mode and control fence. A ticket grants only its recorded attachment authority. Output retains tagged control frames (tag 0 with replay/chunk/end JSON) and byte frames (tag 1), generation/offset replay semantics and disconnect behavior; input remains bounded to 64 KiB.
+
+The terminal-byte channel is an explicit external streaming boundary, not a v5 Frame, typed bulk body or claim that ticket issuance makes output v5. The strict-v5 byte/control portion of audit row **S4** is **RETIRED-BY-DECISION**; the pure frontend codec and replay/input/fence correctness requirements still apply. Owners are `rust/crates/runtime/src/pty_stream.rs`, `rust/crates/core/src/platform/pty/{protocol,ticket}.rs` and the terminal inspector transport/codec.
+
+### Meeting HTTP bridge
+
+The opt-in Meeting service owns a numeric-loopback HTTP bridge and private discovery descriptor. CLI and TUI controllers use authenticated `POST /control`; the live page and its assets use `/view`, with `GET /view/state` and `POST /view/control`, `/view/ask`, `/view/capture`. The controller bearer token and the separate view key have different authority. The bridge requires the exact numeric-loopback Host, rejects a controller Origin and foreign view Origins, validates bearer credentials and route methods, and applies bounded capture admission. Descriptor ownership/symlink checks, fresh page capture consent, capture-owner expiry/disconnect, durable history, worker/model authorization and analysis/evidence policy remain backend obligations. The page owns microphone/display APIs, not arbitrary backend control authority.
+
+This is a scoped local controller/media protocol for the independently owned Meeting lifecycle, not the application v5 connection or trusted process-extension stdio channel. The retained HTTP control/state/audio/ask interface is approved outside v5; no `meeting.control`, `meeting.capture`, `meeting.subscribe` or `meeting.ask` application operations are allocated. The strict-v5 transport portions of audit rows **M11, M12, M13, M14 and T5** are **RETIRED-BY-DECISION**. This retires only the proposed transport replacement, not the Meeting Store, transcription, analysis, approval or trust-boundary requirements. Owners are `rust/crates/core/src/meeting/{bridge,service,runtime}.rs` and the Meeting discovery/bridge presentation consumers.
+
+These exceptions do not approve arbitrary HTTP/SSE application RPC, broaden remote access, alter stored data or retire bootstrap/discovery/stop obligations. Audit rows **D1** and **T2** are not retired by this decision. See [operation dispositions](./wire-operation-inventory.md) and [architecture](../docs/architecture.md#approved-device-terminal-and-meeting-transport-exceptions).
+
+## Typed platform delivery
+
 `fs.read` has STREAM disposition with `ASSET_BULK` delivery. Its explicit `params.path` comes from the `/api/fs/read/*` wildcard and names the Protocol source owner as a domain obligation. The Location query remains explicit. Its canonical typed result contains `mime` and `byteCount`. Nonterminal `Result.asset_metadata` declares that metadata Result plus matching MIME and exact length before a correlated raw BulkStart/BulkPiece/BulkEnd body. Only exact BulkEnd settles success, including zero bytes with zero pieces.
 
 `ycoding-protocol::Asset<FsReadResult>` owns the validated metadata and bounded exact bytes. The runtime's typed asset registration is:

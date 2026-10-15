@@ -155,6 +155,16 @@ Rust Core owns configured trusted process extensions over its private revision 5
 
 Rust Core owns Meeting capture coordination, speech-worker orchestration, local history, and tool-free analysis Sessions. `extensions/meeting` supplies TUI presentation, discovery/bridge consumers, live-page assets, and reference/fixture checks. The authenticated loopback bridge serves `/view` and `/view/capture`; page capture uses a separate view key and fresh consent. The runtime compiles its page and Python worker assets, while configured Python and speech dependencies remain external prerequisites. See [Meeting capture](./configuration.md#meeting-capture).
 
+### Approved device, terminal and Meeting transport exceptions
+
+Application operations and events use binary v5; three dedicated channels are explicitly outside that contract:
+
+- **Chrome device bridge:** paired backend-to-extension version 4 JSON on loopback `/api/browser/connect`. Chrome-extension Origin, bounded first-frame authentication and pairing protect the device boundary; the backend retains Session ownership, permissions and semantic fences. Client-facing `browser.*` operations remain v5. The device codec is not an application RPC surface.
+- **Raw PTY socket:** local `/api/pty/{id}/connect` carries tagged replay/control/output and bounded input, not v5 Frames. V5 ticket issuance and PTY controls remain typed. Origin, the single-use expiring ticket, recorded Location/Session ownership, generation, access and control fence constrain the stream attachment.
+- **Meeting HTTP bridge:** the opt-in local service's private descriptor and controller token protect `/control`; `/view` uses a separate view key for state/control/ask/capture and fresh page consent. Exact loopback Host, route/Origin checks and backend capture leases preserve the controller-versus-page trust boundary. Its dedicated media/lifecycle interface is neither application v5 nor process-extension stdio; Store, worker, authorization and analysis policy stay in Rust Core.
+
+These are retained protocols, not fallback paths or transport replacement work. Their exact scope and audit retirement IDs are specified in [wire-platform](../specs/wire-platform.md#approved-non-v5-transport-boundaries). The approval does not include the separate bootstrap HTTP discovery/stop question, arbitrary HTTP/SSE application RPC, or any remote authority expansion.
+
 ### `packages/cli`
 
 Owns:
