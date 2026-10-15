@@ -7,6 +7,7 @@ import { requireSession, type RemoteCapturedChangesPage, type RemoteRequest } fr
 import { LocalFailure, type LocalServer } from "../src/remote-local"
 import {
   createOperationCache,
+  markSessionActivity,
   createSessionRegistry,
   createSubscriptions,
   executeRemoteOperation,
@@ -124,7 +125,7 @@ test("a Session-scoped read resolves its Location from the verified inventory wi
 
   valueOf(await test.run("session.autonomy.get", "ses_40"))
   expect(test.calls.map((call) => call.method)).toEqual(["getSession", "autonomyGet"])
-  expect(test.calls[0]?.args).toEqual(["ses_40", { directory: "/work" }])
+  expect(test.calls[0]?.args.slice(0, 2)).toEqual(["ses_40", { directory: "/work" }])
 
   test.calls.length = 0
   for (const operation of scopedFanOut) valueOf(await test.run(operation, "ses_40"))
@@ -317,7 +318,7 @@ test("captured summary reads only selective attribution inputs for the root and 
     data: [{ path: "parent.ts" }, { path: "child.ts" }],
   })
   expect(test.count("messages")).toBe(0)
-  expect(test.calls.filter((call) => call.method === "capturedInputs").map((call) => call.args)).toEqual([
+  expect(test.calls.filter((call) => call.method === "capturedInputs").map((call) => call.args.slice(0, 2))).toEqual([
     ["ses_1", { directory: "/work" }],
     ["ses_child", { directory: "/child" }],
   ])
@@ -364,7 +365,7 @@ function capturedFixture(childCount: number) {
   return { ...test, seqs, epochs, files, messageReads, missing, read, children }
 }
 
-test("captured changes reuse the computed groups until the Session or an involved child records a new durable event", async () => {
+test("captured changes reuse the computed groups until the Session moves or a step ends in an involved child", async () => {
   const test = capturedFixture(1)
   const cache = createOperationCache()
   await test.registry.refresh()
@@ -377,10 +378,16 @@ test("captured changes reuse the computed groups until the Session or an involve
   test.calls.length = 0
   expect(await test.read(cache)).toEqual(first)
   expect(test.count("capturedInputs")).toBe(0)
-  expect(test.count("getSession")).toBe(4)
+  expect(test.count("getSession")).toBe(1)
+  expect(test.count("snapshot")).toBe(1)
 
   test.files.set("ses_child_1", ["src/ses_child_1.ts", "src/later.ts"])
   test.seqs.set("ses_child_1", 2)
+  test.calls.length = 0
+  expect((await test.read(cache)).data.map((group) => group.path).sort()).toEqual(["src/parent.ts", "src/ses_child_1.ts"])
+  expect(test.count("capturedInputs")).toBe(0)
+
+  markSessionActivity(cache, "ses_child_1")
   test.calls.length = 0
   expect((await test.read(cache)).data.map((group) => group.path).sort()).toEqual([
     "src/later.ts",
@@ -403,7 +410,7 @@ test("captured changes without a cache load selective inputs and fence every cal
   await test.read()
   await test.read()
   expect(test.count("capturedInputs")).toBe(4)
-  expect(test.count("snapshot")).toBe(8)
+  expect(test.count("snapshot")).toBe(6)
 })
 
 test("a cached summary invalidates on an epoch reset even when the durable sequence is reused", async () => {
@@ -413,6 +420,7 @@ test("a cached summary invalidates on an epoch reset even when the durable seque
   await test.read(cache)
   test.files.set("ses_child_1", ["src/replayed.ts"])
   test.epochs.set("ses_child_1", "epoch_2")
+  markSessionActivity(cache, "ses_child_1")
   test.calls.length = 0
   expect((await test.read(cache)).data.map((file) => file.path).sort()).toEqual(["src/parent.ts", "src/replayed.ts"])
   expect(test.count("capturedInputs")).toBe(2)
@@ -438,21 +446,17 @@ test("parent transcript pruning and dispatch reordering rebuild captured members
   expect((await test.read(cache)).data.map((file) => file.path)).toEqual(["src/parent.ts", "src/ses_child_2.ts"])
   test.calls.length = 0
   await test.read(cache)
-  expect(test.calls.filter((call) => call.method === "getSession").map((call) => call.args[0])).toEqual([
-    "ses_1",
-    "ses_child_2",
-    "ses_1",
-    "ses_child_2",
-  ])
+  expect(test.calls.filter((call) => call.method === "getSession").map((call) => call.args[0])).toEqual(["ses_1"])
   expect(test.count("capturedInputs")).toBe(0)
 })
 
-test("a cached captured page still drops a child that was deleted or moved even though its event position is unchanged", async () => {
+test("a cached captured page drops a child whose inventory event was observed even though its event position is unchanged", async () => {
   const test = capturedFixture(1)
   const cache = createOperationCache()
   await test.registry.refresh()
   expect((await test.read(cache)).data).toHaveLength(2)
   test.missing.add("ses_child_1")
+  markSessionActivity(cache, "ses_child_1")
   test.calls.length = 0
   expect((await test.read(cache)).data.map((group) => group.path)).toEqual(["src/parent.ts"])
 })
@@ -479,6 +483,7 @@ test("a moved child rejected by cache validation is not rediscovered during the 
     valueOf(await test.run("session.capturedChanges.list", parent.id, undefined, cache)) as { data: { path: string }[] }
   expect((await read()).data.map((file) => file.path).sort()).toEqual(["child.ts", "parent.ts"])
   child = { ...child, location: { directory: "/moved" } }
+  markSessionActivity(cache, child.id)
   test.calls.length = 0
   expect((await read()).data.map((file) => file.path)).toEqual(["parent.ts"])
   expect(test.count("listPage")).toBe(0)
@@ -519,7 +524,7 @@ test.each(["event", "epoch"])(
   },
 )
 
-test("an older in-flight transcript cannot replace a newer captured cache entry", async () => {
+test("concurrent captured reads of one Session share a single read and its torn outcome", async () => {
   let seq = 1
   const started = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
@@ -541,28 +546,26 @@ test("an older in-flight transcript cannot replace a newer captured cache entry"
   const cache = createOperationCache()
   const older = test.run("session.capturedChanges.list", "ses_1", undefined, cache)
   await started.promise
+  const joined = test.run("session.capturedChanges.list", "ses_1", undefined, cache)
   seq = 2
-  expect(valueOf(await test.run("session.capturedChanges.list", "ses_1", undefined, cache))).toMatchObject({
-    data: [{ path: "fresh.ts" }],
-  })
   release.resolve()
   expect(errorOf(await older).code).toBe("internal_error")
-  test.calls.length = 0
+  expect(errorOf(await joined).code).toBe("internal_error")
+  expect(test.count("capturedInputs")).toBe(1)
+  expect(cache.capturedChanges.size).toBe(0)
   expect(valueOf(await test.run("session.capturedChanges.list", "ses_1", undefined, cache))).toMatchObject({
     data: [{ path: "fresh.ts" }],
   })
-  expect(test.count("capturedInputs")).toBe(0)
 })
 
-test("no-cache captured reads reject a projection mutation between selective pages and a moved child", async () => {
+test("no-cache captured reads reject a projection mutation between selective pages", async () => {
   let seq = 1
   let moved = false
   let mutate = true
-  let frozenSeq: number | undefined
   const test = fixture([info("ses_1"), info("ses_child", { parentID: "ses_1", directory: "/child" })], {
     snapshot: (id: string) => ({
       sourceEpoch: "epoch_1",
-      watermark: { type: "log.synced", aggregateID: id, seq: frozenSeq ?? seq },
+      watermark: { type: "log.synced", aggregateID: id, seq },
     }),
     getSession: (id: string) =>
       id === "ses_1" ? info(id) : info(id, { parentID: "ses_1", directory: moved ? "/moved" : "/child" }),
@@ -588,9 +591,6 @@ test("no-cache captured reads reject a projection mutation between selective pag
   expect(valueOf(await test.run("session.capturedChanges.list"))).toMatchObject({
     data: [{ path: "old.ts" }, { path: "new.ts" }, { path: "child.ts" }],
   })
-  mutate = true
-  frozenSeq = seq
-  expect(errorOf(await test.run("session.capturedChanges.list")).code).toBe("internal_error")
 })
 
 test("captured reads accept an empty aggregate watermark but fail closed on missing or invalid fences", async () => {

@@ -102,7 +102,7 @@ export type LocalServer = {
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
   readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<SessionInfo>
-  readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
+  readonly getSession: (sessionID: string, location: LocalLocation, signal?: AbortSignal) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
   readonly outstandingSessions: (failures?: boolean) => Promise<{ readonly data: readonly string[]; readonly running: readonly string[]; readonly failed: readonly string[]; readonly lost: readonly string[] }>
@@ -119,7 +119,7 @@ export type LocalServer = {
   readonly referenceList: (location: LocalLocation) => Promise<readonly ReferenceInfo[]>
   readonly resourceCatalog: (location: LocalLocation) => Promise<McpResourceCatalog>
   readonly fileFind: (location: LocalLocation, query: string, limit: number) => Promise<readonly FileSystemEntry[]>
-  readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }) => Promise<unknown>
+  readonly snapshot: (sessionID: string, location: LocalLocation, options?: { readonly limit?: number; readonly before?: string }, signal?: AbortSignal) => Promise<unknown>
   readonly pendingList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly attachmentRead: (sessionID: string, location: LocalLocation, digest: string) => Promise<{ readonly mime: string; readonly bytes: number; readonly data: string }>
   readonly messageRead: (sessionID: string, location: LocalLocation, messageID: string, signal?: AbortSignal) => Promise<SessionMessageInfo>
@@ -135,7 +135,7 @@ export type LocalServer = {
   readonly shellList: (location: LocalLocation) => Promise<readonly unknown[]>
   readonly shellRemove: (shellID: string, location: LocalLocation) => Promise<void>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
-  readonly capturedInputs: (sessionID: string, location: LocalLocation) => Promise<Awaited<ReturnType<YCodingClient["message"]["capturedInputs"]>>["data"]>
+  readonly capturedInputs: (sessionID: string, location: LocalLocation, signal?: AbortSignal) => Promise<Awaited<ReturnType<YCodingClient["message"]["capturedInputs"]>>["data"]>
   readonly compactionList: (sessionID: string, location: LocalLocation) => Promise<RemoteCompactionHistory>
   readonly log: (sessionID: string, location: LocalLocation, after?: number) => Promise<readonly unknown[]>
   readonly autonomyGet: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -244,21 +244,21 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
           request(location, timeoutMs),
         ),
       ),
-    getSession: (sessionID, location) =>
+    getSession: (sessionID, location, signal) =>
       call(async () => {
         await requireDirectory(location)
-        const info = await client.session.get({ sessionID }, request(location, timeoutMs))
+        const info = await client.session.get({ sessionID }, request(location, timeoutMs, signal))
         if (info.location.directory !== location.directory || info.location.workspaceID !== location.workspaceID)
           throw new LocalFailure("not_found", "Session is not available at the recorded location")
         return info
       }),
     messages: (sessionID, location) =>
       call(() => client.message.list({ sessionID }, request(location, timeoutMs))),
-    capturedInputs: (sessionID, location) => call(async () => {
+    capturedInputs: (sessionID, location, signal) => call(async () => {
       const data: Awaited<ReturnType<YCodingClient["message"]["capturedInputs"]>>["data"] = []
       let after: number | undefined
       for (;;) {
-        const page = await client.message.capturedInputs({ sessionID, after, limit: 200 }, request(location, timeoutMs))
+        const page = await client.message.capturedInputs({ sessionID, after, limit: 200 }, request(location, timeoutMs, signal))
         if (page.next !== undefined && (page.data.length === 0 || !Number.isSafeInteger(page.next) || page.next < 0 || after !== undefined && page.next <= after))
           throw new LocalFailure("server", "Captured input pagination did not advance")
         data.push(...page.data)
@@ -284,8 +284,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     referenceList: (location) => call(async () => (await client.reference.list({}, request(location, timeoutMs))).data),
     resourceCatalog: (location) => call(async () => (await client.mcp.resource.catalog({}, request(location, timeoutMs))).data),
     fileFind: (location, query, limit) => call(async () => (await client.file.find({ query, limit }, request(location, timeoutMs))).data),
-    snapshot: (sessionID, location, options) =>
-      call(() => client.session.snapshot({ sessionID, ...options }, request(location, timeoutMs))),
+    snapshot: (sessionID, location, options, signal) =>
+      call(() => client.session.snapshot({ sessionID, ...options }, request(location, timeoutMs, signal))),
     pendingList: (sessionID, location) =>
       call(() => client.session.pending.list({ sessionID }, request(location, timeoutMs))),
     attachmentRead: (sessionID, location, digest) =>

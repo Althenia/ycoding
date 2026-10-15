@@ -364,7 +364,7 @@ test("captured changes attributes a reused child's work to the parent segment th
   ] } })
   const page = valueOf(await capturedRun(test)) as { data: { placementMessageID: string; path: string }[] }
   expect(page.data.map((group) => [group.placementMessageID, group.path])).toEqual([["msg_reply_1", "src/first.ts"], ["msg_reply_2", "src/later.ts"]])
-  expect(test.calls.filter((call) => call.method === "capturedInputs").map((call) => call.args)).toEqual([
+  expect(test.calls.filter((call) => call.method === "capturedInputs").map((call) => call.args.slice(0, 2))).toEqual([
     ["ses_1", { directory: "/work" }], ["ses_child", { directory: "/child" }],
   ])
 })
@@ -636,7 +636,7 @@ describe("backend Session authorization", () => {
     expect(registry.snapshot().map((session) => session.time.updated)).toEqual([50])
   })
 
-  test("notifies list consumers when reported activity changes without repeating an unchanged read", async () => {
+  test("records reported activity without notifying list consumers", async () => {
     let current = { ...sessionInfo("ses_1", { updated: 1 }), time: { created: 1, updated: 1, active: 2 } }
     let invalidations = 0
     const { local } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async () => current })
@@ -645,9 +645,65 @@ describe("backend Session authorization", () => {
     invalidations = 0
     current = { ...current, time: { ...current.time, active: 5 } }
     await registry.verify("ses_1")
-    expect(invalidations).toBe(1)
+    expect(invalidations).toBe(0)
+    expect(registry.snapshot()[0]?.time.active).toBe(5)
     await registry.refresh()
-    expect(invalidations).toBe(1)
+    expect(invalidations).toBe(0)
+  })
+
+  test("a verification window serves repeated verifications until invalidated, renewed, or elapsed", async () => {
+    let clock = 0
+    const current = sessionInfo("ses_1", { updated: 1 })
+    const { local, calls } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async () => current })
+    const registry = createSessionRegistry({ local, verifyWindowMs: 1_000, now: () => clock })
+    await registry.refresh()
+    const reads = () => calls.filter((call) => call.method === "getSession").length
+    await registry.verify("ses_1")
+    await registry.verify("ses_1")
+    expect(reads()).toBe(1)
+    registry.invalidate("ses_1")
+    await registry.verify("ses_1")
+    expect(reads()).toBe(2)
+    await registry.renew("ses_1")
+    expect(reads()).toBe(3)
+    clock = 1_000
+    await registry.verify("ses_1")
+    expect(reads()).toBe(4)
+  })
+
+  test("concurrent verifications of one Session share a single read that aborts with its last waiter", async () => {
+    const gate = Promise.withResolvers<void>()
+    const current = sessionInfo("ses_1", { updated: 1 })
+    let seen: AbortSignal | undefined
+    const { local, calls } = fakeLocal({ listPage: async () => ({ data: [current] }), getSession: async (...args: unknown[]) => { seen = args[2] as AbortSignal; await gate.promise; return current } })
+    const registry = createSessionRegistry({ local })
+    await registry.refresh()
+    const first = new AbortController()
+    const second = new AbortController()
+    const one = registry.verify("ses_1", first.signal)
+    const two = registry.verify("ses_1", second.signal)
+    const three = registry.verify("ses_1")
+    expect(calls.filter((call) => call.method === "getSession")).toHaveLength(1)
+    first.abort()
+    expect(seen?.aborted).toBe(false)
+    await expect(one).rejects.toBeDefined()
+    gate.resolve()
+    expect((await two)?.id).toBe("ses_1")
+    expect((await three)?.id).toBe("ses_1")
+  })
+
+  test("adds one created Session at its reported Location without reading the inventory", async () => {
+    let changes = 0
+    const created = sessionInfo("ses_new", { updated: 2, directory: "/elsewhere" })
+    const { local, calls } = fakeLocal({ listPage: async () => ({ data: [] }), getSession: async () => created })
+    const registry = createSessionRegistry({ local, onChange: () => changes++ })
+    await registry.refresh()
+    calls.length = 0
+    await registry.add("ses_new", { directory: "/elsewhere" })
+    await registry.add("ses_new", { directory: "/elsewhere" })
+    expect(calls.map((call) => [call.method, call.args[0], call.args[1]])).toEqual([["getSession", "ses_new", { directory: "/elsewhere" }]])
+    expect(registry.ids()).toEqual(["ses_new"])
+    expect(changes).toBe(1)
   })
 
   test("refuses a session absent from the authoritative backend inventory", async () => {

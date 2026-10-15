@@ -74,6 +74,7 @@ const maxShellOutputPage = 65_536
 
 const maxCapturedCacheEntries = 32
 const maxCapturedChildReads = 4
+const maxTrackedActivity = 4_096
 const directoryPermissionTtlMs = 30_000
 
 type CapturedGroup = RemoteCapturedChangesPage["data"][number]
@@ -82,17 +83,81 @@ type CapturedEntry = {
   readonly members: ReadonlyMap<string, string | null>
   readonly groups: readonly CapturedGroup[]
   readonly digest: string
+  readonly readAt: number
+  readonly epoch: number
 }
+type CapturedResult = { readonly groups: readonly CapturedGroup[]; readonly digest: string }
+
+/** Session activity the connector observed on the local event stream; a member Session is re-read only after its entry in `at` passes a cached read's clock value. */
+type SessionActivity = { clock: number; epoch: number; floor: number; readonly at: Map<string, number> }
 
 export type OperationCache = {
   readonly providerAuth: Map<string, ProviderAuthEntry>
   readonly now: () => number
   readonly capturedChanges: Map<string, CapturedEntry>
+  readonly capturedReads: Map<string, Flight<CapturedResult>>
+  readonly activity: SessionActivity
   readonly directories: Map<string, { readonly allowed: boolean; readonly expiresAt: number }>
 }
 
 export function createOperationCache(now: () => number = Date.now): OperationCache {
-  return { now, capturedChanges: new Map(), directories: new Map(), providerAuth: new Map() }
+  return {
+    now,
+    capturedChanges: new Map(),
+    capturedReads: new Map(),
+    activity: { clock: 0, epoch: 0, floor: 0, at: new Map() },
+    directories: new Map(),
+    providerAuth: new Map(),
+  }
+}
+
+/** Records that a step ended in, or the inventory changed for, the Session, so a cached captured summary re-reads it. */
+export function markSessionActivity(cache: OperationCache, sessionID: string) {
+  const activity = cache.activity
+  activity.at.delete(sessionID)
+  activity.at.set(sessionID, ++activity.clock)
+  if (activity.at.size <= maxTrackedActivity) return
+  const oldest = activity.at.keys().next().value!
+  activity.floor = activity.at.get(oldest)!
+  activity.at.delete(oldest)
+}
+
+/** Ends trust in every cached captured summary's member Sessions after the event stream may have missed events. */
+export function resetSessionActivity(cache: OperationCache) {
+  cache.activity.floor = 0
+  cache.activity.epoch++
+}
+
+type Flight<Value> = { readonly promise: Promise<Value>; readonly controller: AbortController; waiters: number }
+
+/**
+ * Joins the pending read for the key or starts it. The read aborts when its last
+ * waiter aborts; a caller that aborts rejects at once while other waiters keep the read.
+ */
+function joinFlight<Value>(flights: Map<string, Flight<Value>>, key: string, signal: AbortSignal | undefined, start: (signal: AbortSignal) => Promise<Value>): Promise<Value> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  const existing = flights.get(key)
+  const flight = existing !== undefined && !existing.controller.signal.aborted ? existing : (() => {
+    const controller = new AbortController()
+    const created: Flight<Value> = { promise: start(controller.signal).finally(() => { if (flights.get(key) === created) flights.delete(key) }), controller, waiters: 0 }
+    flights.set(key, created)
+    return created
+  })()
+  flight.waiters++
+  let left = false
+  const leave = () => {
+    if (left) return
+    left = true
+    if (--flight.waiters === 0) flight.controller.abort()
+  }
+  return new Promise<Value>((resolve, reject) => {
+    const onAbort = () => { leave(); reject(signal?.reason) }
+    signal?.addEventListener("abort", onAbort, { once: true })
+    flight.promise.then(resolve, reject).finally(() => {
+      signal?.removeEventListener("abort", onAbort)
+      left = true
+    })
+  })
 }
 
 const catalogLimit = { agents: 100, commands: 200, skills: 200, references: 200, resources: 200 }
@@ -257,9 +322,17 @@ export type SessionRegistry = {
   readonly ids: () => readonly string[]
   readonly snapshot: () => readonly SessionInfo[]
   readonly root: (sessionID: string) => string | undefined
-  readonly get: (sessionID: string) => Promise<SessionInfo | undefined>
-  /** Resolve the Session from the complete backend inventory, then verify its current Location. */
-  readonly verify: (sessionID: string) => Promise<SessionInfo | undefined>
+  readonly get: (sessionID: string, signal?: AbortSignal) => Promise<SessionInfo | undefined>
+  /** Resolve the Session from the complete backend inventory, then verify its current Location. A verification inside the registry's window or already in flight is reused until `invalidate` or `renew`. */
+  readonly verify: (sessionID: string, signal?: AbortSignal) => Promise<SessionInfo | undefined>
+  /** Ends the Session's verification window, so the next `verify` reads its recorded Location again. */
+  readonly invalidate: (sessionID: string) => void
+  /** Ends every verification window and abandons pending verifications, as after events were missed. */
+  readonly invalidateAll: () => void
+  /** Reads the Session at its recorded Location now, whatever the verification window holds. */
+  readonly renew: (sessionID: string) => Promise<SessionInfo | undefined>
+  /** Adds one newly created Session at the Location the backend reported for it, without reading the inventory. */
+  readonly add: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly refresh: () => Promise<void>
 }
 
@@ -270,8 +343,15 @@ export type SessionRegistry = {
 export function createSessionRegistry(input: {
   readonly local: LocalServer
   readonly onChange?: () => void
+  /** How long a successful Location verification serves later verifications of the same Session; zero verifies every time. */
+  readonly verifyWindowMs?: number
+  readonly now?: () => number
 }): SessionRegistry {
   const verified = new Map<string, SessionInfo>()
+  const verifiedAt = new Map<string, number>()
+  const verifications = new Map<string, Flight<SessionInfo | undefined>>()
+  const now = input.now ?? Date.now
+  let invalidations = 0
   let refreshQueue = Promise.resolve<readonly SessionInfo[]>([])
 
   const readAll = async () => {
@@ -306,25 +386,47 @@ export function createSessionRegistry(input: {
     return run
   }
 
-  const verify = async (sessionID: string) => {
+  const read = async (sessionID: string, signal: AbortSignal) => {
     const known = verified.get(sessionID)
     const info = known ?? await findSession(input.local, sessionID)
     if (info === undefined) return undefined
+    const generation = invalidations
     try {
-      const current = await input.local.getSession(sessionID, locationInfo(info))
+      const current = await input.local.getSession(sessionID, locationInfo(info), signal)
       if (verified.get(sessionID) !== known) {
         const latest = verified.get(sessionID)
         return latest === undefined || JSON.stringify(locationInfo(latest)) !== JSON.stringify(locationInfo(current)) ? undefined : latest
       }
       const changed = sessionInventoryChanged(verified.get(sessionID), current)
       verified.set(sessionID, current)
+      if (generation === invalidations) verifiedAt.set(sessionID, now())
       if (changed) input.onChange?.()
       return current
     } catch (cause) {
       if (!(cause instanceof LocalFailure && cause.kind === "not_found")) throw cause
       if (verified.get(sessionID) === known && verified.delete(sessionID)) input.onChange?.()
+      verifiedAt.delete(sessionID)
       return undefined
     }
+  }
+
+  const verify = (sessionID: string, signal?: AbortSignal) => {
+    const known = verified.get(sessionID)
+    const at = verifiedAt.get(sessionID)
+    if (known !== undefined && at !== undefined && now() - at < (input.verifyWindowMs ?? 0)) return Promise.resolve<SessionInfo | undefined>(known)
+    return joinFlight(verifications, sessionID, signal, (flightSignal) => read(sessionID, flightSignal))
+  }
+
+  const invalidate = (sessionID: string) => {
+    invalidations++
+    verifiedAt.delete(sessionID)
+    verifications.delete(sessionID)
+  }
+
+  const invalidateAll = () => {
+    invalidations++
+    verifiedAt.clear()
+    verifications.clear()
   }
 
   return {
@@ -336,6 +438,20 @@ export function createSessionRegistry(input: {
     },
     get: verify,
     verify,
+    invalidate,
+    invalidateAll,
+    renew: (sessionID) => {
+      invalidate(sessionID)
+      return verify(sessionID)
+    },
+    add: async (sessionID, location) => {
+      if (verified.has(sessionID)) return
+      const created = await input.local.getSession(sessionID, location)
+      if (verified.has(sessionID)) return
+      verified.set(sessionID, created)
+      verifiedAt.set(sessionID, now())
+      input.onChange?.()
+    },
     refresh: async () => {
       await refresh()
     },
@@ -346,10 +462,10 @@ function sessionInventoryChanged(previous: SessionInfo | undefined, current: Ses
   if (previous === undefined) return true
   return JSON.stringify([
     previous.title, previous.agent, previous.model, previous.projectID, previous.location,
-    previous.time.archived, previous.time.pinned, previous.time.active,
+    previous.time.archived, previous.time.pinned,
   ]) !== JSON.stringify([
     current.title, current.agent, current.model, current.projectID, current.location,
-    current.time.archived, current.time.pinned, current.time.active,
+    current.time.archived, current.time.pinned,
   ])
 }
 
@@ -580,14 +696,14 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
     assertRootPlacement(existing, id, candidate)
     const current = await input.local.getSession(id, locationInfo(existing))
     assertRootPlacement(current, id, candidate)
-    await input.sessions.refresh()
+    await input.sessions.add(id, locationInfo(current))
     return current
   }
 
   const created = await input.local.createSession(id, candidate.location, agent, model)
   assertRootPlacement(created, id, candidate)
-  await input.sessions.refresh()
-  const verified = await input.sessions.verify(id)
+  await input.sessions.add(id, locationInfo(created))
+  const verified = await input.sessions.verify(id, input.signal)
   if (verified === undefined) throw new OperationError("invalid_message", "Created Session is not available at the selected workspace")
   assertRootPlacement(verified, id, candidate)
   return verified
@@ -613,6 +729,11 @@ class OperationError extends Error {
   }
 }
 
+/** Frames already built while the operation checked their size, so they are serialized once. */
+class PreparedFrames {
+  constructor(readonly frames: readonly RemoteResponse[]) {}
+}
+
 export type OperationInput = {
   readonly request: RemoteRequest
   readonly signal?: AbortSignal
@@ -627,7 +748,7 @@ export async function executeRemoteOperation(input: OperationInput): Promise<rea
   const request = input.request
   try {
     const value = await run(input)
-    return successFrames(request.id, value)
+    return value instanceof PreparedFrames ? value.frames : successFrames(request.id, value)
   } catch (cause) {
     if (cause instanceof ProviderAuthError) return [failureFrame(request.id, "invalid_message", cause.message)]
     if (cause instanceof OperationError) return [failureFrame(request.id, cause.code, cause.message)]
@@ -693,7 +814,7 @@ async function run(input: OperationInput) {
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
   // Verify the Session at its bound Location on every execution, so a moved or
   // deleted Session fails closed instead of being served from stale metadata.
-  const verified = await input.sessions.verify(sessionID)
+  const verified = await input.sessions.verify(sessionID, input.signal)
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
@@ -722,7 +843,7 @@ async function run(input: OperationInput) {
         const page = await input.local.snapshot(sessionID, location, { limit, ...(validated.before === undefined ? {} : { before: validated.before }) })
         const frames = successFrames(request.id, page)
         const first = frames[0]
-        if (!first || first.ok || first.error.code !== "message_too_large") return page
+        if (!first || first.ok || first.error.code !== "message_too_large") return new PreparedFrames(frames)
         if (limit === 1) throw new OperationError("message_too_large", "A single projected message exceeds the response bound")
       }
     }
@@ -1295,27 +1416,35 @@ async function capturedChangesPage(input: OperationInput, owner: SessionInfo, se
   return page
 }
 
-async function capturedGroups(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation) {
-  const cache = input.cache?.capturedChanges
-  const parentKey = await eventPosition(input.local, sessionID, location)
-  const cached = cache?.get(sessionID)
+function capturedGroups(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation) {
+  const cache = input.cache ?? createOperationCache()
+  return joinFlight(cache.capturedReads, `${sessionID}\0${location.directory}\0${location.workspaceID ?? ""}`, input.signal,
+    (signal) => readCapturedGroups(input, cache, owner, sessionID, location, signal))
+}
+
+async function readCapturedGroups(input: OperationInput, cache: OperationCache, owner: SessionInfo, sessionID: string, location: LocalLocation, signal: AbortSignal): Promise<CapturedResult> {
+  const entries = cache.capturedChanges
+  const started = cache.activity.clock
+  const epoch = cache.activity.epoch
+  const parentKey = await eventPosition(input.local, sessionID, location, signal)
+  const cached = entries.get(sessionID)
   const checked = new Map<string, Awaited<ReturnType<typeof capturedMember>>>()
-  if (cache !== undefined && cached !== undefined && cached.parentKey === parentKey) {
-    const members = await limited([...cached.members.keys()], (childID) => capturedMember(input, owner, childID))
+  if (cached !== undefined && cached.parentKey === parentKey) {
+    const unobserved = cached.epoch !== epoch
+    const rechecks = [...cached.members.keys()].filter((childID) => unobserved || (cache.activity.at.get(childID) ?? cache.activity.floor) > cached.readAt)
+    const members = await limited(rechecks, (childID) => capturedMember(input, owner, childID, signal))
     for (const member of members) checked.set(member.childID, member)
     if (members.every((member) => member.key === cached.members.get(member.childID))) {
-      if (!await capturedStable(input, owner, parentKey, members))
-        throw new OperationError("internal_error", "Captured changes changed while reading; refresh to try again")
-      cache.delete(sessionID)
-      cache.set(sessionID, cached)
+      entries.delete(sessionID)
+      entries.set(sessionID, { ...cached, readAt: started, epoch })
       return cached
     }
   }
 
-  const parent = await input.local.capturedInputs(sessionID, location)
+  const parent = await input.local.capturedInputs(sessionID, location, signal)
   const members = await limited(owner.parentID === undefined ? capturedChildSessionIDs(parent) : [], async (childID) => {
-    const member = checked.get(childID) ?? await capturedMember(input, owner, childID)
-    return { ...member, messages: member.child === undefined ? undefined : await input.local.capturedInputs(member.child.id, locationInfo(member.child)) }
+    const member = checked.get(childID) ?? await capturedMember(input, owner, childID, signal)
+    return { ...member, messages: member.child === undefined ? undefined : await input.local.capturedInputs(member.child.id, locationInfo(member.child), signal) }
   })
   const children = new Map(members.flatMap((member) => member.messages === undefined ? [] : [[member.childID, member.messages] as const]))
   const groups = summarizeCapturedChanges(parent, children, (assistantMessageID, callID) => SessionOrchestrationIdentity.send(sessionID, assistantMessageID, callID))
@@ -1324,35 +1453,29 @@ async function capturedGroups(input: OperationInput, owner: SessionInfo, session
       ? { ...original, additions: 0, deletions: 0, files: [{ path: original.path, diff: "", additions: 0, deletions: 0, status: original.status, unavailable: true }] }
       : original)
   const digest = createHash("sha256").update(sessionID).update(JSON.stringify(groups)).digest("hex")
-  if (!await capturedStable(input, owner, parentKey, members))
+  if (!await capturedStable(input, cache, owner, parentKey, members, started, epoch, signal))
     throw new OperationError("internal_error", "Captured changes changed while reading; refresh to try again")
-  if (cache !== undefined) {
-    cache.delete(sessionID)
-    cache.set(sessionID, { parentKey, members: new Map(members.map((member) => [member.childID, member.key ?? null] as const)), groups, digest })
-    if (cache.size > maxCapturedCacheEntries) cache.delete(cache.keys().next().value!)
-  }
+  entries.delete(sessionID)
+  entries.set(sessionID, { parentKey, members: new Map(members.map((member) => [member.childID, member.key ?? null] as const)), groups, digest, readAt: started, epoch })
+  if (entries.size > maxCapturedCacheEntries) entries.delete(entries.keys().next().value!)
   return { groups, digest }
 }
 
-async function capturedStable(input: OperationInput, owner: SessionInfo, parentKey: string, members: readonly Awaited<ReturnType<typeof capturedMember>>[]) {
-  const current = await input.sessions.verify(owner.id)
+async function capturedStable(input: OperationInput, cache: OperationCache, owner: SessionInfo, parentKey: string, members: readonly Awaited<ReturnType<typeof capturedMember>>[], started: number, epoch: number, signal: AbortSignal) {
+  const current = await input.sessions.verify(owner.id, signal)
   if (current === undefined || current.parentID !== owner.parentID || JSON.stringify(locationInfo(current)) !== JSON.stringify(locationInfo(owner)) ||
-    await eventPosition(input.local, owner.id, locationInfo(current)) !== parentKey) return false
-  return (await limited(members, async (member) => {
-    if (member.child === undefined) return true
-    const current = await capturedMember(input, owner, member.childID)
-    return current.key === member.key && JSON.stringify(current.child === undefined ? null : locationInfo(current.child)) === JSON.stringify(member.child === undefined ? null : locationInfo(member.child))
-  })).every(Boolean)
+    await eventPosition(input.local, owner.id, locationInfo(current), signal) !== parentKey) return false
+  return epoch === cache.activity.epoch && members.every((member) => (cache.activity.at.get(member.childID) ?? cache.activity.floor) <= started)
 }
 
-async function capturedMember(input: OperationInput, owner: SessionInfo, childID: string) {
-  const child = await input.sessions.verify(childID)
+async function capturedMember(input: OperationInput, owner: SessionInfo, childID: string, signal: AbortSignal) {
+  const child = await input.sessions.verify(childID, signal)
   if (child?.parentID !== owner.id || child.agent === "btw") return { childID, key: null }
-  return { childID, child, key: await eventPosition(input.local, child.id, locationInfo(child)) }
+  return { childID, child, key: await eventPosition(input.local, child.id, locationInfo(child), signal) }
 }
 
-async function eventPosition(local: LocalServer, sessionID: string, location: LocalLocation) {
-  const snapshot = await local.snapshot(sessionID, location, { limit: 1 })
+async function eventPosition(local: LocalServer, sessionID: string, location: LocalLocation, signal: AbortSignal) {
+  const snapshot = await local.snapshot(sessionID, location, { limit: 1 }, signal)
   const epoch = field(snapshot, "sourceEpoch")
   const watermark = field(snapshot, "watermark")
   const seq = field(watermark, "seq")

@@ -19,6 +19,8 @@ import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
   createOperationCache,
+  markSessionActivity,
+  resetSessionActivity,
   createAttachmentUploads,
   attentionDetails,
   createSubscriptions,
@@ -75,6 +77,8 @@ export type RemoteBridgeOptions = {
   readonly eventRetryMaxMs?: number
   readonly authRetryWindowMs?: number
   readonly conflictRetryMs?: number
+  /** Minimum spacing between Session-list invalidation frames; changes inside the window share one trailing frame. */
+  readonly advertiseCoalesceMs?: number
   readonly now?: () => number
   readonly onDiagnostic?: RemoteDiagnostic
   readonly onTerminal?: (message: string, retryable?: boolean) => void
@@ -86,8 +90,10 @@ const defaults = {
   eventRetryMaxMs: 30_000,
   authRetryWindowMs: 30_000,
   conflictRetryMs: 60_000,
+  advertiseCoalesceMs: 1_000,
   rotateBeforeExpiryMs: 60_000,
 }
+const verifyWindowMs = 5_000
 
 export type BridgeState = "idle" | "live" | "terminal" | "closed"
 
@@ -120,6 +126,8 @@ export class RemoteAgent {
   private refreshTimer?: ReturnType<typeof setTimeout>
   private retryTimer?: ReturnType<typeof setTimeout>
   private statusTimer?: ReturnType<typeof setTimeout>
+  private advertiseTimer?: ReturnType<typeof setTimeout>
+  private advertiseDirty = false
   private statusReading?: RelayConnection
   private statusOwner?: object
   private statusRetryAttempt = 0
@@ -142,6 +150,7 @@ export class RemoteAgent {
   private eventStreamGeneration = 0
   private readonly inFlight = new Map<string, AbortController>()
   private eventRetryAttempt = 0
+  private eventStreamFailed = false
   private terminalReason?: string
   private readonly scheduler: RemoteScheduler.Scheduler
 
@@ -154,7 +163,9 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      onChange: () => { void this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.failureGeneration++; this.scheduleStatus() },
+      verifyWindowMs,
+      now: this.now,
+      onChange: () => { this.advertise(); this.attentionStatus = undefined; this.attentionGeneration++; this.failuresHydrated = false; this.failureGeneration++; this.scheduleStatus() },
     })
     this.subscriptions = createSubscriptions()
     this.scheduler = new RemoteScheduler.Scheduler({
@@ -242,7 +253,8 @@ export class RemoteAgent {
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
-        void this.advertise()
+        this.resetAdvertise()
+        this.advertise()
         this.lastStatus = undefined
         this.attentionStatus = undefined
         this.attentionGeneration++
@@ -375,9 +387,25 @@ export class RemoteAgent {
     return this.subscriptions.interactive(sessionID) ? interactiveCoalesceMs : backgroundCoalesceMs
   }
 
-  private async advertise() {
+  private advertise() {
     if (this.state !== "live") return
-    await this.send(serializeSessions({ type: "sessions" }))
+    if (this.advertiseTimer !== undefined) {
+      this.advertiseDirty = true
+      return
+    }
+    void this.send(serializeSessions({ type: "sessions" }))
+    this.advertiseTimer = setTimeout(() => {
+      this.advertiseTimer = undefined
+      if (!this.advertiseDirty) return
+      this.advertiseDirty = false
+      this.advertise()
+    }, this.options.advertiseCoalesceMs ?? defaults.advertiseCoalesceMs)
+  }
+
+  private resetAdvertise() {
+    if (this.advertiseTimer !== undefined) clearTimeout(this.advertiseTimer)
+    this.advertiseTimer = undefined
+    this.advertiseDirty = false
   }
 
   private scheduleStatus() {
@@ -576,6 +604,11 @@ export class RemoteAgent {
       if (this.state !== "live" || this.eventStreamGeneration !== streamGeneration) await stop()
       else {
         this.eventStop = stop
+        this.eventsMayBeMissed()
+        if (this.eventStreamFailed) {
+          this.eventStreamFailed = false
+          this.advertise()
+        }
         this.eventRetryAttempt = 0
         this.scheduleCompletions()
       }
@@ -585,6 +618,12 @@ export class RemoteAgent {
       this.eventStarting = false
       if (this.state === "live" && this.eventStop === undefined && this.retryTimer === undefined) this.scheduleEventRetry()
     }
+  }
+
+  /** The local event stream has no resume cursor, so a restart loses the gap: cached captured summaries and Location verifications stop being trusted. */
+  private eventsMayBeMissed() {
+    resetSessionActivity(this.cache)
+    this.registry.invalidateAll()
   }
 
   private async stopEventStream() {
@@ -598,6 +637,8 @@ export class RemoteAgent {
     if (this.eventStreamGeneration !== streamGeneration) return
     this.eventStop = undefined
     this.eventStreamGeneration++
+    this.eventsMayBeMissed()
+    this.eventStreamFailed = true
     if (this.state !== "live") return
     if (error !== undefined) this.diagnostic(`the local event stream ended: ${describe(error)}`)
     this.scheduleEventRetry()
@@ -614,6 +655,7 @@ export class RemoteAgent {
   }
 
   private forwardEvent(event: unknown, streamGeneration: number) {
+    this.observeSessionChange(event)
     const connection = this.connection
     if (connection === undefined || this.state !== "live") return
     if (typeof event === "object" && event !== null) {
@@ -642,20 +684,32 @@ export class RemoteAgent {
         if (type.startsWith("guardrail.decided")) this.reportBlock(Reflect.get(event, "data"))
         this.scheduleStatus()
       }
-      if (typeof type === "string" && (type.startsWith("session.step.ended") || type.startsWith("session.step.failed") ||
-        type.startsWith("session.execution.succeeded") || type.startsWith("session.execution.failed") || type.startsWith("session.execution.interrupted"))) {
+      if (isSessionActivityEvent(event)) {
         const sessionID = eventSessionID(event)
-        if (sessionID !== undefined) void this.registry.verify(sessionID).catch((error) =>
+        if (sessionID !== undefined) void this.registry.renew(sessionID).catch((error) =>
           this.diagnostic(`could not refresh Session activity: ${describe(error)}`),
         )
       }
     }
-    if (isSessionInventoryEvent(event)) {
-      void this.registry.refresh().catch((error) =>
-        this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`),
-      )
-    }
+    if (isSessionInventoryEvent(event)) this.refreshInventory(event)
     this.enqueueEvent(event, connection, streamGeneration)
+  }
+
+  /** Runs for every local event, connected or not, so a later cached read never trusts a Session that changed while the relay was away. */
+  private observeSessionChange(event: unknown) {
+    const sessionID = eventSessionID(event)
+    if (sessionID === undefined) return
+    const inventory = isSessionInventoryEvent(event)
+    if (inventory) this.registry.invalidate(sessionID)
+    if (inventory || isSessionActivityEvent(event)) markSessionActivity(this.cache, sessionID)
+  }
+
+  /** A created Session is read alone at the Location its event names; a move or delete reads the whole inventory. */
+  private refreshInventory(event: unknown) {
+    const sessionID = eventSessionID(event)
+    const location = createdLocation(event)
+    const refreshed = sessionID !== undefined && location !== undefined ? this.registry.add(sessionID, location) : this.registry.refresh()
+    void refreshed.catch((error) => this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`))
   }
 
   private enqueueEvent(event: unknown, connection: RelayConnection, streamGeneration: number) {
@@ -843,6 +897,7 @@ export class RemoteAgent {
 
   private clearTimers() {
     if (this.refreshTimer) clearTimeout(this.refreshTimer)
+    this.resetAdvertise()
     if (this.conflictTimer) clearTimeout(this.conflictTimer)
     this.conflictTimer = undefined
     if (this.retryTimer) clearTimeout(this.retryTimer)
@@ -892,6 +947,16 @@ function eventSessionID(event: unknown) {
   return typeof sessionID === "string" ? sessionID : undefined
 }
 
+function createdLocation(event: unknown) {
+  if (typeof event !== "object" || event === null || Reflect.get(event, "type") !== "session.created") return undefined
+  const data = Reflect.get(event, "data")
+  const location = typeof data === "object" && data !== null ? Reflect.get(data, "location") : undefined
+  const directory = typeof location === "object" && location !== null ? Reflect.get(location, "directory") : undefined
+  const workspaceID = typeof location === "object" && location !== null ? Reflect.get(location, "workspaceID") : undefined
+  if (typeof directory !== "string" || (workspaceID !== undefined && typeof workspaceID !== "string")) return undefined
+  return { directory, ...(workspaceID === undefined ? {} : { workspaceID }) }
+}
+
 function oversizedMarker(event: unknown, sessionID: string, omittedChars: number) {
   const data = typeof event === "object" && event !== null ? Reflect.get(event, "data") : undefined
   const originalID = typeof event === "object" && event !== null ? Reflect.get(event, "id") : undefined
@@ -910,6 +975,14 @@ function oversizedMarker(event: unknown, sessionID: string, omittedChars: number
     ...(markerDurable === undefined ? {} : { durable: markerDurable }),
     data: { sessionID, ...(messageID === undefined ? {} : { messageID }), truncated: true, omittedChars },
   }
+}
+
+function isSessionActivityEvent(event: unknown) {
+  if (typeof event !== "object" || event === null) return false
+  const type = Reflect.get(event, "type")
+  return typeof type === "string" && (type.startsWith("session.step.ended") || type.startsWith("session.step.failed") ||
+    type.startsWith("session.execution.succeeded") || type.startsWith("session.execution.failed") || type.startsWith("session.execution.interrupted") ||
+    type.startsWith("session.compaction.ended") || type.startsWith("session.revert.committed"))
 }
 
 function isSessionInventoryEvent(event: unknown) {

@@ -13,7 +13,7 @@ import { CustomSelect } from "../../ui/custom-select"
 import { BrandMark, ThemeToggle } from "../../ui/site"
 import { isAlertDeviceID, readSessionSearch, sessionSearch } from "../alert"
 import { useRemote } from "../context"
-import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "../preload"
+import { preloadKeepAwake, preloadWorkspaces } from "../preload"
 import { SIGN_IN_PROVIDERS } from "../http"
 import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
@@ -196,10 +196,9 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const generation = warmable()
     if (generation === undefined || selectedLoading() || warmup?.generation === generation) return
     clearTimeout(warmup?.timer)
-    // Once the workspace settles, read what the other pages open with so their first visit paints at once.
+    // Once the workspace settles, read the cheap pages' data so their first visit paints at once; Usage reads when its page opens.
     warmup = { generation, timer: setTimeout(() => {
       if (state().generation !== generation) return
-      preloadUsage(remote)
       preloadKeepAwake(remote)
       preloadWorkspaces(remote)
     }, 1_500) }

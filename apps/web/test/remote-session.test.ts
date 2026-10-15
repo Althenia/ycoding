@@ -629,7 +629,7 @@ describe("remote store integration", () => {
     } finally { release(); await test.stop() }
   })
 
-  test("status-driven first-page refresh of an unchanged query never marks resident rows stale", async () => {
+  test("status-driven first-page refresh of an unchanged query keeps the list ready and never marks resident rows stale", async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => { release = resolve })
     let workspaceReads = 0
@@ -645,7 +645,7 @@ describe("remote store integration", () => {
       expect(test.store.state().sessionRowsStale).toBe(false)
       test.relay.pushStatus(["ses_unlisted"], [])
       await test.runUntil(() => workspaceReads >= 2)
-      expect(test.store.state().sessionListStatus).toBe("loading")
+      expect(test.store.state().sessionListStatus).toBe("ready")
       expect(test.store.state().sessionRowsStale).toBe(false)
       expect(test.store.state().sessions).toHaveLength(2)
       release()
@@ -2392,6 +2392,12 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
+      let requestsSeen = -1
+      await test.runUntil(() => {
+        const settled = test.relay.requests.length === requestsSeen && test.store.state().carouselStatus === "ready"
+        requestsSeen = test.relay.requests.length
+        return settled
+      })
       let notifications = 0
       const unsubscribe = test.store.subscribe(() => (notifications += 1))
 

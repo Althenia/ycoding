@@ -86,6 +86,7 @@ function harness(options: {
   credentials?: (signal?: AbortSignal) => Promise<BridgeCredentials>
   disconnect?: () => Promise<void>
   reloadSessions?: () => Promise<readonly AllowlistSession[]>
+  advertiseCoalesceMs?: number
 }) {
   const { local, calls, streams } = fakeLocal({
     listPage: async () => ({
@@ -153,6 +154,7 @@ function harness(options: {
       }
     },
     refreshIntervalMs: 3_600_000,
+    advertiseCoalesceMs: options.advertiseCoalesceMs ?? 0,
     conflictRetryMs: 300,
     eventRetryInitialMs: 5,
     eventRetryMaxMs: 10,
@@ -295,18 +297,168 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
-  test("settled activity invalidates an unsubscribed Session list without waiting for periodic refresh", async () => {
+  test("settled activity refreshes the inventory time without a Session-list invalidation", async () => {
     let current = { ...sessionInfo("ses_1"), time: { created: 1, updated: 1, active: 2 } }
     const test = harness({ results: { listPage: async () => ({ data: [current] }), getSession: async () => current } })
     await test.bridge.connect()
     try {
       await waitFor(() => test.streams[0])
+      await Bun.sleep(20)
       const before = sentFrames(test.records[0]).filter((frame) => frame.type === "sessions").length
+      const reads = test.calls.filter((call) => call.method === "getSession").length
       current = { ...current, time: { ...current.time, active: 20 } }
       test.streams[0].stream.onEvent({ type: "session.step.ended", data: { sessionID: "ses_1" } })
-      await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "sessions").length > before ? true : undefined)
-      expect(test.calls.filter((call) => call.method === "getSession").length).toBeGreaterThan(0)
+      await waitFor(() => test.calls.filter((call) => call.method === "getSession").length > reads ? true : undefined)
+      await Bun.sleep(30)
+      expect(sentFrames(test.records[0]).filter((frame) => frame.type === "sessions")).toHaveLength(before)
       expect(sentEvents(test.records[0])).toHaveLength(0)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a created Session event reads only that Session at the Location the event names", async () => {
+    const test = harness({ results: {
+      getSession: async (sessionID: string, location: { directory: string }) => sessionInfo(sessionID, { directory: location.directory }),
+    } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      const lists = test.calls.filter((call) => call.method === "listPage").length
+      test.streams[0].stream.onEvent({ type: "session.created", data: { sessionID: "ses_new", location: { directory: "/elsewhere" } } })
+      await waitFor(() => test.bridge.advertised.includes("ses_new") ? true : undefined)
+      expect(test.calls.filter((call) => call.method === "listPage")).toHaveLength(lists)
+      expect(test.calls.filter((call) => call.method === "getSession" && call.args[0] === "ses_new").map((call) => call.args[1])).toEqual([{ directory: "/elsewhere" }])
+      await waitFor(() => sentFrames(test.records[0]).filter((frame) => frame.type === "sessions").length > 1 ? true : undefined)
+    } finally { await test.bridge.close() }
+  })
+
+  test("Session-list invalidations inside the coalescing window share one trailing frame", async () => {
+    let title = "Initial"
+    const test = harness({ advertiseCoalesceMs: 60, results: { listPage: async () => ({ data: [{ ...sessionInfo("ses_1"), title }] }) } })
+    await test.bridge.connect()
+    try {
+      const frames = () => test.records[0].sent.filter((frame) => frame.includes('"type":"sessions"')).length
+      expect(frames()).toBe(1)
+      for (const next of ["One", "Two", "Three"]) {
+        title = next
+        await test.bridge.republish()
+      }
+      expect(frames()).toBe(1)
+      await waitFor(() => frames() === 2 ? true : undefined)
+      await Bun.sleep(100)
+      expect(frames()).toBe(2)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a step ending in a child makes the next cached captured read re-check it, and a lost event stream re-checks every child", async () => {
+    let childSeq = 1
+    const parent = sessionInfo("ses_1")
+    const child = { ...sessionInfo("ses_child"), parentID: "ses_1" }
+    const edit = { type: "tool", id: "call_edit", name: "edit", state: { status: "completed", structured: { files: [{ file: "a.ts", patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 }] } } }
+    const launch = { type: "tool", id: "call_launch", name: "subagent", state: { status: "completed", structured: { sessionID: "ses_child" } } }
+    const test = harness({ results: {
+      listPage: async () => ({ data: [parent, child] }),
+      getSession: async (id: string) => id === "ses_child" ? child : parent,
+      snapshot: (id: string) => ({ sourceEpoch: "epoch_1", watermark: { seq: id === "ses_child" ? childSeq : 1 } }),
+      capturedInputs: (id: string) => [{ id: `msg_${id}_user`, type: "user" }, { id: `msg_${id}_reply`, type: "assistant", time: { created: 2, completed: 3 }, content: id === "ses_1" ? [launch] : [edit] }],
+    } })
+    let requests = 0
+    const read = async () => {
+      const id = `req_${++requests}`
+      test.records[0].deliver({ ...requestFrame("session.capturedChanges.list", "ses_1"), id })
+      await waitFor(() => test.records[0].sent.some((frame) => frame.includes(`"id":"${id}"`)) ? true : undefined)
+    }
+    const inputs = () => test.calls.filter((call) => call.method === "capturedInputs").length
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      await read()
+      expect(inputs()).toBe(2)
+      await read()
+      expect(inputs()).toBe(2)
+      childSeq = 2
+      await read()
+      expect(inputs()).toBe(2)
+      test.streams[0].stream.onEvent({ type: "session.step.ended", data: { sessionID: "ses_child" } })
+      await read()
+      expect(inputs()).toBe(4)
+      await read()
+      expect(inputs()).toBe(4)
+      childSeq = 3
+      test.streams[0].stream.onEnd()
+      await waitFor(() => test.streams.length === 2 ? true : undefined)
+      await read()
+      expect(inputs()).toBe(6)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a restarted local event stream advertises once and ends every verification window", async () => {
+    let requests = 0
+    const test = harness({ results: { todoList: [] } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      const ask = async () => {
+        const id = `req_${++requests}`
+        test.records[0].deliver({ ...requestFrame("session.todo.list", "ses_1"), id })
+        await waitFor(() => test.records[0].sent.some((frame) => frame.includes(`"id":"${id}"`)) ? true : undefined)
+      }
+      const reads = () => test.calls.filter((call) => call.method === "getSession").length
+      await ask()
+      await ask()
+      const before = reads()
+      const frames = () => test.records[0].sent.filter((frame) => frame.includes('"type":"sessions"')).length
+      const advertised = frames()
+      test.streams[0].stream.onEnd()
+      await waitFor(() => test.streams.length === 2 ? true : undefined)
+      await waitFor(() => frames() > advertised ? true : undefined)
+      await Bun.sleep(30)
+      expect(frames()).toBe(advertised + 1)
+      await ask()
+      expect(reads()).toBe(before + 1)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a reverted Session's commit ends its verification window", async () => {
+    let requests = 0
+    const test = harness({ results: { todoList: [] } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      const ask = async () => {
+        const id = `req_${++requests}`
+        test.records[0].deliver({ ...requestFrame("session.todo.list", "ses_1"), id })
+        await waitFor(() => test.records[0].sent.some((frame) => frame.includes(`"id":"${id}"`)) ? true : undefined)
+      }
+      const reads = () => test.calls.filter((call) => call.method === "getSession").length
+      await ask()
+      const before = reads()
+      test.streams[0].stream.onEvent({ type: "session.revert.committed", data: { sessionID: "ses_1", to: "msg_1" } })
+      await waitFor(() => reads() > before ? true : undefined)
+      const renewed = reads()
+      await ask()
+      expect(reads()).toBe(renewed)
+    } finally { await test.bridge.close() }
+  })
+
+  test("a verification served from the window is invalidated by a moved event", async () => {
+    let directory = "/work"
+    let requests = 0
+    const test = harness({ results: { todoList: [], getSession: async (sessionID: string) => sessionInfo(sessionID, { directory }) } })
+    await test.bridge.connect()
+    try {
+      await waitFor(() => test.streams[0])
+      const reads = () => test.calls.filter((call) => call.method === "getSession").length
+      const ask = () => test.records[0].deliver({ ...requestFrame("session.todo.list", "ses_1"), id: `req_${++requests}` })
+      ask()
+      await waitFor(() => test.calls.some((call) => call.method === "todoList") ? true : undefined)
+      const afterFirst = reads()
+      ask()
+      await waitFor(() => test.calls.filter((call) => call.method === "todoList").length === 2 ? true : undefined)
+      expect(reads()).toBe(afterFirst)
+      directory = "/work/moved"
+      test.streams[0].stream.onEvent({ type: "session.moved", data: { sessionID: "ses_1", location: { directory } } })
+      ask()
+      await waitFor(() => reads() > afterFirst ? true : undefined)
     } finally { await test.bridge.close() }
   })
 
