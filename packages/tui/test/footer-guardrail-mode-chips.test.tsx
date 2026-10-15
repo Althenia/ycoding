@@ -24,6 +24,7 @@ test("derives the goal chip from the active goal status and labels YOLO by level
   expect(modeChips({ autonomy: { mode: "normal", yolo: false, goal: completed } })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
     { key: "yolo", label: "YOLO off", tone: "off" },
+    { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
   ])
 
   // A retained active goal keeps the goal chip on; `yolo: true` decodes to level 2.
@@ -31,6 +32,7 @@ test("derives the goal chip from the active goal status and labels YOLO by level
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained } })).toEqual([
     { key: "goal", label: "goal", tone: "on" },
     { key: "yolo", label: "YOLO 2", tone: "danger" },
+    { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
   ])
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained }, guardrailPending: true })[0]).toEqual({
     key: "goal",

@@ -1,10 +1,11 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
+import { Duration, Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigShell } from "@ycoding-ai/core/config/shell"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
+import { ConfigQuestionTimeout } from "@ycoding-ai/core/config/question-timeout"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
@@ -337,6 +338,22 @@ describe("Config", () => {
       expect(() => decode({ compaction: { advisory: { consider_percent: 70, strongly_advised_percent: 100 } } })).toThrow()
       expect(() => decode({ compaction: { advisory: { consider_percent: 80, strongly_advised_percent: 80 } } })).toThrow()
       expect(() => decode({ compaction: { advisory: { consider_percent: 90, strongly_advised_percent: 80 } } })).toThrow()
+    }),
+  )
+
+  it.effect("decodes and bounds question_timeout_seconds with a 5 minute default and 0 disabling", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Config.Info)
+      expect(decode({}).question_timeout_seconds).toBeUndefined()
+      expect(decode({ question_timeout_seconds: 30 }).question_timeout_seconds).toBe(30)
+      expect(decode({ question_timeout_seconds: 0 }).question_timeout_seconds).toBe(0)
+      expect(decode({ question_timeout_seconds: 86_400 }).question_timeout_seconds).toBe(86_400)
+      for (const invalid of [-1, 86_401, 1.5, "300"]) expect(() => decode({ question_timeout_seconds: invalid })).toThrow()
+
+      expect(ConfigQuestionTimeout.seconds(undefined)).toBe(300)
+      expect(ConfigQuestionTimeout.duration(undefined)).toEqual(Duration.seconds(300))
+      expect(ConfigQuestionTimeout.duration(45)).toEqual(Duration.seconds(45))
+      expect(ConfigQuestionTimeout.duration(0)).toBeUndefined()
     }),
   )
 

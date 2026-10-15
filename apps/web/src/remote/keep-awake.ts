@@ -1,7 +1,7 @@
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome } from "./transport"
 
-export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly message?: string }
+export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
 
 type KeepAwakeChange = {
   readonly state: "sending" | "failed" | "unknown"
@@ -26,7 +26,16 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
   const message = Reflect.get(data, "message")
   if (state !== "off" && state !== "on" && state !== "unsupported" && state !== "error") return undefined
   if (message !== undefined && (typeof message !== "string" || message.length > maxMessageLength)) return undefined
-  return { state, ...(message === undefined ? {} : { message }) }
+  const lid = Reflect.get(data, "lid")
+  const sleepHold = Reflect.get(data, "sleepHold")
+  const manual = Reflect.get(data, "manual")
+  return {
+    state,
+    ...(lid === "off" || lid === "on" || lid === "held" || lid === "unsupported" || lid === "error" ? { lid } : {}),
+    ...(typeof sleepHold === "boolean" ? { sleepHold } : {}),
+    ...(typeof manual === "boolean" ? { manual } : {}),
+    ...(message === undefined ? {} : { message }),
+  }
 }
 
 export function keepAwakeAnswer(outcome: RemoteRequestOutcome, kept: Pick<KeepAwakeState, "change">): KeepAwakeState {
@@ -54,7 +63,7 @@ export type KeepAwakeView = {
 }
 
 const caveat =
-  "Available on macOS. Prevents idle sleep only, not manual sleep or closing the lid. Turns off when YCoding on that machine stops or restarts."
+  "Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported lid part is unconfirmed. Choosing Sleep still sleeps. On battery this drains the battery and a closed lid traps heat. The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds. Verify lid behavior on this Mac."
 const updateAdvice = "Update YCoding on this machine to keep it awake from here."
 
 export function keepAwakeView(input: {
@@ -97,9 +106,9 @@ export function keepAwakeView(input: {
   const change = keepAwake.change
   if (status.state === "unsupported")
     return view({ label: "Unsupported", detail: status.message ?? "This machine cannot be kept awake from YCoding." })
-  const checked = status.state === "on"
+  const checked = status.manual ?? status.state === "on"
   const base = {
-    label: status.state === "error" ? ("Error" as const) : checked ? ("On" as const) : ("Off" as const),
+    label: status.state === "error" ? ("Error" as const) : status.state === "on" ? ("On" as const) : ("Off" as const),
     checked,
     disabled: false,
   }
@@ -116,8 +125,30 @@ export function keepAwakeView(input: {
     })
   if (status.state === "error")
     return view({ ...base, tone: "danger", alert: true, detail: status.message ?? "This machine reported a problem." })
+  if (status.state === "on" && status.sleepHold)
+    return view({
+      ...base,
+      tone: "attention",
+      alert: status.lid === "error",
+      detail: `Idle ${status.state}; lid ${status.lid === "held" ? "held by another YCoding process" : status.lid ?? "unreported"}. Held on by a sleeping session. The switch sets your manual preference only; the machine stays awake until the last sleeping session wakes.${status.lid === "error" ? " Closing the lid may sleep this machine." : ""}`,
+    })
+  if (status.lid === "error")
+    return view({
+      ...base,
+      tone: "attention",
+      alert: true,
+      detail:
+        status.message ??
+        "Idle sleep is held off, but lid-closed keep-awake could not be armed; closing the lid may sleep this machine.",
+    })
   return view({
     ...base,
-    detail: status.message ?? (checked ? "This machine is being kept awake." : "This machine may sleep when idle."),
+    detail:
+      status.message ??
+      (checked
+        ? status.lid === "on"
+          ? "This machine is being kept awake, lid closed too."
+          : "This machine is being kept awake."
+        : "This machine may sleep when idle.") + ` Idle ${status.state}; lid ${status.lid === "held" ? "held by another YCoding process" : status.lid ?? "unreported"}.`,
   })
 }

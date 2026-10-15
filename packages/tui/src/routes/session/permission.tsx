@@ -416,7 +416,13 @@ export function Prompt<const T extends Record<string, string>>(props: {
   })
   const footer = () =>
     props.footer ??
-    (kind === "guardrail" ? <text fg={theme.text.subdued}>{props.hardReview ? "hard reviews always need you" : "ordinary reviews auto-approve from YOLO 1"}</text> : undefined)
+    (kind === "guardrail" ? (
+      <text fg={theme.text.subdued}>
+        {props.hardReview
+          ? "hard reviews need you unless guardrail-decision or sleep is on"
+          : "ordinary reviews auto-approve from YOLO 1 or guardrail-decision"}
+      </text>
+    ) : undefined)
   const compact = () => dimensions().height < 30
   const chromeHeight = () =>
     3 + keys().length * (compact() ? 1 : 2) + Number(props.footer !== undefined || kind === "guardrail") + (compact() ? 0 : 3)

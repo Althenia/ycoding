@@ -254,6 +254,8 @@ export type SessionAutonomyYoloLevel = 0 | 1 | 2 | 3
 
 export type SessionAutonomyGoalStatus = "active" | "completed" | "stopped" | "exhausted"
 
+export type SessionAutonomySleep = { priorGuardrailDecision: boolean }
+
 export type SessionOrchestrationProgress = { text: string; time: number }
 
 export type SessionOrchestrationQuestion = { id: string; text: string; data?: JsonValue; time: number }
@@ -325,8 +327,6 @@ export type SessionMessageProviderState5 = { [x: string]: any }
 export type SessionMessageProviderState6 = { [x: string]: any }
 
 export type SessionMessageProviderState7 = { [x: string]: any }
-
-export type GuardrailCounter1 = { id: string; current: number; limit: number; scope: "session" | "family" }
 
 export type GuardrailRisk = { level: number; label: string; score: number; metric: "confidence" | "probability" }
 
@@ -517,6 +517,10 @@ export type FileSystemEntry = { path: string; type: "file" | "directory" }
 export type PermissionReply = "once" | "always" | "reject"
 
 export type GuardrailReply = "once" | "always" | "reject"
+
+export type GuardrailDecisionChoice = "approve" | "reject"
+
+export type GuardrailConfidence = number
 
 export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
@@ -753,6 +757,17 @@ export type SessionProjectArtifactsEnded = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; oldProjectID: string; newProjectID: string }
+}
+
+export type SessionGuardrailDismissed = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.guardrail.dismissed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; reviewSessionID: string; ruleID: string; confidence: number }
 }
 
 export type SessionMoved = {
@@ -1226,12 +1241,32 @@ export type QuestionRejected = {
   data: { sessionID: string; requestID: string }
 }
 
+export type QuestionTimedOut = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "question.timed_out"
+  location?: LocationRef
+  data: { sessionID: string; requestID: string }
+}
+
 export type FormCancelled = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
   type: "form.cancelled"
+  location?: LocationRef
+  data: { id: string; sessionID: string }
+}
+
+export type FormTimedOut = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "form.timed_out"
   location?: LocationRef
   data: { id: string; sessionID: string }
 }
@@ -1832,8 +1867,6 @@ export type SessionToolFailed = {
   }
 }
 
-export type GuardrailCounter = GuardrailCounter1
-
 export type GuardrailAsked = {
   id: string
   created: number
@@ -2024,7 +2057,15 @@ export type GuardrailReplied = {
   sourceEpoch?: string
   type: "guardrail.replied"
   location?: LocationRef
-  data: { rootSessionID: string; sessionID: string; requestID: string; reply: GuardrailReply }
+  data: {
+    rootSessionID: string
+    sessionID: string
+    requestID: string
+    reply: GuardrailReply
+    decidedBy?: "decision-model"
+    choice?: GuardrailDecisionChoice
+    confidence?: GuardrailConfidence
+  }
 }
 
 export type GuardrailDecided = {
@@ -2260,7 +2301,13 @@ export type BrowserElement = {
   destination?: BrowserPage
 }
 
-export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
+export type KeepAwakeStatus = {
+  state: KeepAwakeState
+  manual?: boolean
+  lid?: "off" | "on" | "held" | "unsupported" | "error"
+  sleepHold?: boolean
+  message?: string
+}
 
 export type ConfigDiagnostic = {
   path: string
@@ -2382,6 +2429,7 @@ export type SessionTaskUpdated = {
       | { type: "progressed"; progress: SessionOrchestrationProgress }
       | { type: "question_asked"; question: SessionOrchestrationQuestion1 }
       | { type: "question_answered"; answer: SessionOrchestrationAnswer }
+      | { type: "question_timed_out"; questionID: string }
       | { type: "cancel_requested" }
       | { type: "cancelled" }
       | { type: "completed"; excerpt?: string }
@@ -2548,16 +2596,8 @@ export type SessionAutonomyState = {
   mode: SessionAutonomyMode
   yolo: SessionAutonomyYoloLevel | boolean
   goal?: SessionAutonomyGoal | null
-}
-
-export type GuardrailStatus1 = {
-  rootSessionID: string
-  profile: string
-  customRules: number
-  approvals: number
-  blocked: number
-  counters: Array<GuardrailCounter>
-  invalidFiles: Array<string>
+  guardrailDecision?: boolean | null
+  sleep?: SessionAutonomySleep | null
 }
 
 export type ModelInfo = {
@@ -2621,7 +2661,11 @@ export type FormField =
   | FormMultiselectField
   | FormExternalField
 
-export type FormState = { status: "pending" } | { status: "answered"; answer: FormAnswer } | { status: "cancelled" }
+export type FormState =
+  | { status: "pending" }
+  | { status: "answered"; answer: FormAnswer }
+  | { status: "cancelled" }
+  | { status: "timed_out"; seconds: number }
 
 export type FormReplied = {
   id: string
@@ -2893,8 +2937,6 @@ export type SessionMessageAssistantTool = {
   time: { created: number; ran?: number; completed?: number }
 }
 
-export type GuardrailStatus = GuardrailStatus1
-
 export type IntegrationMethod =
   | IntegrationOAuthMethod
   | IntegrationCommandMethod
@@ -3114,6 +3156,16 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.guardrail.dismissed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; reviewSessionID: string; ruleID: string; confidence: number }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.moved"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -3318,6 +3370,7 @@ export type SessionLogItem =
           | { type: "progressed"; progress: SessionOrchestrationProgress }
           | { type: "question_asked"; question: SessionOrchestrationQuestion1 }
           | { type: "question_answered"; answer: SessionOrchestrationAnswer }
+          | { type: "question_timed_out"; questionID: string }
           | { type: "cancel_requested" }
           | { type: "cancelled" }
           | { type: "completed"; excerpt?: string }
@@ -3729,6 +3782,7 @@ export type ServerEvent =
   | SessionModelSelected
   | SessionDaybreakSet
   | SessionProjectArtifactsEnded
+  | SessionGuardrailDismissed
   | SessionMoved
   | SessionRenamed
   | SessionUsageUpdated
@@ -3806,9 +3860,11 @@ export type ServerEvent =
   | QuestionAsked
   | QuestionReplied
   | QuestionRejected
+  | QuestionTimedOut
   | FormCreated
   | FormReplied
   | FormCancelled
+  | FormTimedOut
   | TodoUpdated
   | SessionStatus2
   | SessionIdle
@@ -4487,6 +4543,18 @@ export type SessionAutonomySetInput = {
         readonly maxNoProgress?: number | null
       }
     | { readonly yolo: (0 | 1 | 2 | 3) | boolean; readonly goal?: never | null }
+    | {
+        readonly guardrailDecision: boolean
+        readonly sleep?: boolean | null
+        readonly goal?: never | null
+        readonly yolo?: never | null
+      }
+    | {
+        readonly sleep: boolean
+        readonly guardrailDecision?: never | null
+        readonly goal?: never | null
+        readonly yolo?: never | null
+      }
 }
 
 export type SessionAutonomySetOutput = { data: SessionAutonomyState }["data"]
@@ -5502,7 +5570,26 @@ export type SessionMessageOutput = { data: SessionMessageInfo }["data"]
 
 export type GuardrailStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
-export type GuardrailStatusOutput = { data: GuardrailStatus }["data"]
+export type GuardrailStatusOutput = {
+  data: {
+    rootSessionID: string
+    profile: string
+    customRules: number
+    approvals: number
+    blocked: number
+    counters: Array<{ id: string; current: number; limit: number; scope: "session" | "family" }>
+    invalidFiles: Array<string>
+    dismissals?: Array<{ sessionID: string; created: number; eventID: string; ruleID: string; confidence: number }>
+    decisions?: Array<{
+      sessionID: string
+      created: number
+      requestID: string
+      reply: "once" | "reject"
+      choice?: "approve" | "reject"
+      confidence?: number
+    }>
+  }
+}["data"]
 
 export type GuardrailRequestListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

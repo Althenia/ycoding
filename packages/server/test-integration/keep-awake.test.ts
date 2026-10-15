@@ -29,23 +29,23 @@ test.skipIf(process.platform !== "darwin")(
     }
     try {
       await ready(backend)
-      expect(await call("GET")).toEqual({ data: { state: "off" } })
+      expect(await call("GET")).toMatchObject({ data: { state: "off", lid: "off", sleepHold: false } })
       expect(await inhibitors(backend.pid)).toEqual([])
 
-      expect(await call("PUT", true)).toEqual({ data: { state: "on" } })
+      expect(await call("PUT", true)).toMatchObject({ data: { state: "on", lid: "on", sleepHold: false } })
       const [inhibitor] = await inhibitors(backend.pid)
       expect(inhibitor).toBeGreaterThan(0)
       expect(await inhibitors(backend.pid)).toEqual([inhibitor])
       expect(await assertionHeldBy(inhibitor)).toBe(true)
-      expect(await call("PUT", true)).toEqual({ data: { state: "on" } })
+      expect(await call("PUT", true)).toMatchObject({ data: { state: "on", lid: "on", sleepHold: false } })
       expect(await inhibitors(backend.pid)).toEqual([inhibitor])
 
-      expect(await call("PUT", false)).toEqual({ data: { state: "off" } })
+      expect(await call("PUT", false)).toMatchObject({ data: { state: "off", lid: "off", sleepHold: false } })
       expect(await eventually(() => alive(inhibitor), (running) => !running)).toBe(false)
       expect(await assertionHeldBy(inhibitor)).toBe(false)
       expect(await inhibitors(backend.pid)).toEqual([])
 
-      expect(await call("PUT", true)).toEqual({ data: { state: "on" } })
+      expect(await call("PUT", true)).toMatchObject({ data: { state: "on", lid: "on", sleepHold: false } })
       const [second] = await inhibitors(backend.pid)
       expect(second).not.toBe(inhibitor)
       expect(await assertionHeldBy(second)).toBe(true)

@@ -11,14 +11,21 @@ import {
   type State,
 } from "@ycoding-ai/schema/session-orchestration"
 import { Agent } from "../agent"
+import { Config } from "../config"
+import { ConfigQuestionTimeout } from "../config/question-timeout"
 import { Database } from "../database/database"
+import { Decision } from "../decision"
+import { DecisionChoice } from "../decision-choice"
+import { LocationServiceMap } from "../location-service-map"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { Permission } from "../permission"
+import { AppProcess } from "../process"
+import { ShellLedger } from "../shell/ledger"
 import { Hash } from "../util/hash"
 import { canonicalJSON } from "./context-manifest"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Duration, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { Session } from "../session"
@@ -374,7 +381,56 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const sessions = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
+    const locations = yield* LocationServiceMap.Service
+    const appProcess = yield* AppProcess.Service
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
+    const lifetime = yield* Scope.Scope
+    const timers = new Map<SessionSchema.ID, Fiber.Fiber<void>>()
+
+    const disarmQuestionTimer = Effect.fn("SessionOrchestration.disarmQuestionTimer")(function* (
+      childID: SessionSchema.ID,
+    ) {
+      const timer = timers.get(childID)
+      if (!timer) return
+      timers.delete(childID)
+      yield* Fiber.interrupt(timer)
+    })
+
+    const questionTimeoutSeconds = Effect.fn("SessionOrchestration.questionTimeoutSeconds")(function* (
+      childID: SessionSchema.ID,
+    ) {
+      const child = yield* sessions
+        .get(childID)
+        .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
+      if (!child) return 0
+      const config = yield* Config.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
+      if (config._tag === "Failure") return ConfigQuestionTimeout.seconds(undefined)
+      return ConfigQuestionTimeout.seconds(Config.latest(yield* config.value.entries(), "question_timeout_seconds"))
+    })
+
+    const sleepAnswer = Effect.fn("SessionOrchestration.sleepAnswer")(function* (input: {
+      childID: SessionSchema.ID
+      text: string
+      data?: Schema.Json
+    }) {
+      const options = questionOptions(input.data)
+      if (options.length === 0) return SessionAutonomy.AutomaticAnswer
+      const child = yield* sessions
+        .get(input.childID)
+        .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
+      if (!child) return SessionAutonomy.AutomaticAnswer
+      const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
+      if (decision._tag === "Failure") return SessionAutonomy.AutomaticAnswer
+      const judgment = yield* DecisionChoice.choose(decision.value, {
+        sessionID: input.childID,
+        name: "subagent_question",
+        instructions:
+          "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal falls back to the safest reasonable default.",
+        state: { question: input.text, options },
+        choices: options.map((value) => ({ value })),
+      })
+      return judgment?.value ?? SessionAutonomy.AutomaticAnswer
+    })
 
     const task = Effect.fn("SessionOrchestration.task")(function* (childID: SessionSchema.ID) {
       return yield* db
@@ -415,6 +471,99 @@ const layer = Layer.effect(
       return taskFromRow(row)
     })
 
+    const expireQuestion = Effect.fn("SessionOrchestration.expireQuestion")((
+      childID: SessionSchema.ID,
+      questionID: QuestionID,
+      seconds: number,
+    ) =>
+      locks.withLock(childID)(
+        Effect.gen(function* () {
+          timers.delete(childID)
+          const row = yield* task(childID)
+          if (!row || row.state !== "waiting" || row.question_id !== questionID) return
+          yield* sessions
+            .synthetic({
+              id: SessionOrchestrationIdentity.launch(
+                row.parent_id,
+                row.parent_assistant_message_id,
+                row.tool_call_id,
+              ).answer(questionID),
+              sessionID: childID,
+              text: `No parent answer arrived within ${seconds} seconds for question ${questionID}. The question is closed and can no longer be answered. Proceed using your own best judgment.`,
+              description: "Parent answer timed out",
+              metadata: {
+                source: "subagent_parent",
+                parentID: row.parent_id,
+                childID,
+                kind: "timeout",
+                questionID,
+              },
+              delivery: "steer",
+              resume: false,
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "Session.NotFoundError"
+                  ? new TaskNotFoundError({ childID })
+                  : new ConflictError({ message: `Conflicting timeout for ${questionID}` }),
+              ),
+            )
+          yield* publish(childID, { type: "question_timed_out", questionID })
+          yield* execution.wake(childID)
+        }).pipe(Effect.uninterruptible),
+      ),
+    )
+
+    const armQuestionTimer = Effect.fn("SessionOrchestration.armQuestionTimer")(function* (
+      childID: SessionSchema.ID,
+      questionID: QuestionID,
+      elapsedMillis: number,
+    ) {
+      yield* disarmQuestionTimer(childID)
+      const seconds = yield* questionTimeoutSeconds(childID)
+      if (seconds === 0) return
+      const remaining = Math.max(0, seconds * 1000 - elapsedMillis)
+      const timer = yield* Effect.sleep(Duration.millis(remaining)).pipe(
+        Effect.andThen(expireQuestion(childID, questionID, seconds)),
+        Effect.catch((error) => Effect.logWarning("subagent question timeout failed", { childID, questionID, error })),
+        Effect.forkIn(lifetime),
+      )
+      timers.set(childID, timer)
+    })
+
+    const armWaitingQuestions = Effect.gen(function* () {
+      const waiting = yield* db
+        .select()
+        .from(SessionTaskTable)
+        .where(eq(SessionTaskTable.state, "waiting"))
+        .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.session_id))
+        .all()
+        .pipe(Effect.orDie)
+      if (waiting.length === 0) return
+      const processes = yield* ShellLedger.processes(appProcess).pipe(Effect.option)
+      if (processes._tag === "None") {
+        yield* Effect.logWarning("could not list processes; subagent question timers were not re-armed")
+        return
+      }
+      yield* Effect.forEach(
+        waiting,
+        (row) =>
+          locks.withLock(row.session_id)(
+            Effect.gen(function* () {
+              const latest = yield* task(row.session_id)
+              if (!latest || latest.state !== "waiting" || latest.question_id === null) return
+              if (latest.owner_pid !== process.pid && ShellLedger.alive(processes.value, latest.owner_pid, latest.owner_started)) return
+              yield* armQuestionTimer(
+                latest.session_id,
+                latest.question_id,
+                Date.now() - (latest.question_time ?? Date.now()),
+              )
+            }),
+          ),
+        { concurrency: 4, discard: true },
+      )
+    })
+
     const result: Interface = {
       managed: Effect.fn("SessionOrchestration.managed")(function* (childID) {
         return (yield* task(childID)) !== undefined
@@ -435,7 +584,13 @@ const layer = Layer.effect(
             const promptDigest = Hash.sha256(input.prompt)
             const start = Effect.gen(function* () {
               yield* sessions
-                .prompt({ id: ids.inputID, sessionID: ids.childID, text: input.prompt, resume: false })
+                .prompt({
+                  id: ids.inputID,
+                  sessionID: ids.childID,
+                  text: input.prompt,
+                  resume: false,
+                  origin: "subagent",
+                })
                 .pipe(
                   Effect.mapError((error) =>
                     error._tag === "Session.NotFoundError"
@@ -601,6 +756,7 @@ const layer = Layer.effect(
               type: "question_answered",
               answer: { questionID: input.questionID, text: input.text, data: input.data },
             })
+            yield* disarmQuestionTimer(input.childID)
             yield* execution.wake(input.childID)
             return yield* current(input.childID)
           }),
@@ -613,6 +769,7 @@ const layer = Layer.effect(
             if (row.state === "cancelled") return taskFromRow(row)
             if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
+            yield* disarmQuestionTimer(input.childID)
             yield* publish(input.childID, { type: "cancel_requested" })
             yield* execution.interrupt(input.childID)
             yield* publish(input.childID, { type: "cancelled" })
@@ -667,9 +824,15 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (
-              yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            const asleep = yield* autonomy
+              .isAsleep(childID)
+              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            const canAuto = yield* autonomy
+              .canAutoAnswer(childID)
+              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            if (asleep || canAuto
             ) {
+              const answerText = asleep ? yield* sleepAnswer({ childID, text, data }) : SessionAutonomy.AutomaticAnswer
               yield* sessions
                 .synthetic({
                   id: SessionOrchestrationIdentity.launch(
@@ -680,7 +843,7 @@ const layer = Layer.effect(
                   sessionID: childID,
                   text: `Parent answer:\n${JSON.stringify({
                     questionID: question.id,
-                    text: SessionAutonomy.AutomaticAnswer,
+                    text: answerText,
                   })}`,
                   description: "Autonomous subagent answer",
                   metadata: {
@@ -704,6 +867,7 @@ const layer = Layer.effect(
               return { question, autoAnswered: true }
             }
             yield* publish(childID, { type: "question_asked", question })
+            yield* armQuestionTimer(childID, question.id, 0)
             return { question, autoAnswered: false }
           }),
         ),
@@ -822,6 +986,12 @@ const layer = Layer.effect(
         )
       }),
     }
+    // Started in the background because resolving each task's Location config builds Location
+    // layers, which may depend on this service.
+    yield* armWaitingQuestions.pipe(
+      Effect.catchCause((cause) => Effect.logWarning("failed to re-arm subagent question timers", { cause })),
+      Effect.forkIn(lifetime, { startImmediately: true }),
+    )
     return result
   }),
 )
@@ -829,5 +999,29 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, SessionAutonomy.node, SessionExecution.node, Session.node],
+  deps: [
+    Database.node,
+    EventRuntime.node,
+    SessionAutonomy.node,
+    SessionExecution.node,
+    Session.node,
+    LocationServiceMap.node,
+    AppProcess.node,
+  ],
 })
+
+function questionOptions(data: Schema.Json | undefined): string[] {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return []
+  const options = (data as Record<string, unknown>).options
+  if (!Array.isArray(options)) return []
+  return options.flatMap((option) => {
+    if (typeof option === "string") return [option]
+    if (option && typeof option === "object" && !Array.isArray(option)) {
+      const label = (option as Record<string, unknown>).label
+      const value = (option as Record<string, unknown>).value
+      if (typeof label === "string") return [label]
+      if (typeof value === "string") return [value]
+    }
+    return []
+  })
+}

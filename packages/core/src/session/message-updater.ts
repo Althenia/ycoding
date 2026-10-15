@@ -273,6 +273,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.created": () => Effect.void,
       "session.profile.bound": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
+      "session.guardrail.decided": () => Effect.void,
       "session.work.completed": () => Effect.void,
       "session.usage.updated": () => Effect.void,
       "session.diagnostics.updated": () => Effect.void,
@@ -690,6 +691,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
           }
         })
       },
+      "session.guardrail.dismissed": () => Effect.void,
       "session.compaction.admitted": () => Effect.void,
       "session.compaction.started": () => Effect.void,
       "session.compaction.delta": () => Effect.void,

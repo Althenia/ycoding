@@ -11,6 +11,12 @@ test("reads ordered human questions and typed recorded answers from the actual t
   expect(questionHistory({ ...part, input: { questions: [null, { question: 1 }] } })).toEqual([])
 })
 
+test("a timed-out question reads as timed out, never as an answer", () => {
+  const timedOut = { ...part, structured: { answers: [[], []], timedOutAfterSeconds: 300 } }
+  expect(questionHistory(timedOut).map((row) => row.answer)).toEqual([undefined, undefined])
+  expect(questionAnswerState(timedOut)).toBe("Question timed out")
+})
+
 test("missing or malformed answers never become a recorded answer and failure stays truthful", () => {
   expect(questionHistory({ ...part, structured: { answers: [[2], null] } }).map((row) => row.answer)).toEqual([undefined, undefined])
   expect(questionAnswerState(part)).toBe("Answer not reported")

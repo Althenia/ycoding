@@ -133,13 +133,21 @@ test("manual compaction uses only the backend's verified Session Location and st
 })
 
 test("machine keep-awake forwards global backend controls without a caller Location or Session", async () => {
-  const fixture = await harness({ sessions: [], results: { keepAwakeGet: { state: "off" }, keepAwakeSet: { state: "on" } } })
+  const fixture = await harness({
+    sessions: [],
+    results: {
+      keepAwakeGet: { state: "off", lid: "off", sleepHold: false },
+      keepAwakeSet: { state: "on", lid: "on", sleepHold: true, manual: false },
+    },
+  })
   const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
     request: { ...request(operation, input), ...(sessionID === undefined ? {} : { sessionID }) }, local: fixture.local,
     sessions: fixture.registry, subscriptions: fixture.subscriptions,
   })
-  expect(valueOf(await run("machine.keepAwake.get"))).toEqual({ data: { state: "off" } })
-  expect(valueOf(await run("machine.keepAwake.set", { enabled: true }))).toEqual({ data: { state: "on" } })
+  expect(valueOf(await run("machine.keepAwake.get"))).toEqual({ data: { state: "off", lid: "off", sleepHold: false } })
+  expect(valueOf(await run("machine.keepAwake.set", { enabled: true }))).toEqual({
+    data: { state: "on", lid: "on", sleepHold: true, manual: false },
+  })
   expect(fixture.calls).toEqual([{ method: "keepAwakeGet", args: [] }, { method: "keepAwakeSet", args: [true] }])
   expect(errorOf(await run("machine.keepAwake.set", { enabled: true, directory: "/private" })).code).toBe("invalid_message")
   expect(errorOf(await run("machine.keepAwake.set", { enabled: "true" })).code).toBe("invalid_message")

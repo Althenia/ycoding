@@ -30,7 +30,7 @@ export type SessionHeaderOperationalState =
 
 export type SessionHeaderState =
   | SessionHeaderOperationalState
-  | { type: "autonomy"; yolo: number; goalActive: boolean; state: SessionHeaderOperationalState }
+  | { type: "autonomy"; yolo: number; goalActive: boolean; guardrailDecision?: boolean; asleep?: boolean; machineAwake?: boolean; state: SessionHeaderOperationalState }
 
 type SessionHeaderTimedState = Extract<
   SessionHeaderOperationalState,
@@ -136,12 +136,20 @@ function headerYoloLevel(yolo: unknown): number {
 export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, now = Date.now()): string {
   if (state.type === "autonomy") {
     const level = headerYoloLevel(state.yolo)
+    if (state.asleep && width < 120)
+      return `asleep · guardrail decision · YOLO ${level}${state.goalActive ? " · goal" : ""} · ${headerStatusLabel(state.state, width, runningShells, now)}`
     let autonomy: string
     if (level > 0 && state.goalActive) autonomy = `YOLO ${level} + Goal · autonomous`
     else if (level > 0) autonomy = `YOLO ${level} · auto-approve`
     else if (state.goalActive) autonomy = "Goal · autonomous"
-    else autonomy = "autonomous"
-    return `${autonomy} · ${headerStatusLabel(state.state, width, runningShells, now)}`
+    else autonomy = "YOLO 0 · manual"
+    const extras = [
+      state.guardrailDecision ? "guardrail decision" : undefined,
+      state.asleep ? "asleep" : undefined,
+      state.asleep && state.machineAwake === false ? "machine may sleep" : undefined,
+    ].filter((part): part is string => part !== undefined)
+    const label = extras.length > 0 ? `${autonomy} · ${extras.join(" · ")}` : autonomy
+    return `${label} · ${headerStatusLabel(state.state, width, runningShells, now)}`
   }
   if (state.type === "retry-scheduled")
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
@@ -249,7 +257,10 @@ export function Header(
   const statusColor = createMemo(() => {
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
-    if (current.type === "autonomy") return headerYoloLevel(current.yolo) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
+    if (current.type === "autonomy")
+      return headerYoloLevel(current.yolo) > 0 || current.guardrailDecision
+        ? theme.text.feedback.error.default
+        : theme.text.feedback.success.default
     if (active.type === "provider-error")
       return theme.text.feedback.error.default
     if (active.type === "retrying" || active.type === "retry-scheduled")

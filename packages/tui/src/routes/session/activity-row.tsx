@@ -156,25 +156,27 @@ export function SessionActivityRow(props: {
     (props.row.type === "subagent" ? subagentActive() : false) ||
     (props.row.type === "task" && props.row.status === "in_progress" && props.running === true)
   const markerColor = () => {
-    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "guardrail")
+      return props.row.decided ? theme.text.feedback.info.default : theme.text.feedback.warning.default
     if (props.row.type === "subagent") return theme.text.feedback.info.default
     if (props.row.status === "completed") return theme.text.feedback.success.default
     return theme.text.feedback.info.default
   }
   const statusColor = () => {
-    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "guardrail")
+      return props.row.decided ? theme.text.feedback.info.default : theme.text.feedback.warning.default
     if (props.row.type === "subagent") return theme.text.feedback.info.default
     if (props.row.status === "completed") return theme.text.subdued
     return theme.text.feedback.success.default
   }
   const open = () => {
     const row = props.row
-    if (row.type === "guardrail") props.onGuardrail?.(row.requestID)
+    if (row.type === "guardrail" && !row.decided) props.onGuardrail?.(row.requestID)
     if (row.type === "subagent") props.onSubagent?.((row as Extract<SessionRow, { type: "subagent" }>).sessionID)
   }
   const status = () => {
     const row = props.row
-    if (row.type === "guardrail") return "needs approval"
+    if (row.type === "guardrail") return row.decided ?? "needs approval"
     if (row.type === "subagent") {
       const task = subagentTask()
       const subRow = row as Extract<SessionRow, { type: "subagent" }>

@@ -87,9 +87,35 @@ export class Status extends Schema.Class<Status>("Guardrail.Status")({
   blocked: NonNegativeInt,
   counters: Schema.Array(Counter),
   invalidFiles: Schema.Array(Schema.String),
+  dismissals: Schema.Array(Schema.Struct({
+    sessionID: SessionID,
+    created: NonNegativeInt,
+    eventID: Schema.String,
+    ruleID: Schema.String,
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0.9, maximum: 1 })),
+  })).pipe(optional),
+  decisions: Schema.Array(
+    Schema.Struct({
+      sessionID: SessionID,
+      created: NonNegativeInt,
+      requestID: Schema.String,
+      reply: Schema.Literals(["once", "reject"]),
+      choice: Schema.Literals(["approve", "reject"]).pipe(optional),
+      confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+    }),
+  ).pipe(optional),
 }) {}
 
 const Asked = ephemeral({ type: "guardrail.asked", schema: Request.fields })
+export const DecisionChoice = Schema.Literals(["approve", "reject"]).annotate({
+  identifier: "Guardrail.DecisionChoice",
+})
+export type DecisionChoice = typeof DecisionChoice.Type
+
+export const Confidence = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).annotate({
+  identifier: "Guardrail.Confidence",
+})
+export type Confidence = typeof Confidence.Type
 const Replied = ephemeral({
   type: "guardrail.replied",
   schema: {
@@ -97,6 +123,9 @@ const Replied = ephemeral({
     sessionID: SessionID,
     requestID: RequestID,
     reply: Reply,
+    decidedBy: Schema.Literal("decision-model").pipe(optional),
+    choice: DecisionChoice.pipe(optional),
+    confidence: Confidence.pipe(optional),
   },
 })
 const Decided = ephemeral({

@@ -358,6 +358,45 @@ test("a refresh of a ready machine keeps showing its state and never flashes che
   }
 })
 
+test("a sleep-held machine keeps its reported on state after a manual off change", async () => {
+  const heldStatus: RemoteRequestOutcome = {
+    status: "ok",
+    value: { data: { state: "on", lid: "on", sleepHold: true } },
+  }
+  const test = machine((operation) => {
+    if (operation === "machine.keepAwake.get") return heldStatus
+    if (operation === "machine.keepAwake.set") return heldStatus
+    return undefined
+  })
+  try {
+    test.store.connect("dev_1")
+    await load(test)
+    expect(keepAwake(test)).toEqual({
+      read: "ready",
+      status: { state: "on", lid: "on", sleepHold: true },
+    })
+    expect((await change(test, false)).reached).toBe(true)
+    const sent = test.calls.find((call) => call.operation === "machine.keepAwake.set")
+    expect(sent?.request?.input).toEqual({ enabled: false })
+    expect(keepAwake(test).status).toEqual({ state: "on", lid: "on", sleepHold: true })
+  } finally {
+    test.store.dispose()
+  }
+})
+
+test("a reported manual preference mismatch is not confirmed by a sleep-held effective On", async () => {
+  const status: RemoteRequestOutcome = { status: "ok", value: { data: { state: "on", lid: "on", sleepHold: true, manual: false } } }
+  const fixture = machine((operation) => operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ? status : undefined)
+  try {
+    fixture.store.connect("dev_1")
+    await load(fixture)
+    expect((await change(fixture, true)).reached).toBe(false)
+    expect(keepAwake(fixture).change).toMatchObject({ state: "failed", enabled: true, message: expect.stringContaining("manual preference is Off") })
+  } finally {
+    fixture.store.dispose()
+  }
+})
+
 test("disposal ends the reading and a late change result changes nothing", async () => {
   const late = Promise.withResolvers<RemoteRequestOutcome>()
   const test = machine((operation) => (operation === "machine.keepAwake.set" ? late.promise : ok("off")))

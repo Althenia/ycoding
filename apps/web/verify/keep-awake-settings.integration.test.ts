@@ -59,6 +59,32 @@ async function open(read = "held", theme = "light", width = 1440) {
 }
 
 describe("Settings Keep machine awake", () => {
+  test("renders foreign lid ownership without claiming local lid control or overflowing", async () => {
+    for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"]) {
+      const page = await open("foreign-owner", theme, width)
+      try {
+        await until(page, `${label} === 'On' && !${control}.disabled`)
+        expect(await page.evaluate<string>(detail)).toContain("lid held by another YCoding process")
+        expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(false)
+        expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
+      } finally {
+        await page.close()
+      }
+    }
+  })
+  test("renders idle/lid parts and a sleep hold separately from the manual switch", async () => {
+    for (const mode of ["sleep-held", "lid-error"]) {
+      const page = await open(mode, "dark", 390)
+      try {
+        await until(page, `${label} === 'On' && !${control}.disabled`)
+        expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(mode !== "sleep-held")
+        expect(await page.evaluate<string>(detail)).toMatch(mode === "sleep-held" ? /Idle on; lid on.*sleeping session/ : /lid-closed keep-awake could not be armed/)
+        expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(/battery.*heat/)
+      } finally {
+        await page.close()
+      }
+    }
+  })
   test("shows the backend state, reserves geometry, and changes it only from a keyboard action without browser persistence", async () => {
     for (const width of [320, 390, 1440])
       for (const theme of ["light", "dark"]) {
@@ -73,7 +99,7 @@ describe("Settings Keep machine awake", () => {
             `({ top: document.getElementById('following-settings').getBoundingClientRect().top, storage: JSON.stringify(localStorage) })`,
           )
           expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
-            /macOS.*idle sleep only.*manual sleep or closing the lid.*stops or restarts/,
+            /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
           )
           await page.evaluate(`window.keepAwakeFixture.releaseRead('off')`)
           await until(page, `${label} === 'Off' && !${control}.disabled`)

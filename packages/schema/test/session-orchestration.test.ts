@@ -29,6 +29,15 @@ describe("SessionOrchestration", () => {
     expect(() => decode("queued")).toThrow()
   })
 
+  test("records a timed-out parent question by identity only", () => {
+    const decode = Schema.decodeUnknownSync(SessionOrchestration.Change)
+    expect(decode({ type: "question_timed_out", questionID: "qst_1" })).toEqual({
+      type: "question_timed_out",
+      questionID: SessionOrchestration.QuestionID.make("qst_1"),
+    })
+    expect(() => decode({ type: "question_timed_out" })).toThrow()
+  })
+
   test("bounds progress, questions, and terminal excerpts", () => {
     expect(Schema.is(SessionOrchestration.Progress)({ text: "p".repeat(4096), time: 1 })).toBe(true)
     expect(Schema.is(SessionOrchestration.Progress)({ text: "p".repeat(4097), time: 1 })).toBe(false)

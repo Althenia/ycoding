@@ -46,6 +46,9 @@ const revertCommittedEventType = Event.versionedType(
 )
 const inboxLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
+/** Holds promotion of the Session's pending inputs while `effect` runs. */
+export const withInboxLock = inboxLocks.withLock
+
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()(
   "SessionPending.LifecycleConflict",
   {

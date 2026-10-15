@@ -1,4 +1,4 @@
-import { afterAll, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -22,9 +22,15 @@ import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
-const workspace = await mkdtemp(join(tmpdir(), "ycoding-shell-queued-"))
-afterAll(() => rm(workspace, { recursive: true, force: true }))
-const state = join(workspace, "state")
+class QueuedFixture extends Context.Service<QueuedFixture, {
+  readonly workspace: string
+  readonly spawnHook: { current?: Effect.Effect<void> }
+}>()("ShellQueuedFixture") {}
+
+const fixture = Layer.effect(QueuedFixture, Effect.acquireRelease(
+  Effect.promise(() => mkdtemp(join(tmpdir(), "ycoding-shell-queued-"))),
+  (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+).pipe(Effect.map((workspace) => ({ workspace, spawnHook: {} }))))
 
 const config = Layer.succeed(
   Config.Service,
@@ -41,18 +47,11 @@ const config = Layer.succeed(
   }),
 )
 
-const locationLayer = Layer.succeed(
-  Location.Service,
-  Location.Service.of(location({ directory: AbsolutePath.make(workspace) })),
-)
-
-// While set, the next spawn runs `hook` once the process exists, before the spawn returns.
-const spawnHook: { current?: Effect.Effect<void> } = {}
-
 const appProcess = Layer.effect(
   AppProcess.Service,
   Effect.gen(function* () {
     const real = yield* AppProcess.Service
+    const { spawnHook } = yield* QueuedFixture
     return AppProcess.Service.of({
       ...real,
       spawn: (command) => {
@@ -65,7 +64,9 @@ const appProcess = Layer.effect(
 ).pipe(Layer.provide(AppNodeBuilder.build(AppProcess.node)))
 
 const it = testEffect(
-  AppNodeBuilder.build(
+  Layer.unwrap(Effect.gen(function* () {
+    const { workspace } = yield* QueuedFixture
+    return AppNodeBuilder.build(
     LayerNode.group([
       AppProcess.node,
       Database.node,
@@ -80,7 +81,7 @@ const it = testEffect(
     [
       [AppProcess.node, appProcess],
       [Config.node, config],
-      [Global.node, Global.layerWith({ data: join(workspace, "data"), state })],
+      [Global.node, Global.layerWith({ data: join(workspace, "data"), state: join(workspace, "state") })],
       [
         ShellQueue.node,
         ShellQueue.configured({
@@ -89,9 +90,10 @@ const it = testEffect(
           heartbeatMs: 50,
         }),
       ],
-      [Location.node, locationLayer],
+      [Location.node, Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(workspace) })))],
     ],
-  ),
+  )
+  })).pipe(Layer.provideMerge(fixture)),
 )
 
 const posixIt = process.platform === "win32" ? it.live.skip : it.live
@@ -108,7 +110,9 @@ const running = (shell: Interface, id: Shell.ID) =>
     return yield* Effect.die(new Error(`shell ${id} did not start`))
   })
 
-const entries = Effect.promise(() => readdir(join(state, "shell-queue", "entries")).catch(() => [] as string[]))
+const entries = QueuedFixture.pipe(Effect.flatMap((fixture) => Effect.promise(() =>
+  readdir(join(fixture.workspace, "state", "shell-queue", "entries")).catch(() => [] as string[]),
+)))
 
 // A slot is released just after the command's waiters resolve, when its managing fiber ends.
 const drained = Effect.gen(function* () {
@@ -133,7 +137,7 @@ describe("queued shell commands", () => {
           if (event.type === "shell.exited") seen.push(`${event.type}:${data.id}:${data.status}`)
         }),
       )
-      const release = join(workspace, "release-first")
+      const release = join((yield* QueuedFixture).workspace, "release-first")
       const first = yield* shell.enqueue(
         yield* shell.prepare({ command: `while [ ! -e '${release}' ]; do sleep 0.02; done`, timeout: 0 }),
         sessionA,
@@ -175,7 +179,7 @@ describe("queued shell commands", () => {
   posixIt("cancel when removed, without starting, and release their queue entry first", () =>
     Effect.gen(function* () {
       const shell = yield* Service
-      const marker = join(workspace, "must-not-exist")
+      const marker = join((yield* QueuedFixture).workspace, "must-not-exist")
       const holder = yield* shell.enqueue(yield* shell.prepare({ command: "sleep 30", timeout: 0 }), sessionA)
       yield* running(shell, holder.id)
       const removed = yield* shell.enqueue(yield* shell.prepare({ command: `touch ${marker}`, timeout: 0 }), sessionB)
@@ -239,7 +243,7 @@ describe("queued shell commands", () => {
     Effect.gen(function* () {
       const shell = yield* Service
       const db = (yield* Database.Service).db
-      const marker = join(workspace, "failed-registration")
+      const marker = join((yield* QueuedFixture).workspace, "failed-registration")
       yield* db.run(sql`ALTER TABLE shell RENAME TO shell_unavailable`).pipe(Effect.orDie)
       const failed = yield* shell
         .enqueue(yield* shell.prepare({ command: `touch ${marker}`, timeout: 0 }), sessionA)
@@ -260,7 +264,7 @@ describe("queued shell commands", () => {
   posixIt("never starts a queued command after the Shell service shuts down", () =>
     Effect.gen(function* () {
       const events = yield* EventRuntime.Service
-      const marker = join(workspace, "after-shutdown")
+      const marker = join((yield* QueuedFixture).workspace, "after-shutdown")
       const started: string[] = []
       yield* events.listen((event) =>
         Effect.sync(() => {
@@ -269,8 +273,9 @@ describe("queued shell commands", () => {
         }),
       )
       const scope = yield* Scope.make()
+      const placement = yield* Location.Service
       const context = yield* Layer.buildWithScope(
-        layer().pipe(Layer.provide(Layer.mergeAll(config, locationLayer))),
+        layer().pipe(Layer.provide(Layer.mergeAll(config, Layer.succeed(Location.Service, placement)))),
         scope,
       )
       const shell = Context.get(context, Service)
@@ -291,6 +296,7 @@ describe("queued shell commands", () => {
       const events = yield* EventRuntime.Service
       const shell = yield* Service
       const db = (yield* Database.Service).db
+      const { workspace, spawnHook } = yield* QueuedFixture
       const marker = join(workspace, "cancelled-during-spawn")
       const holder = yield* shell.enqueue(yield* shell.prepare({ command: "sleep 30", timeout: 0 }), sessionA)
       yield* running(shell, holder.id)

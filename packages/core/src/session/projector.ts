@@ -732,8 +732,9 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     yield* notify("question")
     return
   }
-  if (change.type === "question_answered") {
-    if (task.state !== "waiting" || task.question_id !== change.answer.questionID) return yield* conflict()
+  if (change.type === "question_answered" || change.type === "question_timed_out") {
+    const questionID = change.type === "question_answered" ? change.answer.questionID : change.questionID
+    if (task.state !== "waiting" || task.question_id !== questionID) return yield* conflict()
     yield* update({
       state: "running",
       question_id: null,

@@ -24,7 +24,11 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
     },
     keepAwake: {
       get: async () => status,
-      set: async (enabled) => { writes.push(enabled); status = { state: enabled ? "on" : "off" }; return status },
+      set: async (enabled) => {
+        writes.push(enabled);
+        status = enabled ? { state: "on", lid: "on", sleepHold: false } : { state: "off", lid: "off", sleepHold: false }
+        return status
+      },
     },
   })
   const until = async (condition: () => boolean) => {
@@ -40,8 +44,8 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
     screen.input.pressEnter()
     await until(() => writes.length === 1)
     expect(writes).toEqual([true])
-    await until(() => screen.frame().includes("Idle sleep only"))
-    expect(screen.frame()).toContain("Idle sleep only; manual sleep and lid still apply.")
+    await until(() => screen.frame().includes("Idle and lid-closed sleep held off"))
+    expect(screen.frame()).toContain("Idle and lid-closed sleep held off")
 
     status = { state: "error", message: "synthetic inhibitor failure" }
     screen.input.pressKey("p", { ctrl: true })
@@ -91,6 +95,35 @@ test("Status remains Checking until the initial backend read reports On", async 
     expect(screen.lines().some((line) => line.includes("Keep awake") && /\bon\b/.test(line))).toBe(true)
     expect(screen.frame()).not.toContain("Checking")
     expect(writes).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("Status identifies the foreign lid owner without crowding its state row", async () => {
+  const screen = await renderScreen({
+    width: 80, height: 24, settle: "Message YCoding…",
+    keepAwake: {
+      get: async () => ({ state: "on", lid: "held", sleepHold: true, message: "Lid control is held by another YCoding process." }),
+      set: async () => { throw new Error("Status must not change keep-awake") },
+    },
+  })
+  const waitForFrame = async (matches: () => boolean) => {
+    const deadline = Date.now() + 5_000
+    while (!matches() && Date.now() < deadline) await Bun.sleep(10)
+    if (!matches()) throw new Error(screen.frame())
+  }
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitForFrame(() => screen.frame().includes("Commands"))
+    await screen.input.typeText("View status")
+    screen.input.pressEnter()
+    await waitForFrame(() => screen.frame().includes("   Status"))
+    await screen.input.typeText("Keep awake")
+    await waitForFrame(() => screen.frame().includes("Lid control is held by another YCoding process."))
+    expect(screen.frame()).toContain("Keep awake")
+    expect(screen.frame()).toContain("lid held elsewhere")
+    expect(screen.frame()).toContain("Lid control is held by another YCoding process.")
   } finally {
     await screen.dispose()
   }

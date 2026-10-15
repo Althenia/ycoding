@@ -312,7 +312,11 @@ describe("Agent", () => {
       }
       expect(god.system).toContain("Explicit permission denies remain denied.")
       expect(god.system).toContain("1 auto-approves ask permissions and ordinary guardrail reviews")
-      expect(god.system).toContain("Hard reviews always require a human decision.")
+      expect(god.system).toContain(
+        "Surviving hard reviews require a human decision unless the user enabled /guardrail-decision or /sleep",
+      )
+      expect(god.system).toContain("only an explicit false predicate at confidence ≥0.9 dismisses that matched rule")
+      expect(god.system).toContain("uncertainty preserves review, and denies and custom rules are never verified")
       expect(god.system).toContain("Orchestrate; do not implement.")
       expect(god.system).toContain("launch every ready independent task in parallel")
       expect(god.system).toContain("score size, difficulty, complexity, and risk against a rubric")

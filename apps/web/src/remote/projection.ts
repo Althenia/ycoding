@@ -1046,6 +1046,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     }
     case "form.replied":
     case "form.cancelled":
+    case "form.timed_out":
       return data.sessionID === view.id ? removeRequest(view, stringField(data.id)) : view
     default:
       return bump(view)

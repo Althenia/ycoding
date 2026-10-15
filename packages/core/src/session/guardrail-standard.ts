@@ -7,6 +7,7 @@ export interface Match {
   readonly decision: "ask" | "deny"
   readonly reason: string
   readonly hardReview: boolean
+  readonly evidence?: { readonly matchedSegment: string; readonly resolvedTargets: ReadonlyArray<string> }
 }
 
 export interface Paths {
@@ -54,29 +55,34 @@ const databaseReview = {
   reason: "Destructive database operation",
 }
 
-export function match(action: string, resource: string, paths?: Paths): Match | undefined {
-  const outside = paths && outsidePaths(action, resource, paths).length > 0
+export function match(action: string, resource: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
+  const outside = !dismissed?.has("standard.review.outside-repo") && paths && outsidePaths(action, resource, paths).length > 0
     ? { id: "standard.review.outside-repo", decision: "ask" as const,
-        reason: "Work outside the repository requires ordinary guardrail review.", hardReview: false } : undefined
+        reason: "Work outside the repository requires ordinary guardrail review.", hardReview: false,
+        evidence: {
+          matchedSegment: action === "shell" ? shellWorkdirs(resource, paths).find(({ segment, workdir }) => outsidePaths(action, segment.rawTokens.join(" "), { ...paths, workdir }).length > 0)?.segment.rawTokens.join(" ") ?? resource : resource,
+          resolvedTargets: outsidePaths(action, resource, paths),
+        } } : undefined
   if (action !== "shell") return outside
   const command = resource.replace(/\s+/g, " ").trim()
   const denied = catastrophic.find((rule) => rule.pattern.test(command))
-  const deletion = deletionMatch(resource, paths)
+  const deletion = deletionMatch(resource, paths, dismissed)
   if (denied) return { ...denied, decision: "deny", hardReview: false }
   if (deletion?.decision === "deny") return deletion
   if (deletion) return deletion
   const segments = shellSegments(resource).map((segment) => segment.rawTokens.join(" "))
   const review =
-    segmentReviews.find((rule) => segments.some((segment) => rule.pattern.test(segment))) ??
-    (databaseReview.pattern.test(command) ? databaseReview : undefined)
-  return review ? { ...review, decision: "ask", hardReview: true } : outside
+    segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment))) ??
+    (!dismissed?.has(databaseReview.id) && databaseReview.pattern.test(command) ? databaseReview : undefined)
+  return review ? { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment: segments.find((segment) => review.pattern.test(segment)) ?? command, resolvedTargets: [] } } : outside
 }
 
-function deletionMatch(command: string, paths?: Paths): Match | undefined {
+function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
   const matches = rmOperations(command, paths).flatMap((operation): ReadonlyArray<Match> => {
     if (!operation.recursive) return []
     const operands = operation.targets.filter((target) => !isTemporary(target, operation.workdir, paths))
     const targets = operands.map((target) => classifyTarget(target, operation.workdir, paths))
+    const evidence = { matchedSegment: operation.matchedSegment, resolvedTargets: operands.map((target) => resolveTarget(wholeTarget(target), operation.workdir, paths)) }
     if (targets.includes("root"))
       return [
         {
@@ -104,10 +110,11 @@ function deletionMatch(command: string, paths?: Paths): Match | undefined {
           hardReview: false,
         },
       ]
-    if (targets.includes("project"))
+    if (targets.includes("project") && !dismissed?.has("standard.review.project-deletion"))
       return [
         {
           id: "standard.review.project-deletion",
+          evidence,
           decision: "ask",
           reason: "Recursive deletion of the current project or one of its ancestors",
           hardReview: true,
@@ -117,6 +124,7 @@ function deletionMatch(command: string, paths?: Paths): Match | undefined {
       return [
         {
           id: "standard.review.home-child",
+          evidence,
           decision: "ask",
           reason: "Recursive deletion of a direct child of the home directory",
           hardReview: true,
@@ -124,7 +132,7 @@ function deletionMatch(command: string, paths?: Paths): Match | undefined {
       ]
     return []
   })
-  return matches.find((match) => match.decision === "deny") ?? matches.find((match) => match.hardReview) ?? matches[0]
+  return matches.find((match) => match.decision === "deny") ?? matches.find((match) => match.hardReview && !dismissed?.has(match.id))
 }
 
 const temporaryRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders"]
@@ -439,6 +447,7 @@ function isHomeChild(target: string, workdir: string, paths?: Paths) {
 }
 
 interface RmOperation {
+  readonly matchedSegment: string
   readonly recursive: boolean
   readonly targets: ReadonlyArray<string>
   readonly workdir: string
@@ -472,7 +481,7 @@ function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation
       if (separator >= 0 && index > separator) return [index]
       return token !== "--" && !token.startsWith("-") && !/^[<>]/.test(token) ? [index] : []
     })
-    return [{ recursive, workdir, segment: segmentIndex,
+    return [{ recursive, workdir, segment: segmentIndex, matchedSegment: segment.rawTokens.join(" "),
       targets: targetIndexes.map((index) => invocation.args[index]),
       ranges: targetIndexes.map((index) => segment.ranges[segment.tokens.length - invocation.args.length + index]),
     }]
@@ -634,6 +643,11 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
       if (!token) tokenStart = index
       quote = character
       tokenQuoted = true
+      continue
+    }
+    if (character === "#" && !token) {
+      const newline = command.indexOf("\n", index)
+      index = newline < 0 ? command.length : newline - 1
       continue
     }
     if (character === ";" || character === "\n") {

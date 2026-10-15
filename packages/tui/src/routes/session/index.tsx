@@ -132,9 +132,12 @@ import {
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
+  guardrailDecisionEnabled,
+  isAsleep,
   type SessionAutonomyResponse,
   yoloLevel,
 } from "../../util/session-autonomy"
+import { useKeepAwake } from "../../keep-awake"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
@@ -487,6 +490,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     data.on("session.execution.succeeded", settledAutonomy),
     data.on("session.execution.failed", settledAutonomy),
     data.on("session.execution.interrupted", settledAutonomy),
+    data.on("session.context.observed", (event) => {
+      if (event.data.source === "session-state") settledAutonomy(event)
+    }),
   ]
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
@@ -528,13 +534,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (waiting) return { type: "waiting", count: waiting } as const
     return { type: "ready" } as const
   })
+  const keepAwake = useKeepAwake()
   const headerState = createMemo<SessionHeaderState>(() => {
     const state = operationalHeaderState()
     const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
     const level = typeof raw === "number" ? raw : raw === true ? 2 : 0
     const goalActive = autonomy().goal?.status === "active"
-    if (level === 0 && !goalActive) return state
-    return { type: "autonomy", yolo: level, goalActive, state }
+    const guardrailDecision = guardrailDecisionEnabled(autonomy())
+    const asleep = isAsleep(autonomy())
+    if (level === 0 && !goalActive && !guardrailDecision && !asleep) return state
+    return {
+      type: "autonomy",
+      yolo: level,
+      goalActive,
+      guardrailDecision,
+      asleep,
+      machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
+      state,
+    }
   })
   const headerMessage = createMemo(() => {
     const message = messages().findLast((item) => item.type === "assistant")
@@ -2044,7 +2061,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           sessionID={route.sessionID}
           branch={branch()}
           autonomy={autonomy()}
-          onAutonomyUpdated={acceptAutonomy}
+          onAutonomyUpdated={(sessionID, state) => {
+            if (sessionID !== route.sessionID) return
+            autonomyRefresh.invalidate()
+            acceptAutonomy(sessionID, state)
+          }}
           inset={{ left: 3, right: 4 }}
           placeholders={btw() ? { normal: ["Message BTW…"] } : undefined}
           right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
@@ -4901,9 +4922,11 @@ function Question(props: ToolProps) {
   const { theme } = useTheme()
   const questions = createMemo(() => parseQuestions(props.input.questions))
   const answers = createMemo(() => parseQuestionAnswers(props.metadata.answers))
+  const timedOut = createMemo(() => finiteNumber(props.metadata.timedOutAfterSeconds) !== undefined)
   const count = createMemo(() => questions().length)
 
   function format(answer?: ReadonlyArray<string>) {
+    if (timedOut()) return "(timed out)"
     if (!answer?.length) return "(no answer)"
     return answer.join(", ")
   }
@@ -4917,7 +4940,9 @@ function Question(props: ToolProps) {
               {(q, i) => (
                 <box flexDirection="column">
                   <text fg={theme.text.subdued}>{q.question}</text>
-                  <text fg={theme.text.default}>{format(answers()?.[i()])}</text>
+                  <text fg={timedOut() ? theme.text.feedback.warning.default : theme.text.default}>
+                    {format(answers()?.[i()])}
+                  </text>
                 </box>
               )}
             </For>

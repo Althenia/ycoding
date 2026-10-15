@@ -7,7 +7,11 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { goalReminder } from "@ycoding-ai/core/session/live-state"
-import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { GoalTool } from "@ycoding-ai/core/tool/goal"
 import { testEffect } from "./lib/effect"
 
@@ -109,7 +113,7 @@ it.effect("reminds an active goal's agent to decide on the user's behalf until t
       goal: { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
     })
     expect(reminder?.split("\n")).toContain(
-      "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.",
+      "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user unless guardrail-decision or sleep is on for this Session family.",
     )
   }),
 )
@@ -419,5 +423,129 @@ it.effect("does not spend or reset the no-progress budget when ordinary progress
       iteration: 1,
       noProgress: 2,
     })
+  }),
+)
+
+it.effect("persists the guardrail-decision toggle across goal and YOLO updates", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    expect((yield* service.set({ sessionID, guardrailDecision: true })).guardrailDecision).toBe(true)
+    expect(SessionAutonomy.guardrailDecisionEnabled(yield* service.get(sessionID))).toBe(true)
+    expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(true)
+    yield* service.setYolo({ sessionID, yolo: 2 })
+    yield* service.setGoal({ sessionID, text: "Keep the toggle" })
+    expect((yield* service.get(sessionID)).guardrailDecision).toBe(true)
+    expect((yield* service.set({ sessionID, guardrailDecision: false })).guardrailDecision).toBe(false)
+    expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(false)
+  }),
+)
+
+for (const prior of [true, false] as const) {
+  it.effect(`sleep enables guardrail decisions and wake restores prior toggle ${prior}`, () =>
+    Effect.gen(function* () {
+      const service = yield* setup
+      yield* service.set({ sessionID, guardrailDecision: prior })
+      const asleep = yield* service.set({ sessionID, sleep: true })
+      expect(asleep.sleep).toEqual({ priorGuardrailDecision: prior })
+      expect(SessionAutonomy.isAsleep(asleep)).toBe(true)
+      expect(SessionAutonomy.guardrailDecisionEnabled(asleep)).toBe(true)
+      expect(yield* service.isAsleep(sessionID)).toBe(true)
+      expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(true)
+      const woken = yield* service.set({ sessionID, sleep: false })
+      expect(woken.sleep).toBeUndefined()
+      expect(woken.guardrailDecision).toBe(prior)
+      expect(yield* service.isAsleep(sessionID)).toBe(false)
+      expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(prior)
+    }),
+  )
+}
+
+it.effect("wake restores the pre-sleep setting even if the toggle changes while asleep", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    yield* service.set({ sessionID, sleep: true })
+    yield* service.set({ sessionID, guardrailDecision: true })
+    const woken = yield* service.set({ sessionID, sleep: false })
+    expect(woken.guardrailDecision).toBe(false)
+  }),
+)
+
+it.effect("child Sessions inherit guardrail-decision and sleep from the root family", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const { db } = yield* Database.Service
+    const childID = Session.ID.make("ses_autonomy_child")
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: childID,
+        project_id: Project.ID.global,
+        parent_id: sessionID,
+        directory: "/project",
+        title: "child",
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTaskTable)
+      .values({
+        session_id: childID,
+        parent_id: sessionID,
+        parent_assistant_message_id: SessionMessage.ID.make("msg_autonomy_parent"),
+        tool_call_id: "call_autonomy",
+        input_id: SessionMessage.ID.make("msg_autonomy_input"),
+        description: "child",
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({
+          providerID: Provider.ID.make("openai"),
+          id: CatalogModel.ID.make("gpt-5.6"),
+          variant: CatalogModel.VariantID.make("high"),
+        }),
+        prompt_digest: "digest",
+        background: true,
+        delivery: "steer",
+        state: "running",
+        revision: 1,
+        time_created: 1,
+        time_updated: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    expect(yield* service.isAsleep(childID)).toBe(false)
+    yield* service.set({ sessionID, sleep: true })
+    expect(yield* service.isAsleep(childID)).toBe(true)
+    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
+    yield* service.set({ sessionID, sleep: false })
+    yield* service.set({ sessionID, guardrailDecision: true })
+    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
+  }),
+)
+
+it.effect("taskless family members inherit sleep without widening the existing YOLO and goal ladder", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const database = yield* Database.Service
+    const childID = Session.ID.make("ses_taskless_autonomy")
+    yield* database.db
+      .insert(SessionTable)
+      .values({
+        id: childID,
+        project_id: Project.ID.global,
+        parent_id: sessionID,
+        directory: "/project",
+        title: "Taskless child",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* service.setYolo({ sessionID, yolo: 3 })
+    yield* service.setGoal({ sessionID, text: "Parent objective" })
+    expect(yield* service.canAutoPermission(childID)).toBe(false)
+    expect(yield* service.canAutoAnswer(childID)).toBe(false)
+    yield* service.set({ sessionID, sleep: true })
+    expect(yield* service.isAsleep(childID)).toBe(true)
+    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
+    expect(yield* service.canAutoPermission(childID)).toBe(false)
   }),
 )

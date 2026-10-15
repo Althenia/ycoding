@@ -493,9 +493,9 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
       <Show when={props.request().kind === "guardrail"}>
         <header class="request__header">
           <Icon name="alert" size={16} />
-          <span>Guardrail review{isHardReview(props.request()) ? " (human decision required)" : ""}</span>
+          <span>Guardrail review{isHardReview(props.request()) ? " (human decision required unless guardrail-decision or sleep is on)" : ""}</span>
           <Show when={isHardReview(props.request())}>
-            <span class="request__badge">Human only</span>
+            <span class="request__badge">Hard review</span>
           </Show>
         </header>
         <p class="request__body">

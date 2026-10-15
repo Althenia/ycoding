@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { json } from "./fixture/tui-client"
+import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
 test("legacy local auto state cannot approve a permission outside durable autonomy", async () => {
@@ -30,14 +30,17 @@ test("legacy local auto state cannot approve a permission outside durable autono
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
       if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [permission] })
       if (request.method === "POST" && url.pathname.includes("permission")) {
         replies.push(await request.json())
         replied.resolve()
         return new Response(null, { status: 204 })
       }
-      if (["message", "pending", "subagent", "todo", "skills"].some((part) => url.pathname === `/api/session/${sessionID}/${part}`))
+      if (["message", "pending", "todo", "skills"].some((part) => url.pathname === `/api/session/${sessionID}/${part}`))
         return json({ data: [], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}/subagent`)
+        return json({ data: [], summary: { total: 0, active: 0 }, cursor: {} })
       if (url.pathname === `/api/session/${sessionID}/guardrail`)
         return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
       if (url.pathname === "/api/agent")

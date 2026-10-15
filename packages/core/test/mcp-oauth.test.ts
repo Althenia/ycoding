@@ -7,6 +7,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
+import { Decision } from "@ycoding-ai/core/decision"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
@@ -151,6 +152,9 @@ function locationMcp(
   const layer = MCP.layer.pipe(
     Layer.provide(credentials),
     Layer.provideMerge(Form.layer),
+    Layer.provideMerge(
+      Layer.mock(Decision.Service, { evaluate: () => Effect.die("MCP forms must not request judgments") }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(

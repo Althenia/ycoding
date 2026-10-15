@@ -83,4 +83,11 @@ const Rejected = ephemeral({
     requestID: ID,
   },
 })
-export const Event = { Asked, Replied, Rejected, Definitions: inventory(Asked, Replied, Rejected) }
+const TimedOut = ephemeral({
+  type: "question.timed_out",
+  schema: {
+    sessionID: SessionID,
+    requestID: ID,
+  },
+})
+export const Event = { Asked, Replied, Rejected, TimedOut, Definitions: inventory(Asked, Replied, Rejected, TimedOut) }

@@ -12,6 +12,7 @@
     "test": "bun test --only-failures --path-ignore-patterns=test-integration",
     "test:unit:browser": "bun test --timeout 30000 test/browser/browser.test.ts test/browser/isolated-browser.test.ts test/browser/isolated-capture.test.ts test/browser/isolated-cdp.test.ts test/tool-browser.test.ts",
     "test:integration:computer": "bun test --timeout 60000 test-integration/computer-app.test.ts",
+    "test:integration:clamshell": "bun test --timeout 30000 test-integration/clamshell-sleep.test.ts",
     "test:integration:browser": "bun test --timeout 120000 test-integration/browser/isolated-executor.test.ts test-integration/tool-browser-integration.test.ts",
     "smoke:cursor": "bun script/cursor-smoke.ts",
     "typecheck": "tsgo --noEmit"
@@ -53,6 +54,11 @@
       "bun": "./src/util/process-lock-ffi.bun.ts",
       "node": "./src/util/process-lock-ffi.node.ts",
       "default": "./src/util/process-lock-ffi.bun.ts"
+    },
+    "#clamshell-sleep-ffi": {
+      "bun": "./src/util/clamshell-sleep-ffi.bun.ts",
+      "node": "./src/util/clamshell-sleep-ffi.node.ts",
+      "default": "./src/util/clamshell-sleep-ffi.bun.ts"
     }
   },
   "devDependencies": {

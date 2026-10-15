@@ -2187,6 +2187,20 @@ test("hydrates and updates root-family guardrail reviews", async () => {
   }
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/ses_root/guardrail/request") return json({ data: [initial] })
+    if (url.pathname === "/api/session/ses_root/guardrail")
+      return json({
+        data: {
+          rootSessionID: "ses_root",
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+          decisions: [],
+          dismissals: [],
+        },
+      })
     return undefined
   }, events)
   let data!: ReturnType<typeof useData>
@@ -2407,6 +2421,28 @@ test("adds, dismisses, and refreshes form requests", async () => {
       created: 4,
       type: "form.cancelled",
       data: { sessionID: "ses_1", id: "frm_2" },
+    })
+    await wait(() => data.session.form.list("ses_1")?.length === 0)
+
+    emitEvent(events, {
+      id: "evt_form_created_3",
+      created: 5,
+      type: "form.created",
+      data: {
+        form: {
+          id: "frm_3",
+          sessionID: "ses_1",
+          title: "Input requested",
+          fields: formFields,
+        },
+      },
+    })
+    await wait(() => data.session.form.list("ses_1")?.length === 1)
+    emitEvent(events, {
+      id: "evt_form_timed_out_3",
+      created: 6,
+      type: "form.timed_out",
+      data: { sessionID: "ses_1", id: "frm_3" },
     })
     await wait(() => data.session.form.list("ses_1")?.length === 0)
 

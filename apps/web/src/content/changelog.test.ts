@@ -8,10 +8,15 @@ describe("release entries", () => {
     expect(RELEASES[0]).toEqual({
       version: "0.10.10",
       date: "2026-10-14",
-      title: "Shell command queue and self-contained commits",
+      title: "Sleep mode, shell command queue, and faster web",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
         { tag: "Added", text: "The shell tool has a queue channel for expensive commands such as typechecks, builds, and package-wide test suites. Queued commands from every YCoding process on the machine share running limits (two at once and one per Session by default), wait for enough free memory and a low enough CPU load, and report completion like background commands. Set the limits under shell_queue; the TUI and the web Team view show queued commands and their position." },
+        { tag: "Added", text: "/sleep lets the agent keep working while you are away: the root Session family answers its own questions and forms, settles guardrail reviews with the decision model, and keeps the machine awake. /wake or any message you send in the family ends sleep and restores your earlier review setting." },
+        { tag: "Added", text: "/guardrail-decision toggles decision-model review for a root Session family. A review is approved once when the model approves with confidence 0.8 or higher and rejected otherwise; explicit denies still apply and YOLO levels are unchanged." },
+        { tag: "Added", text: "Before a standard guardrail review reaches you, the decision model checks whether the action really matches the rule, and a confident false match is dismissed without a review." },
+        { tag: "Added", text: "/keep-awake toggles keeping the machine awake, also from web Settings → Machine. On macOS it keeps the Mac awake with the lid closed where lid control is available. Sleep holds keep-awake on until the last sleeping Session family wakes." },
+        { tag: "Added", text: "Unanswered questions, forms, and subagent questions time out after question_timeout_seconds (default 300; 0 disables). The agent then proceeds on its own judgment, and a late answer is rejected." },
         { tag: "Changed", text: "Built-in agents commit only complete, self-contained changes: each commit includes its code, tests, docs, and release-note entries, is made after its checks pass, and has a summary that states its intent and a body that states why it exists, what behavior changed, and how it was verified." },
         { tag: "Changed", text: "Built-in agents reply and write documentation, instruction files, code comments, and commit messages as directives and facts from verified evidence in the reader's own terms, without unrequested explanations, copying the request's wording, or mentioning the request or its style instructions." },
         { tag: "Changed", text: "The Usage page shows the monthly provider total and its unit inside the donut ring. A total too wide for the ring is shortened to one decimal with a k, m, or b suffix, such as $2.0k; the exact total stays available on hover, on keyboard focus, and to screen readers, and the legend keeps each provider's exact value." },

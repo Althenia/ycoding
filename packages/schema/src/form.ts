@@ -3,7 +3,7 @@ export * as Form from "./form.js"
 import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
-import { NonNegativeInt, optional, statics } from "./schema.js"
+import { NonNegativeInt, optional, PositiveInt, statics } from "./schema.js"
 
 const IDSchema = Schema.String.check(Schema.isStartsWith("frm_")).pipe(Schema.brand("Form.ID"))
 
@@ -147,6 +147,7 @@ export const State = Schema.Union([
   Schema.Struct({ status: Schema.Literal("pending") }),
   Schema.Struct({ status: Schema.Literal("answered"), answer: Answer }),
   Schema.Struct({ status: Schema.Literal("cancelled") }),
+  Schema.Struct({ status: Schema.Literal("timed_out"), seconds: PositiveInt }),
 ])
   .pipe(Schema.toTaggedUnion("status"))
   .annotate({ identifier: "Form.State" })
@@ -160,5 +161,12 @@ export interface Reply extends Schema.Schema.Type<typeof Reply> {}
 const Created = ephemeral({ type: "form.created", schema: { form: Info } })
 const Replied = ephemeral({ type: "form.replied", schema: { id: ID, sessionID: Schema.String, answer: Answer } })
 const Cancelled = ephemeral({ type: "form.cancelled", schema: { id: ID, sessionID: Schema.String } })
+const TimedOut = ephemeral({ type: "form.timed_out", schema: { id: ID, sessionID: Schema.String } })
 
-export const Event = { Created, Replied, Cancelled, Definitions: inventory(Created, Replied, Cancelled) }
+export const Event = {
+  Created,
+  Replied,
+  Cancelled,
+  TimedOut,
+  Definitions: inventory(Created, Replied, Cancelled, TimedOut),
+}

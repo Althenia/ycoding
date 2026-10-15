@@ -10,6 +10,7 @@ export interface Input {
   readonly paths?: SessionGuardrailStandard.Paths
   /** Custom source layers ordered from nearest repository scope to user scope. */
   readonly custom?: ReadonlyArray<CustomLayer>
+  readonly dismissedStandardRules?: ReadonlySet<string>
 }
 
 export interface CustomLayer {
@@ -18,6 +19,7 @@ export interface CustomLayer {
 }
 
 export interface Result {
+  readonly evidence?: SessionGuardrailStandard.Match["evidence"]
   readonly decision: "allow" | "ask" | "deny"
   readonly ruleIDs: ReadonlyArray<string>
   readonly reason?: string
@@ -29,7 +31,7 @@ const readonlyActions = new Set(["read", "glob", "grep", "webfetch", "websearch"
 
 export function evaluate(input: Input): Result {
   const standard = input.resources.flatMap((resource) => {
-    const match = SessionGuardrailStandard.match(input.action, resource, input.paths)
+    const match = SessionGuardrailStandard.match(input.action, resource, input.paths, input.dismissedStandardRules)
     return match ? [match] : []
   })
   const standardDeny = standard.find((item) => item.decision === "deny")
@@ -53,6 +55,7 @@ export function evaluate(input: Input): Result {
     return {
       decision: "ask",
       ruleIDs: [standardHardReview.id],
+      evidence: standardHardReview.evidence,
       reason: standardHardReview.reason,
       standard: true,
       hardReview: true,
@@ -72,6 +75,7 @@ export function evaluate(input: Input): Result {
     return {
       decision: "ask",
       ruleIDs: [standardAsk.id],
+      evidence: standardAsk.evidence,
       reason: standardAsk.reason,
       standard: true,
       hardReview: false,

@@ -8,6 +8,17 @@ import type { PaletteStatusCommand } from "./component/command-palette"
 
 export type KeepAwakeStatus = KeepAwake.Status
 
+export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): string {
+  if (!status) return "Checking"
+  if (status.state !== "on")
+    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep-held" : ""}`
+  const parts = ["idle"]
+  if (status.lid === "on") parts.push("lid")
+  if (status.lid !== "on") parts.push(`lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}`)
+  if (status.sleepHold) parts.push("sleep-held")
+  return `on · ${parts.join(" + ")}`
+}
+
 type KeepAwakeServer = {
   get: () => Promise<KeepAwakeStatus>
   set: (enabled: boolean) => Promise<KeepAwakeStatus>
@@ -16,12 +27,14 @@ type KeepAwakeServer = {
 type KeepAwakeContextValue = {
   status: () => KeepAwakeStatus | undefined
   toggle: () => Promise<void>
+  refresh: () => Promise<void>
 }
 
 const Context = createContext<KeepAwakeContextValue>()
 const unavailable: KeepAwakeContextValue = {
   status: () => undefined,
   toggle: async () => {},
+  refresh: async () => {},
 }
 
 export function useKeepAwake() {
@@ -61,13 +74,28 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
       return
     }
     const cycle = ++generation
-    const enabled = current.state !== "on"
+    const enabled = !(current.manual ?? current.state === "on")
     try {
       const next = await server.set(enabled)
       if (disposed || cycle !== generation) return
       setStatus(next)
-      if (next.state === "on")
-        toast.show({ variant: "info", title: "Keep machine awake", message: "Idle sleep only; manual sleep and lid still apply.", duration: 6000 })
+      if (next.state === "on" && !enabled && next.sleepHold)
+        toast.show({
+          variant: "info",
+          title: "Keep machine awake",
+          message: "Held on by a sleeping session; your manual setting is off and applies when the last session wakes.",
+          duration: 6000,
+        })
+      if (next.state === "on" && enabled)
+        toast.show({
+          variant: "info",
+          title: "Keep machine awake",
+          message:
+            next.lid === "on"
+              ? "Idle and lid-closed sleep held off; on battery this drains the battery and a closed lid traps heat. Choosing Sleep still sleeps."
+              : "Idle sleep held off; closing the lid may still sleep this machine. On battery keep-awake drains the battery and a closed lid traps heat.",
+          duration: 6000,
+        })
       if (next.state === "error" || next.state === "unsupported")
         toast.show({ variant: "error", title: "Keep machine awake", message: next.message ?? "Keep machine awake is unavailable.", duration: 6000 })
     } catch (error) {
@@ -87,7 +115,12 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
     if (poll) clearInterval(poll)
   })
 
-  return <Context.Provider value={{ status, toggle }}><KeepAwakeCommands />{props.children}</Context.Provider>
+  return (
+    <Context.Provider value={{ status, toggle, refresh }}>
+      <KeepAwakeCommands />
+      {props.children}
+    </Context.Provider>
+  )
 }
 
 function KeepAwakeCommands() {
@@ -97,6 +130,7 @@ function KeepAwakeCommands() {
     title: "Keep machine awake",
     group: "Machine",
     palette: true,
+    slash: { name: "keep-awake" },
     paletteStatus: () => <KeepAwakePaletteStatus status={awake.status} />,
     run: () => { void awake.toggle() },
   } satisfies PaletteStatusCommand
@@ -112,5 +146,5 @@ function KeepAwakePaletteStatus(props: { status: () => KeepAwakeStatus | undefin
       : props.status()?.state === "error"
         ? theme.text.feedback.error.default
         : theme.text.subdued
-  return <span style={{ fg: color() }}>● {props.status()?.state ?? "Checking"}</span>
+  return <span style={{ fg: color() }}>● {keepAwakeStatusLabel(props.status())}</span>
 }

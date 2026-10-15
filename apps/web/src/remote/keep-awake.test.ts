@@ -6,8 +6,20 @@ const ready = (state: "off" | "on" | "unsupported" | "error", message?: string):
   status: { state, ...(message === undefined ? {} : { message }) },
 })
 
+test("reports foreign lid ownership separately from local idle and sleep holds", () => {
+  const status = readKeepAwakeStatus({ data: { state: "on", lid: "held", sleepHold: true } })
+  expect(status?.lid).toBe("held")
+  expect(keepAwakeView({ reachable: true, keepAwake: { read: "ready", status } }).detail).toContain("lid held by another YCoding process")
+})
+
 test("reads only the closed status shape and bounds the machine's message", () => {
   expect(readKeepAwakeStatus({ data: { state: "on" } })).toEqual({ state: "on" })
+  expect(readKeepAwakeStatus({ data: { state: "on", lid: "on", sleepHold: true } })).toEqual({
+    state: "on",
+    lid: "on",
+    sleepHold: true,
+  })
+  expect(readKeepAwakeStatus({ data: { state: "on", lid: "bogus", sleepHold: "yes" } })).toEqual({ state: "on" })
   expect(readKeepAwakeStatus({ data: { state: "error", message: "caffeinate exited" } })).toEqual({
     state: "error",
     message: "caffeinate exited",
@@ -24,6 +36,25 @@ test("reads only the closed status shape and bounds the machine's message", () =
     { state: "on" },
   ])
     expect(readKeepAwakeStatus(value)).toBeUndefined()
+})
+
+test("sleep-held effective On keeps a manual-Off switch and exposes both parts and lid failures", () => {
+  const status = { state: "on", manual: false, sleepHold: true, lid: "error" } as const
+  expect(readKeepAwakeStatus({ data: status })).toEqual(status)
+  const view = keepAwakeView({ reachable: true, keepAwake: { read: "ready", status } })
+  expect(view.checked).toBe(false)
+  expect(view.label).toBe("On")
+  expect(view.detail).toContain("Idle on; lid error")
+  expect(view.detail).toContain("sleeping session")
+  expect(view.detail).toContain("Closing the lid may sleep")
+  expect(view.caveat).toContain("heat")
+})
+
+test("machine status reserves reported-part geometry and owns error tones", async () => {
+  const css = await Bun.file(new URL("../styles/remote.css", import.meta.url)).text()
+  expect(css).toMatch(/\.machine-awake__status\s*\{[^}]*min-block-size:\s*calc\(var\(--yc-leading-xs\) \* 6\)/)
+  expect(css).toMatch(/\.machine-awake__status\[data-tone="danger"\]\s*\{[^}]*color:\s*var\(--yc-danger\)/)
+  expect(css).toMatch(/\.machine-awake__status\[data-tone="attention"\]\s*\{[^}]*color:\s*var\(--yc-yellow-strong\)/)
 })
 
 test("a machine that is not reachable or not read yet never shows Off", () => {
@@ -47,11 +78,11 @@ test("a machine that is not reachable or not read yet never shows Off", () => {
   })
 })
 
-test("a ready machine reports its own state with the idle-sleep caveat and enables the switch", () => {
+test("a ready machine reports its own state with the idle and lid caveat and enables the switch", () => {
   const off = keepAwakeView({ keepAwake: ready("off"), reachable: true })
   expect(off).toMatchObject({ checked: false, disabled: false, busy: false, label: "Off", tone: "neutral" })
   expect(off.caveat).toMatch(/idle sleep/i)
-  expect(off.caveat).toMatch(/manual sleep|lid/i)
+  expect(off.caveat).toMatch(/lid/i)
   expect(off.caveat).toMatch(/restart/i)
   expect(keepAwakeView({ keepAwake: ready("on"), reachable: true })).toMatchObject({
     checked: true,
@@ -84,8 +115,8 @@ test("every machine state keeps the macOS and lifetime caveats visible", () => {
     for (const reachable of [false, true]) {
       const view = keepAwakeView({ keepAwake, reachable })
       expect(view.caveat).toMatch(/macOS/)
-      expect(view.caveat).toMatch(/idle sleep only/)
-      expect(view.caveat).toMatch(/manual sleep or closing the lid/)
+      expect(view.caveat).toMatch(/idle sleep and lid-closed sleep/)
+      expect(view.caveat).toMatch(/battery/)
       expect(view.caveat).toMatch(/stops or restarts/)
     }
   }
@@ -134,4 +165,31 @@ test("a change in flight disables the switch, and a failed or unknown change kee
   expect(unknown).toMatchObject({ checked: true, disabled: false, tone: "attention", alert: true })
   expect(unknown.detail).toContain("unconfirmed")
   expect(unknown.detail).not.toMatch(/turned on|is now on|confirmed on/i)
+})
+
+test("a sleep-held machine explains that turning off only sets the manual preference", () => {
+  const view = keepAwakeView({
+    keepAwake: { read: "ready", status: { state: "on", lid: "on", sleepHold: true } },
+    reachable: true,
+  })
+  expect(view).toMatchObject({ checked: true, disabled: false, label: "On", tone: "attention" })
+  expect(view.detail).toMatch(/sleeping session/)
+  expect(view.detail).toMatch(/manual preference/)
+  expect(view.caveat).toMatch(/battery/)
+  expect(view.caveat).toMatch(/heat/)
+})
+
+test("a lid error stays visible while idle keep-awake is on", () => {
+  const view = keepAwakeView({
+    keepAwake: { read: "ready", status: { state: "on", lid: "error", sleepHold: false } },
+    reachable: true,
+  })
+  expect(view).toMatchObject({ checked: true, label: "On", tone: "attention", alert: true })
+  expect(view.detail).toMatch(/lid-closed keep-awake could not be armed/)
+})
+
+test("an older connector status without lid or sleepHold still reads as on", () => {
+  const view = keepAwakeView({ keepAwake: ready("on"), reachable: true })
+  expect(view).toMatchObject({ checked: true, disabled: false, label: "On", tone: "neutral" })
+  expect(view.detail).toContain("being kept awake")
 })

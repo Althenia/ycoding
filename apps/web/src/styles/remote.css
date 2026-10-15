@@ -1007,8 +1007,7 @@ body:has(.app) {
   background: var(--yc-surface-sunken);
 }
 
-/* A hard review is a human decision at every autonomy level, so it is the one card
-   drawn in the danger role with a heavier outline, a halo, and a "Human only" badge. */
+/* Human hard-review requests retain the danger outline and halo. */
 .request--hard {
   border: 2px solid var(--yc-danger);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-danger) 18%, transparent);
@@ -1942,6 +1941,25 @@ body:has(.app) {
   align-items: center;
   gap: var(--yc-space-2);
   min-inline-size: 0;
+}
+
+.machine-awake__status,
+.machine-awake__caveat {
+  flex-basis: 100%;
+}
+
+.machine-awake__status {
+  min-block-size: calc(var(--yc-leading-xs) * 6);
+  line-height: var(--yc-leading-xs);
+  overflow-wrap: anywhere;
+}
+
+.machine-awake__status[data-tone="danger"] {
+  color: var(--yc-danger);
+}
+
+.machine-awake__status[data-tone="attention"] {
+  color: var(--yc-yellow-strong);
 }
 
 .device {

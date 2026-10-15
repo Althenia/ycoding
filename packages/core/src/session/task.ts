@@ -28,6 +28,10 @@ export const reconcileStaleTasks = (db: DatabaseService, appProcess: AppProcess.
           revision: SessionTaskTable.revision,
           ownerPid: SessionTaskTable.owner_pid,
           ownerStarted: SessionTaskTable.owner_started,
+          state: SessionTaskTable.state,
+          questionID: SessionTaskTable.question_id,
+          question: SessionTaskTable.question,
+          questionTime: SessionTaskTable.question_time,
         })
         .from(SessionTaskTable)
         .where(inArray(SessionTaskTable.state, [...staleStates]))
@@ -42,6 +46,8 @@ export const reconcileStaleTasks = (db: DatabaseService, appProcess: AppProcess.
         }
         for (const row of rows) {
           if (ShellLedger.alive(snapshot.value, row.ownerPid, row.ownerStarted)) continue
+          if (row.state === "waiting" && row.questionID !== null && row.question !== null && row.questionTime !== null)
+            continue
           yield* events.publish(
             SessionEvent.Task.Updated,
             {

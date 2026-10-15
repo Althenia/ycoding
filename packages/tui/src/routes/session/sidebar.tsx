@@ -8,7 +8,13 @@ import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 import { useTerminalDimensions } from "@opentui/solid"
 import { getScrollAcceleration } from "../../util/scroll"
-import { autonomyDecision, autonomyDecisionLabel, autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
+import {
+  autonomyDecision,
+  autonomyDecisionLabel,
+  autonomyModeLabel,
+  guardrailDecisionEnabled,
+  yoloLevel,
+} from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
@@ -145,7 +151,14 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
         )}
       </Show>
       <Show when={true}>
-        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={level() > 0 || props.autonomy.goal?.status === "active"}>
+        <RailSection
+          section="autonomy"
+          title="AUTONOMY"
+          summary={autonomyModeLabel(props.autonomy)}
+          attention={
+            level() > 0 || props.autonomy.goal?.status === "active" || guardrailDecisionEnabled(props.autonomy)
+          }
+        >
           <For each={[
             ["Permissions", "permissions"],
             ["Guardrails", "guardrails"],

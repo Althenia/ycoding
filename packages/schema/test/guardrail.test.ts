@@ -43,3 +43,20 @@ test("Guardrail.Request carries the additive hard-review capability", () => {
   })
   expect(request.hardReview).toBe(true)
 })
+
+test("decision provenance admits bounded confidence and omits unknown fields", () => {
+  for (const confidence of [0, 0.79, 0.8, 1])
+    expect(Schema.decodeUnknownSync(Guardrail.Confidence)(confidence)).toBe(confidence)
+  for (const confidence of [Number.NaN, Infinity, -Infinity, -0.1, 1.1])
+    expect(() => Schema.decodeUnknownSync(Guardrail.Confidence)(confidence)).toThrow()
+  const encode = Schema.encodeSync(Guardrail.Event.Replied.data)
+  expect(
+    encode({
+      rootSessionID: "ses_root",
+      sessionID: "ses_root",
+      requestID: "grq_model",
+      reply: "reject",
+      decidedBy: "decision-model",
+    } as typeof Guardrail.Event.Replied.data.Type),
+  ).not.toHaveProperty("confidence")
+})

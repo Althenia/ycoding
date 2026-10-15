@@ -43,6 +43,8 @@ export async function renderScreen(input: {
   packages?: PackageResolver
   builtins?: readonly Plugin.Definition[]
 }) {
+  const { resetRailExpansion } = await import("../../src/routes/session/rail-section")
+  resetRailExpansion()
   const setup = await createTestRenderer({
     width: input.width,
     height: input.height,

@@ -39,6 +39,16 @@ test("maps each decision to the effective YOLO level and goal", () => {
   expect(labels(0, true)).toEqual(["auto · goal", "ask you", "auto · goal"])
 })
 
+test("sleep and guardrail decisions take precedence without changing YOLO permission behavior", () => {
+  for (const yolo of [0, 1, 2, 3] as const) {
+    const state: SessionAutonomyState = { mode: "normal", yolo, sleep: { priorGuardrailDecision: false } }
+    expect(autonomyDecisionLabel(state, "guardrails")).toBe("auto · decision")
+    expect(autonomyDecisionLabel(state, "questions")).toBe("auto · decision")
+    expect(autonomyDecisionLabel(state, "permissions")).toBe(yolo ? "auto" : "ask you")
+    expect(autonomyModeLabel(state)).toContain("guardrail decision · asleep")
+  }
+})
+
 
 test("represents explicit goal reports through the progress label", () => {
   expect(

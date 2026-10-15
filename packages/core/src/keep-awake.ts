@@ -1,11 +1,15 @@
 export * as KeepAwake from "./keep-awake"
 
 import { KeepAwake } from "@ycoding-ai/schema/keep-awake"
-import { Context, Duration, Effect, Exit, Layer, Option, Ref, Scope, Semaphore } from "effect"
+import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Scope, Semaphore } from "effect"
+import fs from "node:fs"
+import path from "node:path"
 import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { makeGlobalNode } from "./effect/app-node"
 import { AppProcess } from "./process"
+import { Global } from "./global"
+import { ClamshellSleep } from "./util/clamshell-sleep"
 
 export const Status = KeepAwake.Status
 export type Status = KeepAwake.Status
@@ -13,6 +17,8 @@ export type Status = KeepAwake.Status
 export interface Interface {
   readonly get: Effect.Effect<Status>
   readonly set: (enabled: boolean) => Effect.Effect<Status>
+  readonly hold: (id: string) => Effect.Effect<Status>
+  readonly release: (id: string) => Effect.Effect<Status>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/KeepAwake") {}
@@ -22,10 +28,14 @@ export interface Options {
   readonly platform: NodeJS.Platform
   readonly pid: number
   readonly command?: () => ChildProcess.Command
+  readonly clamshell: ClamshellSleep.Interface
+  readonly lidFile?: string
+  readonly reapplyInterval?: Duration.Input
 }
 
 const startGrace = Duration.millis(300)
 const unsupported: Status = { state: "unsupported", message: "Keep machine awake is available on macOS only." }
+const lidErrorMessage = "Lid-closed keep-awake could not be armed; closing the lid may sleep this machine."
 
 export const macOSInhibitor = (pid: number) =>
   ChildProcess.make("/usr/bin/caffeinate", ["-i", "-w", String(pid)], {
@@ -37,18 +47,117 @@ export const macOSInhibitor = (pid: number) =>
 export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
   const parent = yield* Scope.Scope
   const gate = Semaphore.makeUnsafe(1)
-  const status = yield* Ref.make<Status>(options.platform === "darwin" ? { state: "off" } : unsupported)
+  const darwin = options.platform === "darwin"
+  const clamshell = options.clamshell
+  const lidFile = options.lidFile ?? path.join(Global.Path.state, "keep-awake-lid.json")
+  const lidOwner = yield* Ref.make(Option.none<Scope.Closeable>())
+  const decodeArmed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString.pipe(Schema.decodeTo(Schema.Struct({ armed: Schema.Boolean }))))
+  const readArmed = Effect.try(() => fs.readFileSync(lidFile, "utf8")).pipe(
+    Effect.map((text) => Option.getOrUndefined(decodeArmed(text))?.armed === true),
+    Effect.catch(() => Effect.succeed(false)),
+  )
+  const status = yield* Ref.make<Status>(darwin ? { state: "off" } : unsupported)
   const active = yield* Ref.make(Option.none<Scope.Closeable>())
+  const manual = yield* Ref.make(false)
+  const holds = yield* Ref.make<ReadonlySet<string>>(new Set())
+  const lid = yield* Ref.make<ClamshellSleep.LidState | "held">(darwin ? "off" : "unsupported")
+  const reapplyFiber = yield* Ref.make(Option.none<Fiber.Fiber<void>>())
+
+  const combined = Effect.gen(function* () {
+    const base = yield* Ref.get(status)
+    const lidState = yield* Ref.get(lid)
+    const sleepHold = (yield* Ref.get(holds)).size > 0
+    return {
+      ...base,
+      ...(sleepHold ? { manual: yield* Ref.get(manual) } : {}),
+      lid: lidState,
+      sleepHold,
+      ...(lidState === "held" && base.message === undefined ? { message: "Lid control is held by another YCoding process." } : {}),
+      ...(lidState === "error" && base.message === undefined
+        ? {
+            message:
+              base.state === "on"
+                ? lidErrorMessage
+                : "Normal lid sleep could not be restored; check this machine's power state.",
+          }
+        : {}),
+    } satisfies Status
+  })
+
+  const desired = Effect.gen(function* () {
+    return (yield* Ref.get(manual)) || (yield* Ref.get(holds)).size > 0
+  })
+
+  const releaseLidOwner = Ref.getAndSet(lidOwner, Option.none()).pipe(
+    Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: (scope) => Scope.close(scope, Exit.void) })),
+  )
+  const applyLid = (on: boolean, recover = false) => Effect.gen(function* () {
+    if (!darwin) return yield* Ref.set(lid, "unsupported")
+    if (Option.isNone(yield* Ref.get(lidOwner))) {
+      if (!on && !recover && !(yield* readArmed)) return yield* Ref.set(lid, "off")
+      const owner = yield* Scope.make()
+      const acquired = yield* Effect.tryPromise(() => import("./util/process-lock")).pipe(
+        Effect.flatMap(({ ProcessLock }) => ProcessLock.acquire(lidFile).pipe(
+          Effect.provideService(Scope.Scope, owner), Effect.as(true),
+          Effect.catchTag("ProcessLockHeldError", () => Effect.succeed(false)),
+        )),
+        Effect.exit,
+      )
+      if (Exit.isFailure(acquired) || !acquired.value) {
+        yield* Scope.close(owner, Exit.void)
+        return yield* Ref.set(lid, Exit.isFailure(acquired) ? "unsupported" : "held")
+      }
+      yield* Ref.set(lidOwner, Option.some(owner))
+      if (!on && !(yield* readArmed)) {
+        yield* releaseLidOwner
+        return yield* Ref.set(lid, "off")
+      }
+    }
+    const previouslyArmed = yield* readArmed
+    const written = on ? yield* Effect.try(() => fs.writeFileSync(lidFile, JSON.stringify({ armed: true }))).pipe(Effect.exit) : Exit.void
+    if (Exit.isFailure(written)) {
+      yield* releaseLidOwner
+      return yield* Ref.set(lid, "error")
+    }
+    const state = yield* Effect.try(() => clamshell.set(on)).pipe(Effect.catch(() => Effect.succeed("error" as const)))
+    yield* Ref.set(lid, state)
+    if (!on || state === "unsupported") {
+      if (state === "off" || (on && state === "unsupported" && !previouslyArmed)) yield* Effect.try(() => fs.writeFileSync(lidFile, JSON.stringify({ armed: false }))).pipe(
+        Effect.catch(() => Ref.set(lid, "error")),
+      )
+      yield* releaseLidOwner
+    }
+  }).pipe(Effect.uninterruptible)
+
+  const stopReapply = Ref.getAndSet(reapplyFiber, Option.none()).pipe(
+    Effect.flatMap(
+      Option.match({ onNone: () => Effect.void, onSome: (fiber) => Fiber.interrupt(fiber).pipe(Effect.asVoid) }),
+    ),
+  )
+
+  const startReapply = Effect.gen(function* () {
+    if (Option.isSome(yield* Ref.get(reapplyFiber))) return
+    const interval = Duration.fromInputUnsafe(options.reapplyInterval ?? Duration.seconds(30))
+    const loop = Effect.sleep(interval).pipe(
+      Effect.andThen(
+        desired.pipe(Effect.flatMap((on) => (on ? applyLid(true).pipe(Effect.uninterruptible) : Effect.void))),
+      ),
+      Effect.forever,
+    )
+    const fiber = yield* loop.pipe(Effect.forkIn(parent))
+    yield* Ref.set(reapplyFiber, Option.some(fiber))
+  })
 
   const release = Ref.getAndSet(active, Option.none()).pipe(
     Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: (scope) => Scope.close(scope, Exit.void) })),
   )
-  const settle = (next: Status) => Ref.set(status, next).pipe(Effect.as(next))
-  const stop = release.pipe(
-    Effect.andThen(settle(options.platform === "darwin" ? { state: "off" } : unsupported)),
+  const settle = (next: Status) => Ref.set(status, next).pipe(Effect.andThen(combined))
+  const stop = stopReapply.pipe(
+    Effect.andThen(release),
+    Effect.andThen(applyLid(false)),
+    Effect.andThen(settle(darwin ? { state: "off" } : unsupported)),
     Effect.uninterruptible,
   )
-
   const start = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make()
@@ -88,29 +197,46 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
                 if (Option.isNone(current) || current.value !== scope) return
                 yield* Ref.set(active, Option.none())
                 yield* Scope.close(scope, Exit.void)
+                yield* stopReapply
+                yield* applyLid(false)
                 yield* settle({ state: "error", message })
               }).pipe(Effect.uninterruptible),
             ),
           ),
           Effect.forkIn(parent),
         )
+        yield* applyLid(true)
+        yield* startReapply
         return yield* settle({ state: "on" })
       }).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, Exit.void) : Effect.void)))
     }),
   )
 
+  const reconcile = Effect.gen(function* () {
+    if (!darwin) return yield* combined
+    if (!(yield* desired)) return yield* stop
+    if (Option.isSome(yield* Ref.get(active))) {
+      if ((yield* Ref.get(lid)) !== "on") yield* applyLid(true)
+      yield* startReapply
+      return yield* combined
+    }
+    return yield* start
+  })
+
+  if (darwin && (yield* readArmed)) yield* applyLid(false, true)
+
   yield* Effect.addFinalizer(() => gate.withPermit(stop).pipe(Effect.uninterruptible))
 
   return Service.of({
-    get: Ref.get(status),
-    set: (enabled) =>
+    get: combined,
+    set: (enabled) => gate.withPermit(Ref.set(manual, enabled).pipe(Effect.andThen(reconcile))),
+    hold: (id) =>
+      gate.withPermit(Ref.update(holds, (current) => new Set([...current, id])).pipe(Effect.andThen(reconcile))),
+    release: (id) =>
       gate.withPermit(
-        Effect.gen(function* () {
-          if (options.platform !== "darwin") return unsupported
-          if (!enabled) return yield* stop
-          if (Option.isSome(yield* Ref.get(active))) return yield* Ref.get(status)
-          return yield* start
-        }),
+        Ref.update(holds, (current) => new Set([...current].filter((item) => item !== id))).pipe(
+          Effect.andThen(reconcile),
+        ),
       ),
   })
 })
@@ -119,8 +245,10 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const spawner = yield* AppProcess.Service
-    return yield* make({ spawner, platform: process.platform, pid: process.pid })
+    const clamshell = yield* ClamshellSleep.Service
+    const global = yield* Global.Service
+    return yield* make({ spawner, clamshell, lidFile: path.join(global.state, "keep-awake-lid.json"), platform: process.platform, pid: process.pid })
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node, ClamshellSleep.node, Global.node] })

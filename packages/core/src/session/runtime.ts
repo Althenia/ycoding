@@ -63,6 +63,7 @@ import {
   NotFoundError,
 } from "./error"
 import { makeGlobalNode } from "../effect/app-node"
+import { KeepAwake } from "../keep-awake"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionEvent } from "./event"
 import { SessionPending } from "./pending"
@@ -182,6 +183,8 @@ type AutonomyInput = {
   goal?: string | null | true
   maxNoProgress?: number
   mode?: "normal" | "yolo" | "goal"
+  guardrailDecision?: boolean
+  sleep?: boolean
 }
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
@@ -377,6 +380,7 @@ export interface Interface {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     text: string
+    origin?: "subagent" | "plugin"
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     metadata?: Record<string, unknown>
@@ -406,6 +410,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     command: string
     arguments?: string
+    origin?: "subagent" | "plugin"
     agent?: Agent.ID
     model?: CatalogModel.Ref
     files?: PromptInput.Prompt["files"]
@@ -616,6 +621,7 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
+    const keepAwake = yield* KeepAwake.Service
     const compactionJobs = yield* SessionCompactionJob.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
     const contextState = yield* SessionContextState.Service
@@ -628,6 +634,17 @@ const layer = Layer.effect(
     const projectArtifactAccounting = yield* ProjectArtifactAccounting.Service
     const projectArtifactStore = yield* ProjectArtifactStore.Service
     const scope = yield* Scope.Scope
+    yield* Effect.gen(function* () {
+      const rows = yield* db
+        .select({ id: SessionTable.id, autonomy: SessionTable.autonomy })
+        .from(SessionTable)
+        .all()
+        .pipe(Effect.orDie)
+      for (const row of rows) {
+        if (SessionAutonomy.read(row.autonomy).sleep) yield* keepAwake.hold(row.id)
+      }
+    })
+    const familyAutonomyLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
     const activeShells = new Set<SessionSchema.ID>()
     const shellLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
     const commandLocks = KeyedMutex.makeUnsafe<SessionMessage.ID>()
@@ -1182,6 +1199,63 @@ const layer = Layer.effect(
       return state
     })
 
+    const admitSleepNotice = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      asleep: boolean,
+    ): Effect.fn.Return<void> {
+      const awake = yield* keepAwake.get
+      yield* events.publish(SessionEvent.ContextObserved, {
+        sessionID,
+        source: "session-state",
+        text: asleep
+          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Questions, forms, and guardrail reviews are decided by the decision model while sleep is on. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+          : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply.",
+      })
+      const children = yield* result.list({ parentID: sessionID })
+      yield* Effect.forEach(children.data, (child) => admitSleepNotice(child.id, asleep), { discard: true })
+    })
+
+    const applySleepTransition = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      before: SessionAutonomy.State,
+      after: SessionAutonomy.State,
+    ) {
+      if (!before.sleep && after.sleep) {
+        yield* keepAwake.hold(sessionID)
+        yield* admitSleepNotice(sessionID, true)
+      }
+      if (before.sleep && !after.sleep) {
+        yield* keepAwake.release(sessionID)
+        yield* admitSleepNotice(sessionID, false)
+      }
+    })
+
+    const rootSessionID = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      let current = yield* store.get(sessionID)
+      while (current?.parentID) {
+        const parent = yield* store.get(current.parentID)
+        if (!parent) break
+        current = parent
+      }
+      return current?.id ?? sessionID
+    })
+
+    const wakeIfAsleep = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const rootID = yield* rootSessionID(sessionID)
+      yield* familyAutonomyLocks.withLock(rootID)(
+        Effect.gen(function* () {
+          const before = yield* autonomy
+            .get(rootID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+          if (!before?.sleep) return
+          const after = yield* autonomy
+            .set({ sessionID: rootID, sleep: false })
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+          if (after) yield* applySleepTransition(rootID, before, after)
+        }).pipe(Effect.uninterruptible),
+      )
+    })
+
     const result = Service.of({
       create: Effect.fn("Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
@@ -1565,18 +1639,35 @@ const layer = Layer.effect(
             if (!resumed.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
             return yield* admitGoalContinuation(input.sessionID, resumed.state, steer)
           }
-          return yield* autonomy
-            .set({
-              sessionID: input.sessionID,
-              yolo,
-              goal,
-              maxNoProgress: input.maxNoProgress,
-            })
-            .pipe(notFound)
+          const targetID =
+            input.sleep !== undefined || input.guardrailDecision !== undefined
+              ? yield* rootSessionID(input.sessionID)
+              : input.sessionID
+          return yield* familyAutonomyLocks.withLock(targetID)(
+            Effect.gen(function* () {
+              const before = yield* autonomy.get(targetID).pipe(notFound)
+              const after = yield* autonomy
+                .set({
+                  sessionID: targetID,
+                  yolo,
+                  goal,
+                  maxNoProgress: input.maxNoProgress,
+                  guardrailDecision: input.guardrailDecision,
+                  sleep: input.sleep,
+                })
+                .pipe(notFound)
+              yield* applySleepTransition(targetID, before, after)
+              return targetID === input.sessionID ? after : yield* autonomy.get(input.sessionID).pipe(notFound)
+            }).pipe(Effect.uninterruptible),
+          )
         }),
       },
       remove: Effect.fn("Session.remove")(function* (sessionID) {
         yield* result.get(sessionID)
+        const removedAutonomy = yield* autonomy
+          .get(sessionID)
+          .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+        if (removedAutonomy?.sleep) yield* keepAwake.release(sessionID)
         yield* execution.interrupt(sessionID)
         yield* execution.awaitIdle(sessionID)
         const children = yield* result.list({ parentID: sessionID })
@@ -1584,8 +1675,10 @@ const layer = Layer.effect(
         yield* events.publish(SessionEvent.Deleted, { sessionID })
         yield* events.remove(sessionID)
       }),
-      archive: Effect.fn("Session.archive")((sessionID) =>
-        db
+      archive: Effect.fn("Session.archive")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        if (!session.parentID) yield* wakeIfAsleep(sessionID)
+        yield* db
           .transaction(
             () =>
               Effect.gen(function* () {
@@ -1595,8 +1688,8 @@ const layer = Layer.effect(
               }),
             { behavior: "immediate" },
           )
-          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
-      ),
+          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error))))
+      }),
       unarchive: Effect.fn("Session.unarchive")((sessionID) =>
         db
           .transaction(
@@ -1851,6 +1944,14 @@ const layer = Layer.effect(
                           ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                           : Effect.die(defect),
                       ),
+                      // Waking under the inbox lock keeps the runner from promoting this input
+                      // while the family still sleeps; a reused ID never wakes.
+                      Effect.tap((admitted) =>
+                        input.origin === undefined && admitted.type === "user" && admitted.sessionID === input.sessionID
+                          ? wakeIfAsleep(input.sessionID)
+                          : Effect.void,
+                      ),
+                      SessionPending.withInboxLock(input.sessionID),
                     )
                     if (admitted.type !== "user" || admitted.sessionID !== input.sessionID)
                       return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
@@ -1946,6 +2047,7 @@ const layer = Layer.effect(
             id: input.id,
             sessionID: input.sessionID,
             text: evaluated.text,
+            origin: input.origin,
             files: input.files,
             agents: input.agents,
             metadata: provenance
@@ -2867,6 +2969,7 @@ export const node = makeGlobalNode({
     Project.node,
     SessionExecution.node,
     SessionAutonomy.node,
+    KeepAwake.node,
     SessionCompactionJob.node,
     SessionCompactionExecution.node,
     SessionContextState.node,

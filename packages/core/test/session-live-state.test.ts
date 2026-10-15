@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Statement } from "effect/unstable/sql"
 import { Database } from "@ycoding-ai/core/database/database"
+import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
@@ -18,6 +19,18 @@ import { InstructionStateTable, SessionPendingTable, SessionTable } from "@ycodi
 import { testEffect } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_live_state")
+
+testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
+  Effect.sync(() => {
+    const state = { mode: "normal", yolo: 0, sleep: { priorGuardrailDecision: false } } as const
+    expect(SessionLiveState.sleepReminder(state, true, false)).toContain(
+      "lid-closed keep-awake is unavailable or unreported",
+    )
+    expect(SessionLiveState.sleepReminder(state, true, false)).not.toContain("holds idle and lid-closed sleep off")
+    expect(SessionLiveState.sleepReminder(state, false, false)).toContain("battery")
+    expect(SessionLiveState.sleepReminder(state, true, true)).toContain("holds idle and lid-closed sleep off")
+  }),
+)
 const guardrailDigest = "a".repeat(64)
 const guardrails = Layer.succeed(
   SessionGuardrail.Service,
@@ -31,8 +44,13 @@ const guardrails = Layer.succeed(
     withSnapshot: (_sessionID, use) => use({ sequence: 4, digest: guardrailDigest }),
   }),
 )
+const keepAwake = Layer.mock(KeepAwake.Service, {
+  get: Effect.succeed({ state: "off", lid: "off", sleepHold: false } as const),
+})
 const it = testEffect(
-  SessionLiveState.layer.pipe(Layer.provideMerge(Layer.merge(Database.layer({ path: ":memory:" }), guardrails))),
+  SessionLiveState.layer.pipe(
+    Layer.provideMerge(Layer.mergeAll(Database.layer({ path: ":memory:" }), guardrails, keepAwake)),
+  ),
 )
 
 const seed = Effect.gen(function* () {

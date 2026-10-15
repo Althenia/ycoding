@@ -3,6 +3,7 @@ import { useTheme } from "../../context/theme"
 import { useData } from "../../context/data"
 import { PromptFooterIdentity } from "../../component/prompt"
 import { ModeChips } from "../../component/prompt/mode-chips"
+import { useKeepAwake } from "../../keep-awake"
 import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
@@ -15,6 +16,7 @@ export function Footer(props: {
   subagent?: boolean
 }) {
   const { theme } = useTheme()
+  const keepAwake = useKeepAwake()
   const data = useData()
   const route = useRoute()
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
@@ -64,7 +66,7 @@ export function Footer(props: {
     >
       <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
         <PromptFooterIdentity branch={props.branch} />
-        <ModeChips autonomy={props.autonomy} />
+        <ModeChips autonomy={props.autonomy} machineAwake={keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on"} />
         <text fg={theme.text.subdued} wrapMode="none" flexShrink={0}>
           subagents {subagents()}
         </text>

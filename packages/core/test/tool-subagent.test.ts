@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { Context, DateTime, Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import path from "path"
 import { Message, SystemPart } from "@ycoding-ai/ai"
@@ -10,6 +10,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Location } from "@ycoding-ai/core/location"
@@ -36,6 +37,8 @@ import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { Shell } from "@ycoding-ai/core/shell"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
+import { ChildProcess } from "effect/unstable/process"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
@@ -140,6 +143,7 @@ const executionNode = makeGlobalNode({
 const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
   LayerNode.group([
     AppProcess.node,
+    KeepAwake.node,
     Database.node,
     EventRuntime.node,
     SessionAutonomy.node,
@@ -148,6 +152,7 @@ const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
     ToolOutputStore.cleanupNode,
     Session.node,
     SessionExecution.node,
+    SessionOrchestration.node,
     SessionOrchestrationNotifier.node,
     PluginHooks.node,
     ToolHooks.node,
@@ -155,11 +160,57 @@ const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
     PluginRuntime.providerNode,
     LocationServiceMap.node,
   ]),
-  [[Database.node, database], [SessionExecution.node, executionNode], fixtureModels],
+  [
+    [Database.node, database],
+    [SessionExecution.node, executionNode],
+    [KeepAwake.node, Layer.effect(KeepAwake.Service, Effect.gen(function* () {
+      return yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, clamshell: { set: () => "unsupported" } })
+    })).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))],
+    fixtureModels,
+  ],
 )
 
 const layer = subagentLayer()
 const it = testEffect(layer)
+
+it.live("agent delegation while asleep preserves family sleep and its hold", () =>
+  Effect.acquireRelease(
+    Effect.promise(() => tmpdir()),
+    (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  ).pipe(
+    Effect.flatMap((directory) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }),
+          model: parentModel,
+        })
+        yield* withSubagent(parent.location)
+        yield* sessions.autonomy.set({ sessionID: parent.id, sleep: true })
+        const locations = yield* LocationServiceMap.Service
+        const prepared = yield* SessionOrchestration.preflight(parent, {
+          agent: Agent.ID.make("reviewer"),
+          caller: toolIdentity.agent,
+        }).pipe(Effect.provide(locations.get(parent.location)))
+        const runtime = yield* PluginRuntime.Service
+        const child = yield* runtime.orchestration.launch({
+          parentID: parent.id,
+          parentAssistantMessageID: SessionMessage.ID.make("msg_sleep_launch"),
+          toolCallID: "call_sleep_launch",
+          agent: Agent.ID.make("reviewer"),
+          description: "hold sleeping child",
+          prompt: "Continue independently",
+          background: true,
+          prepared,
+        })
+        expect((yield* sessions.autonomy.get(parent.id)).sleep).toEqual({ priorGuardrailDecision: false })
+        expect((yield* sessions.autonomy.get(child.sessionID)).sleep).toEqual({ priorGuardrailDecision: false })
+        const awake = yield* KeepAwake.Service
+        expect((yield* awake.get).sleepHold).toBe(true)
+      }),
+    ),
+  ),
+)
 
 const jobStartupFailureNode = makeGlobalNode({
   service: Job.Service,
@@ -1600,7 +1651,7 @@ describe("SubagentTool", () => {
                   },
                 ],
               }),
-            ).toEqual([["Safest"]])
+            ).toEqual({ status: "answered", answers: [["Safest"]] })
             expect(
               yield* forms.ask({
                 sessionID: child.sessionID,
@@ -1971,4 +2022,224 @@ describe("SubagentTool", () => {
       ),
     ),
   )
+
+  describe("parent question timeout", () => {
+    const waitingChild = Effect.fn("SubagentTest.waitingChild")(function* (timeoutSeconds?: number) {
+      const dir = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+      )
+      if (timeoutSeconds !== undefined)
+        yield* Effect.promise(() =>
+          Bun.write(path.join(dir.path, "ycoding.json"), JSON.stringify({ question_timeout_seconds: timeoutSeconds })),
+        )
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({
+        location: Location.Ref.make({ directory: AbsolutePath.make(dir.path) }),
+        model: parentModel,
+      })
+      yield* withSubagent(parent.location)
+      const locations = yield* LocationServiceMap.Service
+      const orchestration = (yield* PluginRuntime.Service).orchestration
+      const prepared = yield* SessionOrchestration.preflight(parent, {
+        agent: Agent.ID.make("reviewer"),
+        caller: toolIdentity.agent,
+      }).pipe(Effect.provide(locations.get(parent.location)))
+      const child = yield* orchestration.launch({
+        parentID: parent.id,
+        parentAssistantMessageID: SessionMessage.ID.make("msg_question_timeout_parent"),
+        toolCallID: "call_question_timeout_child",
+        agent: Agent.ID.make("reviewer"),
+        description: "ask the parent",
+        prompt: "ask then continue",
+        background: true,
+        prepared,
+      })
+      const asked = yield* orchestration.question(child.sessionID, "Which scope?")
+      expect(asked.autoAnswered).toBe(false)
+      const synthetic = (kind: string) =>
+        sessions
+          .pending(child.sessionID)
+          .pipe(
+            Effect.map((items) =>
+              items.filter((item) => item.type === "synthetic" && item.data.metadata?.kind === kind),
+            ),
+          )
+      return { parent, child, orchestration, questionID: asked.question.id, synthetic }
+    })
+
+    it.effect("times out at the default 5 minutes, wakes the child with an explicit no-answer message, and rejects a late answer", () =>
+      Effect.gen(function* () {
+        const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild()
+        const wakes = executionWakes.filter((id) => id === child.sessionID).length
+
+        yield* TestClock.adjust("299 seconds")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
+        expect(yield* synthetic("timeout")).toEqual([])
+
+        yield* TestClock.adjust("1 second")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running", question: undefined })
+        expect(yield* synthetic("timeout")).toEqual([
+          expect.objectContaining({
+            data: expect.objectContaining({
+              text: `No parent answer arrived within 300 seconds for question ${questionID}. The question is closed and can no longer be answered. Proceed using your own best judgment.`,
+              metadata: expect.objectContaining({ parentID: parent.id, childID: child.sessionID, kind: "timeout", questionID }),
+            }),
+          }),
+        ])
+        expect(yield* synthetic("answer")).toEqual([])
+        expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(wakes + 1)
+        expect(
+          yield* Effect.exit(orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "late" })),
+        ).toMatchObject({ _tag: "Failure" })
+        expect(yield* synthetic("answer")).toEqual([])
+      }),
+    )
+
+    it.effect("times out at the configured seconds", () =>
+      Effect.gen(function* () {
+        const { parent, child, orchestration } = yield* waitingChild(20)
+        yield* TestClock.adjust("19 seconds")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
+        yield* TestClock.adjust("1 second")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running" })
+      }),
+    )
+
+    it.effect("never times out when disabled with 0", () =>
+      Effect.gen(function* () {
+        const { parent, child, orchestration, synthetic } = yield* waitingChild(0)
+        yield* TestClock.adjust("24 hours")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
+        expect(yield* synthetic("timeout")).toEqual([])
+      }),
+    )
+
+    it.effect("a parent answer before the deadline wins and leaves no timer behind", () =>
+      Effect.gen(function* () {
+        const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild(60)
+        yield* TestClock.adjust("59 seconds")
+        yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "Focused tests" })
+        const wakes = executionWakes.filter((id) => id === child.sessionID).length
+        yield* TestClock.adjust("10 minutes")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running" })
+        expect(yield* synthetic("timeout")).toEqual([])
+        expect(yield* synthetic("answer")).toHaveLength(1)
+        expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(wakes)
+      }),
+    )
+
+    it.effect("cancelling the child clears the timer", () =>
+      Effect.gen(function* () {
+        const { parent, child, orchestration, synthetic } = yield* waitingChild(60)
+        yield* orchestration.cancel({ parentID: parent.id, childID: child.sessionID })
+        yield* TestClock.adjust("10 minutes")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "cancelled" })
+        expect(yield* synthetic("timeout")).toEqual([])
+      }),
+    )
+
+    for (const settlement of ["timeout", "answer"] as const) {
+    it.effect(`a fresh layer recovers a dead owner's waiting question by ${settlement}`, () =>
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+        )
+        const appProcess = yield* AppProcess.Service
+        const exitedOwner = yield* appProcess.run(ChildProcess.make(process.execPath, ["-e", [
+          'const { execFileSync } = require("node:child_process");',
+          'const started = execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).toString().trim().replace(/\\s+/g, " ");',
+          'console.log(JSON.stringify({ pid: process.pid, started }));',
+        ].join("\n")])).pipe(Effect.flatMap(AppProcess.requireSuccess))
+        const owner = JSON.parse(exitedOwner.stdout.toString()) as { pid: number; started: string }
+        expect(ShellLedger.alive(yield* ShellLedger.processes(appProcess), owner.pid, owner.started)).toBe(false)
+        const database = () => Database.configured({ path: path.join(dir.path, "startup.db") })
+        const seeded = yield* Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(dir.path) }),
+            model: parentModel,
+          })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const prepared = yield* SessionOrchestration.preflight(parent, {
+            agent: Agent.ID.make("reviewer"),
+            caller: toolIdentity.agent,
+          }).pipe(Effect.provide(locations.get(parent.location)))
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          const child = yield* orchestration.launch({
+            parentID: parent.id,
+            parentAssistantMessageID: SessionMessage.ID.make("msg_startup_timeout_parent"),
+            toolCallID: "call_startup_timeout_child",
+            agent: Agent.ID.make("reviewer"),
+            description: "ask the parent",
+            prompt: "ask then continue",
+            background: true,
+            prepared,
+          })
+          const asked = yield* orchestration.question(child.sessionID, "Which scope?")
+          const { db } = yield* Database.Service
+          yield* db
+            .update(SessionTaskTable)
+            .set({
+              question_time: settlement === "timeout" ? Date.now() - 3_600_000 : Date.now(),
+              owner_pid: owner.pid,
+              owner_started: owner.started,
+            })
+            .where(eq(SessionTaskTable.session_id, child.sessionID))
+            .run()
+            .pipe(Effect.orDie)
+          return { parentID: parent.id, childID: child.sessionID, questionID: asked.question.id }
+        }).pipe(Effect.provide(subagentLayer(database()).pipe(Layer.fresh)), Effect.scoped)
+
+        yield* Effect.gen(function* () {
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          const initial = yield* orchestration.get(seeded.parentID, seeded.childID)
+          expect(initial.state).not.toBe("lost")
+          const childWakes = executionWakes.filter((id) => id === seeded.childID).length
+          const continueParent = Effect.gen(function* () {
+            const before = executionWakes.filter((id) => id === seeded.parentID).length
+            yield* orchestration.settle(seeded.childID, { type: "completed", excerpt: "Finished after the parent question" })
+            const notifier = yield* SessionOrchestrationNotifier.Service
+            yield* notifier.dispatch
+            const sessions = yield* Session.Service
+            expect((yield* sessions.pending(seeded.parentID)).filter((item) =>
+              item.type === "synthetic" && item.data.metadata?.childID === seeded.childID && item.data.metadata?.type === "completed",
+            )).toHaveLength(1)
+            expect(executionWakes.filter((id) => id === seeded.parentID).length).toBeGreaterThan(before)
+          })
+          if (settlement === "answer") {
+            expect(initial.state).toBe("waiting")
+            yield* orchestration.answer({ parentID: seeded.parentID, childID: seeded.childID, questionID: seeded.questionID, text: "Focused tests" })
+            expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({ state: "running", question: undefined })
+            expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(childWakes + 1)
+            yield* TestClock.adjust("10 minutes")
+            const sessions = yield* Session.Service
+            expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "timeout")).toEqual([])
+            expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "answer")).toHaveLength(1)
+            yield* continueParent
+            return
+          }
+          yield* TestClock.adjust("1 second").pipe(
+            Effect.andThen(orchestration.get(seeded.parentID, seeded.childID)),
+            Effect.repeat({ until: (task) => task.state === "running" }),
+          )
+          expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({
+            state: "running",
+            question: undefined,
+          })
+          const sessions = yield* Session.Service
+          expect(
+            (yield* sessions.pending(seeded.childID)).filter(
+              (item) => item.type === "synthetic" && item.data.metadata?.kind === "timeout",
+            ),
+          ).toHaveLength(1)
+          expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(2)
+          yield* continueParent
+        }).pipe(Effect.provide(subagentLayer(database()).pipe(Layer.fresh)), Effect.scoped)
+      }),
+    )
+    }
+  })
 })

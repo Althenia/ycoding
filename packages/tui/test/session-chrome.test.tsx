@@ -403,6 +403,7 @@ describe("autonomy mode chips", () => {
     expect(modeChips({ autonomy: { mode: "normal", yolo: 0 } })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
       { key: "yolo", label: "YOLO off", tone: "off" },
+      { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
     ])
   })
 
@@ -558,6 +559,27 @@ describe("header rendering", () => {
     expect(frame).not.toContain("Workspace")
     expect(frame).toContain("ready")
     app.renderer.destroy()
+  })
+
+  test("renders sleep and guardrail decision beside YOLO in the actual header", async () => {
+    for (const width of [80, 200]) {
+      const app = await renderHeader(width, {
+        type: "autonomy",
+        yolo: 1,
+        goalActive: false,
+        guardrailDecision: true,
+        asleep: true,
+        state: { type: "ready" },
+      })
+      try {
+        expect(app.captureCharFrame()).toContain("YOLO 1")
+        expect(app.captureCharFrame()).toContain("guardrail decision")
+        expect(app.captureCharFrame()).toContain("asleep")
+        expect(app.captureCharFrame()).not.toContain("machine may sleep")
+      } finally {
+        app.renderer.destroy()
+      }
+    }
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {

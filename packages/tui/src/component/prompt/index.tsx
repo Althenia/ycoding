@@ -58,6 +58,7 @@ import {
   confirmSessionCreation,
   createSessionID,
   goalToggleAction,
+  isAsleep,
   parseGoalCommand,
   restoreSessionSubmission,
   retainSessionSubmission,
@@ -65,6 +66,7 @@ import {
   type YoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
+import { useKeepAwake } from "../../keep-awake"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
@@ -268,6 +270,7 @@ export function Prompt(props: PromptProps) {
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
   const client = useClient()
+  const keepAwake = useKeepAwake()
   const editor = useEditorContext()
   const route = useRoute()
   const promptRef = usePromptRef()
@@ -910,6 +913,96 @@ export function Prompt(props: PromptProps) {
             variant: "success",
             duration: 2000,
           })
+        },
+      },
+      {
+        title: "Toggle guardrail decision",
+        name: "session.autonomy.guardrail-decision.toggle",
+        category: "Session",
+        palette: true,
+        slash: { name: "guardrail-decision" },
+        run: async () => {
+          const sessionID = props.sessionID
+          if (!sessionID) {
+            toast.show({ message: "Open a session to toggle guardrail decision", variant: "warning", duration: 3000 })
+            return
+          }
+          const stored = props.autonomy?.guardrailDecision === true
+          const next = !stored
+          try {
+            const result = await client.api.session.autonomy.set({ sessionID, payload: { guardrailDecision: next } })
+            props.onAutonomyUpdated?.(sessionID, result)
+            toast.show({
+              message: next
+                ? "Guardrail decision on: the decision model decides guardrail reviews"
+                : "Guardrail decision off",
+              variant: "success",
+              duration: 3000,
+            })
+          } catch (error) {
+            toast.show({ title: "Failed to toggle guardrail decision", message: errorMessage(error), variant: "error" })
+          }
+        },
+      },
+      {
+        title: "Sleep (decision model answers and reviews)",
+        name: "session.autonomy.sleep",
+        category: "Session",
+        palette: true,
+        slash: { name: "sleep" },
+        run: async () => {
+          const sessionID = props.sessionID
+          if (!sessionID) {
+            toast.show({ message: "Open a session to sleep", variant: "warning", duration: 3000 })
+            return
+          }
+          if (props.autonomy && isAsleep(props.autonomy)) {
+            toast.show({
+              message: "Already asleep; /wake or any prompt wakes the session",
+              variant: "info",
+              duration: 3000,
+            })
+            return
+          }
+          try {
+            const result = await client.api.session.autonomy.set({ sessionID, payload: { sleep: true } })
+            props.onAutonomyUpdated?.(sessionID, result)
+            await keepAwake.refresh()
+            const awake = keepAwake.status()
+            toast.show({
+              title: "Sleep on",
+              message:
+                awake?.state === "on"
+                  ? `Decision model answers questions and guardrail reviews. Idle sleep held off; lid ${awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+                  : "Decision model answers questions and guardrail reviews. Keep-awake is not holding this machine; it may sleep.",
+              variant: "success",
+              duration: 6000,
+            })
+          } catch (error) {
+            toast.show({ title: "Failed to sleep", message: errorMessage(error), variant: "error" })
+          }
+        },
+      },
+      {
+        title: "Wake",
+        name: "session.autonomy.wake",
+        category: "Session",
+        palette: true,
+        slash: { name: "wake" },
+        run: async () => {
+          const sessionID = props.sessionID
+          if (!sessionID) {
+            toast.show({ message: "Open a session to wake", variant: "warning", duration: 3000 })
+            return
+          }
+          try {
+            const result = await client.api.session.autonomy.set({ sessionID, payload: { sleep: false } })
+            props.onAutonomyUpdated?.(sessionID, result)
+            await keepAwake.refresh()
+            toast.show({ message: "Awake; pre-sleep autonomy restored", variant: "success", duration: 3000 })
+          } catch (error) {
+            toast.show({ title: "Failed to wake", message: errorMessage(error), variant: "error" })
+          }
         },
       },
       {
@@ -1871,6 +1964,18 @@ export function Prompt(props: PromptProps) {
           duration: 2000,
         })
       }
+      return true
+    }
+    const autonomySlash = (["guardrail-decision", "sleep", "wake"] as const).find((name) => normalized === `/${name}`)
+    if (autonomySlash) {
+      clearPrompt()
+      const command = keymapCommands().find((item) => item.slash?.name === autonomySlash)
+      if (command) await command.run(undefined)
+      return true
+    }
+    if (normalized === "/keep-awake") {
+      clearPrompt()
+      await keepAwake.toggle()
       return true
     }
     const slash = argumentSlash(inputText, keymapCommands())

@@ -8,6 +8,7 @@ import type {
   ConfigDiagnostic,
   FormInfo,
   GuardrailRequestListOutput,
+  GuardrailStatusOutput,
   IntegrationInfo,
   LocationRef,
   LocationGetOutput,
@@ -179,6 +180,18 @@ type LocationData = {
   skill?: SkillInfo[]
 }
 
+export type GuardrailDecisionMade = {
+  sessionID: string
+  created: number
+  requestID: string
+  reply: "once" | "reject"
+  action?: string
+  choice?: "approve" | "reject"
+  confidence?: number
+}
+
+type GuardrailDismissal = NonNullable<GuardrailStatusOutput["dismissals"]>[number]
+
 type Store = {
   session: {
     info: Record<string, SessionInfo>
@@ -201,6 +214,8 @@ type Store = {
     input: Record<string, string[]>
     permission: Record<string, PermissionRequest[]>
     guardrail: Record<string, GuardrailRequestListOutput>
+    guardrailDecided: Record<string, GuardrailDecisionMade[]>
+    guardrailDismissed: Record<string, GuardrailDismissal[]>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
   }
@@ -660,6 +675,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         input: {},
         permission: {},
         guardrail: {},
+        guardrailDecided: {},
+        guardrailDismissed: {},
         form: {},
       },
       project: {
@@ -1112,6 +1129,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.input[sessionID]
           delete draft.permission[sessionID]
           delete draft.guardrail[sessionID]
+          delete draft.guardrailDecided[sessionID]
+          delete draft.guardrailDismissed[sessionID]
           for (const [rootID, requests] of Object.entries(draft.guardrail)) {
             const next = requests.filter((request) => request.sessionID !== sessionID)
             if (next.length === 0) delete draft.guardrail[rootID]
@@ -1874,6 +1893,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
+        case "session.guardrail.dismissed": {
+          const dismissed = store.session.guardrailDismissed[event.data.sessionID] ?? []
+          if (!dismissed.some((item) => item.eventID === event.id)) setStore("session", "guardrailDismissed", event.data.sessionID,
+            [...dismissed, { sessionID: event.data.reviewSessionID, created: event.created, eventID: event.id, ruleID: event.data.ruleID, confidence: event.data.confidence }].slice(-100),
+          )
+          break
+        }
         case "guardrail.asked":
           if (store.session.guardrail[event.data.rootSessionID]?.some((request) => request.id === event.data.id)) break
           setStore("session", "guardrail", event.data.rootSessionID, [
@@ -1881,7 +1907,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             event.data,
           ])
           break
-        case "guardrail.replied":
+        case "guardrail.replied": {
+          const decidedRequest = (store.session.guardrail[event.data.rootSessionID] ?? []).find(
+            (request) => request.id === event.data.requestID,
+          )
           setStore(
             "session",
             "guardrail",
@@ -1890,7 +1919,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               (request) => request.id !== event.data.requestID,
             ),
           )
+          if (event.data.decidedBy === "decision-model" && event.data.reply !== "always") {
+            const decided = store.session.guardrailDecided[event.data.rootSessionID] ?? []
+            if (!decided.some((item) => item.requestID === event.data.requestID))
+              setStore(
+                "session",
+                "guardrailDecided",
+                event.data.rootSessionID,
+                [
+                  ...decided,
+                  {
+                    requestID: event.data.requestID,
+                    sessionID: event.data.sessionID,
+                    created: event.created,
+                    reply: event.data.reply,
+                    ...(decidedRequest === undefined ? {} : { action: decidedRequest.action }),
+                    ...(event.data.choice === undefined ? {} : { choice: event.data.choice }),
+                    ...(event.data.confidence === undefined ? {} : { confidence: event.data.confidence }),
+                  },
+                ].slice(-100),
+              )
+          }
           break
+        }
         case "form.created":
           if (store.session.form[event.data.form.sessionID]?.some((form) => form.id === event.data.form.id)) break
           setStore("session", "form", event.data.form.sessionID, [
@@ -1900,6 +1951,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "form.replied":
         case "form.cancelled":
+        case "form.timed_out":
           setStore(
             "session",
             "form",
@@ -2261,12 +2313,42 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           list(sessionID: string) {
             return store.session.guardrail[resolveRoot(sessionID)] ?? []
           },
+          decided(sessionID: string) {
+            return store.session.guardrailDecided[resolveRoot(sessionID)] ?? []
+          },
+          dismissed(sessionID: string) {
+            return store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []
+          },
           sync(sessionID: string) {
             return sync.run(`session.guardrail:${sessionID}`, async (current) => {
-              const requests = await client.api.guardrail.request.list({ sessionID })
+              const before = untrack(() => new Set((store.session.guardrailDecided[resolveRoot(sessionID)] ?? []).map((item) => item.requestID)))
+              const beforeDismissals = untrack(() => new Set((store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []).map((item) => item.eventID)))
+              const [requests, status] = await Promise.all([
+                client.api.guardrail.request.list({ sessionID }),
+                client.api.guardrail.status({ sessionID }),
+              ])
               if (!current()) return
-              const rootID = requests[0]?.rootSessionID ?? resolveRoot(sessionID)
+              const rootID = status.rootSessionID
+              const liveDismissals = (store.session.guardrailDismissed[rootID] ?? []).filter((item) => !beforeDismissals.has(item.eventID))
+              setStore("session", "guardrailDismissed", rootID, [
+                ...(status.dismissals ?? []).filter((item) => !liveDismissals.some((current) => current.eventID === item.eventID)),
+                ...liveDismissals,
+              ].slice(-100))
               setStore("session", "guardrail", rootID, reconcile(requests))
+              const decisions = (store.session.guardrailDecided[rootID] ?? []).filter(
+                (item) => !before.has(item.requestID),
+              )
+              setStore(
+                "session",
+                "guardrailDecided",
+                rootID,
+                [
+                  ...(status.decisions ?? []).filter(
+                    (item) => !decisions.some((current) => current.requestID === item.requestID),
+                  ),
+                  ...decisions,
+                ].slice(-100),
+              )
             })
           },
           invalidate(sessionID: string) {

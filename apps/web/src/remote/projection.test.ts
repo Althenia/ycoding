@@ -541,6 +541,19 @@ describe("requests", () => {
     expect(view.requests).toHaveLength(0)
   })
 
+  test("stops offering a timed-out or cancelled form for an answer", () => {
+    const created = (id: string) => ({
+      form: { id, sessionID: "ses_a", title: "Question", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", title: "Which module?" }] },
+    })
+    let view = apply(createSessionView("ses_a"), "form.created", created("frm_timeout"))
+    view = apply(view, "form.created", created("frm_cancel"))
+    expect(view.requests.map((request) => request.id)).toEqual(["frm_timeout", "frm_cancel"])
+    view = apply(view, "form.timed_out", { id: "frm_timeout", sessionID: "ses_a" })
+    expect(view.requests.map((request) => request.id)).toEqual(["frm_cancel"])
+    view = apply(view, "form.cancelled", { id: "frm_cancel", sessionID: "ses_a" })
+    expect(view.requests).toHaveLength(0)
+  })
+
   test("ignores a reply for an unknown request instead of inventing one", () => {
     const view = apply(createSessionView("ses_a"), "permission.replied", { requestID: "per_missing", reply: "once" })
     expect(view.requests).toHaveLength(0)

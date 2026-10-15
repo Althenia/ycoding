@@ -15,6 +15,13 @@ const custom = (
 const layer = (rules: Guardrail.Ruleset, invalidFiles: ReadonlyArray<string> = []) => ({ rules, invalidFiles })
 
 describe("SessionGuardrailMatch", () => {
+  test("a dismissed project-deletion match does not dismiss a separate home-child match on the same target", () => {
+    expect(SessionGuardrailMatch.evaluate({
+      action: "shell", resources: ["rm -rf ."],
+      paths: { workdir: "/home/user/project", project: "/home/user/project", home: "/home/user" },
+      dismissedStandardRules: new Set(["standard.review.project-deletion"]),
+    })).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.home-child"] })
+  })
   const paths = { workdir: "/workspace/project", project: "/workspace/project", home: "/home/user" }
 
   test.each([

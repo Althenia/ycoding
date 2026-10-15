@@ -109,9 +109,21 @@ The completion page selects each root Session's latest accepted receipt by desce
 
 The remote connector sends a full paged completion baseline on connection, event-stream recovery, and periodic refresh (60 seconds by default). After a baseline succeeds, a verified live root `session.work.completed` event is forwarded as one receipt. An event received before baseline or a failed direct delivery schedules a full baseline. Each baseline starts without an `after` cursor; the connector retains no per-Session completion high-water cursor.
 
+## Root-Family Sleep And Review Delegation
+
+`GET /api/session/:sessionID/autonomy` includes optional `guardrailDecision: boolean` and `sleep: { priorGuardrailDecision: boolean }`. Reads on descendants inherit these fields from the root while retaining local YOLO and goal fields. `PUT` accepts `{ guardrailDecision: boolean, sleep?: boolean }` or `{ sleep: boolean }` and targets the root family. Existing YOLO/goal payloads and levels remain unchanged; empty and invalid payloads fail validation.
+
+Sleep captures the pre-sleep toggle exactly once. Wake or any user prompt in the family restores it; repeated switches create no duplicate transition observations. Agent-delegated initial child input, plugin-originated prompts, and synthetic parent messages do not wake the family; prompt metadata cannot opt out of a user wake. Archiving a sleeping root wakes it and releases its machine hold; unarchive does not rearm it. Trusted `session.context.observed` events with source `session-state` project chronological System sleep/wake messages. Sleep text directs independent work and warns about battery and heat with a closed lid. Runtime startup rehydrates one keep-awake hold per sleeping root before serving Sessions, without resuming execution. Effective machine state is manual OR any hold; the final wake restores the manual preference.
+
+Sleeping questions, option forms, and child questions carrying `data.options` (strings or label/value objects) use the decision helper at confidence ≥0.8, with existing automatic fallback on uncertainty. Fields without offered options retain automatic value/validation rules. Guardrail-decision settles every ordinary/hard review with approve-once or reject; denies never reach the helper. See [guardrails](./session-guardrails.md).
+
 ## Parent Answers Resume Waiting Subagents
 
 `POST /api/session/:parentID/subagent/:childID/question/:questionID/answer` accepts `{ text?, data? }` and requires at least one answer value. Core verifies the parent-child ownership, waiting task, and current question ID. It records a deterministic synthetic child steer with the parent, child, and question IDs; answer text remains literal input, not a prompt or command. The `question_answered` event returns the task to `running` before Core wakes the child. The runner promotes the synthetic answer into model-visible history, so the resumed provider request receives it. The task reaches `completed` only when that resumed child execution settles successfully; a changed or resolved question cannot receive an answer addressed to its former ID.
+
+When no parent answer arrives within `question_timeout_seconds` (default 300; `0` disables), Core records the durable change `{ type: "question_timed_out", questionID }`, which returns the waiting task to `running` like `question_answered`, after admitting a synthetic child steer with `metadata.kind` `timeout` under the message ID an answer to that question would use. The steer states that no parent answer arrived within the configured seconds, that the question is closed, and that the child should proceed on its own judgment. A parent answer sent afterwards is rejected as addressed to a question that is no longer open.
+
+Startup reconciliation preserves a `waiting` task with a durable question ID, text, and timestamp even when its owner process has died. Orchestration re-arms its deadline from that timestamp, or retains it for an explicit answer when the timeout is disabled. A live foreign owner's question is left to that process. Answer or timeout claims the task through its existing durable transition and wakes the child; eventual completion notifies and wakes the parent. Recovery never replays a prior in-flight provider attempt.
 
 ## Model Selection Requires Context Fit
 

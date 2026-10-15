@@ -10,7 +10,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
     }).annotateMerge(OpenApi.annotations({
       identifier: "keepAwake.get",
       summary: "Get keep machine awake",
-      description: "Read whether this server is preventing idle system sleep on its machine.",
+      description: "Read effective idle/lid keep-awake, manual preference when sleep-held, and sleeping-family hold status on this machine.",
     })),
   )
   .add(
@@ -21,7 +21,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
       identifier: "keepAwake.set",
       summary: "Set keep machine awake",
       description:
-        "Start or stop preventing idle system sleep for the lifetime of this server process. The choice is not persisted.",
+        "Set the process-local manual keep-awake preference. Sleeping Session families retain their holds independently; macOS controls idle and lid sleep and reports each part.",
     })),
   )
   .annotateMerge(OpenApi.annotations({ title: "keep-awake" }))

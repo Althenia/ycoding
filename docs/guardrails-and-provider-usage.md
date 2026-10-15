@@ -76,14 +76,15 @@ Permissions decide whether an agent may attempt an action. Guardrails apply inde
 
 Because a pending review blocks the family, the terminal surfaces the review prompt and transcript row in every Session view that the review can block, including a subagent chat and an autonomous Session. An autonomous Session cannot silently absorb its own review.
 
-Ordinary guardrail reviews are auto-approved at effective YOLO 1-3. YOLO 0, including an active goal, keeps
-reviews enforced. The TUI has no separate permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
+Ordinary reviews auto-approve at effective YOLO 1–3 when guardrail-decision and sleep are off. `/guardrail-decision` durably delegates every family review to the decision helper; `/sleep` enables this delegation plus option answers and keep-awake. Approve once only at confidence ≥0.8; reject refusal, low confidence, errors, timeout, or reject. Denies never reach the helper. The TUI shows model provenance and reported confidence. Tool permissions remain independent. Human **Session guardrail review** offers:
 
 - `Allow once`
 - `Allow for this session`
 - `Deny`
 
-**Hard reviews** offer only `Allow once` and `Deny` and require a fresh human decision. No YOLO level, active goal, agent automation, previous reusable approval, custom allow rule, or disabled optional guardrails can bypass a built-in hard review. An `always` reply to a hard review is rejected. `computer` and `browser` tool calls are the exception: they are never reviewed, including for hard review decisions (see Standard policy).
+**Standard-match verification** runs before human review or delegated approval of `standard.review.*` matches, except already YOLO-auto-approved ordinary reviews and `skipReview`. It is always on. The predicate asks whether the action actually performs the matched rule's behavior using its ID/reason, the classifier's structured matched segment/resolved targets, and redacted evidence framed as untrusted data. Comments, claims, quoted/printed strings, and names cannot establish a non-match. Unit checks prove framing and structured fields, not model resistance. Only false at confidence ≥0.9 dismisses that rule. Refusal, error, helper unavailability, lower confidence, or a 15-second timeout preserves review. Catastrophic denies, explicit denies, and custom rules are never verified. Reevaluate remaining rules after dismissal; retain permissions and caps. Durable `session.guardrail.dismissed` stores root and reviewed Session attribution, rule ID, and confidence. Status supplies reviewed Session IDs and timestamps; the TUI interleaves the newest 100 dismissals with decision outcomes chronologically in their reviewed Session only, with unrounded confidence. Still-pending family requests remain pinned at the tail.
+
+**Surviving hard reviews** offer only `Allow once` and `Deny`; require a fresh human reply unless user-enabled guardrail-decision or sleep delegates them to the helper. YOLO, goals, agent-invoked judgments, reusable approvals, custom allow rules, and disabled ordinary guardrails cannot settle them. Reject `always`. `computer` and `browser` retain `skipReview`; denies still block.
 
 The `always` reply, rendered as `Allow for this session`, approves the reviewed request's outside directories for the whole root Session family, including child Sessions: a directory target itself, otherwise its parent, including descendants. The approval is stored as a private durable `session.guardrail.approved` event on the root Session, so it survives restarts and applies in every process using the same database; it is not a tool-permission grant. Each action is freshly evaluated first; a later ordinary outside-repository review passes only when every outside target lies under an approved directory, and a deny or hard review is never settled by it. An `always` reply to a review with no outside directories, such as a custom ask rule, approves only that request. `once` is never reusable.
 
@@ -120,7 +121,7 @@ The code-owned standard profile:
 
 The matcher is conservative rather than a complete shell-language interpreter. It tracks possible working directories across supported compound commands; `cd ... &&` establishes relocation only on success, while unconditional, fallback, pipeline and background execution cannot assume relocation succeeded. Aliases, functions, command substitution, `xargs`/`find` deletion, and symlink identity remain outside broad-deletion recognition. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
 
-Catastrophic standard denies and built-in hard reviews are unoverrideable. For other actions, the first matching custom source layer decides before ordinary standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
+Catastrophic standard denies are unoverrideable. Built-in hard reviews that survive semantic match verification retain precedence over custom allow rules. For other actions, the first matching custom source layer decides before ordinary standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
 
 ### Custom guardrails
 

@@ -1,8 +1,12 @@
 export * as Question from "./question"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { Context, Deferred, Effect, Layer, Schema, Semaphore } from "effect"
+import { Config } from "./config"
+import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { Question } from "@ycoding-ai/schema/question"
+import { Decision } from "./decision"
+import { DecisionChoice } from "./decision-choice"
 import { EventRuntime } from "./event"
 import { SessionSchema } from "./session/schema"
 import { SessionAutonomy } from "./session/autonomy"
@@ -43,6 +47,10 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Que
   requestID: ID,
 }) {}
 
+export type Outcome =
+  | { readonly status: "answered"; readonly answers: ReadonlyArray<Answer> }
+  | { readonly status: "timed_out"; readonly seconds: number }
+
 export interface AskInput {
   readonly sessionID: SessionSchema.ID
   readonly questions: ReadonlyArray<Info>
@@ -55,7 +63,7 @@ export interface ReplyInput {
 }
 
 export interface Interface {
-  readonly ask: (input: AskInput) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
+  readonly ask: (input: AskInput) => Effect.Effect<Outcome, RejectedError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -65,7 +73,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Que
 
 interface Pending {
   readonly request: Request
-  readonly deferred: Deferred.Deferred<ReadonlyArray<Answer>, RejectedError>
+  readonly deferred: Deferred.Deferred<Outcome, RejectedError>
 }
 
 /**
@@ -76,9 +84,13 @@ interface Pending {
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const config = yield* Config.Service
     const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
+    const decision = yield* Decision.Service
     const pending = new Map<ID, Pending>()
+    const settle = Semaphore.makeUnsafe(1)
+    const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
@@ -95,21 +107,64 @@ const layer = Layer.effect(
     const ask = Effect.fn("Question.ask")((input: AskInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const asleep = yield* autonomy
+            .isAsleep(input.sessionID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+          if (asleep) {
+            const answers = yield* Effect.forEach(input.questions, (question, index) =>
+              Effect.gen(function* () {
+                const fallback = question.options[0]?.label ?? SessionAutonomy.AutomaticAnswer
+                if (question.options.length === 0) return [fallback]
+                const judgment = yield* DecisionChoice.choose(decision, {
+                  sessionID: input.sessionID,
+                  name: `question_${index}`,
+                  instructions:
+                    "The user is asleep and cannot answer. Choose the option that best serves the stated question with the evidence given. Refuse when the evidence does not support a choice; refusal falls back to the first option.",
+                  state: {
+                    question: question.question,
+                    header: question.header,
+                    options: question.options.map((option) => ({
+                      label: option.label,
+                      description: option.description ?? null,
+                    })),
+                  },
+                  choices: question.options.map((option) => ({
+                    value: option.label,
+                    ...(option.description === undefined ? {} : { description: option.description }),
+                  })),
+                })
+                return [judgment?.value ?? fallback]
+              }),
+            )
+            return { status: "answered", answers } as const
+          }
           const autonomous = yield* autonomy
             .canAutoAnswer(input.sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           if (autonomous) {
-            return input.questions.map((question) => {
-              const selected = question.options[0]?.label
-              return selected ? [selected] : [SessionAutonomy.AutomaticAnswer]
-            })
+            return {
+              status: "answered",
+              answers: input.questions.map((question) => {
+                const selected = question.options[0]?.label
+                return selected ? [selected] : [SessionAutonomy.AutomaticAnswer]
+              }),
+            } as const
           }
           const id = ID.ascending()
-          const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
+          const deferred = yield* Deferred.make<Outcome, RejectedError>()
           const request: Request = { id, ...input }
           pending.set(id, { request, deferred })
+          const configured = Config.latest(yield* config.entries(), "question_timeout_seconds")
+          const timeout = ConfigQuestionTimeout.duration(configured)
+          const wait = Deferred.await(deferred)
+          const expired = timeout
+            ? Effect.sleep(timeout).pipe(
+                Effect.andThen(expire(id, ConfigQuestionTimeout.seconds(configured))),
+                Effect.andThen(wait),
+              )
+            : undefined
           return yield* events.publish(Event.Asked, request).pipe(
-            Effect.andThen(restore(Deferred.await(deferred))),
+            Effect.andThen(restore(expired ? Effect.raceFirst(wait, expired) : wait)),
             Effect.ensuring(
               Effect.sync(() => {
                 pending.delete(id)
@@ -121,7 +176,7 @@ const layer = Layer.effect(
     )
 
     const reply = Effect.fn("Question.reply")((input: ReplyInput) =>
-      Effect.uninterruptible(
+      exclusive(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
@@ -130,14 +185,14 @@ const layer = Layer.effect(
             requestID: existing.request.id,
             answers: input.answers.map((answer) => [...answer]),
           })
-          yield* Deferred.succeed(existing.deferred, input.answers)
+          yield* Deferred.succeed(existing.deferred, { status: "answered", answers: input.answers })
           pending.delete(input.requestID)
         }),
       ),
     )
 
     const reject = Effect.fn("Question.reject")((requestID: ID) =>
-      Effect.uninterruptible(
+      exclusive(
         Effect.gen(function* () {
           const existing = pending.get(requestID)
           if (!existing) return yield* new NotFoundError({ requestID })
@@ -151,6 +206,21 @@ const layer = Layer.effect(
       ),
     )
 
+    const expire = Effect.fn("Question.expire")((requestID: ID, seconds: number) =>
+      exclusive(
+        Effect.gen(function* () {
+          const existing = pending.get(requestID)
+          if (!existing) return
+          yield* events.publish(Event.TimedOut, {
+            sessionID: existing.request.sessionID,
+            requestID: existing.request.id,
+          })
+          yield* Deferred.succeed(existing.deferred, { status: "timed_out", seconds })
+          pending.delete(requestID)
+        }),
+      ),
+    )
+
     const list = Effect.fn("Question.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
     })
@@ -159,4 +229,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, SessionAutonomy.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [Config.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
+})

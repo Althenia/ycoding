@@ -189,9 +189,14 @@ async function setup(options: {
     },
     emit(event: YCodingEvent) {
       if (event.type === "form.created") forms.set(event.data.form.id, event.data.form)
-      if (event.type === "form.replied" || event.type === "form.cancelled") forms.delete(event.data.id)
+      if (event.type === "form.replied" || event.type === "form.cancelled" || event.type === "form.timed_out")
+        forms.delete(event.data.id)
       if (event.type === "question.asked") questions.set(event.data.id, event.data)
-      if (event.type === "question.replied" || event.type === "question.rejected")
+      if (
+        event.type === "question.replied" ||
+        event.type === "question.rejected" ||
+        event.type === "question.timed_out"
+      )
         questions.delete(event.data.requestID)
       if (event.type === "permission.asked") permissions.set(event.data.id, event.data)
       if (event.type === "permission.replied") permissions.delete(event.data.requestID)
@@ -1109,6 +1114,36 @@ describe("internal notifications TUI plugin", () => {
     await harness.flush()
 
     expect(harness.notifications).toEqual([globalFormNotification])
+  })
+
+  test("clears timed-out forms and questions so a later request notifies again", async () => {
+    const harness = await setup()
+
+    harness.emit({ id: "event-1", created: 0, type: "form.created", data: { form: form("form-1") } })
+    harness.emit({ id: "event-2", created: 0, type: "question.asked", data: question("question-1") })
+    await harness.flush()
+    harness.emit({
+      id: "event-3",
+      created: 0,
+      type: "form.timed_out",
+      data: { sessionID: "session", id: "form-1" },
+    })
+    harness.emit({
+      id: "event-4",
+      created: 0,
+      type: "question.timed_out",
+      data: { sessionID: "session", requestID: "question-1" },
+    })
+    harness.emit({ id: "event-5", created: 0, type: "form.created", data: { form: form("form-1") } })
+    harness.emit({ id: "event-6", created: 0, type: "question.asked", data: question("question-1") })
+    await harness.flush()
+
+    expect(harness.notifications).toEqual([
+      formNotification,
+      questionNotification,
+      formNotification,
+      questionNotification,
+    ])
   })
 
   test("dedupes pending forms, questions, and permissions until they are resolved", async () => {

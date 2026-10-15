@@ -11,3 +11,11 @@ process.env.XDG_DATA_HOME = path.join(root, "data")
 process.env.XDG_STATE_HOME = path.join(root, "state")
 process.env.YCODING_DB = ":memory:"
 delete process.env.CLAUDE_CODE_ENTRYPOINT
+
+const { mock } = await import("bun:test")
+const { Layer } = await import("effect")
+const { ClamshellSleep } = await import("../src/util/clamshell-sleep")
+const lidLayer = Layer.succeed(ClamshellSleep.Service, ClamshellSleep.Service.of({ set: (enabled) => enabled ? "on" : "off" }))
+const lidNode = { ...ClamshellSleep.node, implementation: lidLayer }
+const lidModule = { Service: ClamshellSleep.Service, make: ClamshellSleep.make, layer: lidLayer, node: lidNode }
+await mock.module("../src/util/clamshell-sleep", () => ({ ...lidModule, ClamshellSleep: lidModule }))

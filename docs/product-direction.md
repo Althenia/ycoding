@@ -60,7 +60,7 @@ The runtime supports three explicit modes:
 - `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms (`true` → `2`); `3` retains its numeric level and currently behaves like `2`. Active `goal` grants answers and ask permissions at `0`, while ordinary guardrail auto-approval requires `1` or higher;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar shows who decides Permissions, Guardrails, and Questions at the effective YOLO level and active goal (`ask you`, `auto`, or `auto · goal`). Completion claims require verification evidence.
+Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and denies. YOLO 0–3 retain their behavior. `/guardrail-decision` durably delegates ordinary and hard reviews across the root family: approve once only at confidence ≥0.8, otherwise reject. Without delegation, YOLO 1–3 auto-approves ordinary reviews and hard reviews need a fresh human reply. `/sleep` also delegates option answers with automatic fallback, publishes a trusted System notice, and holds machine keep-awake. `/wake` or any family user prompt restores the pre-sleep review setting and releases that family's hold. TUI indicators rehydrate these states, and the sidebar labels decision ownership `auto · decision`. Completion requires verification evidence; helper judgments do not certify it.
 
 ### 5. Durable background orchestration
 
@@ -93,7 +93,7 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
-The hidden decision agent provides structured judgments only when an agent calls the `decision` tool. Main, child, and side-chat Sessions can use it within their effective permissions. The agent chooses when a bounded judgment is useful and supplies authorized evidence and typed questions. The helper uses a configured decision or Session model through its normal authentication route, including supported subscription routes. Confidence is a self-reported, uncalibrated estimate, not a calibrated probability. Insufficient evidence yields an explicit refusal, not a forced choice. Judgments do not execute tools, override owner selections, grant permission, certify completion, or change the user's objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#decisions).
+The hidden decision agent serves explicit agent judgments and user-enabled runtime review/sleep delegation. Use authorized, redacted evidence and typed questions through the configured helper or Session model's normal authentication route. Confidence is self-reported and uncalibrated; insufficient evidence permits refusal. Runtime delegation applies its explicit thresholds and fallback rules, never overrides tool or guardrail denies, and never certifies completion or changes the objective. Agent-invoked judgments grant no permission or approval. See [configuration](./configuration.md#decisions).
 
 ### 8. Documentation and distribution
 

@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -30,6 +31,7 @@ const plan = {
 const assertions: Permission.AssertInput[] = []
 let captured: Form.CreateInput | undefined
 let reject = false
+let timedOut = false
 let deny = false
 const capturedInput = () => captured
 const questionInput = { questions: [{ question: "Continue?", header: "Continue", options: [{ label: "Yes", description: "Continue" }] }] }
@@ -39,7 +41,7 @@ const permission = Layer.mock(Permission.Service, {
 })
 const form = Layer.mock(Form.Service, {
   ask: (input: Form.CreateInput) => Effect.sync(() => { captured = input }).pipe(Effect.andThen(Effect.sync(
-    (): Form.TerminalState => reject ? { status: "cancelled" } : { status: "answered", answer: { q0: "Build", q1: ["Dev"] } },
+    (): Form.TerminalState => timedOut ? { status: "timed_out", seconds: 300 } : reject ? { status: "cancelled" } : { status: "answered", answer: { q0: "Build", q1: ["Dev"] } },
   ))),
 })
 const questionToolNode = makeLocationNode({
@@ -49,6 +51,7 @@ const questionToolNode = makeLocationNode({
 const overrides = [
   [Permission.node, permission],
   [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Questions must not request judgments") })],
+  [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([]) })],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig], [Image.node, imagePassthrough],
 ] as const
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode]), [...overrides, [Form.node, form]]))
@@ -130,6 +133,15 @@ describe("QuestionTool", () => {
       { key: "q1", title: "Environment", description: "Which environment?", options: [{ value: "Dev", label: "Dev", description: "Development" }], custom: true, type: "multiselect" },
       { key: "q2", title: "Optional", description: "Anything else?", options: [], custom: true, type: "string" },
     ] })
+  }))
+
+  it.effect("returns an explicit no-answer result, not an error or a fabricated answer, when the form times out", () => Effect.gen(function* () {
+    timedOut = true
+    const registry = yield* ToolRegistry.Service
+    const text = "No answer arrived within 300 seconds, so the questions were closed without a user answer. Proceed using your own best judgment."
+    expect(yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question-timeout", name: "question", input: questionInput } }).pipe(Effect.ensuring(Effect.sync(() => { timedOut = false })))).toEqual({
+      result: { type: "text", value: text }, output: { structured: { answers: [[]], timedOutAfterSeconds: 300 }, content: [{ type: "text", text }] },
+    })
   }))
 
   it.effect("does not invent tool ownership metadata without a durable registry source", () => Effect.gen(function* () {

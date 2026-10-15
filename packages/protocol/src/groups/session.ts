@@ -195,10 +195,15 @@ export const SessionAutonomyYolo = Schema.Union([SessionAutonomyYoloLevel, Schem
     }),
   )
   .annotate({ identifier: "SessionAutonomyYolo" })
+export const SessionAutonomySleep = Schema.Struct({
+  priorGuardrailDecision: Schema.Boolean,
+}).annotate({ identifier: "SessionAutonomySleep" })
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
   yolo: SessionAutonomyYolo,
   goal: SessionAutonomyGoal.pipe(Schema.optional),
+  guardrailDecision: Schema.Boolean.pipe(Schema.optional),
+  sleep: SessionAutonomySleep.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomySet = Schema.Union([
   Schema.Struct({
@@ -207,6 +212,18 @@ export const SessionAutonomySet = Schema.Union([
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
   Schema.Struct({ yolo: SessionAutonomyYolo, goal: Schema.Never.pipe(Schema.optional) }),
+  Schema.Struct({
+    guardrailDecision: Schema.Boolean,
+    sleep: Schema.Boolean.pipe(Schema.optional),
+    goal: Schema.Never.pipe(Schema.optional),
+    yolo: Schema.Never.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    sleep: Schema.Boolean,
+    guardrailDecision: Schema.Never.pipe(Schema.optional),
+    goal: Schema.Never.pipe(Schema.optional),
+    yolo: Schema.Never.pipe(Schema.optional),
+  }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 
 export const SessionSubagentLaunch = Schema.Struct({

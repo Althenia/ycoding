@@ -28,6 +28,38 @@ import { host as testHost } from "./host"
 const it = testEffect(PluginTestLayer)
 
 describe("fromPromise", () => {
+  it.effect("marks Promise-plugin prompts with the non-user origin at the host boundary", () => Effect.gen(function* () {
+    const registry = yield* PluginRegistry.Service
+    const runtime = yield* PluginRuntime.Service
+    let received: Parameters<PluginRuntime.Interface["session"]["prompt"]>[0] | undefined
+    const host = yield* PluginHost.make(registry).pipe(Effect.provideService(PluginRuntime.Service, {
+      ...runtime,
+      session: { ...runtime.session, prompt: (input) => {
+        received = input
+        return Effect.die("Controlled Session boundary")
+      } },
+    }))
+    yield* PluginPromise.fromPromise(Plugin.define({ id: "prompt-origin", setup: async (context) => {
+      await expect(context.session.prompt({ sessionID: "ses_sleeping", text: "Continue", resume: false })).rejects.toBeDefined()
+    } })).effect(host)
+    expect(received).toMatchObject({ sessionID: "ses_sleeping", text: "Continue", origin: "plugin", resume: false })
+  }))
+  it.effect("marks Promise-plugin commands with the non-user origin at the host boundary", () => Effect.gen(function* () {
+    const registry = yield* PluginRegistry.Service
+    const runtime = yield* PluginRuntime.Service
+    let received: Parameters<PluginRuntime.Interface["session"]["command"]>[0] | undefined
+    const host = yield* PluginHost.make(registry).pipe(Effect.provideService(PluginRuntime.Service, {
+      ...runtime,
+      session: { ...runtime.session, command: (input) => {
+        received = input
+        return Effect.die("Controlled Session boundary")
+      } },
+    }))
+    yield* PluginPromise.fromPromise(Plugin.define({ id: "command-origin", setup: async (context) => {
+      await expect(context.session.command({ sessionID: "ses_sleeping", command: "note", resume: false })).rejects.toBeDefined()
+    } })).effect(host)
+    expect(received).toMatchObject({ sessionID: "ses_sleeping", command: "note", origin: "plugin", resume: false })
+  }))
   it.effect("preserves parent Session identity when the plugin creates an analysis Session", () =>
     Effect.gen(function* () {
       const registry = yield* PluginRegistry.Service

@@ -1,7 +1,11 @@
 export * as Form from "./form"
 
 import { Form } from "@ycoding-ai/schema/form"
-import { Cache, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Cache, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Semaphore } from "effect"
+import { Config } from "./config"
+import { ConfigQuestionTimeout } from "./config/question-timeout"
+import { Decision } from "./decision"
+import { DecisionChoice } from "./decision-choice"
 import { makeLocationNode } from "./effect/app-node"
 import { EventRuntime } from "./event"
 import { SessionAutonomy } from "./session/autonomy"
@@ -96,13 +100,20 @@ interface Entry {
   readonly form: Info
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
+  readonly created: number
+  readonly timer?: Fiber.Fiber<void>
 }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const config = yield* Config.Service
     const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
+    const decision = yield* Decision.Service
+    const lifetime = yield* Scope.Scope
+    const settle = Semaphore.makeUnsafe(1)
+    const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
     const forms = yield* Cache.makeWith<ID, Entry>(
       () => Effect.die(new Error("Form cache must be used via set/getSuccess, never get")),
       {
@@ -123,7 +134,36 @@ export const layer = Layer.effect(
       )
     })
 
-    const create = Effect.fn("Form.create")((input: CreateInput) =>
+    const complete = Effect.fn("Form.complete")(function* (entry: Entry, state: TerminalState) {
+      const id = entry.form.id
+      const sessionID = entry.form.sessionID
+      yield* state.status === "answered"
+        ? events.publish(Event.Replied, { id, sessionID, answer: state.answer })
+        : state.status === "cancelled"
+          ? events.publish(Event.Cancelled, { id, sessionID })
+          : events.publish(Event.TimedOut, { id, sessionID })
+      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, created: entry.created, state })
+      yield* Deferred.succeed(entry.deferred, state)
+      if (entry.timer && state.status !== "timed_out") yield* Fiber.interrupt(entry.timer)
+    })
+
+    const armTimeout = Effect.fn("Form.armTimeout")(function* (id: ID) {
+      const seconds = ConfigQuestionTimeout.seconds(Config.latest(yield* config.entries(), "question_timeout_seconds"))
+      if (seconds === 0) return
+      yield* exclusive(Effect.gen(function* () {
+        const entry = yield* find(id).pipe(Effect.orDie)
+        if (entry.state.status !== "pending" || entry.timer) return
+        const remaining = Math.max(0, seconds * 1000 - ((yield* Clock.currentTimeMillis) - entry.created))
+        const timer = yield* Effect.sleep(Duration.millis(remaining)).pipe(
+          Effect.andThen(expire(id, seconds)),
+          Effect.interruptible,
+          Effect.forkIn(lifetime),
+        )
+        yield* Cache.set(forms, id, { ...entry, timer })
+      }))
+    })
+
+    const createPending = Effect.fn("Form.createPending")((input: CreateInput) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const id = input.id ?? ID.create()
@@ -142,6 +182,7 @@ export const layer = Layer.effect(
             form,
             state: { status: "pending" },
             deferred: yield* Deferred.make<TerminalState>(),
+            created: yield* Clock.currentTimeMillis,
           }
           yield* Cache.set(forms, id, entry)
           yield* events.publish(Event.Created, { form }).pipe(Effect.onError(() => Cache.invalidate(forms, id)))
@@ -150,25 +191,45 @@ export const layer = Layer.effect(
       ),
     )
 
+    const create = Effect.fn("Form.create")((input: CreateInput) =>
+      Effect.uninterruptible(Effect.gen(function* () {
+        const form = yield* createPending(input)
+        yield* armTimeout(form.id)
+        return form
+      })),
+    )
+
     const ask = Effect.fn("Form.ask")((input: CreateInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const form = yield* create(input)
+          const form = yield* createPending(input)
           const entry = yield* find(form.id).pipe(Effect.orDie)
-          const autonomous = Schema.is(SessionSchema.ID)(form.sessionID)
-            ? yield* autonomy
-                .canAutoAnswer(form.sessionID)
-                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-            : false
-          const answer = autonomous ? automaticAnswer(form) : undefined
-          if (answer) {
-            const next: TerminalState = { status: "answered", answer }
-            yield* events.publish(Event.Replied, { id: form.id, sessionID: form.sessionID, answer })
-            yield* Cache.set(forms, form.id, { ...entry, state: next })
-            yield* Deferred.succeed(entry.deferred, next)
-            return next
-          }
-          return yield* restore(Deferred.await(entry.deferred)).pipe(
+          return yield* restore(Effect.gen(function* () {
+            const sessionID = Schema.is(SessionSchema.ID)(form.sessionID) ? form.sessionID : undefined
+            const asleep = sessionID
+              ? yield* autonomy
+                  .isAsleep(sessionID)
+                  .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+              : false
+            const autonomous = !asleep && sessionID
+              ? yield* autonomy
+                  .canAutoAnswer(sessionID)
+                  .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+              : false
+            const answer = asleep && sessionID
+              ? yield* decisionAnswer(decision, sessionID, form)
+              : autonomous
+                ? automaticAnswer(form)
+                : undefined
+            if (answer) {
+              yield* reply({ id: form.id, answer }).pipe(
+                Effect.catchTag("Form.AlreadySettledError", () => Effect.void),
+                Effect.orDie,
+              )
+            }
+            if (!answer) yield* armTimeout(form.id)
+            return yield* Deferred.await(entry.deferred)
+          })).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
           )
         }),
@@ -192,30 +253,34 @@ export const layer = Layer.effect(
     })
 
     const reply = Effect.fn("Form.reply")((input: ReplyInput) =>
-      Effect.uninterruptible(
+      exclusive(
         Effect.gen(function* () {
           const entry = yield* find(input.id)
           if (entry.state.status !== "pending") return yield* new AlreadySettledError({ id: input.id })
           const invalid = validateAnswer(entry.form, input.answer)
           if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
-          const next: TerminalState = { status: "answered", answer: input.answer }
-          yield* events.publish(Event.Replied, { id: input.id, sessionID: entry.form.sessionID, answer: input.answer })
-          yield* Cache.set(forms, input.id, { ...entry, state: next })
-          yield* Deferred.succeed(entry.deferred, next)
+          yield* complete(entry, { status: "answered", answer: input.answer })
         }),
       ),
     )
 
     const cancel = Effect.fn("Form.cancel")((id: ID) =>
-      Effect.uninterruptible(
+      exclusive(
         Effect.gen(function* () {
           const entry = yield* find(id)
           if (entry.state.status !== "pending") return yield* new AlreadySettledError({ id })
-          const next: TerminalState = { status: "cancelled" }
-          yield* events.publish(Event.Cancelled, { id, sessionID: entry.form.sessionID })
-          yield* Cache.set(forms, id, { ...entry, state: next })
-          yield* Deferred.succeed(entry.deferred, next)
+          yield* complete(entry, { status: "cancelled" })
         }),
+      ),
+    )
+
+    const expire = Effect.fn("Form.expire")((id: ID, seconds: number) =>
+      exclusive(
+        Effect.gen(function* () {
+          const entry = yield* find(id)
+          if (entry.state.status !== "pending") return
+          yield* complete(entry, { status: "timed_out", seconds })
+        }).pipe(Effect.orDie),
       ),
     )
 
@@ -235,7 +300,73 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [EventRuntime.node, SessionAutonomy.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [Config.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
+})
+
+function decisionAnswer(
+  decision: Decision.Interface,
+  sessionID: SessionSchema.ID,
+  form: Info,
+): Effect.Effect<Answer | undefined> {
+  return Effect.gen(function* () {
+    const answer: Record<string, Form.Value> = {}
+    for (const field of form.fields) {
+      if (field.type === "external") {
+        answer[field.key] = true
+        continue
+      }
+      if (!isActive(field, answer)) continue
+      const value = yield* decisionValue(decision, sessionID, form, field)
+      if (value === undefined) {
+        if (field.required) return automaticAnswer(form)
+        continue
+      }
+      answer[field.key] = value
+    }
+    return validateAnswer(form, answer) ? automaticAnswer(form) : answer
+  })
+}
+
+function decisionValue(
+  decision: Decision.Interface,
+  sessionID: SessionSchema.ID,
+  form: Info,
+  field: InputField,
+): Effect.Effect<Form.Value | undefined> {
+  if (field.type !== "string" && field.type !== "multiselect") return Effect.succeed(automaticValue(field))
+  const options = field.options
+  if (!options || options.length === 0) return Effect.succeed(automaticValue(field))
+  return DecisionChoice.choose(decision, {
+    sessionID,
+    name: field.key,
+    instructions:
+      "The user is asleep and cannot answer this form. Choose the option that best serves the form's stated purpose with the evidence given. Refuse when the evidence does not support a choice; refusal falls back to the automatic default.",
+    state: {
+      form: form.title,
+      field: field.key,
+      title: field.title ?? null,
+      description: field.description ?? null,
+      options: options.map((option) => ({
+        value: option.value,
+        label: option.label,
+        description: option.description ?? null,
+      })),
+    },
+    choices: options.map((option) => ({
+      value: option.value,
+      description: option.description ?? option.label,
+    })),
+  }).pipe(
+    Effect.map((judgment) => {
+      if (!judgment) return automaticValue(field)
+      const value: Form.Value = field.type === "multiselect" ? [judgment.value] : judgment.value
+      return validateField(field, value) ? automaticValue(field) : value
+    }),
+  )
+}
 
 function automaticAnswer(form: Info): Answer | undefined {
   const answer: Record<string, Form.Value> = {}

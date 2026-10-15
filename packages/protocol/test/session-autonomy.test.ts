@@ -91,3 +91,12 @@ test("R7 documents typed goal resume, stale calculation, and provider failures",
   for (const status of [200, 400, 404, 409, 500]) expect(responses?.[status]).toBeDefined()
   expect(group.endpoints["session.autonomy.set"].middlewares.has(SessionLocationMiddleware)).toBe(true)
 })
+
+test("family autonomy accepts explicit switches without accepting empty or invalid requests", () => {
+  const decode = Schema.decodeUnknownSync(SessionAutonomySet)
+  expect(decode({ guardrailDecision: true })).toEqual({ guardrailDecision: true })
+  expect(decode({ sleep: false })).toEqual({ sleep: false })
+  expect(decode({ guardrailDecision: false, sleep: true })).toEqual({ guardrailDecision: false, sleep: true })
+  for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: 1 }])
+    expect(() => decode(value)).toThrow()
+})

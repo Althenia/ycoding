@@ -7,6 +7,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
+import { KeepAwake } from "../keep-awake"
 import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { Hash } from "../util/hash"
@@ -81,12 +82,31 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
-    "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.",
+    "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user unless guardrail-decision or sleep is on for this Session family.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
     "Call goal complete only after the goal is achieved and verified. Completion remains your explicit agent-owned decision.",
   ].join("\n")
+}
+
+export const sleepReminder = (autonomy: SessionAutonomy.State, machineAwake?: boolean, lidAwake?: boolean) => {
+  if (!autonomy.sleep)
+    return undefined
+  return [
+    "The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done.",
+    "Questions, forms, and guardrail reviews in this Session family are decided by the decision model while sleep is on.",
+    machineAwake === undefined
+      ? undefined
+      : machineAwake
+        ? lidAwake
+          ? "Keep-awake holds idle and lid-closed sleep off."
+          : "Keep-awake holds idle sleep off; lid-closed keep-awake is unavailable or unreported, so closing the lid may sleep this machine."
+        : "Keep-awake is not holding this machine awake; the machine may sleep.",
+    "On battery keep-awake drains the battery and a closed lid traps heat.",
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("\n")
 }
 
 export function toProtectedState(sources: Snapshot["sources"]): ReadonlyArray<ContextManifest.ProtectedStateEntry> {
@@ -198,7 +218,27 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
       .orderBy(desc(EventTable.seq))
       .limit(1)
       .get()
-    const autonomy = SessionAutonomy.read(session.autonomy)
+    let autonomy = SessionAutonomy.read(session.autonomy)
+    let revision = session.autonomyRevision
+    let ancestorID = sessionID
+    while (true) {
+      const task = yield* tx
+        .select({ parentID: SessionTable.parent_id })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, ancestorID))
+        .get()
+      if (!task?.parentID) break
+      const parent = yield* tx
+        .select({ autonomy: SessionTable.autonomy, revision: SessionTable.autonomy_revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, task.parentID))
+        .get()
+      if (!parent) break
+      const state = SessionAutonomy.read(parent.autonomy)
+      autonomy = { ...autonomy, guardrailDecision: state.guardrailDecision, sleep: state.sleep }
+      revision += parent.revision
+      ancestorID = task.parentID
+    }
     const permissionCeiling = SessionPermissionCeiling.read(session.permission)
     const todoDigest = todoState?.digest ?? Hash.sha256(SessionRunnerCache.canonicalJson(todos))
     return {
@@ -220,7 +260,7 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
           digest: Hash.sha256(SessionRunnerCache.canonicalJson(autonomy.goal ?? null)),
         },
         autonomy: {
-          sequence: session.autonomyRevision,
+          sequence: revision,
           digest: Hash.sha256(SessionRunnerCache.canonicalJson(autonomy)),
         },
         permissions: {
@@ -247,6 +287,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const guardrails = yield* SessionGuardrail.Service
+    const keepAwake = yield* KeepAwake.Service
 
     const loadDatabase = Effect.fn("SessionLiveState.loadDatabase")((sessionID: Session.ID) =>
       db
@@ -263,6 +304,7 @@ export const layer = Layer.effect(
       const current = yield* loadDatabase(sessionID)
       const guardrail = yield* guardrails.snapshot(sessionID)
       if (before.sequence !== guardrail.sequence || before.digest !== guardrail.digest) return yield* load(sessionID)
+      const awake = current.autonomy.sleep ? yield* keepAwake.get : undefined
       const text = [
         authoritativeStatePrefix +
           "\n" +
@@ -272,6 +314,7 @@ export const layer = Layer.effect(
             permissionCeiling: current.permissionCeiling,
           }),
         goalReminder(current.autonomy),
+        sleepReminder(current.autonomy, awake?.state === "on", awake?.lid === "on"),
       ]
         .filter((part): part is string => part !== undefined)
         .join("\n\n")
@@ -295,5 +338,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Database.node, SessionGuardrail.node],
+  deps: [Database.node, SessionGuardrail.node, KeepAwake.node],
 })

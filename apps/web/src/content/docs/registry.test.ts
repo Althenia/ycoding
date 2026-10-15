@@ -151,10 +151,13 @@ describe("structured decision documentation", () => {
     expect(JSON.stringify(findDocPage("configuration/agents")?.sections)).toContain("`decision`")
   })
 
-  test("documents explicit judgments, valid requests and abstention without automation", () => {
+  test("documents explicit judgments and user-enabled runtime delegation with thresholds and fallback", () => {
     const tools = findDocPage("configuration/tools")
     const text = JSON.stringify(tools?.sections)
-    expect(text).toContain("only when an agent calls")
+    expect(text).toContain("Agent judgments use `decision`")
+    expect(text).toContain("/guardrail-decision or /sleep")
+    expect(text).toContain("confidence 0.8 or higher")
+    expect(text).toContain("automatic fallback")
     expect(text).toContain("permission ceilings")
     expect(text).toContain("owner choices")
     expect(text).toContain("insufficient evidence")
@@ -172,7 +175,7 @@ describe("structured decision documentation", () => {
       ],
     } })
     expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("explicit goal")
-    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("without helper classification")
+    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("Denies never reach the helper")
     const rejected = findDocPage("configuration")?.sections.flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Rejected keys")
     expect(rejected?.kind === "code" ? rejected.code : "").toContain("decisions")
@@ -190,10 +193,12 @@ describe("structured decision documentation", () => {
     ]) expect(guardrails).toContain(rule)
     expect(guardrails).not.toContain("standard.review.broad-deletion")
     expect(guardrails).not.toContain("standard.review.publish")
-    expect(guardrails).toContain("without helper classification")
+    expect(guardrails).toContain("Without guardrail-decision or sleep")
     expect(guardrails).toContain("case-sensitive")
     expect(guardrails).toContain("YOLO 1–3")
-    expect(guardrails).toContain("A fresh human `Allow once` or `Deny` only")
+    expect(guardrails).toContain("fresh human reply")
+    expect(guardrails).toContain("decision model")
+    expect(guardrails).toContain("confidence 0.8 or higher")
   })
 })
 

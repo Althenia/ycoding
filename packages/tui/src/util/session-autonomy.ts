@@ -13,7 +13,15 @@ export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
   return 0
 }
 
-export type AutonomyDecision = "you" | "yolo" | "goal"
+export type AutonomyDecision = "you" | "yolo" | "goal" | "decision"
+
+export function isAsleep(state: SessionAutonomyState): boolean {
+  return state.sleep !== undefined && state.sleep !== null
+}
+
+export function guardrailDecisionEnabled(state: SessionAutonomyState): boolean {
+  return state.guardrailDecision === true || isAsleep(state)
+}
 
 export function autonomyDecision(
   state: SessionAutonomyState,
@@ -23,6 +31,8 @@ export function autonomyDecision(
   const activeGoal = state.goal?.status === "active"
   const automatedByYolo =
     action === "permissions" || action === "guardrails" ? level >= 1 : level >= 2
+  if (action === "guardrails" && guardrailDecisionEnabled(state)) return "decision"
+  if (action === "questions" && isAsleep(state)) return "decision"
   if (automatedByYolo) return "yolo"
   if (activeGoal && action !== "guardrails") return "goal"
   return "you"
@@ -43,13 +53,14 @@ export function autonomyDecisionLabel(
 ) {
   const decision = autonomyDecision(state, action)
   if (decision === "you") return "ask you"
+  if (decision === "decision") return "auto · decision"
   return decision === "goal" ? "auto · goal" : "auto"
 }
 
 export function autonomyModeLabel(state: SessionAutonomyState) {
   const level = yoloLevel(state)
   const active = state.goal?.status === "active"
-  return `${level === 0 ? "Manual" : `YOLO ${level}`}${active ? " · goal" : ""}`
+  return `${level === 0 ? "Manual" : `YOLO ${level}`}${active ? " · goal" : ""}${guardrailDecisionEnabled(state) ? " · guardrail decision" : ""}${isAsleep(state) ? " · asleep" : ""}`
 }
 
 export function autonomyProgressLabel(state: SessionAutonomyState) {

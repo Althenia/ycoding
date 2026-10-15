@@ -196,6 +196,7 @@ export const Change = Schema.Union([
   Schema.Struct({ type: Schema.Literal("progressed"), progress: Progress }),
   Schema.Struct({ type: Schema.Literal("question_asked"), question: Question }),
   Schema.Struct({ type: Schema.Literal("question_answered"), answer: Answer }),
+  Schema.Struct({ type: Schema.Literal("question_timed_out"), questionID: QuestionID }),
   Schema.Struct({ type: Schema.Literal("cancel_requested") }),
   Schema.Struct({ type: Schema.Literal("cancelled") }),
   Schema.Struct({ type: Schema.Literal("completed"), excerpt: TerminalExcerpt.pipe(optional) }),

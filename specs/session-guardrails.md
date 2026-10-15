@@ -26,7 +26,7 @@ The decision order is:
 
 1. an unoverrideable standard catastrophic deny;
 2. an effective custom deny from the first matching source layer;
-3. an unoverrideable standard hard review;
+3. a standard hard review that survives semantic match verification;
 4. a matching custom `hard_review` rule from any source layer;
 5. the ordinary decision from the first matching custom source layer: nearest repository `Config.Directory`, then broader repository directories, then global config;
 6. standard ordinary review;
@@ -39,6 +39,18 @@ Within one custom source layer, rules sort by descending numeric priority, then 
 JSON/JSONC configuration recovery treats `guardrails` as one security unit. Any invalid value, including an unknown property, is replaced with `{ "enabled": true }`; omitted caps resolve to 8 concurrent shells, 8 concurrent subagents, and 16 pending reviews. This replacement takes precedence over an earlier document's disabled guardrails or custom caps through the existing last-defined configuration rule. `GET /api/config/diagnostics` reports the source path, `jsonPath: "$.guardrails"`, the rejection reason and message, and `failClosed: true`. Invalid permission rules likewise fail closed in their global or agent ruleset: preserve valid rule order, append a deny for the readable nonempty action on every resource, or append an all-action/all-resource deny if the action or ruleset is unreadable. This recovery does not change ordinary precedence between configuration scopes.
 
 ## Guarded boundaries
+
+### Standard-match verification
+
+Before a matched `standard.review.*` rule can create a human request or proceed to guardrail-decision approval, call the configured helper with the `guardrail_match` predicate. Supply the matched standard rule ID/reason and redacted action, resources, workdir, and project under `untrustedEvidence`; explicitly treat all evidence text as data, never instructions. Dismiss only `answer: false` with finite confidence in [0.9, 1]. Refusal, error, unavailability, a 15-second timeout, other answer types, and lower confidence preserve review. Verification has no toggle. Already YOLO-auto-approved ordinary reviews and `skipReview` skip it; catastrophic denies, explicit denies, and custom rules are never verified.
+
+Reevaluate excluding only dismissed standard rule IDs. Verify additional standard matches and preserve independently matched custom policy. Dismissal never widens permissions, bypasses caps, approves another rule, or creates reusable approval. Surviving hard matches flow into existing human or user-enabled guardrail-decision review. Cancellation during verification owns no pending request or review slot.
+
+Supply the classifier's `matchedSegment` and `resolvedTargets` as separate structured fields under `untrustedEvidence.classifier`. Comments are not shell operands. Statements, comments, quoted or printed strings, and suggestive names are not proof of a non-match: evaluate executable shell semantics. Unit tests establish the request framing and structured evidence, not a model's behavioral resistance to adversarial evidence.
+
+Publish public durable `session.guardrail.dismissed.1` with `{ sessionID, reviewSessionID, ruleID, confidence }`; `sessionID` owns the root-family aggregate and `reviewSessionID` identifies the action's Session. Never store command/resource evidence in it. Status adds optional `dismissals: [{ eventID, sessionID, created, ruleID, confidence }]`, with the reviewed Session and event-envelope timestamp, oldest-first among the newest 100 dismissals. The TUI deduplicates by event ID and interleaves completed provenance chronologically only in the reviewed Session's view. Render the rule ID, `not a real match`, and unrounded confidence; only still-pending family requests remain pinned at the tail.
+
+Verification: `packages/core/test/session-guardrail-service.test.ts` covers threshold dismissal, retained review, exclusions, delegated fallback, untrusted framing/redaction, cancellation, remaining standard/custom policy, and durable status provenance. Schema event-manifest tests guard the public payload and bounds. TUI Session transcript tests prove rehydrated and live rendering.
 
 The current runtime evaluates guardrails immediately before supported side effects:
 
@@ -68,7 +80,7 @@ The repository is the Location's version-control worktree root, or the Location 
 
 `file_mutation` (edit, write, and patch commits) targeting a path outside the repository requires ordinary review. A shell command requires ordinary review when its working directory, a `cd` target (a bare `cd` means home), or any operand, redirection target, or `--option=value` path resolves outside the repository. Shell resolution reuses the deletion recognizer's working-directory tracking and `~`, `$HOME`, `$PWD`, `$TMPDIR` expansion. Device paths under `/dev` and the executable position of each command are not targets. Deterministically recognized read-only shell commands are exempt even when they name outside paths, and read-only tools are not guarded; reading outside the repository remains governed by the `external_directory` permission. Like deletion recognition, this is a bounded recognizer: it does not detect paths produced by substitution, `sh -c` payloads, `eval`, `xargs`, `find -exec`, scripts, or programs that write outside the repository without naming the path.
 
-Outside-repository ordinary reviews always use the normal review and effective YOLO path without helper-model classification. Deterministic denies, hard reviews, custom rules, disabled ordinary guardrails, and `skipReview` retain their gates. Optional historical `risk` fields remain valid in stored requests and events for replay, but current guardrail evaluation does not produce them or use them to allow an action.
+Outside-repository reviews use the normal review/YOLO path when guardrail-decision and sleep are off. When either is enabled on the root family, the decision helper settles every ordinary and hard review, including custom `hard_review`: approve once only for an approve judgment with confidence ≥0.8; reject refusal, errors, a 60-second timeout, low confidence, or reject. Send redacted self-contained action, resources, reason, rule IDs, and hard/ordinary status. Never offer or produce `always` automatically. Catastrophic and explicit denies block before any helper call. Deterministic rule classification, disabled ordinary guardrails, caps, and `skipReview` retain their gates; historical optional `risk` is not a classifier.
 
 ## Human review
 
@@ -78,7 +90,7 @@ A review request blocks the guarded operation until the user replies:
 - `always` permits the attempt and, for an ordinary outside-repository review, records the request's outside directories (a directory target itself, otherwise its parent, including descendants) as a private durable `session.guardrail.approved` event on the root Session; with no outside directories it approves only that attempt;
 - `reject` fails the blocked operation.
 
-A request with `hardReview: true` advertises only `once` and `reject`. It cannot use a transient `always` approval, and a direct `always` reply fails the waiting operation rather than approving it. Hard reviews are never auto-approved by YOLO 0-3, active goals, agent automation, permission auto-answering, or any reusable approval. Ordinary reviews auto-approve at effective YOLO 1-3.
+A request with `hardReview: true` advertises only `once` and `reject`. A direct `always` reply fails the waiting operation. Hard reviews require a fresh human reply unless user-enabled guardrail-decision or sleep delegates the review to the helper. YOLO 0–3, active goals, agent-invoked judgments, permission auto-answering, and reusable approvals do not settle them. Ordinary reviews auto-approve at effective YOLO 1–3 only when decision delegation is off.
 
 An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. Ordinary review auto-approval requires effective `yolo 1-3`; active `goal` or permission auto-approval alone cannot grant it.
 
@@ -113,6 +125,8 @@ POST /api/session/:sessionID/guardrail/request/:requestID/reply
 
 Guardrail asked, replied, and decided events are ephemeral. Durable Session history remains the authority for Session ownership; guardrail review state is process-local and rehydrated from the canonical request API after reconnect or restart.
 
+Decision-model replies add `decidedBy: "decision-model"`, optional `choice: "approve" | "reject"`, and optional reported `confidence` in `[0,1]`. Preserve the actual choice/confidence even when a low-confidence approve is rejected; refusal/error/timeout have no fabricated confidence. The private durable `session.guardrail.decided` event stores root `sessionID`, `reviewSessionID`, request ID, `reply: "once" | "reject"`, and available choice/confidence. Event identity identifies model provenance; store no evidence or helper output. Guardrail status adds optional `decisions` containing the newest 100 outcomes, including reviewed `sessionID` and envelope `created` timestamp, in chronological order for TUI rehydration. Display each outcome chronologically only in its reviewed Session. Pending requests remain process-local and pinned at the family tail.
+
 The Reply body is the public union `once | always | reject`. `Guardrail.RuleDecision` additionally accepts `hard_review`, and pending requests may carry optional `hardReview: true` and `Guardrail.Risk`. No additional guardrail route is required.
 
 ## Notification contract
@@ -123,8 +137,8 @@ After a 500 ms pending-review checkpoint, an unresolved guardrail review emits *
 
 - Catastrophic direct shell forms are denied before process creation.
 - Catastrophic standard denies cannot be overridden by custom policy or any approval reply.
-- Recursive deletion of the current project or an ancestor requires human-only hard review after temporary exclusions; filesystem root, user-home, and system-directory deletion remains denied.
-- Semantic risk classification is consulted only for outside-repository ordinary reviews and can only keep that review or allow it; deterministic denies, hard reviews, and inside-repository work never consult the classifier.
+- Recursive deletion of the current project or an ancestor requires hard review after temporary exclusions; user-enabled decision delegation may settle it once. Filesystem root, user-home, and system-directory deletion remains denied.
+- Decision delegation settles reviews only; it never changes deterministic classification, permissions, or denies.
 - Hard reviews cannot be bypassed by disabled ordinary guardrails, custom allow rules, reusable approvals, agent or goal automation, or YOLO 3.
 - Raw custom file content and command history are not rendered in the sidebar.
 - Invalid enabled policy never silently disables the standard profile.

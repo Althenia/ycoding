@@ -128,6 +128,32 @@ export const GuardrailApproved = Event.durable({
 })
 export type GuardrailApproved = typeof GuardrailApproved.Type
 
+export const GuardrailDecided = Event.durable({
+  type: "session.guardrail.decided",
+  ...options,
+  schema: {
+    ...Base,
+    reviewSessionID: SessionID,
+    requestID: Schema.String,
+    reply: Schema.Literals(["once", "reject"]),
+    choice: Schema.Literals(["approve", "reject"]).pipe(optional),
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+  },
+})
+export type GuardrailDecided = typeof GuardrailDecided.Type
+
+export const GuardrailDismissed = Event.durable({
+  type: "session.guardrail.dismissed",
+  ...options,
+  schema: {
+    ...Base,
+    reviewSessionID: SessionID,
+    ruleID: Schema.String.check(Schema.isPattern(/^standard\.review\./)),
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0.9, maximum: 1 })),
+  },
+})
+export type GuardrailDismissed = typeof GuardrailDismissed.Type
+
 export const DaybreakSet = Event.durable({
   type: "session.daybreak.set",
   ...options,
@@ -848,6 +874,7 @@ export const Definitions = Event.inventory(
   ModelSelected,
   DaybreakSet,
   ProjectArtifactsEnded,
+  GuardrailDismissed,
   Moved,
   Renamed,
   UsageUpdated,
@@ -920,6 +947,7 @@ export const DurableDefinitions = Event.inventory(
   ProviderRequestRecorded,
   ProfileBound,
   GuardrailApproved,
+  GuardrailDecided,
 )
 
 // Durable replay accepts legacy and current payloads for the same event type.
@@ -930,7 +958,7 @@ export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).annot
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })
-export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound, GuardrailApproved], {
+export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound, GuardrailApproved, GuardrailDecided], {
   mode: "oneOf",
 })
 export type Event = typeof All.Type

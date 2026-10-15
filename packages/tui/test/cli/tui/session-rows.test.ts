@@ -2,6 +2,25 @@ import { expect, test } from "bun:test"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
 import { messageBoundaryIDs, reduceSessionRows } from "../../../src/routes/session/rows"
 
+test.each(["root", "child"])("places only %s review provenance chronologically and keeps family pending at the tail", (sessionID) => {
+  const messages: SessionMessageInfo[] = [
+    { type: "user", id: "first", text: "Before reviews", time: { created: 10 } },
+    { type: "user", id: "last", text: "After reviews", time: { created: 50 } },
+  ]
+  const rows = reduceSessionRows(messages, new Set(), false, {
+    sessionID,
+    decisions: [{ sessionID: "root", created: 30, requestID: "decided-root", reply: "once", confidence: 0.9 }],
+    dismissals: [
+      { sessionID: "root", created: 20, eventID: "dismissed-root", ruleID: "standard.review.force-push", confidence: 0.95 },
+      { sessionID: "child", created: 40, eventID: "dismissed-child", ruleID: "standard.review.git-destructive", confidence: 0.96 },
+    ],
+    pending: [{ id: "pending", rootSessionID: "root", sessionID: "child", action: "shell", resources: [], ruleIDs: [], reason: "Still pending", standard: true }],
+  })
+  expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type))
+    .toEqual(sessionID === "root" ? ["first", "dismissed-root", "decided-root", "last", "pending"] : ["first", "dismissed-child", "last", "pending"])
+  expect(rows.at(-1)).toMatchObject({ type: "guardrail", requestID: "pending" })
+})
+
 test("assigns assistant boundaries to the first rendered row instead of the first text row", () => {
   const messages: SessionMessageInfo[] = [
     { type: "user", id: "user-1", text: "Question", time: { created: 0 } },

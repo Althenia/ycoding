@@ -324,6 +324,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         context.data.on("form.cancelled", (event) =>
           clearRequest("form", event.data.sessionID, event.data.id, event.location),
         ),
+        context.data.on("form.timed_out", (event) =>
+          clearRequest("form", event.data.sessionID, event.data.id, event.location),
+        ),
         context.data.on("question.asked", (event) =>
           addRequest({ kind: "question", id: event.data.id, sessionID: event.data.sessionID }),
         ),
@@ -331,6 +334,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           clearRequest("question", event.data.sessionID, event.data.requestID),
         ),
         context.data.on("question.rejected", (event) =>
+          clearRequest("question", event.data.sessionID, event.data.requestID),
+        ),
+        context.data.on("question.timed_out", (event) =>
           clearRequest("question", event.data.sessionID, event.data.requestID),
         ),
         context.data.on("permission.asked", (event) =>

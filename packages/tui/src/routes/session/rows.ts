@@ -1,4 +1,4 @@
-import type { SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
+import type { GuardrailRequestListOutput, GuardrailStatusOutput, SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
 import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData } from "../../context/data"
@@ -13,7 +13,7 @@ export type PartRef = {
 export type SessionRow =
   | { type: "message"; messageID: string }
   | { type: "compaction"; jobID: string }
-  | { type: "guardrail"; requestID: string; reason: string }
+  | { type: "guardrail"; requestID: string; reason: string; decided?: string }
   | { type: "subagent"; sessionID: string; agent: string; created: number }
   | { type: "task"; content: string; status: "completed" | "in_progress" }
   | { type: "part"; ref: PartRef }
@@ -78,18 +78,16 @@ export function createSessionRows(sessionID: Accessor<string>) {
     const visible = (revertID ? messages.filter((message) => message.id < revertID) : messages).filter(
       (message) => message.type !== "compaction" || (!showLifecycle && message.id === latestLegacy?.id),
     )
-    const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle")
+    const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle", {
+      sessionID: sessionID(), decisions: data.session.guardrail.decided(sessionID()),
+      dismissals: data.session.guardrail.dismissed(sessionID()), pending: data.session.guardrail.list(sessionID()),
+    })
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
       const index = latestLifecycle.status === "completed" ? 0 : compactionRowIndex(latestLifecycle, messages, rows)
-      if (index === -1) rows.push(row)
+      if (index === -1) rows.splice(reviewStart(rows), 0, row)
       else rows.splice(index, 0, row)
     }
-    // A pending guardrail review blocks the Session family, so its row must render in every
-    // Session view where it can block work, including a subagent chat and an autonomous Session.
-    // The list only contains requests that are still awaiting a reply.
-    const pendingGuardrails = activityRows()
-    if (pendingGuardrails.length > 0) rows.push(...pendingGuardrails)
     partitionPending(rows, pendingPermissions())
     // Attach a stable unique key so keyed reconcile reuses tail activity rows instead of
     // rebuilding them positionally when an earlier message row is inserted.
@@ -106,12 +104,6 @@ export function createSessionRows(sessionID: Accessor<string>) {
         request.source?.type === "tool" ? [request.source.callID] : [],
       ),
     )
-  }
-
-  function activityRows(): SessionRow[] {
-    return data.session.guardrail
-      .list(sessionID())
-      .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason }))
   }
 
   createEffect(() => {
@@ -152,6 +144,10 @@ export function createSessionRows(sessionID: Accessor<string>) {
         // The closing assistant footer depends on execution state, so idling must re-reduce.
         data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
+        ...data.session.guardrail.dismissed(sessionID()).map((item) => `${item.eventID}:${item.confidence}`),
+        ...data.session.guardrail
+          .decided(sessionID())
+          .map((item) => `${item.requestID}:${item.reply}:${item.confidence}`),
       ],
       () => setRows(reconcile(reduce(), { key: "key" })),
     ),
@@ -196,7 +192,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
         const pending = isPending(messageID)
         const message = data.session.message.get(sessionID(), messageID)
         const index =
-          message?.type === "compaction" && pending ? queuedStart(draft) : pending ? draft.length : queuedStart(draft)
+          message?.type === "compaction" && pending ? queuedStart(draft) : pending ? reviewStart(draft) : queuedStart(draft)
         if (!pending) completePrevious(draft, index)
         const row: SessionRow = { type: "message", messageID }
         Object.assign(row, { key: rowKey(row, message) })
@@ -239,7 +235,11 @@ export function createSessionRows(sessionID: Accessor<string>) {
   }
 
   const queuedStart = (rows: SessionRow[]) => {
-    const index = rows.findIndex((row) => row.type === "message" && isPending(row.messageID))
+    const index = rows.findIndex((row) => (row.type === "message" && isPending(row.messageID)) || (row.type === "guardrail" && !row.decided))
+    return index === -1 ? rows.length : index
+  }
+  const reviewStart = (rows: SessionRow[]) => {
+    const index = rows.findIndex((row) => row.type === "guardrail" && !row.decided)
     return index === -1 ? rows.length : index
   }
 
@@ -327,7 +327,31 @@ export function createSessionRows(sessionID: Accessor<string>) {
   return rows
 }
 
-export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false) {
+export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false, guardrails?: {
+  sessionID: string
+  decisions: ReadonlyArray<NonNullable<GuardrailStatusOutput["decisions"]>[number] & { action?: string }>
+  dismissals: NonNullable<GuardrailStatusOutput["dismissals"]>
+  pending: GuardrailRequestListOutput
+}) {
+  const provenance = [
+    ...(guardrails?.decisions ?? []).filter((item) => item.sessionID === guardrails?.sessionID).map((item) => ({
+      created: item.created,
+      row: { type: "guardrail", requestID: item.requestID, reason: item.action ?? "guardrail review", decided:
+        item.choice === "approve" && item.reply === "reject" ? `decision model approve · ${item.confidence?.toString() ?? "unreported"} · rejected`
+          : `decision model ${item.reply === "reject" ? "rejected" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}` } satisfies SessionRow,
+    })),
+    ...(guardrails?.dismissals ?? []).filter((item) => item.sessionID === guardrails?.sessionID).map((item) => ({
+      created: item.created,
+      row: { type: "guardrail", requestID: item.eventID, reason: item.ruleID, decided: `match verifier · not a real match · ${item.confidence.toString()}` } satisfies SessionRow,
+    })),
+  ].sort((left, right) => left.created - right.created || left.row.requestID.localeCompare(right.row.requestID))
+  let nextProvenance = 0
+  const insertThrough = (rows: SessionRow[], created: number) => {
+    while (nextProvenance < provenance.length && provenance[nextProvenance]!.created <= created) {
+      completePrevious(rows)
+      rows.push(provenance[nextProvenance++]!.row)
+    }
+  }
   const transcript = messages.filter(
     (message) =>
       !(message.type === "synthetic" && message.metadata?.decisionInputID !== undefined) &&
@@ -345,11 +369,12 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
         ("jobID" in message && message.status !== "completed" && message.status !== "failed")),
   )
   const pending = new Set([...pendingCompactions.map((message) => message.id), ...inputs])
-  return [
+  const rows = [
     ...transcript.filter((message) => !pending.has(message.id)),
     ...pendingCompactions,
     ...transcript.filter(isInput),
   ].reduce<SessionRow[]>((rows, message) => {
+    insertThrough(rows, message.time.created)
     if (message.type !== "assistant") {
       if (message.type === "synthetic" && !message.description?.trim()) return rows
       if (!pending.has(message.id)) completePrevious(rows)
@@ -358,6 +383,7 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
     }
     const ordinals = { text: 0, reasoning: 0 }
     message.content.forEach((part) => {
+      insertThrough(rows, "time" in part ? part.time?.created ?? message.time.created : message.time.created)
       const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID }, part)
@@ -369,10 +395,14 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
       message.id === closing
     ) {
       completePrevious(rows)
+      insertThrough(rows, message.time.completed ?? message.time.created)
       rows.push({ type: "assistant-footer", messageID: message.id })
     }
     return rows
   }, [])
+  insertThrough(rows, Infinity)
+  rows.push(...(guardrails?.pending ?? []).map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })))
+  return rows
 }
 
 export function compactionMessageTranscriptVisible(message: Extract<SessionMessageInfo, { type: "compaction" }>) {

@@ -19,7 +19,11 @@ function sessionStateSummary(value: Record<string, unknown>) {
   const mode = typeof autonomy?.mode === "string" ? autonomy.mode : "unknown"
   const yolo = autonomy?.yolo ?? 0
   const todos = Array.isArray(value.todos) ? value.todos.length : 0
-  return `Session state · ${mode} · YOLO ${yolo} · ${todos} ${todos === 1 ? "task" : "tasks"}`
+  const extras = [
+    autonomy?.guardrailDecision === true || autonomy?.sleep !== undefined ? "guardrail decision" : undefined,
+    autonomy?.sleep !== undefined ? "asleep" : undefined,
+  ].filter((part): part is string => part !== undefined)
+  return `Session state · ${mode} · YOLO ${yolo}${extras.length > 0 ? ` · ${extras.join(" · ")}` : ""} · ${todos} ${todos === 1 ? "task" : "tasks"}`
 }
 
 function teamViewSummary(value: Record<string, unknown>) {

@@ -30,7 +30,10 @@ export const Input = Schema.Struct({
   questions: Schema.NonEmptyArray(Question.Prompt).annotate({ description: "Questions to ask" }),
 })
 
-export const Output = Schema.Struct({ answers: Schema.Array(Question.Answer) })
+export const Output = Schema.Struct({
+  answers: Schema.Array(Question.Answer),
+  timedOutAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.optional),
+})
 export type Output = typeof Output.Type
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("QuestionTool.CancelledError", {}) {
@@ -42,7 +45,10 @@ export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("Q
 export const toModelOutput = (
   questions: ReadonlyArray<Question.Prompt>,
   answers: ReadonlyArray<Question.Answer>,
+  timedOutAfterSeconds?: number,
 ) => {
+  if (timedOutAfterSeconds !== undefined)
+    return `No answer arrived within ${timedOutAfterSeconds} seconds, so the questions were closed without a user answer. Proceed using your own best judgment.`
   const formatted = questions.map((question, index) =>
     `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
   ).join(", ")
@@ -58,7 +64,7 @@ export const Plugin = {
       description,
       input: Input,
       output: Output,
-      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers) }],
+      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers, output.timedOutAfterSeconds) }],
       execute: (input, context) => permission.assert({
         action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent,
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
@@ -73,6 +79,8 @@ export const Plugin = {
           Effect.orDie,
           Effect.flatMap((state) => {
             if (state.status === "cancelled") return Effect.die(new CancelledError())
+            if (state.status === "timed_out")
+              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), timedOutAfterSeconds: state.seconds })
             return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
               const value = state.answer[`q${index}`]
               if (value === undefined) return []

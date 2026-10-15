@@ -448,9 +448,11 @@ Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` c
 
 ## Tools
 
+Use `/guardrail-decision` to toggle decision-model review for the root family, `/sleep` to enable durable sleep and its keep-awake hold, `/wake` to restore the pre-sleep setting, and `/keep-awake` to toggle the backend's manual keep-awake preference. These TUI controls are built-ins, not discovered command templates. See [configuration](./configuration.md) for thresholds, fallback, inheritance, and machine warnings.
+
 The built-in `decision` tool accepts `{ provider: "agent", request }`. Requests contain JSON `state` and ordered named questions and expose validated model-estimate results as TOON. Permission action `decision` uses resource `agent`; an explicit denial blocks the call. Credentials stay outside agent arguments and results. Send only evidence authorized for disclosure to the helper model route. The hidden primary `decision` agent has no tools, is reserved for internal evaluation rather than foreground Session or command selection, and uses `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. Its confidence is self-reported and uncalibrated. See [agent input and TOON](../specs/decisions.md#decision-agent-inputs) and [configuration](./configuration.md#decisions).
 
-Only explicit agent calls invoke decision judgments. Main, child, and side-chat Sessions share the tool and its `core/decision-use` guidance; effective permission denies and inherited ceilings remain enforced. Predicates, choices, and scores can abstain with `type: refusal`, null answer values, and confidence `0`. Refusal means insufficient evidence or inability to judge, not a selected option or approval; gather missing evidence or ask the user.
+Agent judgments require explicit `decision` calls. The runtime also uses the helper for standard guardrail match verification, user-enabled guardrail-decision reviews, and sleeping-family option answers under their documented thresholds and fallback rules. Main, child, and side-chat Sessions share the tool and its `core/decision-use` guidance; effective permission denies and inherited ceilings remain enforced. Predicates, choices, and scores can abstain with `type: refusal`, null answer values, and confidence `0`. Refusal means insufficient evidence or inability to judge, not a selected option or approval; gather missing evidence or ask the user.
 
 YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 

@@ -11,6 +11,7 @@ import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Credential } from "@ycoding-ai/core/credential"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
+import { Decision } from "@ycoding-ai/core/decision"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
@@ -401,6 +402,9 @@ function knowledgeLayer(url: string) {
   const unusedIntegration = () => Effect.die("unused Integration method")
   return MCP.layer.pipe(
     Layer.provideMerge(Form.layer),
+    Layer.provideMerge(
+      Layer.mock(Decision.Service, { evaluate: () => Effect.die("MCP forms must not request judgments") }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(

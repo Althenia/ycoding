@@ -178,10 +178,26 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
             unconfirmed(`The machine answered unreadably, so the result of turning it ${verb} is unconfirmed. The state shown is what it last reported.`)
             return { reached: false, reload: true }
           }
-          const reached = answered.state === (enabled ? "on" : "off")
+          const heldBySleep = !enabled && answered.state === "on" && answered.sleepHold === true
+          const reached = answered.manual === undefined
+            ? heldBySleep || answered.state === (enabled ? "on" : "off")
+            : answered.manual === enabled
           const mismatch = (answered.state === "on" || answered.state === "off") && !reached
-          write({ read: "ready", status: answered,
-            ...(mismatch ? { change: { state: "failed" as const, enabled, message: `The machine reports it is ${answered.state === "on" ? "On" : "Off"}.` } } : {}) })
+          write({
+            read: "ready",
+            status: answered,
+            ...(mismatch
+              ? {
+                  change: {
+                    state: "failed" as const,
+                    enabled,
+                  message: answered.manual === undefined
+                    ? `The machine reports it is ${answered.state === "on" ? "On" : "Off"}.`
+                    : `The machine reports its manual preference is ${answered.manual ? "On" : "Off"}.`,
+                  },
+                }
+              : {}),
+          })
           return { reached, reload: false }
         }
         if (unknownOperation(outcome)) {
