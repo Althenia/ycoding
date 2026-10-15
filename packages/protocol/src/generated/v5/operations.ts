@@ -4450,7 +4450,7 @@ export const operations: readonly OperationDescriptor[] = [
   {
     $typeName: "ycoding.v5.OperationDescriptor",
     errorTypes: ["ycoding.v5.Connector_Error"],
-    roles: [2, 3],
+    roles: [1, 2, 3],
     sensitiveFields: [],
     roleScopes: [],
     eventTypes: [],
@@ -4468,7 +4468,7 @@ export const operations: readonly OperationDescriptor[] = [
   {
     $typeName: "ycoding.v5.OperationDescriptor",
     errorTypes: ["ycoding.v5.Connector_Error"],
-    roles: [2, 3],
+    roles: [1, 2, 3],
     sensitiveFields: [],
     roleScopes: [],
     eventTypes: [],
@@ -4558,7 +4558,7 @@ export const operations: readonly OperationDescriptor[] = [
   {
     $typeName: "ycoding.v5.OperationDescriptor",
     errorTypes: ["ycoding.v5.Connector_Error"],
-    roles: [2, 3],
+    roles: [1, 2, 3],
     sensitiveFields: [],
     roleScopes: [],
     eventTypes: [],
@@ -4723,7 +4723,7 @@ export const operationIDsByRole: Readonly<Record<PeerRole, readonly number[]>> =
     4016, 4017, 4018, 4019, 4020, 4021, 4022, 4023, 4024, 4025, 4026, 4027, 4028, 4029, 4030, 4031, 4032, 4033, 4034,
     4035, 4036, 4037, 4038, 4039, 4040, 4041, 4042, 4043, 4044, 4045, 4046, 4047, 4048, 4049, 4050, 4051, 4052, 4053,
     4054, 4055, 4056, 4057, 4058, 4059, 4060, 4061, 4062, 4063, 4064, 4065, 4066, 4067, 4068, 4069, 4070, 4071, 4072,
-    4073, 4074, 4075, 4076, 4077, 4078, 4079, 4080, 4081, 4082, 4083,
+    4073, 4074, 4075, 4076, 4077, 4078, 4079, 4080, 4081, 4082, 4083, 5008, 5013, 5018,
   ],
   "2": [
     2055, 2058, 2059, 3013, 3025, 3026, 3043, 3046, 3047, 3048, 3049, 4000, 4001, 4008, 4010, 4011, 4012, 4014, 4015,

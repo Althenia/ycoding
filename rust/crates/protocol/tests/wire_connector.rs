@@ -203,12 +203,73 @@ fn generated_role_allowlists_are_closed_and_match_descriptors() {
         }
     }
     for operation in OPERATIONS.iter().filter(|item| item.operation_id >= 5000) {
-        assert!(
-            !operation
+        assert_eq!(
+            operation
                 .roles
-                .contains(&(v5::PeerRole::LocalClient as i32))
+                .contains(&(v5::PeerRole::LocalClient as i32)),
+            [5008, 5013, 5018].contains(&operation.operation_id)
         );
         assert!(!operation.roles.contains(&(v5::PeerRole::Agent as i32)));
         assert!(!operation.roles.contains(&(v5::PeerRole::Server as i32)));
     }
+}
+
+#[test]
+fn local_family_reads_preserve_ids_shapes_errors_and_remote_authority() {
+    for (name, id, request, result, paging) in [
+        (
+            "session.capturedChanges.list",
+            5008,
+            "session_capturedChanges_list_Request",
+            "session_capturedChanges_list_Result",
+            2,
+        ),
+        (
+            "session.team.economics",
+            5013,
+            "session_team_economics_Request",
+            "session_team_economics_Result",
+            1,
+        ),
+        (
+            "session.family.activity",
+            5018,
+            "session_family_activity_Request",
+            "session_family_activity_Result",
+            1,
+        ),
+    ] {
+        let operation = OPERATIONS
+            .iter()
+            .find(|item| item.diagnostic_name == name)
+            .unwrap();
+        assert_eq!(operation.operation_id, id);
+        assert_eq!(operation.roles, vec![1, 2, 3]);
+        assert_eq!(operation.request_type, format!("ycoding.v5.{request}"));
+        assert_eq!(operation.result_type, format!("ycoding.v5.{result}"));
+        assert_eq!(operation.error_types, vec!["ycoding.v5.Connector_Error"]);
+        assert_eq!(
+            (
+                operation.scope,
+                operation.mutation,
+                operation.settlement,
+                operation.paging,
+                operation.streaming
+            ),
+            (3, 1, 1, paging, 2)
+        );
+    }
+    let typescript = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../packages/protocol/src/generated/v5/contract.ts"),
+    )
+    .unwrap();
+    assert!(typescript.starts_with(&format!(
+        "export const CONTRACT_DIGEST = {:?}",
+        ycoding_protocol::CONTRACT_DIGEST
+    )));
+    assert_ne!(
+        ycoding_protocol::CONTRACT_DIGEST,
+        "03ed82fc9cc1926cab3a2a448f0d45c96fb514cf0fd00880e846f2fea19b6054"
+    );
 }

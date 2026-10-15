@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "03ed82fc9cc1926cab3a2a448f0d45c96fb514cf0fd00880e846f2fea19b6054"
+export const CONTRACT_DIGEST = "21b9db68353a2a1b4e7d814af8f43211a1d3774fbb28c0f9492fe03fea6b916d"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,

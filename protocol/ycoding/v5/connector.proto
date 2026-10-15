@@ -823,6 +823,7 @@ service connector {
       operation_id: 5008
       diagnostic_name: "session.capturedChanges.list"
       error_types: "ycoding.v5.Connector_Error"
+      roles: LOCAL_CLIENT
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: SESSION
@@ -838,6 +839,7 @@ service connector {
       operation_id: 5013
       diagnostic_name: "session.team.economics"
       error_types: "ycoding.v5.Connector_Error"
+      roles: LOCAL_CLIENT
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: SESSION
@@ -913,6 +915,7 @@ service connector {
       operation_id: 5018
       diagnostic_name: "session.family.activity"
       error_types: "ycoding.v5.Connector_Error"
+      roles: LOCAL_CLIENT
       roles: REMOTE_CLIENT
       roles: RELAY
       scope: SESSION

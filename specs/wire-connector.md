@@ -2,7 +2,7 @@
 
 The revision-5 connector contract maps the closed 70-name source inventory to 66 canonical connector descriptors and four relay-owned notice descriptors. `protocol/ycoding/v5/connector.proto` owns derived operations, raw upload staging, catalog composition and notices in the explicit 5000–5099 range. Shared local operations retain their IDs and use the same typed request and result for remote peers. Service declarations are descriptor metadata, not gRPC servers or an implemented dispatcher.
 
-TypeScript exports `operationIDsByRole`; Rust exports `OPERATION_IDS_BY_ROLE`. REMOTE_CLIENT may originate 70 canonical operations, including the four relay-owned notices. RELAY may forward exactly 66 connector operations. AGENT and SERVER send responses and permitted controls but no operation requests. Every unaffected local operation remains LOCAL_CLIENT-only. The existing `session.prediction` and `session.promptGenerate` remote roles are retained.
+TypeScript exports `operationIDsByRole`; Rust exports `OPERATION_IDS_BY_ROLE`. REMOTE_CLIENT may originate 70 canonical operations, including the four relay-owned notices. RELAY may forward exactly 66 connector operations. LOCAL_CLIENT may also originate the canonical captured-change, team-economics and family-activity reads specified below. AGENT and SERVER send responses and permitted controls but no operation requests. Every unaffected local operation remains LOCAL_CLIENT-only. The existing `session.prediction` and `session.promptGenerate` remote roles are retained.
 
 Request direction follows `packages/remote/src/index.ts:478–480,645–673`, `infra/cloudflare/src/relay/core.ts:554–613,754–827` and `packages/cli/src/remote-bridge.ts:305–328`. Claimed role never substitutes for authenticated ownership. The local, client and agent routes use the foundation PeerRole vocabulary. Generated allowlists do not authenticate an upgrade or authorize a Session.
 
@@ -35,7 +35,7 @@ Roles: S = LOCAL_CLIENT + REMOTE_CLIENT + RELAY; C = REMOTE_CLIENT + RELAY; N = 
 | session.active                 | session.active                  | 4008 | B-reuse    | S     | READ     |
 | session.get                    | session.get                     | 4030 | A          | S     | READ     |
 | session.messages               | session.messages                | 4041 | A          | S     | READ     |
-| session.capturedChanges.list   | session.capturedChanges.list    | 5008 | C          | C     | READ     |
+| session.capturedChanges.list   | session.capturedChanges.list    | 5008 | C          | S     | READ     |
 | session.compaction.list        | session.compaction.list         | 4081 | B-reuse    | S     | READ     |
 | session.compact                | session.compact                 | 4015 | B-reuse    | S     | MUTATION |
 | session.snapshot               | session.snapshot                | 4063 | B-reuse    | S     | READ     |
@@ -48,12 +48,12 @@ Roles: S = LOCAL_CLIENT + REMOTE_CLIENT + RELAY; C = REMOTE_CLIENT + RELAY; N = 
 | session.unpin                  | session.unpin                   | 4076 | B-reuse    | S     | MUTATION |
 | session.subagent.cancel        | session.subagent.cancel         | 4065 | B-reuse    | S     | MUTATION |
 | session.subagent.answer        | session.subagent.answer         | 4064 | B-reuse    | S     | MUTATION |
-| session.team.economics         | session.team.economics          | 5013 | C          | C     | READ     |
+| session.team.economics         | session.team.economics          | 5013 | C          | S     | READ     |
 | session.team.shell.list        | session.team.shell.list         | 5014 | C          | C     | READ     |
 | session.team.shell.kill        | session.team.shell.kill         | 5015 | B-distinct | C     | MUTATION |
 | session.side-chat.list         | session.side-chat.list          | 5016 | C          | C     | READ     |
 | session.side-chat.create       | session.side-chat.create        | 5017 | C          | C     | MUTATION |
-| session.family.activity        | session.family.activity         | 5018 | C          | C     | READ     |
+| session.family.activity        | session.family.activity         | 5018 | C          | S     | READ     |
 | session.log                    | session.log                     | 4039 | B-reuse    | S     | READ     |
 | session.subscribe              | event.subscribe                 | 4000 | B-reuse    | S     | MUTATION |
 | session.unsubscribe            | event.unsubscribe               | 4001 | B-reuse    | S     | MUTATION |
@@ -98,6 +98,28 @@ Roles: S = LOCAL_CLIENT + REMOTE_CLIENT + RELAY; C = REMOTE_CLIENT + RELAY; N = 
 | notice.list                    | notice.list                     | 5040 | C          | N     | READ     |
 | notice.read                    | notice.read                     | 5041 | C          | N     | MUTATION |
 | notice.readAll                 | notice.readAll                  | 5042 | C          | N     | MUTATION |
+
+## Canonical local family reads
+
+`LOCAL_CLIENT`, `REMOTE_CLIENT` and `RELAY` use the same three descriptors and messages. Only `LOCAL_CLIENT` gains admission; no new operation, PeerRole value, message, field tag, event or error branch is allocated. The descriptors have Session scope, READ mutation, COMPLETED settlement, TYPED_BULK streaming and PRIVATE sensitivity. AGENT and SERVER cannot originate them. The local server authenticates the connection before descriptor admission; a claimed local role alone grants nothing. Remote requests still require authenticated user/device ownership, connector authority and verified Session placement.
+
+Every request carries the target Session ID in `Request.scope.session`, not in its typed payload. Resolve that Session's Location from backend state. Accept no caller-supplied directory or workspace selector. Reject deleted, moved or unavailable placement before reading family data. Captured changes support a root or child Session; economics and activity require a root. Economics accepts the root and its direct managed children (excluding side-chat children); activity accepts direct children, excluding the root in its explicit list, and prepends the root to the result. Reject duplicate or foreign members. Local structural member bounds are 128 IDs, each 1–128 UTF-16 units; remote admission remains at most 15 explicit IDs. Economics requires at least one explicit ID, including the root for a root-only read; activity permits a present-empty list for a root-only read. These are bounded selections, not claims that unrequested members were read. A client requiring complete family economics enumerates the durable subagent inventory, requests every eligible member in bounded batches and includes the root once; resident transcript or Session windows are not the family inventory.
+
+All text below is `LosslessString`; collection messages wrap repeated `items` at tag 1. Request wrappers require `payload` at tag 1. Result wrappers require `data` at tag 1. Optional means absent is distinct from a present-empty wrapper.
+
+| ID / operation                        | Request payload                                         | Result and paging                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5008 / `session.capturedChanges.list` | Optional `cursor` (tag 1), opaque, 1–256 UTF-16 units   | `data: Connector_CapturedGroup[]`; optional `cursor` (tag 2) with optional `next` (tag 1). CURSOR paging binds the continuation to the canonical projection digest; stale or invalid cursors fail rather than mix snapshots. Consume pages until `cursor.next` is absent.                                                                                                                                      |
+| 5013 / `session.team.economics`       | Required `sessionIDs` collection (tag 1), 1–128 entries | `data` array of economics rows; UNPAGED. Each row has required `sessionID` (1), finite `cost` (2), `TokenUsage_Info tokens` (3), and optional finite `contextTotal` (4), `contextLimit` (5), `cacheHitRatio` (6), `cacheRead` (7), `cacheWrite` (8). Token usage has required input/output/reasoning (1/2/3) and cache (4), with required read/write (1/2). Unknown diagnostics are absent, never zero-filled. |
+| 5018 / `session.family.activity`      | Required `sessionIDs` collection (tag 1), 0–128 entries | `data` array; UNPAGED. Each row has required `sessionID` (1), `executing` bool (2), optional `activity` (3). Activity has required kind (1: tool=1, thinking=2, replying=3), room (2: research=1, qa=2, meeting=3, developer=4, hold=5) and text (3), at most 80 Unicode code points. Inactive members omit activity.                                                                                          |
+
+`Connector_CapturedGroup` has required `placementMessageID` (1), `path` (2), safe nonnegative uint64 `additions` (3), `deletions` (4), status (5: created=1, deleted=2, modified=3) and `files` collection (6). Each `Connector_CapturedFile` has required `diff` (1), `path` (2), additions (3), deletions (4), the same status vocabulary (5), and optional `unavailable` bool (6). Placement, eligible-child correlation and grouping come from retained canonical history, independently of which parent or child messages a client has loaded. Preserve unavailable-file markers instead of inventing patches.
+
+The exact declared error union for all three operations is the single `ycoding.v5.Connector_Error` message: required `code` enum (tag 1) and required `message` (tag 2, at most 512 UTF-16 units). Its frozen codes are invalid_message=1, message_too_large=2, unknown_operation=3, session_required=4, session_not_allowed=5, subagent_read_only=6, not_found=7, not_subscribed=8, rate_limited=9, agent_unavailable=10, outcome_unknown=11, forbidden=12, telemetry_disabled=13, unauthorized=14 and internal_error=15. Local admission does not add HTTP middleware errors or remap failures into success. Structural/direction failures remain foundation connection failures; authentication failure precedes operation dispatch.
+
+The generated local client exposes `session.capturedChanges.list({ sessionID, cursor? })`, `session.team.economics({ sessionID, sessionIDs })` and `session.family.activity({ sessionID, sessionIDs })`, each with optional `RequestOptions` and a Promise of the complete domain result wrapper. Keep captured-change cursors; economics and activity return `{ data }`. Domain enums are string literals, uint64 counts are safe numbers, strings preserve lone UTF-16 units, and typed Connector errors reject unchanged. These additions are v5-only and do not enter the reference HTTP client.
+
+Canonical role declarations come from `connector-contract.ts` through `connector-materialize.ts --write`. Run `bun run --cwd packages/protocol generate:v5`, then `bun run --cwd packages/client generate:v5` and `python3 protocol/ycoding/v5/testdata/generate.py`. The contract digest hashes each sorted `.proto` path relative to `protocol`, a NUL byte and its exact bytes. Rust `rust/crates/protocol/build.rs` reads those same files to derive Prost messages, operation descriptors, role allowlists, event membership and digest; no independent Rust contract copy is maintained. Peers with a different digest fail negotiation rather than use a compatibility path.
 
 ## Remote admission obligations on shared descriptors
 

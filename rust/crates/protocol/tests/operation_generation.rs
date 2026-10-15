@@ -229,8 +229,8 @@ fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
         patterns,
         BTreeMap::from([
             (vec![1], 152),
-            (vec![1, 2, 3], 49),
-            (vec![2, 3], 17),
+            (vec![1, 2, 3], 52),
+            (vec![2, 3], 14),
             (vec![2], 4),
         ]),
         "a new operation role pattern or count needs an explicit assertion mapping"

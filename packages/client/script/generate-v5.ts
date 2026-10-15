@@ -317,6 +317,49 @@ function emit(object: ts.ObjectLiteralExpression, path: string[] = []): string {
   )
 }
 const surface = emit(result)
+const familyMethods = [
+  ["capturedChanges", "list", "CapturedChanges"],
+  ["team", "economics", "TeamEconomics"],
+  ["family", "activity", "FamilyActivity"],
+] as const
+function familyDomainType(schema: Schema): string {
+  if (schema.typeName === "ycoding.v5.LosslessString") return "string"
+  if (schema.oneofs.length) throw new Error(`Unsupported family union: ${schema.typeName}`)
+  const fields = schema.fields.map((field) => {
+    const type =
+      field.fieldKind === "message" || (field.fieldKind === "list" && field.listKind === "message")
+        ? familyDomainType(field.message)
+        : field.fieldKind === "enum" || (field.fieldKind === "list" && field.listKind === "enum")
+          ? field.enum.values
+              .map((value) => {
+                const label = value.name.slice(field.enum.name.length + 1).toLowerCase()
+                ;(labels[field.enum.typeName] ??= {})[value.number] = label
+                return JSON.stringify(label)
+              })
+              .join(" | ")
+          : field.scalar === 8
+            ? "boolean"
+            : field.scalar === 9
+              ? "string"
+              : "number"
+    return { field, type: field.fieldKind === "list" ? `(${type})[]` : type }
+  })
+  if (fields.length === 1 && fields[0].field.fieldKind === "list") return fields[0].type
+  return `{ ${fields.map(({ field, type }) => `${field.name}${field.proto.label === 2 || field.fieldKind === "list" ? "" : "?"}: ${type}`).join("; ")} }`
+}
+const familyTypes: string[] = []
+const familySurface = familyMethods.map(([group, method, type]) => {
+  const name = `session.${group}.${method}`
+  const operation = operations.find((item) => item.diagnosticName === name)!
+  if (!operation?.roles.includes(PeerRole.LOCAL_CLIENT)) throw new Error(`Missing local family operation: ${name}`)
+  const request = messages.get(operation.requestType)!
+  const payload = request.fields.find((field) => field.name === "payload")!.message!
+  familyTypes.push(`export type ${type}Input = { sessionID: string } & ${familyDomainType(payload)}`)
+  familyTypes.push(`export type ${type}Output = ${familyDomainType(messages.get(operation.resultType)!)}`)
+  const data = payload.fields.map((field) => `${field.name}: input.${field.name}`).join(", ")
+  return `${group}: { ${method}: (input: ${type}Input, requestOptions?: RequestOptions) => transport.call<${type}Output>({ method: ${JSON.stringify(name)}, operationID: ${operation.operationId}, resultPath: [], empty: false }, { payload: { ${data} } }, input, requestOptions) }`
+})
+familyTypes.push(`export type FamilyOperationError = ${familyDomainType(messages.get("ycoding.v5.Connector_Error")!)}`)
 const boundaryMethods = [
   ["provider", "configure", "ProviderConfigureInput", "ProviderConfigureOutput", true],
   ["mcp", "configure", "McpConfigureInput", "McpConfigureOutput", true],
@@ -353,7 +396,7 @@ const boundaryImports = [
 ]
 await Bun.write(
   `${import.meta.dir}/../src/v5/generated/frontend-boundary.ts`,
-  `import type { YCodingClient } from "../../promise/index.js"\nimport type { RequestOptions } from "../../promise/generated/client.js"\nimport type { LocationGetInput, SkillListInput } from "../../promise/generated/types.js"\nimport type { ${boundaryImports.join(", ")} } from "../frontend-boundary.js"\nimport type { LocalTransport } from "../socket.js"\nexport function bindFrontendBoundary(transport: LocalTransport, client: YCodingClient): Omit<YCodingClient, keyof FrontendBoundaryClient> & { [K in keyof FrontendBoundaryClient]: K extends keyof YCodingClient ? Omit<YCodingClient[K], keyof FrontendBoundaryClient[K]> & FrontendBoundaryClient[K] : FrontendBoundaryClient[K] } { return { ...client, ${boundarySurface.join(",\n")}, location: { ...client.location, get: (input?: LocationGetInput, requestOptions?: RequestOptions) => client.location.get(input, requestOptions) as Promise<BackendLocationOutput> }, skill: { ...client.skill, list: (input?: SkillListInput, requestOptions?: RequestOptions) => client.skill.list(input, requestOptions) as Promise<BackendSkillListOutput> } } }\n`,
+  `import type { YCodingClient } from "../../promise/index.js"\nimport type { RequestOptions } from "../../promise/generated/client.js"\nimport type { LocationGetInput, SkillListInput } from "../../promise/generated/types.js"\nimport type { ${boundaryImports.join(", ")} } from "../frontend-boundary.js"\nimport type { LocalTransport } from "../socket.js"\n${familyTypes.join("\n")}\nfunction bindFamily(transport: LocalTransport, session: YCodingClient["session"]) { return { ...session, ${familySurface.join(",\n")} } }\nexport function bindFrontendBoundary(transport: LocalTransport, client: YCodingClient): Omit<YCodingClient, keyof FrontendBoundaryClient | "session"> & { session: ReturnType<typeof bindFamily> } & { [K in keyof FrontendBoundaryClient]: K extends keyof YCodingClient ? Omit<YCodingClient[K], keyof FrontendBoundaryClient[K]> & FrontendBoundaryClient[K] : FrontendBoundaryClient[K] } { return { ...client, session: bindFamily(transport, client.session), ${boundarySurface.join(",\n")}, location: { ...client.location, get: (input?: LocationGetInput, requestOptions?: RequestOptions) => client.location.get(input, requestOptions) as Promise<BackendLocationOutput> }, skill: { ...client.skill, list: (input?: SkillListInput, requestOptions?: RequestOptions) => client.skill.list(input, requestOptions) as Promise<BackendSkillListOutput> } } }\n`,
 )
 associate(messages.get("ycoding.v5.PublicEvent")!, aliases.get("ServerEvent")!)
 for (const schema of schemas) {
