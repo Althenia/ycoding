@@ -45,7 +45,7 @@ const selected = process.argv
   .find((argument) => argument.startsWith("--group="))
   ?.slice(8)
   .split(",")
-const groups = ["storage", "predecessor", "stall", "http", "limits", "authority", "d1"]
+const groups = ["storage", "predecessor", "stall", "disposal", "http", "limits", "authority", "d1"]
 expect(!selected?.some((name) => !groups.includes(name)), "Unknown native wire-flow group")
 const enabled = (name: string) => selected === undefined || selected.includes(name)
 await mkdir(path.join(root, ".cache/tmp"), { recursive: true })
@@ -550,16 +550,10 @@ async function subscribe(agent: TestPeer, client: TestPeer, id: string, announce
 }
 
 async function stallReceipts() {
-  for (const kind of [
-    "status",
-    "completions",
-    "blocked",
-    "inventoryInvalidated",
-    "resyncRequired",
-    "priority",
-    "failure",
-  ] as const) {
-    const fixture = await device(`stall_${kind}`)
+  for (const { kind, disposal } of (
+    ["status", "completions", "blocked", "inventoryInvalidated", "resyncRequired", "priority", "failure"] as const
+  ).flatMap((kind) => [false, true].map((disposal) => ({ kind, disposal })))) {
+    const fixture = await device(`stall_${kind}_${disposal}`)
     const agent = peer(fixture, PeerRole.AGENT)
     await agent.ready
     const browser = peer(fixture, PeerRole.REMOTE_CLIENT)
@@ -611,6 +605,16 @@ async function stallReceipts() {
     )
     await notice(healthy)
     expect(sender.connection.ledger(LedgerClass.NORMAL).handedBytes === charge, `${kind} was refunded by another peer`)
+    if (disposal) {
+      await fixtureCommand(fixture, "dispose")
+      await Promise.all([agent, browser, healthy].map((actor) => nativeClosed(actor, `${kind} disposal`)))
+      expect(sender.connection.reservation.used === 0, `${kind} disposal retained sender ownership`)
+      expect((await inspection(fixture)).budget.used === 0, `${kind} disposal retained relay ownership`)
+      await fixtureCommand(fixture, "release", {})
+      expect((await inspection(fixture)).budget.used === 0, `${kind} late callback resurrected ownership`)
+      receipts.push(`TEST-055 socket ${kind}: outstanding native receipt survives healthy peer; disposal releases`)
+      continue
+    }
     await fixtureCommand(fixture, "release", {})
     if (kind === "failure")
       expect(
@@ -917,6 +921,202 @@ async function stallReceipts() {
   expect((await inspection(fixture)).budget.used === 0, "Native stalled teardown retained application reservations")
 }
 
+async function outstandingSocketDisposal() {
+  for (const kind of [
+    "request",
+    "subscriptionSnapshot",
+    "result",
+    "eventBatch",
+    "streamEnd",
+    "notice",
+    "bulkStart",
+    "bulkPiece",
+    "bulkEnd",
+  ] as const) {
+    const fixture = await device(`dispose_${kind}`)
+    const agent = peer(fixture, PeerRole.AGENT)
+    await agent.ready
+    const browser = peer(fixture, PeerRole.REMOTE_CLIENT)
+    const healthy = peer(fixture, PeerRole.REMOTE_CLIENT)
+    await Promise.all([browser.ready, healthy.ready])
+    if (kind === "eventBatch" || kind === "streamEnd") await subscribe(agent, browser, "dispose-interest")
+    const recipient = kind === "request" || kind === "subscriptionSnapshot" ? agent : browser
+    recipient.autoConsume = false
+    const before = recipient.raw.length
+    if (kind === "request") {
+      browser.request("session.todo.list", scope, todo)
+      await agent.next("dispatch")
+    }
+    if (kind === "subscriptionSnapshot") {
+      browser.request(
+        "event.subscribe",
+        scope,
+        encodeStrict(event_subscribe_RequestSchema, create(event_subscribe_RequestSchema, { scope })),
+      )
+      const request = await agent.next("dispatch")
+      agent.connection.consume(LedgerClass.NORMAL, request.ordinal, performance.now())
+      agent.flush()
+    }
+    if (kind === "result") {
+      const id = browser.request("session.todo.list", scope, todo)
+      agent.result(
+        await agent.next("dispatch"),
+        encodeStrict(session_todo_list_ResultSchema, create(session_todo_list_ResultSchema, { data: { items: [] } })),
+      )
+      expect((await browser.next("settled", id)).status === "success", "Disposal Result never reached its recipient")
+    }
+    if (kind === "eventBatch") {
+      agent.connection.enqueueEvent(
+        create(EventRecordSchema, {
+          eventId: "evt_disposal",
+          createdMs: 1n,
+          event: {
+            typeName: PublicEventSchema.typeName,
+            payload: encodeStrict(
+              PublicEventSchema,
+              create(PublicEventSchema, {
+                kind: {
+                  case: "catalogUpdated",
+                  value: { id: encodeLossless("evt_disposal"), created: 1, type: 1, data: {} },
+                },
+              }),
+            ),
+          },
+        }),
+        { subscriptionID: "dispose-interest", scope, sourceEpoch: "native-epoch" },
+        performance.now(),
+      )
+      agent.flush()
+      await browser.next("events")
+    }
+    if (kind === "streamEnd") {
+      await fixtureCommand(fixture, "hold", { kind, role: "agent" })
+      send({ case: "streamEnd", value: create(StreamEndSchema, { subscriptionId: "dispose-interest" }) }, agent)
+      await until(
+        async () => ((await dump(fixture)).held.length ? true : undefined),
+        "Disposal StreamEnd did not reach native receipt",
+      )
+    }
+    if (kind === "notice") {
+      browser.autoConsume = true
+      const id = browser.request("notice.subscribe", machine, encodeStrict(EmptySchema, create(EmptySchema)))
+      expect((await browser.next("settled", id)).status === "success", "Disposal notice subscription failed")
+      await until(async () => {
+        const actual = await inspection(fixture)
+        return actual.budget.peers
+          .find((entry) => entry.epoch === browser.connection.connectionEpoch)
+          ?.ledgers.find((entry) => entry.kind === LedgerClass.NORMAL)?.handed === 0
+          ? true
+          : undefined
+      }, "Notice subscription setup retained an earlier Result receipt")
+      browser.autoConsume = false
+      send(
+        {
+          case: "control",
+          value: create(ControlSchema, {
+            kind: { case: "blocked", value: { sessionId: "ses_disposal_notice" } },
+          }),
+        },
+        agent,
+      )
+    }
+    if (kind === "bulkStart" || kind === "bulkPiece" || kind === "bulkEnd") {
+      browser.autoConsume = true
+      browser.request("session.todo.list", scope, todo)
+      const request = await agent.next("dispatch")
+      const bytes = encodeStrict(
+        session_todo_list_ResultSchema,
+        create(session_todo_list_ResultSchema, { data: { items: [] } }),
+      )
+      const start: Frame["body"] = {
+        case: "bulkStart",
+        value: create(BulkStartSchema, {
+          requestId: request.requestID,
+          transferId: "disposal-bulk",
+          operationId: request.operation.operationId,
+          typeName: request.operation.resultType,
+          contentKind: ContentKind.TYPED_MESSAGE,
+          byteCount: BigInt(bytes.length),
+          chunkCount: 1,
+        }),
+      }
+      if (kind === "bulkStart") await fixtureCommand(fixture, "hold", { kind, role: "agent" })
+      send(start, agent)
+      if (kind !== "bulkStart") {
+        await agent.wait(() => agent.connection.ledger(LedgerClass.NORMAL).handedBytes === 0)
+        if (kind === "bulkPiece") await fixtureCommand(fixture, "hold", { kind, role: "agent" })
+        send(
+          {
+            case: "bulkPiece",
+            value: create(BulkPieceSchema, {
+              transferId: "disposal-bulk",
+              index: 0,
+              offset: 0n,
+              data: bytes,
+            }),
+          },
+          agent,
+        )
+      }
+      if (kind === "bulkEnd") {
+        await agent.wait(() => agent.connection.ledger(LedgerClass.BULK).handedBytes === 0)
+        await fixtureCommand(fixture, "hold", { kind, role: "agent" })
+        send(
+          {
+            case: "bulkEnd",
+            value: create(BulkEndSchema, {
+              transferId: "disposal-bulk",
+              byteCount: BigInt(bytes.length),
+              outcome: { case: "success", value: {} },
+            }),
+          },
+          agent,
+        )
+      }
+      await until(
+        async () => ((await dump(fixture)).held.length ? true : undefined),
+        "Disposal Bulk did not reach native receipt",
+      )
+    }
+    const ledger =
+      kind === "eventBatch" || kind === "streamEnd"
+        ? LedgerClass.EVENT
+        : kind === "bulkPiece"
+          ? LedgerClass.BULK
+          : LedgerClass.NORMAL
+    const held = kind === "bulkStart" || kind === "bulkPiece" || kind === "bulkEnd" || kind === "streamEnd"
+    if (!held)
+      await recipient.wait(() =>
+        recipient.raw
+          .slice(before)
+          .some(
+            (frame) =>
+              frame.body.case === kind || (frame.body.case === "control" && frame.body.value.kind.case === kind),
+          ),
+      )
+    const owned = async () => {
+      if (held) return agent.connection.ledger(ledger).handedBytes
+      const measured = await inspection(fixture)
+      return (
+        measured.budget.peers
+          .find((entry) => entry.epoch === recipient.connection.connectionEpoch)
+          ?.ledgers.find((entry) => entry.kind === ledger)?.handed ?? 0
+      )
+    }
+    const charge = await until(async () => (await owned()) || undefined, `${kind} has no outstanding charge`)
+    await notice(healthy)
+    expect((await owned()) === charge, `${kind} independent recipient released stalled ownership`)
+    await fixtureCommand(fixture, "dispose")
+    await Promise.all([agent, browser, healthy].map((actor) => nativeClosed(actor, `${kind} disposal`)))
+    expect((await inspection(fixture)).budget.used === 0, `${kind} disposal retained application reservations`)
+    for (const actor of [agent, browser, healthy])
+      expect(actor.connection.reservation.used === 0, `${kind} disposal retained endpoint ownership`)
+    if (held) await fixtureCommand(fixture, "release", {})
+    expect((await inspection(fixture)).budget.used === 0, `${kind} late callback resurrected application reservations`)
+    receipts.push(`TEST-055 socket ${kind}: exact outstanding charge survives healthy peer; disposal releases`)
+  }
+}
+
 async function nativeLimits() {
   for (const role of [PeerRole.REMOTE_CLIENT, PeerRole.AGENT] as const) {
     const fixture = await device(`native_limit_${role}`)
@@ -971,7 +1171,7 @@ async function nativeLimits() {
 }
 
 async function nativeHttpConsumers() {
-  for (const mode of ["success", "cancel", "truncated"] as const) {
+  for (const mode of ["success", "cancel", "truncated", "dispose"] as const) {
     const fixture = await device(`http_${mode}`)
     const agent = peer(fixture, PeerRole.AGENT)
     await agent.ready
@@ -1088,6 +1288,18 @@ async function nativeHttpConsumers() {
       agent.connection.ledger(LedgerClass.BULK).handedBytes === charge,
       "Foreign transfer Credit released the stalled producer",
     )
+    if (mode === "dispose") {
+      await fixtureCommand(fixture, "dispose")
+      await Promise.all([agent, browser, healthy].map((actor) => nativeClosed(actor, "HTTP outstanding disposal")))
+      await response.body?.cancel()
+      for (const actor of [agent, browser, healthy])
+        expect(actor.connection.reservation.used === 0, "HTTP disposal retained endpoint ownership")
+      expect((await inspection(fixture)).budget.used === 0, "HTTP disposal retained application reservations")
+      receipts.push(
+        "TEST-055 HTTP Bulk: unread native body preserves producer charge and healthy peer progress; disposal releases",
+      )
+      continue
+    }
     const applied: Decision[] = []
     const abort = new AbortController()
     if (mode === "cancel") abort.abort(new Error("Synthetic native consumer cancellation"))
@@ -1689,6 +1901,7 @@ try {
   }
 
   if (enabled("stall")) await stallReceipts()
+  if (enabled("disposal")) await outstandingSocketDisposal()
   if (enabled("http")) await nativeHttpConsumers()
   if (enabled("limits")) await nativeLimits()
   if (enabled("authority")) await authorityMatrix()

@@ -1071,6 +1071,120 @@ fn recursive_report_is_rejected_without_waiting_or_blocking_canonical_work() {
 }
 
 #[test]
+fn reviewed_report_count_sql_parameter_row_column_and_output_bounds() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let engine = root.engine(&store);
+    let query = || Query {
+        sql: "SELECT 1",
+        parameters: vec![],
+        max_rows: 1,
+    };
+    assert_eq!(
+        engine
+            .report((0..16).map(|_| query()).collect())
+            .unwrap()
+            .len(),
+        16
+    );
+    for queries in [
+        vec![],
+        (0..17).map(|_| query()).collect(),
+        vec![Query {
+            max_rows: 0,
+            ..query()
+        }],
+        vec![Query {
+            max_rows: 4097,
+            ..query()
+        }],
+        vec![Query {
+            parameters: vec![Value::BigInt(1); 65],
+            ..query()
+        }],
+    ] {
+        assert!(matches!(
+            engine.report(queries),
+            Err(analytics::Error::Configuration)
+        ));
+    }
+    for count in [64, 65] {
+        let sql = Box::leak(format!("SELECT {}", vec!["?"; count].join(",")).into_boxed_str());
+        let result = engine.report(vec![Query {
+            sql,
+            parameters: vec![Value::BigInt(1); count],
+            max_rows: 1,
+        }]);
+        if count == 64 {
+            assert_eq!(result.unwrap()[0][0], vec![Value::BigInt(1); 64]);
+        } else {
+            assert!(matches!(result, Err(analytics::Error::Configuration)));
+        }
+        let sql = Box::leak(format!("SELECT {}", vec!["1"; count].join(",")).into_boxed_str());
+        let result = engine.report(vec![Query { sql, ..query() }]);
+        if count == 64 {
+            assert_eq!(result.unwrap()[0][0].len(), 64);
+        } else {
+            assert!(matches!(result, Err(analytics::Error::Limit)));
+        }
+    }
+    for bytes in [analytics::ROW_BYTES, analytics::ROW_BYTES + 1] {
+        let sql = Box::leak(format!("SELECT 1{}", " ".repeat(bytes - 8)).into_boxed_str());
+        let result = engine.report(vec![Query { sql, ..query() }]);
+        if bytes == analytics::ROW_BYTES {
+            assert_eq!(result.unwrap()[0], vec![vec![Value::Int(1)]]);
+        } else {
+            assert!(matches!(result, Err(analytics::Error::Configuration)));
+        }
+    }
+    let rows = || Query {
+        sql: "SELECT * FROM range(4096)",
+        parameters: vec![],
+        max_rows: 4096,
+    };
+    assert_eq!(engine.report(vec![rows()]).unwrap()[0].len(), 4096);
+    assert!(matches!(
+        engine.report(vec![rows(), query()]),
+        Err(analytics::Error::Limit)
+    ));
+    assert!(matches!(
+        engine.report(vec![Query {
+            sql: "SELECT * FROM range(2)",
+            ..query()
+        }]),
+        Err(analytics::Error::Limit)
+    ));
+    for bytes in [analytics::REPORT_BYTES, analytics::REPORT_BYTES + 1] {
+        let input = engine.report(vec![Query {
+            sql: "SELECT length(?)",
+            parameters: vec![Value::Text("x".repeat(bytes))],
+            max_rows: 1,
+        }]);
+        let output = engine.report(vec![Query {
+            sql: "SELECT repeat('x', ?::BIGINT)",
+            parameters: vec![Value::BigInt(bytes as i64)],
+            max_rows: 1,
+        }]);
+        if bytes == analytics::REPORT_BYTES {
+            assert_eq!(input.unwrap()[0], vec![vec![Value::BigInt(bytes as i64)]]);
+            assert_eq!(
+                output.unwrap()[0],
+                vec![vec![Value::Text("x".repeat(bytes))]]
+            );
+        } else {
+            assert!(matches!(input, Err(analytics::Error::Limit)));
+            assert!(matches!(output, Err(analytics::Error::Limit)));
+        }
+    }
+    assert_report(&engine, &[]);
+    put(&store, 1, 10);
+    assert_report(&engine, &[10]);
+    engine.shutdown().unwrap();
+}
+
+#[test]
 fn report_scalar_output_budget_rejects_nested_values() {
     let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let root = Root::new();
@@ -1087,6 +1201,74 @@ fn report_scalar_output_budget_rejects_nested_values() {
         Err(analytics::Error::Configuration)
     ));
     assert_report(&engine, &[]);
+}
+
+#[test]
+fn reviewed_analytics_source_column_and_identifier_configuration_bounds() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    for (source_count, column_count, name_bytes, accepted) in [
+        (64, 1, 8, true),
+        (65, 1, 8, false),
+        (0, 1, 8, false),
+        (1, 64, 8, true),
+        (1, 65, 8, false),
+        (1, 0, 8, false),
+        (1, 1, 128, true),
+        (1, 1, 129, false),
+    ] {
+        let root = Root::new();
+        let store = root.store();
+        allow(&store);
+        let columns = Box::leak(
+            (0..column_count)
+                .map(|index| Column {
+                    name: Box::leak(format!("c_{index}").into_boxed_str()),
+                    kind: ColumnType::Integer,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let sources = Box::leak(
+            (0..source_count)
+                .map(|index| Source {
+                    name: Box::leak(
+                        format!("{}_{index:03}", "s".repeat(name_bytes - 4)).into_boxed_str(),
+                    ),
+                    version: 1,
+                    columns,
+                    allowed,
+                    load,
+                    page,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let result = Engine::start(store.client(), root.0.join("derived"), sources);
+        if accepted {
+            let engine = result.unwrap();
+            assert_eq!(
+                engine
+                    .report(vec![Query {
+                        sql: "SELECT 1::BIGINT",
+                        parameters: vec![],
+                        max_rows: 1
+                    }])
+                    .unwrap()[0],
+                vec![vec![Value::BigInt(1)]]
+            );
+            engine.shutdown().unwrap();
+        } else {
+            assert!(matches!(result, Err(analytics::Error::Configuration)));
+        }
+        assert!(
+            store
+                .snapshot()
+                .unwrap()
+                .get::<Consent>(b"scope")
+                .unwrap()
+                .unwrap()
+        );
+    }
 }
 
 #[test]

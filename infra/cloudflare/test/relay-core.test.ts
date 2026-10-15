@@ -185,6 +185,67 @@ test("owner/device isolation fails before receiving any application frame", asyn
   ])
 })
 
+test("reviewed relay peer count and metadata reservations reject the sixty-fifth browser", async () => {
+  const h = await harness()
+  for (let index = 0; index < 64; index++) await h.attach(`browser-${index}`, "client", {}, undefined, false)
+  expect(h.close).toEqual([])
+  expect(h.relay.reservation.used).toBe(64 * 1024)
+  await h.attach("overflow", "client", {}, undefined, false)
+  expect(h.close).toEqual([{ id: "overflow", code: 1009, reason: "LIMIT" }])
+  expect(h.relay.reservation.used).toBe(64 * 1024)
+  h.relay.closeDevice()
+  expect(h.relay.reservation.used).toBe(0)
+})
+
+test("reviewed push count window and asynchronous reservation ownership remain bounded", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const delivered: { category: string; overflow?: number }[] = []
+  const h = await harness({
+    notifyPush: async (_owner, event) => {
+      delivered.push(event)
+      await gate
+      return []
+    },
+  })
+  let agentID = "agent"
+  let agent = await h.attach(agentID, "agent")
+  const blocked = async (index: number) => {
+    const body: Frame["body"] = {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: { case: "blocked", value: { sessionId: `ses_${index}` } },
+      }),
+    }
+    agent.enqueue(body, frameReservation(body), h.now())
+    await h.send(agentID)
+  }
+  for (let index = 0; index < 22; index++) await blocked(index)
+  expect(delivered).toHaveLength(21)
+  expect(delivered.slice(0, 20).every((event) => event.overflow === undefined)).toBe(true)
+  expect(delivered[20]!.overflow).toBe(1)
+  const retained = h.relay.reservation.used
+  release()
+  await h.relay.settleDeliveries()
+  expect(retained - h.relay.reservation.used).toBe(21 * 32 * 1024)
+  h.relay.detach(agentID)
+  h.at(59_999)
+  agentID = "renewed"
+  agent = await h.attach(agentID, "agent")
+  await blocked(22)
+  await h.relay.settleDeliveries()
+  expect(delivered).toHaveLength(21)
+  h.at(60_000)
+  await blocked(23)
+  await h.relay.settleDeliveries()
+  expect(delivered).toHaveLength(22)
+  expect(delivered[21]!.overflow).toBeUndefined()
+  h.relay.closeDevice()
+  expect(h.relay.reservation.used).toBe(0)
+})
+
 test("notices are relay-local typed RPCs and survive reconstruction without restored ledgers", async () => {
   const h = await harness()
   await h.attach("agent", "agent")

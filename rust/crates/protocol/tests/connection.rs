@@ -2197,6 +2197,200 @@ fn ac_wire_008_credit_and_tiny_receipt_forgery_matrix() {
 }
 
 #[test]
+fn reviewed_normal_rates_enforce_sender_role_and_exact_rolling_window() {
+    for peer in [v5::PeerRole::LocalClient, v5::PeerRole::Agent] {
+        for elapsed in [99, 100] {
+            let (_, mut receiver) = role_pair_with(
+                peer,
+                if peer == v5::PeerRole::Agent {
+                    v5::PeerRole::Relay
+                } else {
+                    v5::PeerRole::Server
+                },
+                OPERATIONS.clone(),
+                Budgets {
+                    client_rate: 2,
+                    agent_rate: 3,
+                    rate_window_ms: 100,
+                    ..Budgets::default()
+                },
+            );
+            let cap = if peer == v5::PeerRole::Agent { 3 } else { 2 };
+            for ordinal in 1..=cap + 1 {
+                let body = if peer == v5::PeerRole::Agent {
+                    v5::frame::Body::Control(v5::Control {
+                        kind: Some(v5::control::Kind::Status(v5::Status::default())),
+                    })
+                } else {
+                    v5::frame::Body::Request(v5::Request {
+                        request_id: ordinal.to_string(),
+                        operation_id: 3009,
+                        scope: batch("a").scope,
+                        payload: v5::BrowserStopRequest {
+                            params: v5::BrowserStopRequestParams {
+                                session_id: ycoding_protocol::encode_lossless(&[97]),
+                            },
+                        }
+                        .encode_to_vec(),
+                    })
+                };
+                let frame = established_frame(body, v5::LedgerClass::Normal, ordinal);
+                let decisions = receiver.receive(
+                    frame.clone(),
+                    frame.encoded_len() as u64,
+                    if ordinal <= cap { 4 } else { 4 + elapsed },
+                );
+                let rejected = ordinal > cap && elapsed == 99;
+                assert_eq!(
+                    decisions.iter().any(|decision| matches!(decision, Decision::Closed(close) if close.category == ProtocolError::Limit)),
+                    rejected,
+                    "{peer:?} ordinal {ordinal}, elapsed {elapsed}"
+                );
+                if rejected {
+                    assert_eq!(receiver.reservation().borrow().used(), 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reviewed_consumption_credit_obeys_byte_threshold_or_exact_delay() {
+    let request = |ordinal: u64| {
+        established_frame(
+            v5::frame::Body::Request(v5::Request {
+                request_id: ordinal.to_string(),
+                operation_id: 3009,
+                scope: batch("a").scope,
+                payload: v5::BrowserStopRequest {
+                    params: v5::BrowserStopRequestParams {
+                        session_id: ycoding_protocol::encode_lossless(&[97]),
+                    },
+                }
+                .encode_to_vec(),
+            }),
+            v5::LedgerClass::Normal,
+            ordinal,
+        )
+    };
+    let bytes = request(1_u64).encoded_len() as u64;
+    for threshold in [false, true] {
+        let (_, mut receiver) = pair_with(Budgets {
+            credit_bytes: bytes * 2,
+            credit_delay_ms: 25,
+            ..Budgets::default()
+        });
+        let frame = request(1);
+        receiver.receive(frame, bytes, 4);
+        receiver.consume(v5::LedgerClass::Normal, 1, 4).unwrap();
+        assert!(receiver.poll(4).is_empty());
+        if threshold {
+            let frame = request(2);
+            receiver.receive(frame, bytes, 4);
+            receiver.consume(v5::LedgerClass::Normal, 2, 4).unwrap();
+        } else {
+            assert!(receiver.poll(28).is_empty());
+        }
+        let frame = send(receiver.poll(if threshold { 4 } else { 29 }));
+        assert!(
+            matches!(frame.body, Some(v5::frame::Body::Control(v5::Control {
+            kind: Some(v5::control::Kind::Credit(v5::Credit { ledger, consumed_through, transfer_id: None }))
+        })) if ledger == v5::LedgerClass::Normal as i32 && consumed_through == if threshold { 2 } else { 1 })
+        );
+    }
+}
+
+#[test]
+fn reviewed_asset_mime_byte_length_accepts_256_and_rejects_257() {
+    for length in [255, 256, 257] {
+        let result = ycoding_protocol::Asset::new(
+            v5::FsReadResult {
+                data: v5::PlatformAssetMetadata {
+                    mime: ycoding_protocol::encode_lossless(
+                        &format!("text/{}", "x".repeat(length - 5))
+                            .encode_utf16()
+                            .collect::<Vec<_>>(),
+                    ),
+                    byte_count: 0,
+                },
+            },
+            Vec::new(),
+        );
+        assert_eq!(result.is_ok(), length <= 256);
+    }
+}
+
+#[test]
+fn reviewed_tiny_byte_occupancy_and_relay_peer_union_bounds_reject_one_past() {
+    let (_, mut receiver) = pair_with(Budgets {
+        tiny_queue_bytes: 1024,
+        tiny_queue_count: 128,
+        ..Budgets::default()
+    });
+    let mut received = 0;
+    for ordinal in 2..=128 {
+        let frame = established_frame(
+            v5::frame::Body::Control(v5::Control {
+                kind: Some(v5::control::Kind::Pong(v5::Pong { id: ordinal })),
+            }),
+            v5::LedgerClass::Tiny,
+            ordinal,
+        );
+        let decisions = receiver.receive(frame.clone(), frame.encoded_len() as u64, 4);
+        if decisions.iter().any(|decision| matches!(decision, Decision::Closed(close) if close.category == ProtocolError::Limit)) {
+            assert!(received + frame.encoded_len() as u64 > 1024);
+            assert!(ordinal < 128);
+            assert_eq!(receiver.reservation().borrow().used(), 0);
+            break;
+        }
+        received += frame.encoded_len() as u64;
+        assert!(received <= 1024);
+        assert!(ordinal < 128, "tiny byte occupancy was not enforced");
+    }
+    let (mut agent, _) = role_pair(v5::PeerRole::Agent, v5::PeerRole::Relay, OPERATIONS.clone());
+    for index in 0..64 {
+        agent
+            .update_relay_interests(
+                v5::SubscriptionSnapshot {
+                    client_id: format!("client-{index}"),
+                    session_ids: vec![format!("session-{index}")],
+                },
+                4,
+            )
+            .unwrap();
+    }
+    let retained = agent.reservation().borrow().used();
+    for snapshot in [
+        v5::SubscriptionSnapshot {
+            client_id: "client-64".into(),
+            session_ids: vec!["session-0".into()],
+        },
+        v5::SubscriptionSnapshot {
+            client_id: "client-0".into(),
+            session_ids: vec!["session-0".into(), "session-64".into()],
+        },
+    ] {
+        assert_eq!(
+            agent.update_relay_interests(snapshot, 4),
+            Err(ProtocolError::Limit)
+        );
+        assert_eq!(agent.reservation().borrow().used(), retained);
+    }
+    agent.release_relay_client("client-0", 4).unwrap();
+    agent
+        .update_relay_interests(
+            v5::SubscriptionSnapshot {
+                client_id: "client-64".into(),
+                session_ids: vec!["session-64".into()],
+            },
+            4,
+        )
+        .unwrap();
+    agent.disconnect(true);
+    assert_eq!(agent.reservation().borrow().used(), 0);
+}
+
+#[test]
 fn ac_wire_010_disconnect_emits_request_scoped_abort_without_session_interruption() {
     let (mut client, mut server) = pair();
     let id = stop(&mut client, 4);
