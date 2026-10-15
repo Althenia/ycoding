@@ -43,15 +43,20 @@ function report(
   ],
   options?: { rowCount?: number; nextOffset?: number },
 ): ProviderRequestReport {
-  const values: ProviderRequestReport["rows"] = rows.map((row) => ({ key: row.key, label: row.label, ...metrics(row.logical) }))
-  if (values[0]) values[0].speed = {
-    firstOutputP50Ms: 125,
-    firstOutputP95Ms: 250,
-    totalP50Ms: 1_200,
-    totalP95Ms: 2_500,
-    outputTokensPerSecond: 42.5,
-    samples: 4,
-  }
+  const values: ProviderRequestReport["rows"] = rows.map((row) => ({
+    key: row.key,
+    label: row.label,
+    ...metrics(row.logical),
+  }))
+  if (values[0])
+    values[0].speed = {
+      firstOutputP50Ms: 125,
+      firstOutputP95Ms: 250,
+      totalP50Ms: 1_200,
+      totalP95Ms: 2_500,
+      outputTokensPerSecond: 42.5,
+      samples: 4,
+    }
   return {
     group,
     rows: values,
@@ -108,7 +113,11 @@ async function renderReports(input: {
   return app
 }
 
-async function waitFor(app: Awaited<ReturnType<typeof renderReports>>, predicate: (frame: string) => boolean, label: string) {
+async function waitFor(
+  app: Awaited<ReturnType<typeof renderReports>>,
+  predicate: (frame: string) => boolean,
+  label: string,
+) {
   for (let attempt = 0; attempt < 150; attempt++) {
     const frame = app.captureCharFrame()
     if (predicate(frame)) return frame
@@ -134,9 +143,28 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     },
   })
   try {
-    let frame = await waitFor(app, (value) => value.includes("All retained history") && value.includes("Alpha"), "the initial table")
+    let frame = await waitFor(
+      app,
+      (value) => value.includes("All retained history") && value.includes("Alpha"),
+      "the initial table",
+    )
     expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" })
-    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "TOK/S"]) expect(frame).toContain(column)
+    for (const column of [
+      "STEPS",
+      "INPUT",
+      "OUTPUT",
+      "REASON",
+      "CACHE READ",
+      "CACHE WRITE",
+      "TOTAL",
+      "COST",
+      "FIRST P50",
+      "FIRST P95",
+      "TOTAL P50",
+      "TOTAL P95",
+      "TOK/S",
+    ])
+      expect(frame).toContain(column)
     expect(frame).toContain("125ms")
     expect(frame).toContain("42.5")
     expect(frame).toContain("unreported")
@@ -197,13 +225,20 @@ test("preserves selected identity on refresh and fences stale, failed, and chang
     await waitFor(app, (value) => value.includes("> Beta"), "selected row")
 
     app.mockInput.pressKey("r")
-    await waitFor(app, (value) => requests.length === 2 && value.includes("Refreshing · showing previous data") && value.includes("> Beta"), "stale refresh")
+    await waitFor(
+      app,
+      (value) =>
+        requests.length === 2 && value.includes("Refreshing · showing previous data") && value.includes("> Beta"),
+      "stale refresh",
+    )
     app.mockInput.pressKey("r")
     await waitFor(app, () => requests.length === 3, "newer refresh")
-    requests[2].result.resolve(report("model", [
-      { key: "beta", label: "Beta refreshed", logical: 8 },
-      { key: "charlie", label: "Charlie", logical: 2 },
-    ]))
+    requests[2].result.resolve(
+      report("model", [
+        { key: "beta", label: "Beta refreshed", logical: 8 },
+        { key: "charlie", label: "Charlie", logical: 2 },
+      ]),
+    )
     await waitFor(app, (value) => value.includes("> Beta refreshed"), "identity-preserving result")
     requests[1].result.resolve(report("model", [{ key: "stale", label: "Stale result", logical: 99 }]))
     await Bun.sleep(50)
@@ -212,10 +247,18 @@ test("preserves selected identity on refresh and fences stale, failed, and chang
     app.mockInput.pressKey("r")
     await waitFor(app, () => requests.length === 4, "failing refresh")
     requests[3].result.reject(new Error("offline"))
-    await waitFor(app, (value) => value.includes("Refresh failed · showing stale data") && value.includes("Beta refreshed"), "stale error")
+    await waitFor(
+      app,
+      (value) => value.includes("Refresh failed · showing stale data") && value.includes("Beta refreshed"),
+      "stale error",
+    )
 
     app.mockInput.pressKey("ARROW_RIGHT")
-    await waitFor(app, (value) => requests.length === 5 && value.includes("Loading usage") && !value.includes("Beta refreshed"), "changed-query loading")
+    await waitFor(
+      app,
+      (value) => requests.length === 5 && value.includes("Loading usage") && !value.includes("Beta refreshed"),
+      "changed-query loading",
+    )
     requests[4].result.resolve(report("day", [{ key: "2026-09-22", label: "2026-09-22", logical: 5 }]))
     await waitFor(app, (value) => value.includes("> 2026-09-22"), "changed-query result")
     expect(refreshes).toBe(3)
@@ -240,9 +283,16 @@ test("sorts every report metric from its column header and keyboard bindings", a
     const inputX = lines[headerY].indexOf("INPUT") + 2
     await app.mockMouse.click(inputX, headerY)
     await waitFor(app, () => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "desc", "click sort")
+    await app.renderOnce()
     expect(app.captureCharFrame().split("\n")[headerY]).toContain("INPUT ▼")
 
-    for (const [bind, sort] of [["s", "steps"], ["o", "output"], ["g", "reasoning"], ["a", "cacheRead"], ["w", "cacheWrite"]] as const) {
+    for (const [bind, sort] of [
+      ["s", "steps"],
+      ["o", "output"],
+      ["g", "reasoning"],
+      ["a", "cacheRead"],
+      ["w", "cacheWrite"],
+    ] as const) {
       app.mockInput.pressKey(bind)
       await waitFor(app, () => calls.at(-1)?.sort === sort && calls.at(-1)?.order === "desc", `${sort} sort`)
     }
@@ -264,7 +314,11 @@ test("sorts every report metric from its column header and keyboard bindings", a
 test("removes the retention remark while preserving the empty-window message", async () => {
   const empty = await renderReports({ tab: "stats", load: async (query) => report(query.group, []) })
   try {
-    const frame = await waitFor(empty, (value) => value.includes("No usage recorded in the last 52 weeks."), "empty stats")
+    const frame = await waitFor(
+      empty,
+      (value) => value.includes("No usage recorded in the last 52 weeks."),
+      "empty stats",
+    )
     expect(frame).not.toContain("Usage before")
     expect(frame).not.toContain("unreported (not retained)")
   } finally {
@@ -305,7 +359,11 @@ test("pages bounded rows and keeps keyboard or mouse selection visible without a
     },
   })
   try {
-    let frame = await waitFor(app, (value) => value.includes("Rows 1–100 of 205") && value.includes("> 2026-09-001"), "first page")
+    let frame = await waitFor(
+      app,
+      (value) => value.includes("Rows 1–100 of 205") && value.includes("> 2026-09-001"),
+      "first page",
+    )
     expect(frame.split("\n").every((line) => line.length <= 80)).toBe(true)
     expect(frame).not.toContain("Usage details")
 
@@ -316,7 +374,11 @@ test("pages bounded rows and keeps keyboard or mouse selection visible without a
     await waitFor(app, (value) => value.includes("> 2026-09-012"), "mouse selection")
 
     app.mockInput.pressKey("RETURN")
-    frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("2026-09-012"), "selected details")
+    frame = await waitFor(
+      app,
+      (value) => value.includes("Usage details") && value.includes("2026-09-012"),
+      "selected details",
+    )
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
     expect(frame).toContain("Total tokens 14,580")
@@ -370,7 +432,9 @@ test("keeps large-value rows on one line with compact token columns", async () =
   const app = await renderReports({
     load: async (query) => ({
       group: query.group,
-      rows: [{ key: "large", label: "Investigate YCoding macOS Safari window inspection in a separate worktree", ...large }],
+      rows: [
+        { key: "large", label: "Investigate YCoding macOS Safari window inspection in a separate worktree", ...large },
+      ],
       total: large,
       rowCount: 1,
     }),
@@ -380,7 +444,8 @@ test("keeps large-value rows on one line with compact token columns", async () =
     const lines = frame.split("\n")
     const row = lines.find((line) => line.includes("Investigate YCoding"))!
     expect(lines.every((line) => line.length <= 189)).toBe(true)
-    for (const value of ["295", "2,773", "271.4K", "103.6M", "553.3K", "104.4M", "$1711.29"]) expect(row).toContain(value)
+    for (const value of ["295", "2,773", "271.4K", "103.6M", "553.3K", "104.4M", "$1711.29"])
+      expect(row).toContain(value)
     expect(lines[lines.indexOf(row) + 1].trim()).not.toMatch(/^\d/)
   } finally {
     app.renderer.destroy()

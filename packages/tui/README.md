@@ -34,6 +34,10 @@ The runtime event connection must forward ephemeral public events as well as dur
 
 ## Transcript reload reconciliation
 
+Retained history can begin with a synthetic `metadata.compactionCheckpoint` summary without a compaction lifecycle row. Keep it resident but omit it from chat rows and Timeline/Fork choices; stop older paging there even if the response includes an earlier cursor. Copy and Markdown export explicitly read retained canonical history and begin with a readable Compaction checkpoint section; JSON export retains the synthetic summary as its first data message. These reads do not expand resident history. Mini counts user prompts, not checkpoint messages.
+
+Fork and revert failures with the v5 `HistoryPrunedError` show “Message removed by compaction; use a later message.” Undo and message-dialog revert populate the composer only after successful staging; failed staging preserves the draft.
+
 The TUI reloads the canonical newest message window when a durable Session sequence gap is detected. Durable events at or below the snapshot watermark are discarded before store and row consumers. A reload remains read-only and never resumes provider execution.
 
 Reconcile assistant parts even when live events touch the resident message during the read. Match text and reasoning by type ordinal and tools by call ID. Preserve touched or active resident metadata and matching live parts, include recovered canonical-only parts, and retain resident-only live parts when the canonical part set shrinks. For untouched incomplete assistants, retain prefix-extending live text, reasoning, and streaming tool input over the canonical prefix. Each message and part identity appears once; rows reference only resident messages and parts.

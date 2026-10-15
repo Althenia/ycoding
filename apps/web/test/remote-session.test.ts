@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { validLatencySample, type NoticeFrame } from "../src/remote/wire-views"
-import { canReplyToRequest, sessionStatusLabel, visibleTranscriptMessages } from "../src/remote/projection"
+import {
+  canReplyToRequest,
+  hasCompactionCheckpoint,
+  sessionStatusLabel,
+  visibleTranscriptMessages,
+} from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import {
@@ -796,6 +801,48 @@ describe("remote store integration", () => {
           .filter((request) => request.operation === "session.snapshot")
           .map((request) => request.input?.before),
       ).toEqual([undefined, "middle", "checkpoint"])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("a pruned oldest page starting with the checkpoint summary hides it and requests nothing earlier", async () => {
+    const test = await harness({
+      handler: (request) =>
+        request.operation === "session.snapshot"
+          ? {
+              ok: true,
+              value: {
+                sourceEpoch: "epoch_1",
+                session: { id: request.sessionID },
+                watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 10 },
+                before: "pruned",
+                messages: [
+                  {
+                    id: "msg_compaction_abc",
+                    type: "synthetic",
+                    text: "<conversation-checkpoint>summary</conversation-checkpoint>",
+                    description: "Compaction checkpoint",
+                    metadata: { compactionCheckpoint: { manifestDigest: "abc", through: 4 } },
+                    time: { created: 1 },
+                  },
+                  { id: "msg_after", type: "user", text: "after", time: { created: 5 } },
+                ],
+              },
+            }
+          : "default",
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.some((session) => session.id === "ses_a"))
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().history?.before).toBeUndefined()
+      await test.store.loadOlderMessages()
+      expect(visibleTranscriptMessages(test.store.state().view?.messages ?? []).map((message) => message.id)).toEqual([
+        "msg_after",
+      ])
+      expect(hasCompactionCheckpoint(test.store.state().view?.messages ?? [])).toBe(true)
+      expect(test.relay.requests.filter((request) => request.operation === "session.snapshot")).toHaveLength(1)
     } finally {
       await test.stop()
     }

@@ -151,6 +151,7 @@ import {
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
+import { isCompactionCheckpoint } from "../../util/session"
 import {
   Header,
   headerModelRef,
@@ -1465,11 +1466,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         }
         void client.api.session.revert
           .stage({ sessionID: route.sessionID, messageID: message.id })
+          .then(() => prompt?.set({ ...projectedPromptInput(message), pasted: [] }))
           .catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
-        prompt?.set({
-          ...projectedPromptInput(message),
-          pasted: [],
-        })
         dialog.clear()
       },
     },
@@ -5220,6 +5218,8 @@ function transcriptToolPartVisible(
 
 function formatSessionTranscript(session: SessionInfo, messages: SessionMessageInfo[], thinking: boolean) {
   const body = messages.flatMap((message) => {
+    if (isCompactionCheckpoint(message) && message.type === "synthetic")
+      return [`## Compaction checkpoint\n\n${checkpointSummary(message.text)}`]
     if (message.type === "user") return [`## User\n\n${message.text}`]
     if (message.type === "shell")
       return [`## Shell\n\n\`\`\`\n$ ${message.command}\n${message.output?.output ?? ""}\n\`\`\``]
@@ -5241,6 +5241,10 @@ function formatSessionTranscript(session: SessionInfo, messages: SessionMessageI
     return [`## Assistant\n\n${content.join("\n\n")}`]
   })
   return `# ${session.title}\n\n**Session ID:** ${session.id}\n**Created:** ${new Date(session.time.created).toLocaleString()}\n**Updated:** ${new Date(session.time.updated).toLocaleString()}\n\n---\n\n${body.join("\n\n---\n\n")}\n`
+}
+
+function checkpointSummary(text: string) {
+  return /<summary>\n([\s\S]*)\n<\/summary>\s*<\/conversation-checkpoint>/.exec(text)?.[1] ?? text
 }
 
 export function parseApplyPatchFiles(value: unknown) {

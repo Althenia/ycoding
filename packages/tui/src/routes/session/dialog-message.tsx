@@ -84,14 +84,11 @@ export function DialogMessage(props: {
           value: "session.revert",
           onSelect: (dialog) => {
             const value = message()
-            if (value?.type === "user") {
-              props.setPrompt?.({
-                ...projectedPromptInput(value),
-                pasted: [],
-              })
-            }
             void client.api.session.revert
               .stage({ sessionID: props.sessionID, messageID: props.messageID })
+              .then(() => {
+                if (value?.type === "user") props.setPrompt?.({ ...projectedPromptInput(value), pasted: [] })
+              })
               .catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
             dialog.clear()
           },

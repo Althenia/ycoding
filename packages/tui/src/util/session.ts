@@ -1,5 +1,9 @@
 import type { SessionInfo, SessionMessageInfo, ShellInfo } from "@ycoding-ai/client"
 
+export function isCompactionCheckpoint(message: SessionMessageInfo) {
+  return message.type === "synthetic" && message.metadata?.compactionCheckpoint !== undefined
+}
+
 export function isDefaultTitle(title: string) {
   return /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title)
 }
@@ -31,7 +35,10 @@ function rawParentSlice(messages: readonly SessionMessageInfo[]): string {
         .map((part) => ({ role: "Assistant", text: part.text }))
     })
     .slice(-12)
-  return ["Recent parent session history (latest projected window):", ...recent.map((item) => `${item.role}:\n${item.text}`)].join("\n\n")
+  return [
+    "Recent parent session history (latest projected window):",
+    ...recent.map((item) => `${item.role}:\n${item.text}`),
+  ].join("\n\n")
 }
 
 export async function openBtwSession(input: {
@@ -90,7 +97,10 @@ export function groupSessionShells(
     const owned = visible.filter((shell) => shell.metadata.sessionID === sessionID)
     if (!owned.length) return []
     const owner = sessions.find((session) => session.id === sessionID)
-    const label = sessionID === currentSessionID ? "Main chat" : `${owner?.agent === "btw" ? "BTW" : owner?.agent ?? "Subagent"} · ${owner?.title ?? ""}`
+    const label =
+      sessionID === currentSessionID
+        ? "Main chat"
+        : `${owner?.agent === "btw" ? "BTW" : (owner?.agent ?? "Subagent")} · ${owner?.title ?? ""}`
     return [{ owner: { label }, shells: owned }]
   })
   const unknown = visible.filter((shell) => {

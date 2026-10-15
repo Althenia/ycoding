@@ -603,6 +603,7 @@ export function transcriptMessageVisible(message: RemoteMessageView): boolean {
     (message.source === "session-state" || message.source === "team-view")
   )
     return false
+  if (isCheckpointSummary(message)) return false
   if (message.kind === "synthetic") return Boolean(message.description?.trim())
   if (message.kind === "compaction")
     return (
@@ -2014,8 +2015,14 @@ export function visibleTranscript(messages: readonly RemoteMessageView[]): reado
 
 export function hasCompactionCheckpoint(messages: readonly RemoteMessageView[]): boolean {
   return messages.some(
-    (message) => message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID,
+    (message) =>
+      (message.kind === "compaction" && message.status === "completed" && !!message.boundaryMessageID) ||
+      isCheckpointSummary(message),
   )
+}
+
+function isCheckpointSummary(message: RemoteMessageView) {
+  return message.kind === "synthetic" && message.metadata?.compactionCheckpoint !== undefined
 }
 
 function pushMessage(view: SessionView, message: RemoteMessageView): SessionView {

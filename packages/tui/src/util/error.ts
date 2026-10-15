@@ -1,3 +1,4 @@
+import { isHistoryPrunedError } from "@ycoding-ai/client/v5"
 import { isRecord } from "./record"
 
 type ConfigIssue = { message: string; path: string[] }
@@ -11,7 +12,10 @@ function isMaxListenersNoise(input: unknown): boolean {
         : isRecord(input) && typeof input.message === "string"
           ? input.message
           : String(input ?? "")
-  return text.includes("MaxListenersExceededWarning") || (text.includes("Possible EventEmitter memory leak") && text.includes("resize"))
+  return (
+    text.includes("MaxListenersExceededWarning") ||
+    (text.includes("Possible EventEmitter memory leak") && text.includes("resize"))
+  )
 }
 
 export function cliErrorMessage(input: unknown): string | undefined {
@@ -195,6 +199,7 @@ export function errorFormat(error: unknown): string {
 
 export function errorMessage(error: unknown): string {
   if (isMaxListenersNoise(error)) return ""
+  if (isHistoryPrunedError(error)) return "Message removed by compaction; use a later message."
   const blocked = formatModelSwitchBlocked(error)
   if (blocked) return blocked
   if (error instanceof Error) {
