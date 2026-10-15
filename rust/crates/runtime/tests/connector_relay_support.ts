@@ -1,4 +1,4 @@
-import { spawn } from "bun"
+import { spawn, type WebSocketOptions } from "bun"
 import path from "node:path"
 import {
   create,
@@ -14,15 +14,26 @@ import {
   event_subscribe_ResultSchema,
   event_unsubscribe_RequestSchema,
   session_todo_list_RequestSchema,
+  session_todo_list_ResultSchema,
   session_snapshot_RequestSchema,
   session_snapshot_ResultSchema,
   session_message_RequestSchema,
   session_message_ResultSchema,
   PublicEventSchema,
   Connector_ErrorSchema,
+  FrameSchema,
+  toBinary,
+  clearField,
 } from "../../../../packages/protocol/src/v5"
+import type { Frame } from "../../../../packages/protocol/src/v5"
 import { TestPeer } from "../../../../packages/remote/test/peer"
-import { httpBulkQuery, readHttpBulk } from "../../../../packages/remote/src/index"
+import {
+  deviceSignaturePayload,
+  httpBulkQuery,
+  readHttpBulk,
+  RelayLimits,
+  WireLimit,
+} from "../../../../packages/remote/src/index"
 import { sha256Hex, randomToken, base64UrlEncode } from "../../../../infra/cloudflare/src/auth/crypto"
 import { generateVapidKeys } from "../../../../infra/cloudflare/script/vapid-keys"
 import { deriveWebPushKeys } from "../../../../infra/cloudflare/src/push/crypto"
@@ -33,7 +44,8 @@ const configPath = path.join(scratch, "wrangler.json")
 const persist = path.join(scratch, "worker-state")
 const wranglerBin = path.join(root, "node_modules/.bin/wrangler")
 const peers: TestPeer[] = []
-let worker: ReturnType<typeof spawn> | undefined
+const NativeSocket = WebSocket as typeof WebSocket & { new (url: string, options: WebSocketOptions): WebSocket }
+let worker: Bun.Subprocess<"ignore", "pipe", "inherit"> | undefined
 let workerOutput: Promise<string> | undefined
 const standin = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ keys: [] }) })
 const reservation = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("reserved") })
@@ -166,6 +178,267 @@ async function release(client: TestPeer, subscriptionID: string) {
   expect((await client.next("settled", id)).status === "success", "Relay release failed")
   client.connection.releaseSubscription(subscriptionID, performance.now())
 }
+async function relayBoundaryMatrix() {
+  const json = async (route: string, body?: unknown, browser = false) => {
+    const response = await fetch(`${origin}${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(browser ? { cookie: `yc_session=${cookie}`, origin } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    expect(response.ok, `Boundary fixture setup failed: ${route} ${response.status}`)
+    return response.json()
+  }
+  const key = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
+  const publicKey = await crypto.subtle.exportKey("jwk", key.publicKey)
+  const enrollment = (await json("/api/devices/enrollments", undefined, true)) as { enrollmentID: string; code: string }
+  const device = (await json("/api/devices/enroll", {
+    enrollmentID: enrollment.enrollmentID,
+    code: enrollment.code,
+    publicKey: { kty: "EC", crv: "P-256", x: publicKey.x, y: publicKey.y },
+    name: "Wire boundary fixture",
+  })) as {
+    deviceID: string
+  }
+  const challenge = (await json("/api/devices/challenge", { deviceID: device.deviceID })) as {
+    challengeID: string
+    nonce: string
+  }
+  const signature = base64UrlEncode(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        key.privateKey,
+        new TextEncoder().encode(deviceSignaturePayload(challenge.challengeID, challenge.nonce)),
+      ),
+    ),
+  )
+  const credential = (await json("/api/devices/token", {
+    deviceID: device.deviceID,
+    challengeID: challenge.challengeID,
+    signature,
+  })) as { accessToken: string }
+  const vectors = (await Bun.file(path.join(root, "protocol/ycoding/v5/testdata/manifest.tsv")).text())
+    .trim()
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .filter((row) => row[1] === "ycoding.v5.Frame" && row[2] === "valid")
+  const fixtures = vectors.map((row) => ({
+    name: row[0]!,
+    frame: decodeStrict(FrameSchema, Buffer.from(row[4]!, "hex")),
+  }))
+  for (const role of [PeerRole.REMOTE_CLIENT, PeerRole.AGENT] as const) {
+    const url = `${origin.replace("http", "ws")}/ws/v5/${role === PeerRole.AGENT ? "agent" : `client?device=${device.deviceID}`}`
+    const headers: Record<string, string> =
+      role === PeerRole.AGENT
+        ? { authorization: `Bearer ${credential.accessToken}` }
+        : { cookie: `yc_session=${cookie}`, origin }
+    const invalidHello: { name: string; change: (frame: Frame) => Frame }[] = [
+      ...[4, 6].map((revision) => ({
+        name: `revision-${revision}`,
+        change(frame: Frame) {
+          frame.revision = revision
+          if (frame.body.case === "hello") frame.body.value.revision = revision
+          return frame
+        },
+      })),
+      {
+        name: "digest",
+        change(frame) {
+          if (frame.body.case === "hello") frame.body.value.contractDigest[0]! ^= 1
+          return frame
+        },
+      },
+      {
+        name: "role",
+        change(frame) {
+          if (frame.body.case === "hello") frame.body.value.role = PeerRole.LOCAL_CLIENT
+          return frame
+        },
+      },
+      {
+        name: "fabricated-epoch",
+        change(frame) {
+          frame.connectionEpoch = "fabricated"
+          return frame
+        },
+      },
+      {
+        name: "pre-ready-request",
+        change() {
+          return fixtures.find((entry) => entry.name === "request")!.frame
+        },
+      },
+    ]
+    for (const item of invalidHello) {
+      const peer = new TestPeer(url, headers, role, undefined, item.change)
+      try {
+        const closed = await peer.closed
+        expect(closed.code === 1008, `${role} ${item.name}: ${JSON.stringify(closed)}`)
+        expect(
+          !peer.raw.some((frame) => frame.body.case === "ready" || frame.body.case === "result"),
+          `${role} ${item.name} delivered application state`,
+        )
+      } finally {
+        peer.stop()
+      }
+    }
+    const classes = new Set<string>()
+    for (const fixture of fixtures.filter((entry) => !["hello", "ready"].includes(entry.name))) {
+      classes.add(fixture.frame.body.case!)
+      for (const epoch of [undefined, "stale-epoch"]) {
+        const peer = new TestPeer(url, headers, role)
+        try {
+          await peer.ready
+          const before = peer.raw.length
+          const invalid = create(FrameSchema, fixture.frame)
+          if (epoch === undefined) clearField(invalid, FrameSchema.field.connectionEpoch)
+          if (epoch !== undefined) invalid.connectionEpoch = epoch
+          peer.socket.send(toBinary(FrameSchema, invalid))
+          const closed = await peer.closed
+          expect(closed.code === 1002, `${role} ${fixture.name} ${epoch}: ${JSON.stringify(closed)}`)
+          expect(
+            !peer.raw
+              .slice(before)
+              .some((frame) =>
+                ["request", "result", "eventBatch", "bulkStart", "bulkPiece", "bulkEnd", "streamEnd"].includes(
+                  frame.body.case ?? "",
+                ),
+              ),
+            `${role} stale frame produced application delivery`,
+          )
+        } finally {
+          peer.stop()
+        }
+      }
+    }
+    expect(classes.size === 8, `Missing established envelope class for role ${role}: ${[...classes].join(",")}`)
+    const peer = new TestPeer(url, headers, role)
+    try {
+      await peer.ready
+      const size = (role === PeerRole.AGENT ? WireLimit.SERVER_FRAME_BYTES : WireLimit.CLIENT_FRAME_BYTES) + 1
+      expect(size < RelayLimits.nativeReceiveBytes, "Application-overlimit case must remain below native receipt cap")
+      peer.socket.send(new Uint8Array(size))
+      const closed = await peer.closed
+      expect(
+        closed.code === 1002 && closed.reason === "LIMIT",
+        `${role} application-overlimit native receipt: ${JSON.stringify(closed)}`,
+      )
+      expect(
+        !peer.raw.some((frame) => frame.body.case === "result" || frame.body.case === "bulkStart"),
+        "Overlimit frame reached application dispatch",
+      )
+    } finally {
+      peer.stop()
+    }
+    for (const phase of ["hello", "confirmation", "text", "concatenated"]) {
+      const socket = new NativeSocket(url, { headers })
+      const deadline = setTimeout(() => socket.close(1000, "fixture-deadline"), 10_000)
+      const received: Frame[] = []
+      socket.binaryType = "arraybuffer"
+      socket.addEventListener("message", (event) =>
+        received.push(decodeStrict(FrameSchema, new Uint8Array(event.data as ArrayBuffer))),
+      )
+      socket.addEventListener("open", () => {
+        if (phase === "hello") return
+        if (phase === "text") {
+          socket.send('{"operation":"session.list"}')
+          return
+        }
+        const hello = fixtures.find((entry) => entry.name === "hello")!.frame
+        expect(hello.body.case === "hello", "Missing independent Hello")
+        const bytes = toBinary(FrameSchema, { ...hello, body: { case: "hello", value: { ...hello.body.value, role } } })
+        const ping =
+          phase === "concatenated"
+            ? toBinary(FrameSchema, fixtures.find((entry) => entry.name === "ping")!.frame)
+            : new Uint8Array()
+        socket.send(new Uint8Array([...bytes, ...ping]))
+      })
+      try {
+        const closed = await new Promise<CloseEvent>((resolve) =>
+          socket.addEventListener("close", resolve, { once: true }),
+        )
+        expect(closed.code === 1008, `${role} ${phase} deadline: ${closed.code} ${closed.reason}`)
+        expect(
+          received.filter((frame) => frame.body.case === "ready").length === (phase === "confirmation" ? 1 : 0),
+          `${role} unexpected handshake delivery in ${phase}`,
+        )
+        expect(
+          !received.some((frame) => frame.body.case === "request" || frame.body.case === "result"),
+          "Timed-out handshake dispatched application work",
+        )
+      } finally {
+        clearTimeout(deadline)
+        socket.close()
+      }
+    }
+  }
+  const agentURL = `${origin.replace("http", "ws")}/ws/v5/agent`
+  const clientURL = `${origin.replace("http", "ws")}/ws/v5/client?device=${device.deviceID}`
+  const agentHeaders = { authorization: `Bearer ${credential.accessToken}` }
+  const clientHeaders = { cookie: `yc_session=${cookie}`, origin }
+  const predecessor = new TestPeer(agentURL, agentHeaders, PeerRole.AGENT)
+  const replacementPeers = [predecessor]
+  const request = encodeStrict(
+    session_todo_list_RequestSchema,
+    create(session_todo_list_RequestSchema, { params: { sessionID: encodeLossless("ses_boundary") } }),
+  )
+  const scope = create(ScopeSchema, { target: { case: "session", value: "ses_boundary" } })
+  try {
+    await predecessor.ready
+    const oldClient = new TestPeer(clientURL, clientHeaders, PeerRole.REMOTE_CLIENT)
+    replacementPeers.push(oldClient)
+    await oldClient.ready
+    const pending = oldClient.request("session.todo.list", scope, request)
+    const oldDispatch = await predecessor.next("dispatch")
+    const conflicting = new TestPeer(agentURL, agentHeaders, PeerRole.AGENT)
+    replacementPeers.push(conflicting)
+    expect((await conflicting.closed).code === 4409, "Concurrent live agent was not rejected")
+    expect(
+      predecessor.socket.readyState === 1 && oldClient.socket.readyState === 1,
+      "Rejected contender displaced the live owner",
+    )
+    predecessor.stop()
+    await predecessor.closed
+    expect((await oldClient.closed).code === 1012, "Agent disconnection did not fence old browser work")
+    expect(
+      (await oldClient.next("settled", pending)).status === "unknown",
+      "Sent predecessor read was not classified unknown",
+    )
+    const successor = new TestPeer(agentURL, agentHeaders, PeerRole.AGENT)
+    replacementPeers.push(successor)
+    await successor.ready
+    const clients = [
+      new TestPeer(clientURL, clientHeaders, PeerRole.REMOTE_CLIENT),
+      new TestPeer(clientURL, clientHeaders, PeerRole.REMOTE_CLIENT),
+    ]
+    replacementPeers.push(...clients)
+    await Promise.all(clients.map((peer) => peer.ready))
+    const ids = clients.map((peer) => peer.request("session.todo.list", scope, request))
+    expect(
+      ids[0] === pending && ids[1] === pending,
+      "Fixture did not collide request identities across epochs and peers",
+    )
+    const dispatches = [await successor.next("dispatch"), await successor.next("dispatch")]
+    expect(
+      dispatches[0]!.requestID === oldDispatch.requestID && dispatches[0]!.requestID !== dispatches[1]!.requestID,
+      "Successor correlation was not independently scoped",
+    )
+    for (const dispatch of dispatches)
+      successor.result(
+        dispatch,
+        encodeStrict(session_todo_list_ResultSchema, create(session_todo_list_ResultSchema, { data: { items: [] } })),
+      )
+    const results = await Promise.all(clients.map((peer, index) => peer.next("settled", ids[index]!)))
+    expect(
+      results.every((result) => result.status === "success"),
+      "Successor result correlation failed after reconnect",
+    )
+    expect(!successor.queue.some((item) => item.decision.type === "dispatch"), "Replacement replayed predecessor work")
+  } finally {
+    for (const peer of replacementPeers) peer.stop()
+  }
+  await json(`/api/devices/${device.deviceID}/revoke`, undefined, true)
+}
 try {
   await Bun.write(path.join(scratch, "assets/index.html"), "<!doctype html><title>Connector relay fixture</title>")
   const config = await Bun.file(path.join(root, "infra/cloudflare/wrangler.jsonc")).json()
@@ -250,6 +523,7 @@ try {
     if (Date.now() > readyDeadline) throw new Error("workerd readiness timed out")
     await Bun.sleep(100)
   }
+  await relayBoundaryMatrix()
   const enrollmentResponse = await fetch(`${origin}/api/devices/enrollments`, {
     method: "POST",
     headers: { cookie: `yc_session=${cookie}`, origin },

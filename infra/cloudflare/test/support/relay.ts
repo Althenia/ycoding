@@ -17,6 +17,7 @@ import { receiveBinary, handoffBinary, remoteEventTypes } from "../../../../pack
 import { createRelay } from "../../src/relay/core"
 import type { RelayConnection, RelayAuthority, RelayDeps } from "../../src/relay/core"
 import { createNoticeStore } from "../../src/relay/notice-store"
+import type { NoticeStorage } from "../../src/relay/notice-store"
 import { createNoticeStorage } from "../notice-storage"
 
 export async function harness(
@@ -27,6 +28,7 @@ export async function harness(
     deviceID?: string
     monotonic?: RelayDeps["monotonic"]
     send?: RelayDeps["send"]
+    noticeStorage?: NoticeStorage
   } = {},
 ) {
   let now = 0
@@ -35,7 +37,7 @@ export async function harness(
   const deviceID = options.deviceID ?? "device"
   const output = new Map<string, Uint8Array[]>()
   const close: { id: string; code: number; reason: string }[] = []
-  const notices = createNoticeStore(createNoticeStorage(new Database(":memory:")))
+  const notices = createNoticeStore(options.noticeStorage ?? createNoticeStorage(new Database(":memory:")))
   const relay = createRelay({
     now: () => now,
     monotonic: options.monotonic ?? (() => now),

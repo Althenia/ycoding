@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import {
   create,
   encodeStrict,
@@ -22,6 +23,7 @@ import type { Frame } from "../../../packages/protocol/src/v5"
 import { frameReservation } from "../../../packages/remote/src/index"
 import { harness } from "./support/relay"
 import { httpBulkFixture } from "./support/http-bulk"
+import { createNoticeStorage } from "./notice-storage"
 
 test.each(["message", "asset"] as const)("%s HTTP bulk settles exactly once on its owning socket", async (kind) => {
   const f = await httpBulkFixture(kind)
@@ -38,10 +40,10 @@ test.each(["message", "asset"] as const)("%s HTTP bulk settles exactly once on i
   ])
   const completed = decisions.filter((entry) => entry.type === "bulkComplete")
   expect(completed).toHaveLength(1)
-  expect(completed[0].data).toEqual(f.data)
+  expect(completed[0]!.data).toEqual(f.data)
   expect(f.h.receive("unrelated").flatMap((entry) => entry.decisions)).toEqual([])
   expect(f.h.close).toEqual([])
-  f.browser.releaseBulk(completed[0].transferID)
+  f.browser.releaseBulk(completed[0]!.transferID)
   f.h.relay.closeDevice()
   expect(f.h.relay.reservation.used).toBe(0)
 })
@@ -150,11 +152,11 @@ test("opaque RPC correlation is per browser, and upstream input waits for downst
   const frames = h.receive("agent")
   const requests = frames.flatMap((entry) => entry.decisions).filter((item) => item.type === "dispatch")
   expect(requests.map((item) => item.requestID)).toEqual(["1", "2"])
-  expect(requests[0].request.payload).toEqual(requests[1].request.payload)
+  expect(requests[0]!.request.payload).toEqual(requests[1]!.request.payload)
   expect(h.relay.connection("first")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
   const charge = h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).handedBytes
   expect(charge).toBeGreaterThan(0)
-  agent.consume(LedgerClass.NORMAL, frames[0].frame!.deliveryOrdinal, 0)
+  agent.consume(LedgerClass.NORMAL, frames[0]!.frame!.deliveryOrdinal, 0)
   expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).handedBytes).toBe(charge)
   h.at(25)
   agent.advance(25)
@@ -198,7 +200,7 @@ test("notices are relay-local typed RPCs and survive reconstruction without rest
   if (result.type !== "settled") throw new Error("result")
   const page = decodeStrict(ConnectorNoticePageSchema, result.payload!.payload)
   expect(page.notice!.kind.case).toBe("added")
-  if (page.notice!.kind.case === "added") expect(page.notice!.kind.value.notices[0].id).toBe("ntc_1")
+  if (page.notice!.kind.case === "added") expect(page.notice!.kind.value.notices[0]!.id).toBe("ntc_1")
   expect(result.requestID).toBe(id)
   expect(
     h
@@ -301,29 +303,160 @@ test("typed bulk is forwarded without endpoint reassembly and stays charged thro
   expect(h.relay.connection("agent")!.ledger(LedgerClass.BULK).receivedBytes).toBe(0)
 })
 
-test("fanout does not credit a status until every authorized recipient consumes it", async () => {
-  const h = await harness()
-  const agent = await h.attach("agent", "agent")
-  const first = await h.attach("first")
-  const second = await h.attach("second")
-  const body: Frame["body"] = {
+test.each(["status", "inventoryInvalidated"] as const)(
+  "TEST-034 %s fanout retains charge until every authorized recipient consumes it",
+  async (kind) => {
+    const h = await harness()
+    const agent = await h.attach("agent", "agent")
+    const first = await h.attach("first")
+    const second = await h.attach("second")
+    const body: Frame["body"] = {
+      case: "control",
+      value: create(ControlSchema, {
+        kind:
+          kind === "status"
+            ? { case: "status", value: { running: ["ses_1"], attention: [] } }
+            : { case: "inventoryInvalidated", value: {} },
+      }),
+    }
+    agent.enqueue(body, frameReservation(body), 0)
+    await h.send("agent")
+    const one = h.receive("first").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
+    const two = h.receive("second").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
+    const handed = h.relay.connection("first")!.ledger(LedgerClass.NORMAL).handedBytes
+    expect(handed).toBeGreaterThan(0)
+    expect(h.relay.connection("first")!.ledger(LedgerClass.NORMAL).queuedBytes).toBe(0)
+    expect(h.relay.connection("second")!.ledger(LedgerClass.NORMAL).handedBytes).toBe(handed)
+    first.consume(LedgerClass.NORMAL, one.deliveryOrdinal, 0)
+    h.at(25)
+    first.advance(25)
+    await h.send("first")
+    expect(h.relay.connection("first")!.ledger(LedgerClass.NORMAL).handedBytes).toBe(0)
+    expect(h.relay.connection("second")!.ledger(LedgerClass.NORMAL).handedBytes).toBe(handed)
+    expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
+    second.consume(LedgerClass.NORMAL, two.deliveryOrdinal, 25)
+    h.at(50)
+    second.advance(50)
+    await h.send("second")
+    expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
+    expect(h.close).toEqual([])
+    h.relay.closeDevice()
+    expect(h.relay.reservation.used).toBe(0)
+  },
+)
+
+test("TEST-035 completion rollback preserves high-water and suppresses notices and push across reconstruction", async () => {
+  const database = new Database(":memory:")
+  const storage = createNoticeStorage(database)
+  let rejectCommit = false
+  const pushes: string[] = []
+  const h = await harness({
+    noticeStorage: {
+      ...storage,
+      transactionSync: (operation) =>
+        database.transaction(() => {
+          const result = operation()
+          if (rejectCommit) throw new Error("fixture completion commit rejected")
+          return result
+        })(),
+    },
+    notifyPush: async (_, event) => {
+      pushes.push("sessionID" in event ? event.sessionID : event.category)
+      return []
+    },
+  })
+  const completion = (sequence: bigint): Frame["body"] => ({
     case: "control",
-    value: create(ControlSchema, { kind: { case: "status", value: { running: ["ses_1"], attention: [] } } }),
+    value: create(ControlSchema, {
+      kind: {
+        case: "completions",
+        value: {
+          items: [{ id: `receipt-${sequence}`, sequence, sessionId: "ses_1", createdMs: sequence }],
+          more: false,
+        },
+      },
+    }),
+  })
+  try {
+    const agent = await h.attach("agent", "agent")
+    await h.attach("browser")
+    agent.enqueue(completion(1n), frameReservation(completion(1n)), h.now())
+    await h.send("agent")
+    expect(storage.kv.get<number>("completion:ses_1")).toBe(1)
+    expect(storage.kv.get<boolean>("completionSync")).toBe(true)
+    expect(h.notices.page().total).toBe(0)
+    expect(pushes).toEqual([])
+    rejectCommit = true
+    agent.enqueue(completion(2n), frameReservation(completion(2n)), h.now())
+    await h.send("agent")
+    expect(storage.kv.get<number>("completion:ses_1")).toBe(1)
+    expect(h.notices.page().total).toBe(0)
+    expect(h.notices.unavailable()).toBe(true)
+    expect(pushes).toEqual([])
+    rejectCommit = false
+    h.relay.closeDevice()
+    expect(h.relay.reservation.used).toBe(0)
+    const recovered = await harness({
+      noticeStorage: storage,
+      notifyPush: async (_, event) => {
+        pushes.push("sessionID" in event ? event.sessionID : event.category)
+        return []
+      },
+    })
+    try {
+      const successor = await recovered.attach("successor", "agent")
+      const browser = await recovered.attach("reconnected")
+      recovered.request(browser, "notice.subscribe")
+      await recovered.send("reconnected")
+      recovered.receive("reconnected")
+      for (let retry = 0; retry < 2; retry++) {
+        successor.enqueue(completion(2n), frameReservation(completion(2n)), recovered.now())
+        await recovered.send("successor")
+      }
+      expect(storage.kv.get<number>("completion:ses_1")).toBe(2)
+      expect(recovered.notices.page()).toEqual({
+        notices: [{ id: "ntc_1", category: "agent-completed", sessionID: "ses_1", createdAt: 2 }],
+        total: 1,
+      })
+      expect(pushes).toEqual(["ses_1"])
+      const notices = recovered
+        .receive("reconnected")
+        .filter((entry) => entry.frame?.body.case === "control" && entry.frame.body.value.kind.case === "notice")
+      expect(
+        notices.filter(
+          (entry) =>
+            entry.frame?.body.case === "control" &&
+            entry.frame.body.value.kind.case === "notice" &&
+            entry.frame.body.value.kind.value.kind.case === "added",
+        ),
+      ).toHaveLength(1)
+    } finally {
+      recovered.relay.closeDevice()
+      expect(recovered.relay.reservation.used).toBe(0)
+    }
+    const state = database.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+    expect(state.map((row) => row.name).sort()).toEqual([
+      "attention_alert",
+      "fixture_kv",
+      "notice",
+      "notice_sync",
+      "sqlite_sequence",
+    ])
+    expect(
+      database
+        .query("PRAGMA table_info(notice)")
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual(["seq", "category", "session_id", "created_at"])
+    expect(database.query("SELECT key, value FROM fixture_kv ORDER BY key").all()).toEqual([
+      { key: "completion:ses_1", value: "2" },
+      { key: "completionSync", value: "true" },
+    ])
+  } finally {
+    h.relay.closeDevice()
+    expect(h.relay.reservation.used).toBe(0)
+    database.close()
   }
-  agent.enqueue(body, frameReservation(body), 0)
-  await h.send("agent")
-  const one = h.receive("first").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
-  const two = h.receive("second").find((item) => item.frame?.ledger === LedgerClass.NORMAL)!.frame!
-  first.consume(LedgerClass.NORMAL, one.deliveryOrdinal, 0)
-  h.at(25)
-  first.advance(25)
-  await h.send("first")
-  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBeGreaterThan(0)
-  second.consume(LedgerClass.NORMAL, two.deliveryOrdinal, 25)
-  h.at(50)
-  second.advance(50)
-  await h.send("second")
-  expect(h.relay.connection("agent")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(0)
 })
 
 test.each(["hello", "confirm"])(

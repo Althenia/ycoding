@@ -369,12 +369,24 @@ async fn handshake_mismatches_close_before_ready_without_dispatch() {
                 frame(None, hello(4, digest(), v5::PeerRole::LocalClient)),
             ),
             (
+                "future revision",
+                frame(None, hello(6, digest(), v5::PeerRole::LocalClient)),
+            ),
+            (
                 "digest",
                 frame(None, hello(5, wrong_digest, v5::PeerRole::LocalClient)),
             ),
             (
                 "role",
                 frame(None, hello(5, digest(), v5::PeerRole::RemoteClient)),
+            ),
+            (
+                "agent role",
+                frame(None, hello(5, digest(), v5::PeerRole::Agent)),
+            ),
+            (
+                "server role",
+                frame(None, hello(5, digest(), v5::PeerRole::Server)),
             ),
             (
                 "fabricated epoch",
@@ -430,6 +442,109 @@ async fn handshake_mismatches_close_before_ready_without_dispatch() {
         server.shutdown().await.unwrap();
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_024_every_post_ready_frame_class_requires_its_connection_epoch() {
+    bounded(async {
+        let (dispatcher, count) = counting();
+        let server = start(services(LocalAuth::disabled(), false), dispatcher).await;
+        let vectors = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../protocol/ycoding/v5/testdata/manifest.tsv"),
+        )
+        .unwrap();
+        let mut classes = std::collections::BTreeSet::new();
+        for row in vectors
+            .lines()
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+        {
+            if row[1] != "ycoding.v5.Frame"
+                || row[2] != "valid"
+                || matches!(row[0], "hello" | "ready")
+            {
+                continue;
+            }
+            let bytes: Vec<u8> = (0..row[4].len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&row[4][index..index + 2], 16).unwrap())
+                .collect();
+            let original = v5::Frame::decode(bytes.as_slice()).unwrap();
+            classes.insert(match original.body.as_ref().unwrap() {
+                v5::frame::Body::Request(_) => "request",
+                v5::frame::Body::Result(_) => "result",
+                v5::frame::Body::EventBatch(_) => "events",
+                v5::frame::Body::Control(_) => "control",
+                v5::frame::Body::BulkStart(_) => "bulk-start",
+                v5::frame::Body::BulkPiece(_) => "bulk-piece",
+                v5::frame::Body::BulkEnd(_) => "bulk-end",
+                v5::frame::Body::StreamEnd(_) => "stream-end",
+                _ => panic!("unexpected established fixture {}", row[0]),
+            });
+            for epoch in [None, Some("stale-epoch")] {
+                let mut client = Client::open(server.address(), &[]).await.unwrap();
+                let mut invalid = original.clone();
+                invalid.connection_epoch = epoch.map(str::to_owned);
+                client.socket.send_binary(&invalid.encode_to_vec()).await;
+                assert_eq!(client.closed().await.0, 1002, "{} {epoch:?}", row[0]);
+            }
+        }
+        assert_eq!(
+            classes,
+            std::collections::BTreeSet::from([
+                "request",
+                "result",
+                "events",
+                "control",
+                "bulk-start",
+                "bulk-piece",
+                "bulk-end",
+                "stream-end",
+            ])
+        );
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "rejected frames cannot dispatch"
+        );
+        let mut healthy = Client::open(server.address(), &[]).await.unwrap();
+        let response: v5::HealthGetResult =
+            success(healthy.call("health.get", machine(), Vec::new()).await);
+        assert!(response.data.healthy);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_023_retired_http_json_and_sse_routes_cannot_dispatch_application_operations() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    };
+    bounded(async {
+        let (dispatcher, count) = counting();
+        let server = start(services(LocalAuth::disabled(), false), dispatcher).await;
+        for (method, path, accept) in [
+            ("GET", "/session", "application/json"),
+            ("POST", "/session/ses_prompt/prompt", "application/json"),
+            ("GET", "/event", "text/event-stream"),
+            ("GET", "/global/event", "text/event-stream"),
+            ("GET", "/openapi.json", "application/json"),
+            ("GET", "/ws/v4/local", "application/json"),
+        ] {
+            let mut socket = TcpStream::connect(server.address()).await.unwrap();
+            socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: {accept}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}", server.address()).as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.unwrap();
+            let response = String::from_utf8(response).unwrap();
+            assert_eq!(response.lines().next().unwrap().split_whitespace().nth(1), Some("404"), "{method} {path}: {response}");
+            assert!(!response.to_ascii_lowercase().contains("text/event-stream"));
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        server.shutdown().await.unwrap();
+    }).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -385,6 +385,11 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
     expect(operation.roles.length).toBeGreaterThan(0)
   }
   expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(204)
+  for (const name of ["session.capturedChanges.list", "session.team.economics", "session.family.activity"]) {
+    const operation = operations.find((operation) => operation.diagnosticName === name)
+    expect(operation?.roles).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
+    expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toContain(operation!.operationId)
+  }
   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
   expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
   expect(operations.filter((operation) => operation.diagnosticName.startsWith("notice."))).toHaveLength(4)
@@ -443,10 +448,33 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
       ).toBe(true)
 })
 
-test("TEST-030 TS generation twice in scratch copies is byte identical", async () => {
-  const { cp, mkdtemp, readdir, rm, symlink } = await import("node:fs/promises")
+test("TEST-030 protocol and thin client generation is reproducible and matches checked-in consumers", async () => {
+  const { cp, mkdir, mkdtemp, readdir, rm, symlink } = await import("node:fs/promises")
   const { tmpdir } = await import("node:os")
   const root = path.resolve(import.meta.dir, "../../..")
+  const outputs = [
+    path.join("packages", "protocol", "src", "generated", "v5"),
+    path.join("packages", "client", "src", "v5", "generated"),
+  ]
+  const collect = async (base: string) => {
+    const hashes: Record<string, string> = {}
+    const visit = async (directory: string) => {
+      for (const entry of await readdir(path.join(base, directory), { withFileTypes: true })) {
+        const file = path.join(directory, entry.name)
+        if (entry.isDirectory()) await visit(file)
+        else
+          hashes[file] = new Bun.CryptoHasher("sha256")
+            .update(await Bun.file(path.join(base, file)).arrayBuffer())
+            .digest("hex")
+      }
+    }
+    for (const output of outputs) {
+      await visit(output)
+      expect(Object.keys(hashes).some((file) => file.startsWith(`${output}${path.sep}`))).toBe(true)
+    }
+    return hashes
+  }
+  const checkedIn = await collect(root)
   const runs: Record<string, string>[] = []
   for (let run = 0; run < 2; run++) {
     const scratch = await mkdtemp(path.join(tmpdir(), "ycoding-v5-generation-"))
@@ -455,33 +483,51 @@ test("TEST-030 TS generation twice in scratch copies is byte identical", async (
       await cp(path.join(root, "packages/protocol/src"), path.join(scratch, "packages/protocol/src"), {
         recursive: true,
       })
+      await cp(path.join(root, "packages/protocol/package.json"), path.join(scratch, "packages/protocol/package.json"))
+      await cp(path.join(root, "packages/client/src"), path.join(scratch, "packages/client/src"), { recursive: true })
+      await cp(path.join(root, "packages/client/script"), path.join(scratch, "packages/client/script"), {
+        recursive: true,
+      })
+      await cp(path.join(root, "package.json"), path.join(scratch, "package.json"))
       await symlink(path.join(root, "node_modules"), path.join(scratch, "node_modules"), "dir")
       await symlink(
         path.join(root, "packages/protocol/node_modules"),
         path.join(scratch, "packages/protocol/node_modules"),
         "dir",
       )
-      const generated = Bun.spawnSync(["bun", path.join(scratch, "packages/protocol/src/v5/generate.ts")], {
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      if (generated.exitCode !== 0) throw new Error(`generator failed: ${new TextDecoder().decode(generated.stderr)}`)
-      const output: Record<string, string> = {}
-      const collect = async (directory: string) => {
-        for (const entry of await readdir(directory, { withFileTypes: true })) {
-          const file = path.join(directory, entry.name)
-          if (entry.isDirectory()) await collect(file)
-          else
-            output[path.relative(path.join(scratch, "packages/protocol/src/generated/v5"), file)] =
-              new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex")
-        }
+      await mkdir(path.join(scratch, "packages/client/node_modules/@ycoding-ai"), { recursive: true })
+      await symlink(
+        path.join(scratch, "packages/protocol"),
+        path.join(scratch, "packages/client/node_modules/@ycoding-ai/protocol"),
+        "dir",
+      )
+      await symlink(
+        path.join(root, "packages/schema"),
+        path.join(scratch, "packages/client/node_modules/@ycoding-ai/schema"),
+        "dir",
+      )
+      await symlink(
+        path.join(root, "node_modules/typescript"),
+        path.join(scratch, "packages/client/node_modules/typescript"),
+        "dir",
+      )
+      for (const output of outputs) await rm(path.join(scratch, output), { recursive: true, force: true })
+      for (const generator of ["packages/protocol/src/v5/generate.ts", "packages/client/script/generate-v5.ts"]) {
+        const generated = Bun.spawnSync(["bun", path.join(scratch, generator)], {
+          cwd: scratch,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 60_000,
+        })
+        if (generated.exitCode !== 0)
+          throw new Error(`${generator} failed (${generated.exitCode}): ${new TextDecoder().decode(generated.stderr)}`)
       }
-      await collect(path.join(scratch, "packages/protocol/src/generated/v5"))
-      runs.push(output)
+      runs.push(await collect(scratch))
     } finally {
       await rm(scratch, { recursive: true, force: true })
     }
   }
   expect(Object.keys(runs[0] ?? {}).length).toBeGreaterThan(0)
   expect(runs[1]).toEqual(runs[0])
+  expect(runs[0]).toEqual(checkedIn)
 }, 120_000)
