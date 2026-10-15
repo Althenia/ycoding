@@ -84,6 +84,21 @@ describe("documentation index", () => {
     const rows = resource?.blocks.flatMap((block) => block.kind === "table" ? block.rows : []) ?? []
     for (const field of ["max_running", "max_running_per_session", "max_queued_per_session"])
       expect(rows.find((row) => row[0] === `\`shell_queue.${field}\``)?.[3]).toContain("slot range")
+    expect(rows.find((row) => row[0] === "`shell_queue.max_running`")?.[2]).toBe("`10`")
+    expect(rows.find((row) => row[0] === "`shell_queue.memory_reserve_mb`")?.[3]).toContain("unmaterialized")
+    expect(rows.find((row) => row[0] === "`shell_queue.max_load`")?.[3]).toContain("recent starts")
+    expect(text).toContain("exp(−age / 60 seconds)")
+    expect(text).toContain("run-0")
+    expect(text).toContain("even when memory or CPU headroom is insufficient")
+    expect(text).toContain("last five recorded queued runs")
+    expect(text).toContain("periodic memory sample after startup")
+    expect(text).toContain("successful exits with code 0")
+    expect(text).toContain("Nonzero exits")
+    expect(text).toContain("do not evict history")
+    expect(text).toContain("after completion and release of running slots")
+    expect(text).toContain("256 recently recorded keys")
+    expect(text).toContain("full memory limit")
+    expect(text).toContain("reserves a family shell slot only at admission")
   })
 
   test("describes release installation without claiming a signature", () => {

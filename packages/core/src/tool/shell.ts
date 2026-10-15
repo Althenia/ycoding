@@ -53,7 +53,7 @@ export const Input = Schema.Struct({
   }),
   channel: Schema.Literals(["normal", "queue"]).pipe(Schema.optional).annotate({
     description:
-      "normal (default) runs the command now. queue admits it to a bounded machine-wide queue shared by every YCoding process and returns immediately; it starts when resources allow and completion is delivered automatically. Use queue for typechecks, builds, and package-wide test suites.",
+      "normal (default) runs the command now. queue returns immediately with a bounded machine-wide queue position; it reserves a family shell slot only at admission. The idle head can start on run-0 regardless of resource headroom, within family and per-Session caps. Later admissions account for learned peak memory requirements and recent CPU starts. With no history, the full memory limit or configured reserve is required. Completion is delivered automatically. Use queue for typechecks, builds, and package-wide test suites.",
   }),
 })
 
@@ -203,7 +203,7 @@ export const Plugin = {
         draft.add(
           name,
           Tool.make({
-            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds, up to ${MAX_TIMEOUT_MS}; zero or omission uses the ${DEFAULT_TIMEOUT_MS} ms default. memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes. channel=queue admits the command to a bounded machine-wide queue shared by every YCoding process on this machine and returns immediately with its shell ID and queue position; it starts when a slot, its Session's running cap, available memory (memory_limit_mb or the configured reserve), and CPU load allow, its timeout counts from that start, and completion is delivered automatically like a background command. Use channel=queue for typechecks, builds, and package-wide test suites so expensive commands never run concurrently beyond safe limits; use the default channel=normal for ordinary commands.`,
+            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds, up to ${MAX_TIMEOUT_MS}; zero or omission uses the ${DEFAULT_TIMEOUT_MS} ms default. memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes. channel=queue returns immediately with its shell ID and machine-wide queue position. Guardrail review runs at submission, but waiting commands hold no family shell slot; admission reserves family capacity before claiming queue running slots. With no queued command running, the ordered head may claim run-0 regardless of resource headroom, within family and per-Session caps and turn order. Later admissions use memory headroom after subtracting running commands' remaining requirements and CPU headroom including decaying recent starts. A memory requirement is the highest peak of the last five recorded queued runs for the exact command and resolved working directory, capped by memory_limit_mb. Successful exits with code 0 and a periodic post-start sample may record lower peaks; nonzero exits and other incomplete runs record only peaks above the current requirement and otherwise leave history intact. History retains up to 256 keys across local processes, with background writes after completion and slot release. A cold command requires its full memory limit, or the configured reserve without a limit. Its timeout counts from start, and completion is delivered automatically like a background command. Use channel=queue for typechecks, builds, and package-wide test suites; use the default channel=normal for ordinary commands.`,
             input: Input,
             output: Output,
             structured: StructuredOutput,
@@ -274,6 +274,7 @@ export const Plugin = {
                 if ((yield* fsUtil.stat(target.canonical)).type !== "Directory")
                   return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
+                const queued = input.channel === "queue"
                 const reservation = yield* guardrail
                   .assert({
                     sessionID: context.sessionID,
@@ -281,6 +282,7 @@ export const Plugin = {
                     resources: [input.command],
                     metadata: { workdir: target.canonical },
                     holder: context.callID,
+                    deferShell: queued,
                   })
                   .pipe(
                     Effect.mapError((error) =>
@@ -289,10 +291,9 @@ export const Plugin = {
                         : new ToolFailure({ message: `Session guardrail rejected shell command: ${input.command}`, error }),
                     ),
                   )
-                const queued = input.channel === "queue"
                 const start: Effect.Effect<ShellSchema.Info, ToolFailure | Shell.SpawnError> = queued
                   ? shell
-                      .enqueue(prepared, context.sessionID)
+                      .enqueue(prepared, context.sessionID, reservation.admission)
                       .pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error })))
                   : shell.create(prepared)
                 const info = yield* start.pipe(Effect.onError(() => reservation.release))

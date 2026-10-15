@@ -32,6 +32,7 @@ import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Permission } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { Shell } from "@ycoding-ai/core/shell"
@@ -438,7 +439,56 @@ const waitForJob = (jobs: Job.Interface, id: string): Effect.Effect<Job.Info> =>
       ),
     )
 
+const requiredShellID = (settled: { output?: { structured?: unknown } }) =>
+  Schema.decodeUnknownSync(Schema.Struct({ shellID: ShellSchema.ID }))(settled.output?.structured).shellID
+
 describe("ShellTool", () => {
+  it.live("keeps twelve waiting commands outside the family shell cap while normal shells run", () =>
+    Effect.acquireUseRelease(Effect.promise(() => tmpdir()), (tmp) => {
+      reset()
+      configEntries = [configDocument(undefined, undefined, { max_running: 1, max_queued_per_session: 16 })]
+      return withSession(tmp.path, (registry) => Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        const guardrail = yield* SessionGuardrail.Service
+        yield* Effect.addFinalizer(() => shell.list().pipe(Effect.flatMap((items) => Effect.forEach(items, (item) => shell.remove(item.id).pipe(Effect.ignore), { discard: true }))))
+        const holder = yield* settleTool(registry, call({ command: idleCommand, channel: "queue" }, "call-holder"))
+        const id = requiredShellID(holder)
+        yield* Effect.gen(function* () { while ((yield* shell.get(id)).status !== "running") yield* Effect.yieldNow }).pipe(Effect.timeout(5_000))
+        yield* settleTool(registry, call({ command: idleCommand, background: true }, "call-normal"))
+        for (let index = 0; index < 12; index++) {
+          const waiting = yield* settleTool(registry, call({ command: helloCommand, channel: "queue" }, `call-waiting-${index}`)).pipe(Effect.timeout(2_000))
+          expect(requiredShellID(waiting)).toStartWith("sh_")
+        }
+        expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(2)
+        const normal = yield* settleTool(registry, call({ command: helloCommand }, "call-available-normal"))
+        expect(normal.output?.content[0]).toEqual({ type: "text", text: "hello" })
+      }))
+    }, (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())),
+  )
+
+  it.live("waits for family capacity without holding running slots and starts after a normal shell frees capacity", () =>
+    Effect.acquireUseRelease(Effect.promise(() => tmpdir()), (tmp) => {
+      reset()
+      configEntries = [configDocument(undefined, undefined, { max_running: 1 }), new Config.Document({ type: "document", info: new Config.Info({ guardrails: new ConfigGuardrail.Info({ max_concurrent_shells: 1, shell_wait_seconds: 1 }) }) })]
+      return withSession(tmp.path, (registry) => Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        const events = yield* EventRuntime.Service
+        yield* Effect.addFinalizer(() => shell.list().pipe(Effect.flatMap((items) => Effect.forEach(items, (item) => shell.remove(item.id).pipe(Effect.ignore), { discard: true }))))
+        const normal = yield* settleTool(registry, call({ command: idleCommand, background: true }, "call-full-normal"))
+        const normalID = requiredShellID(normal)
+        const waiting = yield* settleTool(registry, call({ command: helloCommand, channel: "queue" }, "call-full-queued")).pipe(Effect.timeout(2_000))
+        const waitingID = requiredShellID(waiting)
+        expect(waitingID).toStartWith("sh_")
+        const other = yield* shell.enqueue(yield* shell.prepare({ command: idleCommand, timeout: 0 }), Session.ID.make("ses_other_family"))
+        yield* Effect.gen(function* () { while ((yield* shell.get(other.id)).status !== "running") yield* Effect.yieldNow }).pipe(Effect.timeout(5_000))
+        expect((yield* shell.get(waitingID)).status).toBe("queued")
+        yield* shell.remove(other.id)
+        const completed = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic" && JSON.stringify(event.data.input.data).includes("hello")), Stream.runHead, Effect.forkScoped({ startImmediately: true }))
+        yield* shell.remove(normalID)
+        expect((yield* Fiber.join(completed).pipe(Effect.timeout(5_000))).valueOrUndefined).toBeDefined()
+      }))
+    }, (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())),
+  )
   afterAll(async () => fs.rm(data, { recursive: true, force: true }))
 
   test("accepts process timeouts through one hour and rejects invalid values", () => {

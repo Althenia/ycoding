@@ -716,7 +716,7 @@ describe("Config", () => {
       }).shell_queue
       expect(queue).toEqual({ max_running: 64, max_running_per_session: 1, max_queued_per_session: 1_000, memory_reserve_mb: 0, max_load: 0.5 })
       expect(ConfigShell.queueLimits(undefined)).toEqual({
-        max_running: 2,
+        max_running: 10,
         max_running_per_session: 1,
         max_queued_per_session: 16,
         memory_reserve_mb: 2_048,

@@ -13,7 +13,7 @@ import {
 } from "effect/unstable/process/ChildProcessSpawner"
 // ast-grep-ignore: no-star-import
 import * as NodeChildProcess from "node:child_process"
-import { PassThrough } from "node:stream"
+import { PassThrough, pipeline, type Readable } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
@@ -90,6 +90,13 @@ type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJ
 const makeCrossSpawnSpawner = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  const buffered = new WeakMap<NodeChildProcess.ChildProcess, { stdout?: PassThrough; stderr?: PassThrough }>()
+  const buffer = (source: Readable | null) => {
+    if (!source) return undefined
+    const stream = new PassThrough()
+    pipeline(source, stream, () => {})
+    return stream
+  }
 
   const cwd = Effect.fnUntraced(function* (opts: ChildProcess.CommandOptions) {
     if (Predicate.isUndefined(opts.cwd)) return undefined
@@ -239,18 +246,22 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     out: ChildProcess.StdoutConfig,
     err: ChildProcess.StderrConfig,
   ) => {
-    let stdout = proc.stdout
-      ? NodeStream.fromReadable({
-          evaluate: () => proc.stdout!,
-          onError: (cause) => toPlatformError("fromReadable(stdout)", toError(cause), command),
-        })
-      : Stream.empty
-    let stderr = proc.stderr
-      ? NodeStream.fromReadable({
-          evaluate: () => proc.stderr!,
-          onError: (cause) => toPlatformError("fromReadable(stderr)", toError(cause), command),
-        })
-      : Stream.empty
+    const captured = buffered.get(proc)!
+    const readable = (stream: PassThrough | undefined, method: string) =>
+      !stream
+        ? Stream.empty
+        : Stream.unwrap(
+            Effect.sync(() =>
+              stream.errored
+                ? Stream.fail(toPlatformError(method, stream.errored, command))
+                : NodeStream.fromReadable({
+                    evaluate: () => stream,
+                    onError: (cause) => toPlatformError(method, toError(cause), command),
+                  }),
+            ),
+          )
+    let stdout = readable(captured.stdout, "fromReadable(stdout)")
+    let stderr = readable(captured.stderr, "fromReadable(stderr)")
 
     if (Sink.isSink(out.stream)) stdout = Stream.transduce(stdout, out.stream)
     if (Sink.isSink(err.stream)) stderr = Stream.transduce(stderr, err.stream)
@@ -262,6 +273,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
+      buffered.set(proc, { stdout: buffer(proc.stdout), stderr: buffer(proc.stderr) })
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
       proc.on("error", (err) => {

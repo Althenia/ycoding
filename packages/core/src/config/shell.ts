@@ -26,19 +26,19 @@ export const Queue = Schema.Struct({
     }),
   memory_reserve_mb: MemoryLimitMb.pipe(Schema.optional).annotate({
     description:
-      "Available memory in MiB required to start a queued command that has no memory limit; a command with a limit requires its limit",
+      "Cold-command memory requirement in MiB without a memory limit, after accounting for running commands' unmaterialized requirements; a finite memory limit supplies the cold requirement instead, and measured runs supply learned peak requirements",
   }),
   max_load: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_QUEUE_LOAD))
     .pipe(Schema.optional)
     .annotate({
       description:
-        "Start a queued command only while the 1-minute load average divided by the CPU count is below this value",
+        "CPU headroom threshold for further queued admissions: 1-minute load average plus decaying recent starts, divided by available parallelism; the idle run-0 head is exempt",
     }),
 })
 export type Queue = typeof Queue.Type
 
 export const QUEUE_DEFAULTS = {
-  max_running: 2,
+  max_running: 10,
   max_running_per_session: 1,
   max_queued_per_session: 16,
   memory_reserve_mb: 2_048,

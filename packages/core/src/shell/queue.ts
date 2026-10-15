@@ -2,7 +2,7 @@ export * as ShellQueue from "./queue"
 
 import { randomUUID } from "crypto"
 import { watch } from "fs"
-import { mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from "fs/promises"
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "fs/promises"
 import os from "os"
 import path from "path"
 import { Context, Deferred, Effect, Exit, Layer, Option, Queue, Schema, Scope, Semaphore } from "effect"
@@ -14,6 +14,7 @@ import { Global } from "../global"
 import { AppProcess } from "../process"
 import { Hash } from "../util/hash"
 import { ProcessLock } from "../util/process-lock"
+import { ShellMemory } from "./memory"
 
 // While this process has waiting entries it re-evaluates at least this often, covering changes
 // that produce no file event: resource levels, crashed owners, stalled owners, and missed events.
@@ -33,8 +34,23 @@ export type Sample = { readonly availableMb: number; readonly load: number }
 export interface Request {
   readonly id: Shell.ID
   readonly sessionID: string
+  readonly command: string
+  readonly cwd: string
+  readonly admission?: Admission
   readonly memoryLimitMb?: number
+  readonly residentMb?: () => number
   readonly limits: Required<ConfigShell.Queue>
+}
+
+export interface Admission {
+  readonly family: string
+  readonly acquire: Effect.Effect<FamilyReservation | undefined>
+  readonly subscribe: (wake: () => void) => () => void
+}
+
+export interface FamilyReservation {
+  readonly release: Effect.Effect<void>
+  readonly commit: Effect.Effect<void>
 }
 
 export class FullError extends Schema.TaggedErrorClass<FullError>()("ShellQueue.FullError", {
@@ -60,6 +76,7 @@ export interface Ticket {
 }
 
 export interface Interface {
+  readonly recordPeak: (input: ShellMemory.Peak) => Effect.Effect<void>
   // Adds an entry to the machine-wide queue. The entry and every slot it holds are released when
   // the enclosing scope closes.
   readonly enqueue: (request: Request) => Effect.Effect<Ticket, FullError, Scope.Scope>
@@ -89,9 +106,13 @@ const Entry = Schema.Union([
 ])
 type Entry = typeof Entry.Type
 
-const Owner = Schema.Struct({ heartbeatMs: Schema.Finite })
+const Owner = Schema.Struct({
+  heartbeatMs: Schema.Finite,
+  residentMb: Schema.Record(Schema.String, Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).pipe(Schema.optional),
+})
 
 type Waiter = {
+  readonly request: Request
   readonly entry: Entry
   readonly admitted: Deferred.Deferred<void, EntryLostError>
   readonly admission: Scope.Scope
@@ -101,7 +122,7 @@ type Waiter = {
 }
 
 type Claim = { readonly id: string; readonly parent: Scope.Scope; readonly scope: Scope.Closeable }
-type Exhausted = { run: number; readonly sessions: Map<string, number> }
+type Exhausted = { run: number; readonly sessions: Map<string, number>; readonly families: Set<string> }
 
 type Snapshot = {
   readonly started: number
@@ -113,6 +134,7 @@ type Snapshot = {
   readonly running: readonly Entry[]
   readonly waiting: readonly Entry[]
   readonly stalled: ReadonlySet<string>
+  readonly residentMb: ReadonlyMap<string, Readonly<Record<string, number>>>
 }
 
 const decodeEntry = Schema.decodeUnknownOption(Schema.fromJsonString(Entry))
@@ -150,6 +172,8 @@ export interface Options {
   readonly heartbeatMs?: number
   readonly watch?: Watch
   readonly trace?: (event: Trace) => void
+  readonly now?: () => number
+  readonly parallelism?: number
 }
 
 const watchDirectory: Watch = (directory, onChange, onError) => {
@@ -184,9 +208,12 @@ export const layer = (options?: Options) =>
       )
       const backstopMs = options?.backstopMs ?? BACKSTOP_MS
       const heartbeatMs = options?.heartbeatMs ?? HEARTBEAT_MS
+      const now = options?.now ?? Date.now
+      const parallelism = options?.parallelism ?? os.availableParallelism()
       const trace = options?.trace ?? (() => {})
       const runFork = Effect.runForkWith(yield* Effect.context())
       const dir = path.join(global.state, "shell-queue")
+      const memory = ShellMemory.make(dir)
       const entriesDir = path.join(dir, "entries")
       const ownersDir = path.join(dir, "owners")
       const slotsDir = path.join(dir, "slots")
@@ -198,6 +225,7 @@ export const layer = (options?: Options) =>
       const waiters = new Map<string, Waiter>()
       // Every entry this process owns, waiting or admitted, until its scope closes.
       const owned = new Map<string, Entry>()
+      const residents = new Map<string, () => number>()
       const published = new Set<string>()
       // Every slot this process holds, by file.
       const claims = new Map<string, Claim>()
@@ -210,7 +238,14 @@ export const layer = (options?: Options) =>
       const evaluating = yield* Semaphore.make(1)
       const writing = yield* Semaphore.make(1)
       const missingOwners = new Map<string, number>()
-      const ownerHeartbeats = new Map<string, { readonly mtimeMs: number; readonly heartbeatMs: number }>()
+      const ownerHeartbeats = new Map<
+        string,
+        {
+          readonly mtimeMs: number
+          readonly heartbeatMs: number
+          readonly residentMb: Readonly<Record<string, number>>
+        }
+      >()
       const changes = { revision: 0 }
       const admissionEpoch = attempt(() => readFile(admissionFile, "utf8")).pipe(
         Effect.map((value) => value ?? "initial"),
@@ -280,8 +315,23 @@ export const layer = (options?: Options) =>
         }
       })
 
+      const residentMb = (id: string) => {
+        const value = residents.get(id)?.() ?? 0
+        return Number.isFinite(value) ? Math.max(0, value) : 0
+      }
+
       const heartbeat = Effect.promise(() =>
-        utimes(ownerFile, new Date(), new Date()).then(
+        writeFile(
+          ownerFile,
+          encodeOwner({
+            heartbeatMs,
+            residentMb: Object.fromEntries(
+              [...owned.values()].flatMap((entry) =>
+                entry.admitted === undefined ? [] : [[entry.id, residentMb(entry.id)]],
+              ),
+            ),
+          }),
+        ).then(
           () => true,
           () => false,
         ),
@@ -367,7 +417,11 @@ export const layer = (options?: Options) =>
         missingOwners.delete(owner)
         const recorded = Option.getOrUndefined(decodeOwner((yield* attempt(() => readFile(file, "utf8"))) ?? ""))
         const interval = recorded?.heartbeatMs ?? HEARTBEAT_MS
-        ownerHeartbeats.set(owner, { mtimeMs: info.mtimeMs, heartbeatMs: interval })
+        ownerHeartbeats.set(owner, {
+          mtimeMs: info.mtimeMs,
+          heartbeatMs: interval,
+          residentMb: recorded?.residentMb ?? {},
+        })
         if (now - info.mtimeMs <= interval * STALE_HEARTBEATS) return "live" as const
         return yield* Effect.scoped(ProcessLock.claim(file)).pipe(
           Effect.as("dead" as const),
@@ -477,6 +531,9 @@ export const layer = (options?: Options) =>
             item.entry && !item.entry.retiring && !stale.includes(item) ? [item.entry] : [],
           ),
           stalled: new Set(foreign.filter((owner) => states.get(owner) === "stalled")),
+          residentMb: new Map(
+            [...ownerHeartbeats].map(([owner, value]) => [owner, states.get(owner) === "live" ? value.residentMb : {}]),
+          ),
         }
       })
 
@@ -509,6 +566,7 @@ export const layer = (options?: Options) =>
           running: current.entries.filter((entry) => entry.admitted !== undefined),
           waiting: order(unordered, lanes),
           stalled: current.stalled,
+          residentMb: current.residentMb,
         } satisfies Snapshot
       })
 
@@ -539,15 +597,39 @@ export const layer = (options?: Options) =>
         )
       })
 
-      const resourcesMet = (entry: Entry) =>
+      const resourcesMet = (entry: Entry, current: Snapshot) =>
         sampler.pipe(
-          Effect.map(
-            (value) => value !== undefined && value.availableMb >= entry.reserveMb && value.load < entry.maxLoad,
-          ),
+          Effect.map((value) => {
+            if (value === undefined) return false
+            const unmaterializedMb = current.running.reduce(
+              (total, running) =>
+                total +
+                Math.max(
+                  0,
+                  running.reserveMb -
+                    (running.owner === token
+                      ? residentMb(running.id)
+                      : (current.residentMb.get(running.owner)?.[running.id] ?? 0)),
+                ),
+              0,
+            )
+            const time = now()
+            const recentLoad = current.running.reduce(
+              (total, running) =>
+                total + (running.admitted === undefined ? 0 : Math.exp(-Math.max(0, time - running.admitted) / 60_000)),
+              0,
+            )
+            return (
+              value.availableMb - unmaterializedMb >= entry.reserveMb &&
+              value.load + recentLoad / parallelism < entry.maxLoad
+            )
+          }),
         )
 
       const candidate = (current: Snapshot, exhausted: Exhausted) =>
         current.waiting.find((entry) => {
+          const family = waiters.get(entry.id)?.request.admission?.family
+          if (family !== undefined && exhausted.families.has(family)) return false
           if (current.stalled.has(entry.owner)) return false
           if (entry.owner !== token && entry.capacityBlocked !== undefined)
             return entry.capacityBlocked !== current.admissionEpoch
@@ -585,23 +667,36 @@ export const layer = (options?: Options) =>
       })
 
       const admit = Effect.fnUntraced(function* (waiter: Waiter, current: Snapshot, exhausted: Exhausted) {
-        const entry = waiter.entry
+        const entry = {
+          ...waiter.entry,
+          reserveMb: yield* memory.requirement({
+            ...waiter.request,
+            reserveMb: waiter.request.limits.memory_reserve_mb,
+          }),
+        }
         if (waiters.get(entry.id) !== waiter) return "stop" as const
         const admission = yield* Scope.fork(waiter.admission)
         const slot = (prefix: string, size: number) => claimSlot({ prefix, size, id: entry.id, parent: admission })
         const idle = current.running.length === 0
+        const family: { current?: FamilyReservation } = {}
         const claimed = yield* Effect.gen(function* () {
-          if (!idle && !(yield* resourcesMet(entry))) return "resources" as const
+          if (!idle && !(yield* resourcesMet(entry, current))) return "resources" as const
           if (changes.revision !== current.revision || candidate(current, exhausted)?.id !== entry.id)
             return "changed" as const
+          if (waiter.request.admission) {
+            family.current = yield* Effect.acquireRelease(
+              waiter.request.admission.acquire,
+              (reservation) => reservation?.release ?? Effect.void,
+            ).pipe(Scope.provide(admission))
+            if (!family.current) return "family" as const
+          }
           const lane = laneOf(entry.sessionID)
-          // Only run-0 can use the idle resource exemption; all other indices require a sample.
           const exempt = idle ? yield* slot("run", 1) : undefined
           if (exempt !== undefined) {
             const session = yield* slot(`session-${lane}`, entry.maxRunningPerSession)
             return session === undefined ? ("session" as const) : { run: exempt, session }
           }
-          if (idle && !(yield* resourcesMet(entry))) return "resources" as const
+          if (idle && !(yield* resourcesMet(entry, current))) return "resources" as const
           const session = yield* slot(`session-${lane}`, entry.maxRunningPerSession)
           if (session === undefined) return "session" as const
           const run = yield* slot("run", entry.maxRunning)
@@ -611,7 +706,7 @@ export const layer = (options?: Options) =>
           yield* Scope.close(admission, Exit.void)
           if (claimed !== "changed")
             yield* capacityBlocked(waiter, claimed === "resources" ? undefined : yield* admissionEpoch)
-          return claimed === "run" || claimed === "session" ? claimed : ("stop" as const)
+          return claimed === "run" || claimed === "session" || claimed === "family" ? claimed : ("stop" as const)
         }
         trace("claimed")
         const latest = yield* snapshot
@@ -649,8 +744,8 @@ export const layer = (options?: Options) =>
         )
         if (bypass) yield* Scope.close(bypass, Exit.void)
         trace("admission-written")
-        const now = Date.now()
-        const started = { ...entry, admitted: now, slots: claimed }
+        const admitted = now()
+        const started = { ...entry, admitted, slots: claimed }
         if (waiters.get(entry.id) !== waiter || !owned.has(entry.id)) {
           yield* Scope.close(admission, Exit.void)
           return "stop" as const
@@ -659,7 +754,7 @@ export const layer = (options?: Options) =>
         yield* Effect.gen(function* () {
           const lane = path.join(lanesDir, laneOf(entry.sessionID))
           const temporary = `${lane}.${token}.tmp`
-          yield* Effect.promise(() => writeFile(temporary, String(now)))
+          yield* Effect.promise(() => writeFile(temporary, String(admitted)))
           yield* Effect.promise(() => rename(temporary, lane))
           yield* writeEntry(entry.id)
         }).pipe(
@@ -675,6 +770,7 @@ export const layer = (options?: Options) =>
         }
         waiters.delete(entry.id)
         yield* Scope.close(waiter.waiting, Exit.void)
+        if (family.current) yield* family.current.commit
         yield* Deferred.succeed(waiter.admitted, undefined)
         yield* pruneLanes(new Set(current.entries.map((item) => laneOf(item.sessionID))), current.started)
         return "admitted" as const
@@ -749,7 +845,10 @@ export const layer = (options?: Options) =>
         if (waiters.size === 0) return
         trace("pass")
         yield* register
-        const state = { current: yield* snapshot, exhausted: { run: 0, sessions: new Map<string, number>() } }
+        const state = {
+          current: yield* snapshot,
+          exhausted: { run: 0, sessions: new Map<string, number>(), families: new Set<string>() },
+        }
         yield* settle(state.current)
         while (true) {
           if (changes.revision !== state.current.revision) return
@@ -758,6 +857,8 @@ export const layer = (options?: Options) =>
           if (!waiter) return
           const result = yield* admit(waiter, state.current, state.exhausted)
           if (result === "stop") return
+          if (result === "family" && waiter.request.admission)
+            state.exhausted.families.add(waiter.request.admission.family)
           if (result === "run") state.exhausted.run = Math.max(state.exhausted.run, waiter.entry.maxRunning)
           if (result === "session")
             state.exhausted.sessions.set(
@@ -766,7 +867,7 @@ export const layer = (options?: Options) =>
             )
           if (result === "admitted") {
             state.current = yield* snapshot
-            state.exhausted = { run: 0, sessions: new Map<string, number>() }
+            state.exhausted = { run: 0, sessions: new Map<string, number>(), families: new Set<string>() }
             yield* settle(state.current)
           }
         }
@@ -813,7 +914,7 @@ export const layer = (options?: Options) =>
           id: request.id,
           owner: token,
           sessionID: request.sessionID,
-          enqueued: Date.now(),
+          enqueued: now(),
           reserveMb: request.memoryLimitMb ?? request.limits.memory_reserve_mb,
           maxRunning: request.limits.max_running,
           maxRunningPerSession: request.limits.max_running_per_session,
@@ -833,12 +934,14 @@ export const layer = (options?: Options) =>
           return yield* new FullError({ limit })
         }
         const admission = yield* Scope.fork(scope)
+        if (request.residentMb) residents.set(entry.id, request.residentMb)
         owned.set(entry.id, entry)
         yield* Scope.addFinalizer(
           scope,
           Effect.gen(function* () {
             waiters.delete(entry.id)
             owned.delete(entry.id)
+            residents.delete(entry.id)
             yield* writing.withPermits(1)(
               Effect.gen(function* () {
                 const temporary = `${entryFile(entry.id)}.${randomUUID()}.tmp`
@@ -860,6 +963,7 @@ export const layer = (options?: Options) =>
         const current = yield* snapshot
         const position = Math.max(1, current.waiting.findIndex((item) => item.id === entry.id) + 1)
         const waiter: Waiter = {
+          request,
           entry,
           admitted: yield* Deferred.make<void, EntryLostError>(),
           admission,
@@ -868,6 +972,10 @@ export const layer = (options?: Options) =>
           onPosition: () => Effect.void,
         }
         waiters.set(entry.id, waiter)
+        if (request.admission) {
+          const unsubscribe = request.admission.subscribe(wake)
+          yield* Scope.addFinalizer(scope, Effect.sync(unsubscribe))
+        }
         syncWatcher()
         wake()
         return {
@@ -881,7 +989,14 @@ export const layer = (options?: Options) =>
         } satisfies Ticket
       })
 
-      return Service.of({ enqueue })
+      return Service.of({
+        enqueue,
+        recordPeak: (input) =>
+          memory.record(input).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("Shell memory peak could not be recorded", { cause })),
+            Effect.andThen(Effect.sync(wake)),
+          ),
+      })
     }),
   )
 

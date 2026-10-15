@@ -14,23 +14,38 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Service, type Interface, node, layer, NotFoundError } from "@ycoding-ai/core/shell"
 import { ShellQueue } from "@ycoding-ai/core/shell/queue"
+import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
 import { ShellTable } from "@ycoding-ai/core/shell/sql"
 import { Shell } from "@ycoding-ai/schema/shell"
 import { eq, sql } from "drizzle-orm"
-import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
-class QueuedFixture extends Context.Service<QueuedFixture, {
-  readonly workspace: string
-  readonly spawnHook: { current?: Effect.Effect<void> }
-}>()("ShellQueuedFixture") {}
+class QueuedFixture extends Context.Service<
+  QueuedFixture,
+  {
+    readonly workspace: string
+    readonly spawnHook: { current?: Effect.Effect<void> }
+    readonly history: { started?: Deferred.Deferred<void>; finished?: Deferred.Deferred<void> }
+    readonly processTree: {
+      enabled: boolean
+      pid?: number
+      awaitExit?: boolean
+      factor?: number
+      sampled?: (factor: number) => Effect.Effect<void>
+    }
+  }
+>()("ShellQueuedFixture") {}
 
-const fixture = Layer.effect(QueuedFixture, Effect.acquireRelease(
-  Effect.promise(() => mkdtemp(join(tmpdir(), "ycoding-shell-queued-"))),
-  (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
-).pipe(Effect.map((workspace) => ({ workspace, spawnHook: {} }))))
+const fixture = Layer.effect(
+  QueuedFixture,
+  Effect.acquireRelease(
+    Effect.promise(() => mkdtemp(join(tmpdir(), "ycoding-shell-queued-"))),
+    (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+  ).pipe(Effect.map((workspace) => ({ workspace, spawnHook: {}, history: {}, processTree: { enabled: false } }))),
+)
 
 const config = Layer.succeed(
   Config.Service,
@@ -51,49 +66,108 @@ const appProcess = Layer.effect(
   AppProcess.Service,
   Effect.gen(function* () {
     const real = yield* AppProcess.Service
-    const { spawnHook } = yield* QueuedFixture
+    const { spawnHook, processTree } = yield* QueuedFixture
     return AppProcess.Service.of({
       ...real,
       spawn: (command) => {
         const hook = spawnHook.current
         spawnHook.current = undefined
-        return hook ? Effect.uninterruptible(real.spawn(command).pipe(Effect.tap(() => hook))) : real.spawn(command)
+        const spawned = real.spawn(command).pipe(
+          Effect.tap((handle) =>
+            Effect.sync(() => {
+              if (processTree.enabled) processTree.pid = Number(handle.pid)
+            }),
+          ),
+          Effect.tap((handle) => (processTree.awaitExit ? handle.exitCode.pipe(Effect.asVoid) : Effect.void)),
+        )
+        return hook ? Effect.uninterruptible(spawned.pipe(Effect.tap(() => hook))) : spawned
+      },
+      run: (command, options) => {
+        if (
+          !processTree.enabled ||
+          processTree.pid === undefined ||
+          command._tag !== "StandardCommand" ||
+          command.command !== "ps" ||
+          !command.args.includes("pid=,ppid=,pgid=,rss=,lstart=")
+        )
+          return real.run(command, options)
+        const pid = processTree.pid
+        const factor = processTree.factor ?? 1
+        return Effect.succeed({
+          command: "ps",
+          exitCode: 0,
+          stdout: Buffer.from(
+            [
+              `${pid} 1 ${pid} ${1024 * factor} parent`,
+              `${pid + 1} ${pid} ${pid + 1} ${2048 * factor} child`,
+              `${pid + 2} ${pid + 1} ${pid + 2} ${4096 * factor} grandchild`,
+              `${pid + 3} 1 ${pid + 3} 8192 unrelated`,
+            ].join("\n"),
+          ),
+          stderr: Buffer.alloc(0),
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }).pipe(Effect.tap(() => processTree.sampled?.(factor) ?? Effect.void))
       },
     })
   }),
 ).pipe(Layer.provide(AppNodeBuilder.build(AppProcess.node)))
 
 const it = testEffect(
-  Layer.unwrap(Effect.gen(function* () {
-    const { workspace } = yield* QueuedFixture
-    return AppNodeBuilder.build(
-    LayerNode.group([
-      AppProcess.node,
-      Database.node,
-      Config.node,
-      EventRuntime.node,
-      Global.node,
-      Location.node,
-      ShellSandbox.node,
-      ShellQueue.node,
-      node,
-    ]),
-    [
-      [AppProcess.node, appProcess],
-      [Config.node, config],
-      [Global.node, Global.layerWith({ data: join(workspace, "data"), state: join(workspace, "state") })],
-      [
-        ShellQueue.node,
-        ShellQueue.configured({
-          sample: Effect.succeed({ availableMb: 1_000_000, load: 0 }),
-          backstopMs: 100,
-          heartbeatMs: 50,
-        }),
-      ],
-      [Location.node, Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(workspace) })))],
-    ],
-  )
-  })).pipe(Layer.provideMerge(fixture)),
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const { workspace } = yield* QueuedFixture
+      return AppNodeBuilder.build(
+        LayerNode.group([
+          AppProcess.node,
+          Database.node,
+          Config.node,
+          EventRuntime.node,
+          Global.node,
+          Location.node,
+          ShellSandbox.node,
+          ShellQueue.node,
+          node,
+        ]),
+        [
+          [AppProcess.node, appProcess],
+          [Config.node, config],
+          [Global.node, Global.layerWith({ data: join(workspace, "data"), state: join(workspace, "state") })],
+          [
+            ShellQueue.node,
+            Layer.effect(
+              ShellQueue.Service,
+              Effect.gen(function* () {
+                const queue = yield* ShellQueue.Service
+                const fixture = yield* QueuedFixture
+                return ShellQueue.Service.of({
+                  ...queue,
+                  recordPeak: (input) =>
+                    Effect.gen(function* () {
+                      if (fixture.history.started) yield* Deferred.succeed(fixture.history.started, undefined)
+                      yield* queue.recordPeak(input)
+                      if (fixture.history.finished) yield* Deferred.succeed(fixture.history.finished, undefined)
+                    }),
+                })
+              }),
+            ).pipe(
+              Layer.provide(
+                ShellQueue.layer({
+                  sample: Effect.succeed({ availableMb: 1_000_000, load: 0 }),
+                  backstopMs: 100,
+                  heartbeatMs: 50,
+                }),
+              ),
+            ),
+          ],
+          [
+            Location.node,
+            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(workspace) }))),
+          ],
+        ],
+      )
+    }),
+  ).pipe(Layer.provideMerge(fixture)),
 )
 
 const posixIt = process.platform === "win32" ? it.live.skip : it.live
@@ -110,9 +184,13 @@ const running = (shell: Interface, id: Shell.ID) =>
     return yield* Effect.die(new Error(`shell ${id} did not start`))
   })
 
-const entries = QueuedFixture.pipe(Effect.flatMap((fixture) => Effect.promise(() =>
-  readdir(join(fixture.workspace, "state", "shell-queue", "entries")).catch(() => [] as string[]),
-)))
+const entries = QueuedFixture.pipe(
+  Effect.flatMap((fixture) =>
+    Effect.promise(() =>
+      readdir(join(fixture.workspace, "state", "shell-queue", "entries")).catch(() => [] as string[]),
+    ),
+  ),
+)
 
 // A slot is released just after the command's waiters resolve, when its managing fiber ends.
 const drained = Effect.gen(function* () {
@@ -124,6 +202,224 @@ const drained = Effect.gen(function* () {
 })
 
 describe("queued shell commands", () => {
+  posixIt("sampled nonzero exits preserve heavy peaks and record only increases", () =>
+    Effect.gen(function* () {
+      const fixture = yield* QueuedFixture
+      const queue = yield* ShellQueue.Service
+      const shell = yield* Service
+      fixture.processTree.enabled = true
+      const release = join(fixture.workspace, "failed-release")
+      const command = `while [ ! -e '${release}' ]; do sleep 0.02; done; exit 7`
+      yield* queue.recordPeak({
+        command,
+        cwd: fixture.workspace,
+        peakMb: 64,
+        canLower: true,
+        reserveMb: 2_048,
+        memoryLimitMb: 128,
+      })
+      for (const factor of [2, 2, 2, 2, 2, 14]) {
+        fixture.processTree.factor = 1
+        fixture.history.finished = yield* Deferred.make<void>()
+        const periodic = yield* Deferred.make<void>()
+        fixture.processTree.sampled = (current) =>
+          current === factor ? Deferred.succeed(periodic, undefined).pipe(Effect.asVoid) : Effect.void
+        const info = yield* shell.enqueue(yield* shell.prepare({ command, timeout: 0, memoryLimitMb: 128 }), sessionA)
+        yield* running(shell, info.id)
+        fixture.processTree.factor = factor
+        yield* Deferred.await(periodic).pipe(Effect.timeout(5_000))
+        yield* Effect.promise(() => Bun.write(release, "finish"))
+        expect((yield* shell.wait(info.id)).exit).toBe(7)
+        yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
+        const history = yield* Effect.promise(() =>
+          Bun.file(join(fixture.workspace, "state", "shell-queue", "memory.json")).json(),
+        )
+        expect(history).toEqual([
+          { key: expect.stringMatching(/^[a-f0-9]{64}$/), peaks: factor === 14 ? [64, 98] : [64] },
+        ])
+        yield* Effect.promise(() => rm(release, { force: true }))
+      }
+    }),
+  )
+  posixIt("fast failed exits cannot lower or evict a heavy peak", () =>
+    Effect.gen(function* () {
+      const fixture = yield* QueuedFixture
+      const queue = yield* ShellQueue.Service
+      const shell = yield* Service
+      fixture.processTree.enabled = true
+      const command = "exit 7"
+      yield* queue.recordPeak({
+        command,
+        cwd: fixture.workspace,
+        peakMb: 64,
+        canLower: true,
+        reserveMb: 2_048,
+        memoryLimitMb: 128,
+      })
+      for (let index = 0; index < 5; index++) {
+        fixture.history.finished = yield* Deferred.make<void>()
+        const info = yield* shell.enqueue(yield* shell.prepare({ command, timeout: 0, memoryLimitMb: 128 }), sessionA)
+        expect((yield* shell.wait(info.id)).exit).toBe(7)
+        yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
+      }
+      const history = yield* Effect.promise(() =>
+        Bun.file(join(fixture.workspace, "state", "shell-queue", "memory.json")).json(),
+      )
+      expect(history).toEqual([{ key: expect.stringMatching(/^[a-f0-9]{64}$/), peaks: [64] }])
+    }),
+  )
+  for (const outcome of ["removed-low", "timeout-low", "removed-high"] as const) {
+    posixIt(`records only requirement increases from ${outcome} runs`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* QueuedFixture
+        const queue = yield* ShellQueue.Service
+        const shell = yield* Service
+        fixture.processTree.enabled = true
+        fixture.processTree.factor = outcome === "removed-high" ? 4 : 1
+        const command = "sleep 60"
+        yield* queue.recordPeak({
+          command,
+          cwd: fixture.workspace,
+          peakMb: 20,
+          canLower: true,
+          reserveMb: 2_048,
+          memoryLimitMb: 128,
+        })
+        fixture.history.finished = yield* Deferred.make<void>()
+        const info = yield* shell.enqueue(
+          yield* shell.prepare({ command, timeout: outcome === "timeout-low" ? 50 : 0, memoryLimitMb: 128 }),
+          sessionA,
+        )
+        yield* running(shell, info.id)
+        if (outcome === "timeout-low") expect((yield* shell.wait(info.id)).status).toBe("timeout")
+        if (outcome !== "timeout-low") yield* shell.remove(info.id)
+        yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
+        const history = yield* Effect.promise(() =>
+          Bun.file(join(fixture.workspace, "state", "shell-queue", "memory.json")).json(),
+        )
+        expect(history).toEqual([
+          { key: expect.stringMatching(/^[a-f0-9]{64}$/), peaks: outcome === "removed-high" ? [20, 28] : [20] },
+        ])
+      }),
+    )
+  }
+  posixIt("settles timeouts and releases run and family slots before a contended peak write", () =>
+    Effect.gen(function* () {
+      const fixture = yield* QueuedFixture
+      const shell = yield* Service
+      fixture.processTree.enabled = true
+      fixture.history.started = yield* Deferred.make<void>()
+      fixture.history.finished = yield* Deferred.make<void>()
+      const holder = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(holder, Exit.void))
+      yield* ProcessLock.acquire(join(fixture.workspace, "state", "shell-queue", "memory.lock")).pipe(
+        Scope.provide(holder),
+      )
+      const released = yield* Deferred.make<void>()
+      const info = yield* shell.enqueue(
+        yield* shell.prepare({ command: "sleep 60", timeout: 50, memoryLimitMb: 128 }),
+        sessionA,
+        {
+          family: sessionA,
+          acquire: Effect.succeed({
+            commit: Effect.void,
+            release: Deferred.succeed(released, undefined).pipe(Effect.asVoid),
+          }),
+          subscribe: () => () => {},
+        },
+      )
+      expect((yield* shell.wait(info.id).pipe(Effect.timeout(500))).status).toBe("timeout")
+      yield* Deferred.await(fixture.history.started).pipe(Effect.timeout(500))
+      expect(yield* Deferred.isDone(released)).toBe(true)
+      expect(yield* Effect.promise(() => readdir(join(fixture.workspace, "state", "shell-queue", "slots")))).toEqual([])
+      yield* shell.timeout(info.id, 0)
+      expect(yield* Deferred.isDone(fixture.history.finished)).toBe(false)
+      yield* Scope.close(holder, Exit.void)
+      yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
+    }),
+  )
+  posixIt("records the highest process-tree sample after a successful sampled exit", () =>
+    Effect.gen(function* () {
+      const fixture = yield* QueuedFixture
+      const shell = yield* Service
+      fixture.processTree.enabled = true
+      fixture.history.finished = yield* Deferred.make<void>()
+      const high = yield* Deferred.make<void>()
+      const low = yield* Deferred.make<void>()
+      fixture.processTree.sampled = (factor) =>
+        factor === 3
+          ? Deferred.succeed(high, undefined).pipe(Effect.asVoid)
+          : factor === 2
+            ? Deferred.succeed(low, undefined).pipe(Effect.asVoid)
+            : Effect.void
+      const release = join(fixture.workspace, "finish-peak")
+      const command = `while [ ! -e '${release}' ]; do sleep 0.02; done; exit 0`
+      const info = yield* shell.enqueue(yield* shell.prepare({ command, memoryLimitMb: 128, timeout: 0 }), sessionA)
+      yield* running(shell, info.id)
+      fixture.processTree.factor = 3
+      yield* Deferred.await(high).pipe(Effect.timeout(5_000))
+      fixture.processTree.factor = 2
+      yield* Deferred.await(low).pipe(Effect.timeout(5_000))
+      yield* Effect.promise(() => Bun.write(release, "finish"))
+      expect((yield* shell.wait(info.id)).exit).toBe(0)
+      yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
+      const history = yield* Effect.promise(() =>
+        Bun.file(join(fixture.workspace, "state", "shell-queue", "memory.json")).json(),
+      )
+      expect(history).toEqual([{ key: expect.stringMatching(/^[a-f0-9]{64}$/), peaks: [21] }])
+    }),
+  )
+  for (const queued of [false, true]) {
+    posixIt(`retains output when a ${queued ? "queued" : "normal"} process exits before spawn returns`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* QueuedFixture
+        fixture.processTree.awaitExit = true
+        const shell = yield* Service
+        const prepared = yield* shell.prepare({ command: "printf hello; printf error >&2", timeout: 0 })
+        const info = queued ? yield* shell.enqueue(prepared, sessionA) : yield* shell.create(prepared)
+        yield* shell.wait(info.id)
+        expect((yield* shell.output(info.id)).output).toContain("hello")
+        expect((yield* shell.output(info.id)).output).toContain("error")
+      }),
+    )
+  }
+  for (const tree of [false, true]) {
+    posixIt(
+      tree
+        ? "credits descendant resident memory across process-group boundaries"
+        : "measures unlimited queued commands and publishes their resident memory",
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* QueuedFixture
+          fixture.processTree.enabled = tree
+          const shell = yield* Service
+          const events = yield* EventRuntime.Service
+          const started = yield* Deferred.make<Shell.Info>()
+          const updated = Schema.is(Schema.Struct({ info: Shell.Info }))
+          yield* events.listen((event) =>
+            event.type === "shell.updated" && updated(event.data) && event.data.info.status === "running"
+              ? Deferred.succeed(started, event.data.info).pipe(Effect.asVoid)
+              : Effect.void,
+          )
+          const first = yield* shell.enqueue(
+            yield* shell.prepare({ command: `"${process.execPath}" -e 'setInterval(() => {}, 1000)'`, timeout: 0 }),
+            sessionA,
+          )
+          expect((yield* Deferred.await(started).pipe(Effect.timeout(5_000))).id).toBe(first.id)
+          const second = yield* shell.enqueue(yield* shell.prepare({ command: "printf queued", timeout: 0 }), sessionA)
+          const directory = join((yield* QueuedFixture).workspace, "state", "shell-queue", "owners")
+          const owner = (yield* Effect.promise(() => readdir(directory))).find((name) => name.endsWith(".lock"))
+          expect(owner).toBeDefined()
+          const report = Schema.decodeUnknownSync(
+            Schema.fromJsonString(Schema.Struct({ residentMb: Schema.Record(Schema.String, Schema.Number) })),
+          )(yield* Effect.promise(() => Bun.file(join(directory, owner!)).text()))
+          expect(report.residentMb[first.id]).toBeGreaterThan(0)
+          if (tree) expect(report.residentMb[first.id]).toBe(7)
+          yield* shell.remove(second.id)
+          yield* shell.remove(first.id)
+        }),
+    )
+  }
   posixIt("start once admitted, report queue updates, and count their timeout from start", () =>
     Effect.gen(function* () {
       const events = yield* EventRuntime.Service

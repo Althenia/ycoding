@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
-import { mkdirSync, unlinkSync } from "node:fs"
+import { mkdirSync, unlinkSync, watch } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -52,12 +52,28 @@ const enqueue = Effect.fn("test.enqueue")(function* (
   queue: ShellQueue.Interface,
   id: string,
   sessionID: string,
-  options: { limits?: ConfigShell.Queue; memoryLimitMb?: number } = {},
+  options: {
+    limits?: ConfigShell.Queue
+    memoryLimitMb?: number
+    residentMb?: () => number
+    command?: string
+    cwd?: string
+    admission?: ShellQueue.Admission
+  } = {},
 ) {
   const parent = yield* Scope.Scope
   const scope = yield* Scope.fork(parent)
   const ticket = yield* queue
-    .enqueue({ id: Shell.ID.make(id), sessionID, limits: limits(options.limits), memoryLimitMb: options.memoryLimitMb })
+    .enqueue({
+      id: Shell.ID.make(id),
+      sessionID,
+      command: options.command ?? id,
+      cwd: options.cwd ?? "/workspace",
+      admission: options.admission,
+      limits: limits(options.limits),
+      memoryLimitMb: options.memoryLimitMb,
+      residentMb: options.residentMb,
+    })
     .pipe(Scope.provide(scope))
   const admitted = yield* Deferred.make<void>()
   const positions: number[] = []
@@ -75,7 +91,354 @@ const enqueue = Effect.fn("test.enqueue")(function* (
 
 const settle = Effect.sleep(200)
 
+const evaluations = Effect.gen(function* () {
+  const pending: { requested?: Deferred.Deferred<void>; active?: Deferred.Deferred<void>; wake: () => void } = {
+    wake: () => {},
+  }
+  return {
+    options: {
+      watch: (_directory: string, wake: () => void) => {
+        pending.wake = wake
+        return { close() {} }
+      },
+      trace: (event: ShellQueue.Trace) => {
+        if (event === "pass") {
+          pending.active = pending.requested
+          pending.requested = undefined
+        }
+        if ((event === "wait-backstop" || event === "wait-idle") && pending.active) {
+          Effect.runSync(Deferred.succeed(pending.active, undefined))
+          pending.active = undefined
+        }
+      },
+    },
+    flush: Effect.gen(function* () {
+      const done = yield* Deferred.make<void>()
+      pending.requested = done
+      pending.wake()
+      yield* Deferred.await(done).pipe(Effect.timeout(2_000))
+    }),
+  }
+})
+
 describe("ShellQueue", () => {
+  it.live("makes no running claims while the head's family is full", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const claims: ShellQueue.Trace[] = []
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const waiting = yield* enqueue(queue, "sh_family_full", "ses_family", {
+              admission: {
+                family: "ses_root",
+                acquire: Effect.succeed(undefined),
+                subscribe: () => () => {},
+              },
+            })
+            yield* evaluation.flush
+            expect(yield* waiting.isAdmitted).toBe(false)
+            expect(claims.filter((event) => event === "run-claimed" || event === "session-claimed")).toEqual([])
+          }),
+        {
+          ...evaluation.options,
+          trace: (event) => {
+            claims.push(event)
+            evaluation.options.trace(event)
+          },
+        },
+      )
+    }),
+  )
+  it.live(
+    "uses retained peaks for concurrent admissions, clamps them to the limit, and keeps cold commands at their full limit",
+    () =>
+      Effect.gen(function* () {
+        const state = yield* temp
+        const evaluation = yield* evaluations
+        yield* withQueue(
+          state,
+          (queue) =>
+            Effect.gen(function* () {
+              for (const peakMb of [9_000, 1_000, 1_500, 2_000, 2_500, 3_000])
+                yield* queue.recordPeak({
+                  command: "check",
+                  cwd: "/workspace",
+                  peakMb,
+                  canLower: true,
+                  reserveMb: 2_048,
+                })
+              const options = { command: "check", memoryLimitMb: 6_144, limits: { max_running: 4 } }
+              const first = yield* enqueue(queue, "sh_learned_1", "ses_a", options)
+              yield* Deferred.await(first.admitted).pipe(Effect.timeout(2_000))
+              const second = yield* enqueue(queue, "sh_learned_2", "ses_b", options)
+              yield* Deferred.await(second.admitted).pipe(Effect.timeout(2_000))
+              const cold = yield* enqueue(queue, "sh_cold", "ses_c", { ...options, command: "check " })
+              const elsewhere = yield* enqueue(queue, "sh_elsewhere", "ses_d", { ...options, cwd: "/other" })
+              yield* evaluation.flush
+              expect(yield* cold.isAdmitted).toBe(false)
+              expect(yield* elsewhere.isAdmitted).toBe(false)
+              const entry = (id: string) =>
+                Effect.promise(() => Bun.file(path.join(state, "shell-queue", "entries", `${id}.json`)).json())
+              expect((yield* entry("sh_learned_1")).reserveMb).toBe(3_000)
+              expect((yield* entry("sh_learned_2")).reserveMb).toBe(3_000)
+              expect((yield* entry("sh_cold")).reserveMb).toBe(6_144)
+              yield* first.release
+              yield* second.release
+              yield* cold.release
+              yield* elsewhere.release
+              const limited = yield* enqueue(queue, "sh_limited", "ses_e", { ...options, memoryLimitMb: 2_048 })
+              yield* Deferred.await(limited.admitted).pipe(Effect.timeout(2_000))
+              expect((yield* entry("sh_limited")).reserveMb).toBe(2_048)
+            }),
+          { ...evaluation.options, sample: Effect.succeed({ availableMb: 6_000, load: 0 }), parallelism: 64 },
+        )
+      }),
+  )
+
+  it.live("reconsiders waiting commands when a finished run teaches a smaller requirement", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const holder = yield* enqueue(queue, "sh_holder", "ses_a", {
+              memoryLimitMb: 6_144,
+              residentMb: () => 6_000,
+            })
+            yield* Deferred.await(holder.admitted).pipe(Effect.timeout(2_000))
+            const waiting = yield* enqueue(queue, "sh_waiting", "ses_b", { command: "check", memoryLimitMb: 6_144 })
+            yield* evaluation.flush
+            expect(yield* waiting.isAdmitted).toBe(false)
+            yield* queue.recordPeak({
+              command: "check",
+              cwd: "/workspace",
+              peakMb: 2_000,
+              canLower: true,
+              reserveMb: 2_048,
+            })
+            yield* evaluation.flush
+            yield* Deferred.await(waiting.admitted).pipe(Effect.timeout(2_000))
+          }),
+        { ...evaluation.options, sample: Effect.succeed({ availableMb: 5_700, load: 0 }), parallelism: 64 },
+      )
+    }),
+  )
+
+  it.live("fills the configured cap on an idle machine with enough adaptive headroom", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const entries = yield* Effect.forEach(
+              Array.from({ length: 11 }, (_, index) => index),
+              (index) => enqueue(queue, `sh_idle_${index.toString().padStart(2, "0")}`, `ses_idle_${index}`),
+            )
+            yield* evaluation.flush
+            expect(yield* Effect.forEach(entries, (entry) => entry.isAdmitted)).toEqual([
+              ...Array.from({ length: 10 }, () => true),
+              false,
+            ])
+          }),
+        {
+          ...evaluation.options,
+          parallelism: 64,
+          now: () => 0,
+          sample: Effect.succeed({ availableMb: 100_000, load: 0 }),
+        },
+      )
+    }),
+  )
+
+  it.live("reserves unmaterialized memory and credits growing resident memory without negative reservations", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const resident = { first: 0, second: 0 }
+      const sample = { availableMb: 100, load: 0 }
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const first = yield* enqueue(queue, "sh_memory_first", "ses_first", {
+              memoryLimitMb: 40,
+              residentMb: () => resident.first,
+            })
+            const second = yield* enqueue(queue, "sh_memory_second", "ses_second", {
+              limits: { memory_reserve_mb: 40 },
+              residentMb: () => resident.second,
+            })
+            const third = yield* enqueue(queue, "sh_memory_third", "ses_third", { memoryLimitMb: 40 })
+            yield* evaluation.flush
+            expect(yield* Effect.forEach([first, second, third], (entry) => entry.isAdmitted)).toEqual([
+              true,
+              true,
+              false,
+            ])
+            resident.first = 10
+            resident.second = 10
+            yield* evaluation.flush
+            expect(yield* third.isAdmitted).toBe(true)
+            resident.first = 400
+            resident.second = 400
+            sample.availableMb = 60
+            const fourth = yield* enqueue(queue, "sh_memory_fourth", "ses_fourth", { memoryLimitMb: 40 })
+            yield* evaluation.flush
+            expect(yield* fourth.isAdmitted).toBe(false)
+            sample.availableMb = 80
+            yield* evaluation.flush
+            expect(yield* fourth.isAdmitted).toBe(true)
+          }),
+        { ...evaluation.options, parallelism: 64, now: () => 0, sample: Effect.sync(() => sample) },
+      )
+    }),
+  )
+
+  it.live("counts recent starts as load until their exponential contribution decays", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const clock = { now: 0 }
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const entries = yield* Effect.forEach([0, 1, 2, 3, 4], (index) =>
+              enqueue(queue, `sh_cpu_${index}`, `ses_cpu_${index}`),
+            )
+            yield* evaluation.flush
+            expect(yield* Effect.forEach(entries, (entry) => entry.isAdmitted)).toEqual([
+              true,
+              true,
+              false,
+              false,
+              false,
+            ])
+            clock.now = 60_000
+            yield* evaluation.flush
+            expect(yield* Effect.forEach(entries, (entry) => entry.isAdmitted)).toEqual([true, true, true, true, false])
+          }),
+        {
+          ...evaluation.options,
+          parallelism: 2,
+          now: () => clock.now,
+          sample: Effect.succeed({ availableMb: 100_000, load: 0 }),
+        },
+      )
+    }),
+  )
+
+  it.live("keeps a loaded machine below its measured plus reserved CPU threshold", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const clock = { now: 0 }
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const first = yield* enqueue(queue, "sh_loaded_first", "ses_first")
+            const same = yield* enqueue(queue, "sh_loaded_same", "ses_first")
+            const other = yield* enqueue(queue, "sh_loaded_other", "ses_other")
+            yield* evaluation.flush
+            expect(yield* Effect.forEach([first, same, other], (entry) => entry.isAdmitted)).toEqual([
+              true,
+              false,
+              false,
+            ])
+            clock.now = 60_000
+            yield* evaluation.flush
+            expect(yield* Effect.forEach([first, same, other], (entry) => entry.isAdmitted)).toEqual([
+              true,
+              false,
+              true,
+            ])
+            yield* first.release
+            yield* evaluation.flush
+            expect(yield* same.isAdmitted).toBe(false)
+            clock.now = 120_000
+            yield* evaluation.flush
+            expect(yield* same.isAdmitted).toBe(true)
+          }),
+        {
+          ...evaluation.options,
+          parallelism: 4,
+          now: () => clock.now,
+          sample: Effect.succeed({ availableMb: 100_000, load: 0.75 }),
+        },
+      )
+    }),
+  )
+
+  for (const resource of ["memory", "cpu"] as const) {
+    posixIt(`shares ${resource} headroom with another process through queue files`, () =>
+      Effect.gen(function* () {
+        const state = yield* temp
+        const log = path.join(state, "log")
+        const clockFile = path.join(state, "clock")
+        yield* Effect.promise(() => fs.writeFile(clockFile, "0"))
+        const evaluation = yield* evaluations
+        const resident = { current: 0 }
+        yield* withQueue(
+          state,
+          (queue) =>
+            Effect.gen(function* () {
+              const first = yield* enqueue(queue, "sh_owner", "ses_owner", {
+                memoryLimitMb: resource === "memory" ? 100 : 1,
+                residentMb: () => resident.current,
+                limits: { max_running: 3 },
+              })
+              yield* Deferred.await(first.admitted).pipe(Effect.timeout(2_000))
+              const remote = spawn({
+                state,
+                log,
+                id: "sh_remote",
+                sessionID: "ses_remote",
+                holdMs: -1,
+                maxRunning: 3,
+                availableMb: resource === "memory" ? 100 : 1_000_000,
+                memoryReserveMb: resource === "memory" ? 50 : 1,
+                parallelism: resource === "memory" ? 64 : 1,
+                clockFile,
+                evaluated: `${log}.evaluated`,
+              })
+              yield* Effect.addFinalizer(() =>
+                Effect.promise(async () => {
+                  remote.kill("SIGKILL")
+                  await remote.exited
+                }),
+              )
+              yield* fileSignal(`${log}.evaluated`)
+              const waiting = yield* Effect.promise(() =>
+                fs.readFile(path.join(state, "shell-queue", "entries", "sh_remote.json"), "utf8"),
+              )
+              expect(
+                Schema.decodeUnknownSync(
+                  Schema.fromJsonString(Schema.Struct({ admitted: Schema.Undefined.pipe(Schema.optional) })),
+                )(waiting),
+              ).toEqual({})
+              resident.current = 100
+              if (resource === "cpu") yield* Effect.promise(() => fs.writeFile(clockFile, "60000"))
+              yield* enqueue(queue, "sh_publish", "ses_owner", { memoryLimitMb: 0, limits: { max_running: 3 } })
+              yield* fileSignal(log, (text) => text.includes("start sh_remote"))
+            }),
+          {
+            ...evaluation.options,
+            parallelism: 64,
+            now: () => 0,
+            sample: Effect.succeed({ availableMb: 100, load: 0 }),
+          },
+        )
+      }),
+    )
+  }
   it.live("cannot resurrect an entry cancelled after the admission-file rename", () =>
     Effect.gen(function* () {
       const state = yield* temp
@@ -91,6 +454,8 @@ describe("ShellQueue", () => {
               .enqueue({
                 id: Shell.ID.make("sh_cancelled"),
                 sessionID: "ses_cancelled",
+                command: "cancelled",
+                cwd: state,
                 limits: limits({ max_running: 1 }),
               })
               .pipe(Scope.provide(entryScope))
@@ -120,7 +485,13 @@ describe("ShellQueue", () => {
       yield* withQueue(state, (queue) =>
         Effect.gen(function* () {
           const result = yield* queue
-            .enqueue({ id: Shell.ID.make("sh_closed"), sessionID: "ses_closed", limits: limits() })
+            .enqueue({
+              id: Shell.ID.make("sh_closed"),
+              sessionID: "ses_closed",
+              command: "closed",
+              cwd: state,
+              limits: limits(),
+            })
             .pipe(Scope.provide(closed), Effect.flip)
           expect(result._tag).toBe("ShellQueue.FullError")
           expect(yield* Effect.promise(() => fs.readdir(path.join(state, "shell-queue", "slots")))).toEqual([])
@@ -141,7 +512,7 @@ describe("ShellQueue", () => {
             ? path.join(root, "lanes", Hash.sha256("ses_failed").slice(0, 32))
             : path.join(root, "entries", "sh_failed.json")
         const failed = yield* Deferred.make<void>()
-        const publication = { written: false }
+        const publication = { written: false, resume: false }
         yield* withQueue(
           state,
           (queue) =>
@@ -165,12 +536,17 @@ describe("ShellQueue", () => {
               ).toEqual({})
               yield* head.release
               yield* Scope.close(occupied, Exit.void)
+              publication.resume = true
               yield* Deferred.await(next.admitted).pipe(Effect.timeout(2_000))
             }),
           {
             backstopMs: 60_000,
             watch: () => ({ close() {} }),
-            sample: Effect.never,
+            sample: Effect.suspend(() =>
+              !publication.written || publication.resume
+                ? Effect.succeed({ availableMb: 1_000_000, load: 0 })
+                : Effect.never,
+            ),
             trace: (event) => {
               if (event === "admission-written" && !publication.written) {
                 if (failure === "entry") unlinkSync(target)
@@ -685,12 +1061,14 @@ describe("ShellQueue", () => {
       const state = yield* temp
       const sampling = yield* Deferred.make<void>()
       const releaseSample = yield* Deferred.make<void>()
+      const samplingState = { hold: false }
       yield* withQueue(
         state,
         (queue) =>
           Effect.gen(function* () {
             const holder = yield* enqueue(queue, "sh_holder", "ses_holder", { limits: { max_running: 2 } })
             yield* Deferred.await(holder.admitted)
+            samplingState.hold = true
             const first = yield* enqueue(queue, "sh_0", "ses_0", { limits: { max_running: 2 } }).pipe(Effect.forkScoped)
             yield* Deferred.await(sampling)
             const acknowledged = yield* Effect.all(
@@ -716,9 +1094,13 @@ describe("ShellQueue", () => {
             yield* holder.release
           }),
         {
-          sample: Deferred.succeed(sampling, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseSample)),
-            Effect.as({ availableMb: 1_000_000, load: 0 }),
+          sample: Effect.suspend(() =>
+            samplingState.hold
+              ? Deferred.succeed(sampling, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseSample)),
+                  Effect.as({ availableMb: 1_000_000, load: 0 }),
+                )
+              : Effect.succeed({ availableMb: 1_000_000, load: 0 }),
           ),
         },
       )
@@ -790,40 +1172,47 @@ describe("ShellQueue", () => {
     }),
   )
 
-  it.live("waits for memory and load while queued work runs, and admits the head when nothing queued runs", () =>
-    Effect.gen(function* () {
-      const state = yield* temp
-      yield* Effect.addFinalizer(() => Effect.sync(() => (resources.current = { availableMb: 1_000_000, load: 0 })))
-      yield* withQueue(state, (queue) =>
-        Effect.gen(function* () {
-          resources.current = { availableMb: 100, load: 9 }
-          const options = {
-            limits: { max_running: 2, max_running_per_session: 2, memory_reserve_mb: 2_048, max_load: 1 },
-          }
-          const idle = yield* enqueue(queue, "sh_idle", "ses_a", options)
-          yield* Deferred.await(idle.admitted).pipe(Effect.timeout(2_000))
-
-          const memory = yield* enqueue(queue, "sh_memory", "ses_a", { ...options, memoryLimitMb: 4_096 })
-          resources.current = { availableMb: 3_000, load: 0.2 }
-          yield* settle
-          expect(yield* memory.isAdmitted).toBe(false)
-          resources.current = { availableMb: 5_000, load: 1.5 }
-          yield* settle
-          expect(yield* memory.isAdmitted).toBe(false)
-          resources.current = { availableMb: 5_000, load: 0.5 }
-          yield* Deferred.await(memory.admitted).pipe(Effect.timeout(2_000))
-          yield* memory.release
-
-          resources.current = { availableMb: 1_000, load: 0 }
-          const reserve = yield* enqueue(queue, "sh_reserve", "ses_a", options)
-          yield* settle
-          expect(yield* reserve.isAdmitted).toBe(false)
-          yield* idle.release
-          yield* Deferred.await(reserve.admitted).pipe(Effect.timeout(2_000))
-        }),
-      )
-    }),
-  )
+  for (const gate of ["memory", "cpu"] as const) {
+    it.live(`starts the idle head despite insufficient ${gate} headroom and gates later admissions`, () =>
+      Effect.gen(function* () {
+        const state = yield* temp
+        yield* Effect.addFinalizer(() => Effect.sync(() => (resources.current = { availableMb: 1_000_000, load: 0 })))
+        const evaluation = yield* evaluations
+        yield* withQueue(
+          state,
+          (queue) =>
+            Effect.gen(function* () {
+              resources.current =
+                gate === "memory" ? { availableMb: 5_700, load: 0 } : { availableMb: 100_000, load: 2 }
+              const options = {
+                limits: { max_running: 2, max_running_per_session: 1, memory_reserve_mb: 2_048, max_load: 1 },
+              }
+              const idle = yield* enqueue(queue, "sh_idle", "ses_a", { ...options, memoryLimitMb: 8_192 })
+              yield* Deferred.await(idle.admitted).pipe(Effect.timeout(2_000))
+              const same = yield* enqueue(queue, "sh_same", "ses_a", options)
+              resources.current = { availableMb: 6_143, load: 0.2 }
+              const memory = yield* enqueue(queue, "sh_memory", "ses_b", { ...options, memoryLimitMb: 4_096 })
+              yield* evaluation.flush
+              expect(yield* memory.isAdmitted).toBe(false)
+              expect(yield* same.isAdmitted).toBe(false)
+              resources.current = { availableMb: 12_288, load: 1 }
+              yield* evaluation.flush
+              expect(yield* memory.isAdmitted).toBe(false)
+              resources.current = { availableMb: 12_288, load: 0.5 }
+              yield* evaluation.flush
+              yield* Deferred.await(memory.admitted).pipe(Effect.timeout(2_000))
+              expect(yield* same.isAdmitted).toBe(false)
+              yield* memory.release
+              resources.current = { availableMb: 0, load: 99 }
+              yield* idle.release
+              yield* evaluation.flush
+              yield* Deferred.await(same.admitted).pipe(Effect.timeout(2_000))
+            }),
+          { ...evaluation.options, parallelism: 64, now: () => 0 },
+        )
+      }),
+    )
+  }
 
   posixIt("bounds running commands across independent processes sharing one state directory", () =>
     Effect.gen(function* () {
@@ -1160,12 +1549,14 @@ describe("ShellQueue", () => {
   it.live("refreshes its heartbeat while an evaluation waits on a resource sample", () =>
     Effect.gen(function* () {
       const state = yield* temp
+      const samplingState = { hold: false }
       yield* withQueue(
         state,
         (queue) =>
           Effect.gen(function* () {
             const holder = yield* enqueue(queue, "sh_holder", "ses_a", { limits: { max_running: 2 } })
             yield* Deferred.await(holder.admitted)
+            samplingState.hold = true
             yield* enqueue(queue, "sh_waiting", "ses_b", { limits: { max_running: 2 } })
             const owners = path.join(state, "shell-queue", "owners")
             const owner = path.join(owners, (yield* Effect.promise(() => fs.readdir(owners)))[0]!)
@@ -1174,7 +1565,13 @@ describe("ShellQueue", () => {
             yield* Effect.sleep(500)
             expect((yield* mtime()) - before).toBeGreaterThan(200)
           }),
-        { heartbeatMs: 50, backstopMs: 50, sample: Effect.never },
+        {
+          heartbeatMs: 50,
+          backstopMs: 50,
+          sample: Effect.suspend(() =>
+            samplingState.hold ? Effect.never : Effect.succeed({ availableMb: 1_000_000, load: 0 }),
+          ),
+        },
       )
     }),
   )
@@ -1417,11 +1814,12 @@ describe("ShellQueue", () => {
     }),
   )
 
-  posixIt("allows only run-0 to bypass unmet resources after an idle snapshot race", () =>
+  posixIt("allows only run-0 to bypass unmet resources after an unpublished claimant exits", () =>
     Effect.gen(function* () {
       const state = yield* temp
       const log = path.join(state, "log")
       const sampled = yield* Deferred.make<void>()
+      const sample = { availableMb: 0, load: 99 }
       const stopped = spawn({
         state,
         log,
@@ -1461,7 +1859,7 @@ describe("ShellQueue", () => {
             expect(yield* Effect.forEach(entries, (entry) => entry.isAdmitted)).toEqual([true, false, false])
             yield* Effect.forEach(entries, (entry) => entry.release, { discard: true })
           }),
-        { sample: Deferred.succeed(sampled, undefined).pipe(Effect.as({ availableMb: 0, load: 99 })) },
+        { sample: Deferred.succeed(sampled, undefined).pipe(Effect.map(() => sample)) },
       )
     }),
   )
@@ -1702,6 +2100,10 @@ function spawn(input: {
   maxQueuedPerSession?: number
   backstopMs?: number
   stopAt?: ShellQueue.Trace
+  availableMb?: number
+  memoryReserveMb?: number
+  parallelism?: number
+  clockFile?: string
   enqueueGate?: string
   evaluated?: string
   id?: string
@@ -1717,6 +2119,10 @@ function spawn(input: {
     maxRunningPerSession: input.maxRunningPerSession ?? 1,
     maxQueuedPerSession: input.maxQueuedPerSession ?? 16,
     stopAt: input.stopAt,
+    availableMb: input.availableMb,
+    memoryReserveMb: input.memoryReserveMb,
+    parallelism: input.parallelism,
+    clockFile: input.clockFile,
     enqueueGate: input.enqueueGate,
     evaluated: input.evaluated,
     entries: input.entries ?? [{ id: input.id ?? "", sessionID: input.sessionID ?? "", holdMs: input.holdMs ?? 0 }],
@@ -1758,4 +2164,23 @@ function waitForEffect(check: Effect.Effect<boolean>) {
     }
     return yield* Effect.die(new Error("condition was not reached"))
   })
+}
+
+function fileSignal(file: string, predicate: (text: string) => boolean = () => true) {
+  return Effect.callback<void>((resume) => {
+    const check = () =>
+      fs
+        .readFile(file, "utf8")
+        .then((text) => {
+          if (predicate(text)) resume(Effect.void)
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof Error) || Reflect.get(error, "code") !== "ENOENT") resume(Effect.die(error))
+        })
+    const watcher = watch(path.dirname(file), () => {
+      void check()
+    })
+    void check()
+    return Effect.sync(() => watcher.close())
+  }).pipe(Effect.timeout(5_000))
 }

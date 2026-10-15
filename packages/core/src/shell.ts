@@ -127,6 +127,11 @@ type Active = {
   done: Deferred.Deferred<Info, NotFoundError>
   timeoutFiber?: Fiber.Fiber<void>
   memoryFiber?: Fiber.Fiber<void>
+  residentMb?: number
+  peakResidentMb?: number
+  peakRecorded?: boolean
+  periodicSample?: boolean
+  queueMemory?: { readonly memoryLimitMb?: number; readonly reserveMb: number }
   timeout?: (duration: number) => Effect.Effect<void>
   // Queue-channel commands only: the fiber that waits for admission and then runs the command, and
   // a timeout replaced while queued, which applies from start.
@@ -149,7 +154,11 @@ export interface Interface {
   readonly create: (prepared: Prepared) => Effect.Effect<Shell.Info, SpawnError>
   // Admits the command to the machine-wide shell queue and returns it as `queued`; it starts once
   // the queue admits it. A start failure reaches `wait` as a defect.
-  readonly enqueue: (prepared: Prepared, sessionID: SessionSchema.ID) => Effect.Effect<Shell.Info, ShellQueue.FullError>
+  readonly enqueue: (
+    prepared: Prepared,
+    sessionID: SessionSchema.ID,
+    admission?: ShellQueue.Admission,
+  ) => Effect.Effect<Shell.Info, ShellQueue.FullError>
   // Queued and running commands only; exited shells are retained for get/output but excluded here.
   readonly list: () => Effect.Effect<Shell.Info[]>
   readonly get: (id: Shell.ID) => Effect.Effect<Shell.Info, NotFoundError>
@@ -179,6 +188,7 @@ export const layer = (options?: ShellSelect.Options) =>
       const appProcess = yield* AppProcess.Service
       const sandbox = yield* ShellSandbox.Service
       const queue = yield* ShellQueue.Service
+      const serviceScope = yield* Scope.Scope
       const database = (yield* Database.Service).db
       const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
@@ -212,6 +222,21 @@ export const layer = (options?: ShellSelect.Options) =>
         if (!session) return yield* new NotFoundError({ id })
         return session
       })
+
+      const rememberPeak = (session: Active) =>
+        Effect.suspend(() => {
+          if (session.peakRecorded || !session.queueMemory || session.peakResidentMb === undefined) return Effect.void
+          session.peakRecorded = true
+          return queue
+            .recordPeak({
+              ...session.queueMemory,
+              command: session.info.command,
+              cwd: session.info.cwd,
+              peakMb: session.peakResidentMb,
+              canLower: session.info.status === "exited" && session.info.exit === 0 && session.periodicSample === true,
+            })
+            .pipe(Effect.forkIn(serviceScope), Effect.asVoid)
+        })
 
       const removeSession = Effect.fnUntraced(function* (id: Shell.ID) {
         const session = sessions.get(id)
@@ -334,7 +359,7 @@ export const layer = (options?: ShellSelect.Options) =>
       const processGroupMemory = (pid: number) =>
         appProcess
           .run(
-            ChildProcess.make("ps", ["-axo", "pid=,pgid=,rss=,lstart="], {
+            ChildProcess.make("ps", ["-axo", "pid=,ppid=,pgid=,rss=,lstart="], {
               stdin: "ignore",
             }),
             { maxOutputBytes: PROCESS_LIST_MAX_BYTES, maxErrorBytes: 1024 },
@@ -348,15 +373,28 @@ export const layer = (options?: ShellSelect.Options) =>
                 .flatMap((line) => {
                   const fields = line.trim().split(/\s+/)
                   const processID = Number(fields[0])
-                  const groupID = Number(fields[1])
-                  const residentKiB = Number(fields[2])
-                  if (![processID, groupID, residentKiB].every(Number.isFinite)) return []
-                  return [{ processID, groupID, residentKiB, identity: fields.slice(3).join(" ") }]
+                  const parentID = Number(fields[1])
+                  const groupID = Number(fields[2])
+                  const residentKiB = Number(fields[3])
+                  if (![processID, parentID, groupID, residentKiB].every(Number.isFinite)) return []
+                  return [{ processID, parentID, groupID, residentKiB, identity: fields.slice(4).join(" ") }]
                 })
               const root = processes.find((process) => process.processID === pid && process.groupID === pid)
               if (!root) return
+              // Cross-group descendants need an unbroken parent chain in this process snapshot.
+              const tree = new Set([pid])
+              while (true) {
+                const children = processes.filter(
+                  (process) => !tree.has(process.processID) && (process.groupID === pid || tree.has(process.parentID)),
+                )
+                if (children.length === 0) break
+                children.forEach((process) => tree.add(process.processID))
+              }
               return {
                 identity: root.identity,
+                treeResidentKiB: processes
+                  .filter((process) => tree.has(process.processID))
+                  .reduce((total, process) => total + process.residentKiB, 0),
                 residentKiB: processes
                   .filter((process) => process.groupID === pid)
                   .reduce((total, process) => total + process.residentKiB, 0),
@@ -548,27 +586,46 @@ export const layer = (options?: ShellSelect.Options) =>
                 if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
               })
 
-            if (state.memoryLimitMb !== undefined) {
-              const limitKiB = state.memoryLimitMb * 1024
+            if (
+              process.platform !== "win32" &&
+              (state.memoryLimitMb !== undefined || session.info.time.queued !== undefined)
+            ) {
+              const limitKiB = state.memoryLimitMb === undefined ? undefined : state.memoryLimitMb * 1024
               const initial = yield* processGroupMemory(Number(handle.pid)).pipe(
-                Effect.mapError((cause) => new SpawnError({ command: state.command, cause })),
+                Effect.catch((cause) =>
+                  limitKiB === undefined
+                    ? Effect.succeed(undefined)
+                    : Effect.fail(new SpawnError({ command: state.command, cause })),
+                ),
               )
+              session.residentMb = initial === undefined ? 0 : initial.treeResidentKiB / 1024
+              session.peakResidentMb = initial === undefined ? undefined : initial.treeResidentKiB / 1024
               if (initial)
                 session.memoryFiber = runFork(
                   Effect.gen(function* () {
                     while (session.info.status === "running") {
-                      yield* Effect.sleep(Duration.millis(MEMORY_CHECK_INTERVAL_MS))
+                      yield* Effect.sleep(Duration.millis(limitKiB === undefined ? 1_000 : MEMORY_CHECK_INTERVAL_MS))
                       if (session.info.status !== "running") return
                       const sample = yield* processGroupMemory(Number(handle.pid))
-                      if (!sample || sample.identity !== initial.identity) return
-                      if (sample.residentKiB <= limitKiB) continue
+                      if (session.info.status !== "running") return
+                      if (!sample || sample.identity !== initial.identity) {
+                        session.residentMb = 0
+                        return
+                      }
+                      session.residentMb = sample.treeResidentKiB / 1024
+                      session.periodicSample = true
+                      session.peakResidentMb = Math.max(session.peakResidentMb ?? 0, session.residentMb)
+                      if (limitKiB === undefined || sample.residentKiB <= limitKiB) continue
                       yield* finish("memory-limit", undefined, handle.kill().pipe(Effect.catch(() => Effect.void)))
                       return
                     }
                   }).pipe(
-                    Effect.catch(() =>
-                      finish("memory-limit", undefined, handle.kill().pipe(Effect.catch(() => Effect.void))),
-                    ),
+                    Effect.catch(() => {
+                      session.residentMb = 0
+                      return limitKiB === undefined
+                        ? Effect.void
+                        : finish("memory-limit", undefined, handle.kill().pipe(Effect.catch(() => Effect.void)))
+                    }),
                   ),
                 )
             }
@@ -636,7 +693,11 @@ export const layer = (options?: ShellSelect.Options) =>
         return session.info
       })
 
-      const enqueue = Effect.fn("Shell.enqueue")(function* (prepared: Prepared, sessionID: SessionSchema.ID) {
+      const enqueue = Effect.fn("Shell.enqueue")(function* (
+        prepared: Prepared,
+        sessionID: SessionSchema.ID,
+        admission?: ShellQueue.Admission,
+      ) {
         const state = yield* take(prepared)
         const info = initial(Shell.ID.ascending(), state)
         // Registration is atomic: a failure or interruption before the admission fiber owns the queue
@@ -648,6 +709,7 @@ export const layer = (options?: ShellSelect.Options) =>
               info: produce(info, (draft) => {
                 draft.status = "queued"
               }),
+              queueMemory: { memoryLimitMb: state.memoryLimitMb, reserveMb: state.queueLimits.memory_reserve_mb },
               file: info.file,
               size: 0,
               done: Deferred.makeUnsafe<Info, NotFoundError>(),
@@ -655,7 +717,16 @@ export const layer = (options?: ShellSelect.Options) =>
             return yield* Effect.gen(function* () {
               const ticket = yield* restore(
                 queue
-                  .enqueue({ id: info.id, sessionID, memoryLimitMb: state.memoryLimitMb, limits: state.queueLimits })
+                  .enqueue({
+                    id: info.id,
+                    sessionID,
+                    command: state.command,
+                    cwd: state.cwd,
+                    admission,
+                    memoryLimitMb: state.memoryLimitMb,
+                    limits: state.queueLimits,
+                    residentMb: () => session.residentMb ?? 0,
+                  })
                   .pipe(Scope.provide(slot)),
               )
               session.info = produce(session.info, (draft) => {
@@ -723,6 +794,7 @@ export const layer = (options?: ShellSelect.Options) =>
             Cause.hasInterruptsOnly(cause) ? Effect.void : abandonQueued(session, Cause.squash(cause)),
           ),
           Effect.ensuring(Scope.close(slot, Exit.void)),
+          Effect.ensuring(rememberPeak(session)),
         )
 
       // A queued command that cannot be admitted or started leaves no observable shell; its waiters

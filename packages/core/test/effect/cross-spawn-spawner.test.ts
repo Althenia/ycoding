@@ -60,6 +60,24 @@ async function gone(pid: number, timeout = 5_000) {
 }
 
 describe("cross-spawn spawner", () => {
+  for (const channel of ["stdout", "stderr"] as const) {
+    fx.live(`releasing ${channel} closes its continuous writer without a scope kill`, () =>
+      Effect.gen(function* () {
+        const handle = yield* ChildProcess.make(process.execPath, [
+          "-e",
+          `
+          const output = process.${channel};
+          output.on("error", (error) => process.exit(error.code === "EPIPE" ? 0 : 2));
+          const chunk = Buffer.alloc(4096, 120);
+          function write() { while (output.write(chunk)) {} output.once("drain", write); }
+          write();
+        `,
+        ])
+        expect((yield* Stream.runHead(handle[channel]))._tag).toBe("Some")
+        expect(yield* handle.exitCode.pipe(Effect.timeout(2_000))).toBe(ChildProcessSpawner.ExitCode(0))
+      }),
+    )
+  }
   describe("basic spawning", () => {
     fx.effect(
       "captures stdout",

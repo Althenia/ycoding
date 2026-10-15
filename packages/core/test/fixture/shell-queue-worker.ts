@@ -1,5 +1,5 @@
 import { appendFile, writeFile } from "node:fs/promises"
-import { writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { ConfigShell } from "@ycoding-ai/core/config/shell"
 import { Global } from "@ycoding-ai/core/global"
@@ -21,16 +21,23 @@ const input = Schema.decodeUnknownSync(
       stopAt: Schema.String.pipe(Schema.optional),
       enqueueGate: Schema.String.pipe(Schema.optional),
       evaluated: Schema.String.pipe(Schema.optional),
+      availableMb: Schema.Number.pipe(Schema.optional),
+      memoryReserveMb: Schema.Number.pipe(Schema.optional),
+      parallelism: Schema.Number.pipe(Schema.optional),
+      clockFile: Schema.String.pipe(Schema.optional),
     }),
   ),
 )(process.argv[2])
 
 const stop = { pending: input.stopAt }
 const evaluation = { passed: false }
+const clockFile = input.clockFile
 
 const layer = AppNodeBuilder.build(
   ShellQueue.configured({
-    sample: Effect.succeed({ availableMb: 1_000_000, load: 0 }),
+    sample: Effect.succeed({ availableMb: input.availableMb ?? 1_000_000, load: 0 }),
+    parallelism: input.parallelism,
+    now: clockFile ? () => Number(readFileSync(clockFile, "utf8")) : undefined,
     backstopMs: input.backstopMs,
     heartbeatMs: 50,
     trace: (event) => {
@@ -69,10 +76,13 @@ await Effect.runPromise(
             .enqueue({
               id: Shell.ID.make(entry.id),
               sessionID: entry.sessionID,
+              command: entry.id,
+              cwd: input.state,
               limits: ConfigShell.queueLimits({
                 max_running: input.maxRunning,
                 max_running_per_session: input.maxRunningPerSession,
                 max_queued_per_session: input.maxQueuedPerSession,
+                memory_reserve_mb: input.memoryReserveMb ?? 2_048,
               }),
             })
             .pipe(

@@ -26,7 +26,13 @@ await Effect.runPromise(
           const queue = yield* ShellQueue.Service
           const limits = ConfigShell.queueLimits({ max_running: 1 })
           if (mode === "published") {
-            const holder = yield* queue.enqueue({ id: Shell.ID.make("sh_holder"), sessionID: "ses_holder", limits })
+            const holder = yield* queue.enqueue({
+              id: Shell.ID.make("sh_holder"),
+              sessionID: "ses_holder",
+              command: "holder",
+              cwd: state,
+              limits,
+            })
             yield* holder.admitted(() => Effect.void)
           }
           if (mode === "unpublished") {
@@ -67,6 +73,8 @@ await Effect.runPromise(
               queue.enqueue({
                 id: Shell.ID.make(`sh_waiting_${index}`),
                 sessionID: `ses_${index % 5}`,
+                command: `waiting ${index}`,
+                cwd: state,
                 limits,
               }),
             { concurrency: "unbounded", discard: true },
