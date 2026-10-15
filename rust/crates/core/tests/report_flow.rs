@@ -147,6 +147,7 @@ fn baseline_sql() -> String {
          CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL);
          CREATE TABLE database_format (id TEXT PRIMARY KEY, time_created INTEGER NOT NULL);
          INSERT INTO migration VALUES ('baseline', -9223372036854775808);
+         INSERT INTO migration VALUES ('20261014011041_task-owner', 1);
          INSERT INTO database_format VALUES ('current-2026-08-04', 9223372036854775807);",
     );
     sql.push_str(&format!(
