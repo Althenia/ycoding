@@ -86,7 +86,7 @@ pub type IsolatedBrowserResolver =
 pub struct PlatformServices {
     pub shell: Arc<ycoding_core::platform::shell::Shell>,
     pub pty: Arc<ycoding_core::platform::pty::Pty>,
-    pub tickets: Mutex<ycoding_core::platform::pty::ticket::Tickets>,
+    pub tickets: Arc<Mutex<ycoding_core::platform::pty::ticket::Tickets>>,
     pub config: Arc<ycoding_core::resources::config::Configuration>,
     pub filesystem: Arc<ycoding_core::platform::filesystem::Location>,
     pub search: Arc<ycoding_core::platform::filesystem::search::Service>,

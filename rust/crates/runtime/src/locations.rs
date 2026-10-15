@@ -1,6 +1,6 @@
 use crate::{convert, dispatch::Failure};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ops::Bound,
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
@@ -24,8 +24,8 @@ use ycoding_core::tools::policy::{
     questions::Questions,
 };
 use ycoding_core::ycoding_schema::{
-    LosslessString, location, project_id::ProjectId, schema::AbsolutePath, session,
-    workspace_id::WorkspaceId,
+    DomainDecode, LosslessString, guardrail, location, project_id::ProjectId, schema::AbsolutePath,
+    session, workspace_id::WorkspaceId,
 };
 use ycoding_core::ycoding_store::{
     Client, Error, KeyPart, Snapshot, TableSpec,
@@ -59,6 +59,7 @@ pub struct Configuration {
 }
 
 type Key = (LosslessString, Option<LosslessString>);
+type Reviews = Arc<Mutex<BTreeMap<session::Id, BTreeSet<guardrail::RequestId>>>>;
 
 struct Inner {
     client: Client,
@@ -119,6 +120,89 @@ pub struct ServiceSet {
     pub agents: Arc<agent::Service>,
     pub production: Option<crate::production::Composed>,
     snapshots: SnapshotSettings,
+    reviews: Reviews,
+}
+
+#[derive(Clone)]
+pub(crate) struct Pending {
+    permissions: Permissions,
+    questions: Questions,
+    forms: Forms,
+    guardrails: Guardrails,
+    reviews: Reviews,
+}
+
+impl Pending {
+    pub(crate) fn in_use(&self) -> bool {
+        let sessions = self
+            .reviews
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        !self.permissions.list().is_empty()
+            || !self.questions.list().is_empty()
+            || !self.forms.list(None).is_empty()
+            || sessions.iter().any(|session| {
+                self.guardrails
+                    .for_session(session)
+                    .is_ok_and(|requests| !requests.is_empty())
+            })
+    }
+    pub(crate) fn cancel(&self, session: &session::Id) {
+        for request in self.permissions.for_session(session) {
+            self.permissions.cancel(&request.id);
+        }
+        for request in self
+            .questions
+            .list()
+            .iter()
+            .filter(|request| &request.session_id == session)
+        {
+            self.questions.cancel(&request.id);
+        }
+        for form in self.forms.list(Some(session.as_lossless())) {
+            if self.forms.cancel(&form.id).is_err() {
+                tracing::error!("pending Form cancellation failed");
+            }
+        }
+        let requests = self
+            .reviews
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(session);
+        if let Some(requests) = requests {
+            for id in requests {
+                self.guardrails.cancel(&id);
+            }
+        }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.permissions.shutdown();
+        self.questions.shutdown();
+        if !self.forms.shutdown().is_empty() {
+            tracing::error!("pending Forms shutdown failed");
+        }
+        self.guardrails.shutdown();
+        self.reviews
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+}
+
+impl ServiceSet {
+    pub(crate) fn pending(&self) -> Pending {
+        Pending {
+            permissions: self.permissions.clone(),
+            questions: self.questions.clone(),
+            forms: self.forms.clone(),
+            guardrails: self.guardrails.clone(),
+            reviews: self.reviews.clone(),
+        }
+    }
 }
 
 impl LocationServices {
@@ -247,7 +331,7 @@ impl Locations {
     }
 
     pub fn reload(&self, info: &location::Info) -> Result<(), Failure> {
-        self.replace(info, None).map(drop)
+        self.replace(info, None, true).map(drop)
     }
 
     // Replaces the generation only while `generation` is still current, so a retired
@@ -257,10 +341,15 @@ impl Locations {
         info: &location::Info,
         generation: u64,
     ) -> Result<bool, Failure> {
-        self.replace(info, Some(generation))
+        self.replace(info, Some(generation), false)
     }
 
-    fn replace(&self, info: &location::Info, generation: Option<u64>) -> Result<bool, Failure> {
+    fn replace(
+        &self,
+        info: &location::Info,
+        generation: Option<u64>,
+        force: bool,
+    ) -> Result<bool, Failure> {
         if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Failure::Unavailable("Location map is closed".into()));
         }
@@ -305,6 +394,7 @@ impl Locations {
                 },
                 false,
                 current.services.production.as_ref(),
+                force,
             )?,
         );
         let old = std::mem::replace(&mut current.services, built);
@@ -314,6 +404,35 @@ impl Locations {
             .unwrap_or_else(PoisonError::into_inner)
             .push(old);
         drop(cache);
+        let reference = location::Ref {
+            directory: info.directory.clone(),
+            workspace_id: info.workspace_id.clone(),
+        };
+        for data in [
+            ycoding_core::event_feed::Data::CatalogUpdated(Box::new(
+                ycoding_core::ycoding_schema::catalog::Empty,
+            )),
+            ycoding_core::event_feed::Data::AgentUpdated(Box::new(
+                ycoding_core::ycoding_schema::agent::Empty,
+            )),
+            ycoding_core::event_feed::Data::CommandUpdated(Box::new(
+                ycoding_core::ycoding_schema::command::Empty,
+            )),
+            ycoding_core::event_feed::Data::ReferenceUpdated(Box::new(
+                ycoding_core::ycoding_schema::models_dev::Empty,
+            )),
+            ycoding_core::event_feed::Data::SkillUpdated(Box::new(
+                ycoding_core::ycoding_schema::models_dev::Empty,
+            )),
+            ycoding_core::event_feed::Data::PluginUpdated(Box::new(
+                ycoding_core::ycoding_schema::models_dev::Empty,
+            )),
+        ] {
+            self.0
+                .feed
+                .emit(data, Some(reference.clone()))
+                .map_err(|_| Failure::Unavailable("catalog update publication failed".into()))?;
+        }
         self.0
             .feed
             .emit(
@@ -356,11 +475,12 @@ impl Locations {
 
     fn close_sets(&self, removed: Vec<Arc<ServiceSet>>) -> Result<(), Failure> {
         let mut failure = None;
-        if let Some(factory) = &self.0.factory {
-            for services in removed {
-                if let Err(error) = factory.close(&services) {
-                    failure.get_or_insert(error);
-                }
+        for services in removed {
+            services.pending().shutdown();
+            if let Some(factory) = &self.0.factory
+                && let Err(error) = factory.close(&services)
+            {
+                failure.get_or_insert(error);
             }
         }
         failure.map_or(Ok(()), Err)
@@ -446,7 +566,7 @@ impl Locations {
             }));
         }
         let project = project(&directory)?;
-        let built = Arc::new(self.build(&directory, workspace, project, true, None)?);
+        let built = Arc::new(self.build(&directory, workspace, project, true, None, false)?);
         let released = Arc::new(Mutex::new(Instant::now()));
         cache.insert(
             key,
@@ -468,17 +588,27 @@ impl Locations {
         project: Project,
         boot: bool,
         previous: Option<&crate::production::Composed>,
+        force: bool,
     ) -> Result<ServiceSet, Failure> {
         let prepared = self
             .0
             .factory
             .as_ref()
             .map(|factory| {
-                factory.prepare(
+                if !force {
+                    return factory.prepare(
+                        directory,
+                        workspace,
+                        project.id.as_lossless(),
+                        &project.directory,
+                    );
+                }
+                factory.prepare_refresh(
                     directory,
                     workspace,
                     project.id.as_lossless(),
                     &project.directory,
+                    force,
                 )
             })
             .transpose()?;
@@ -496,6 +626,8 @@ impl Locations {
             }),
         };
         let feed = self.0.feed.clone();
+        let reviews = Reviews::default();
+        let requested = reviews.clone();
         let sink = configuration.publisher.clone();
         let event_location = location::Ref {
             directory: AbsolutePath::new(directory.clone()).map_err(|_| unrepresentable())?,
@@ -505,6 +637,27 @@ impl Locations {
                 .map_err(|_| unrepresentable())?,
         };
         let publisher: Publisher = Arc::new(move |event| {
+            if event.type_ == "guardrail.asked" {
+                let request = guardrail::Request::decode(&event.data)
+                    .map_err(|_| "invalid guardrail request publication".to_owned())?;
+                requested
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .entry(request.session_id)
+                    .or_default()
+                    .insert(request.id);
+            }
+            if event.type_ == "guardrail.replied" {
+                let reply = guardrail::RepliedData::decode(&event.data)
+                    .map_err(|_| "invalid guardrail reply publication".to_owned())?;
+                let mut reviews = requested.lock().unwrap_or_else(PoisonError::into_inner);
+                if reviews.get_mut(&reply.session_id).is_some_and(|requests| {
+                    requests.remove(&reply.request_id);
+                    requests.is_empty()
+                }) {
+                    reviews.remove(&reply.session_id);
+                }
+            }
             let mut publication = crate::services::ephemeral(&event)?;
             publication.location = Some(event_location.clone());
             sink(event)?;
@@ -561,6 +714,7 @@ impl Locations {
             agents: configuration.agents.clone(),
             production: None,
             snapshots: configuration.snapshots.clone(),
+            reviews,
         };
         if let Some(prepared) = prepared {
             let composed = self
@@ -597,6 +751,125 @@ impl Locations {
             .map(|dependencies| prediction::Service::new(dependencies, self.0.autonomy.clone()));
         services.prompts = dependencies.map(prompt_generator::Service::new);
         Ok(services)
+    }
+
+    pub(crate) fn reload_current(&self) -> Result<(), Failure> {
+        if self.0.factory.is_none() {
+            return Ok(());
+        }
+        let current = self
+            .0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter_map(|cached| {
+                cached
+                    .services
+                    .production
+                    .as_ref()
+                    .map(|composed| (cached.services.info.clone(), composed.generation))
+            })
+            .collect::<Vec<_>>();
+        let mut failure = None;
+        for (info, generation) in current {
+            if let Err(error) = self.reload_generation(&info, generation) {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    pub(crate) async fn credentials_changed(&self) -> Result<(), Failure> {
+        let locations = self.clone();
+        tokio::task::spawn_blocking(move || locations.reload_current())
+            .await
+            .map_err(|_| Failure::Unavailable("credential refresh worker failed".into()))?
+    }
+
+    pub(crate) fn policy_sets(&self, info: &location::Info) -> Vec<Arc<ServiceSet>> {
+        let mut sets = self
+            .0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|cached| {
+                cached.services.info.directory == info.directory
+                    && cached.services.info.workspace_id == info.workspace_id
+            })
+            .map(|cached| cached.services.clone())
+            .collect::<Vec<_>>();
+        sets.extend(
+            self.0
+                .retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|services| {
+                    services.info.directory == info.directory
+                        && services.info.workspace_id == info.workspace_id
+                })
+                .cloned(),
+        );
+        sets
+    }
+
+    fn sets(&self) -> Vec<Arc<ServiceSet>> {
+        let mut sets = self
+            .0
+            .services
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|cached| cached.services.clone())
+            .collect::<Vec<_>>();
+        sets.extend(
+            self.0
+                .retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .cloned(),
+        );
+        sets
+    }
+
+    pub(crate) async fn cancel_session(&self, session: &session::Id) -> Result<(), Failure> {
+        match &self.0.factory {
+            Some(factory) => factory.cancel_session(session).await,
+            None => self.release_controls(session).await,
+        }
+    }
+
+    pub(crate) async fn release_controls(&self, session: &session::Id) -> Result<(), Failure> {
+        let locations = self.clone();
+        let cancelling = session.clone();
+        let isolated = tokio::task::spawn_blocking(move || {
+            let mut isolated = Vec::new();
+            for services in locations.sets() {
+                services.pending().cancel(&cancelling);
+                if let Some(composed) = &services.production
+                    && !isolated
+                        .iter()
+                        .any(|current| Arc::ptr_eq(current, &composed.isolated))
+                {
+                    isolated.push(composed.isolated.clone());
+                }
+            }
+            isolated
+        })
+        .await
+        .map_err(|_| Failure::Unavailable("Session ownership cancellation worker failed".into()))?;
+        let mut failure = None;
+        for isolated in isolated {
+            if isolated.release_session(session).await.is_err() {
+                failure.get_or_insert_with(|| {
+                    Failure::Unavailable("Session isolated browser release failed".into())
+                });
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -666,11 +939,23 @@ impl Locations {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&key);
         if let Some(removed) = removed {
+            let mut sets = self.policy_sets(&removed.services.info);
+            sets.push(removed.services.clone());
             self.0
                 .retired
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(removed.services);
+            let mut failure = None;
+            for services in sets {
+                services.pending().shutdown();
+                if let Some(factory) = &self.0.factory
+                    && let Err(error) = factory.evict(&services)
+                {
+                    failure.get_or_insert(error);
+                }
+            }
+            return failure.map_or(Ok(()), Err);
         }
         Ok(())
     }

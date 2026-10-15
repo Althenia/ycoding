@@ -50,6 +50,15 @@ pub async fn create(
     );
     let info = form::Info::decode(&JsonValue::Object(object))
         .map_err(|_| invalid_fields("The form definition is invalid"))?;
+    if invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .iter()
+        .any(|services| services.forms.get(&info.id).is_ok())
+    {
+        return Err(Failure::Conflict("Form already exists".into()));
+    }
     let created = services.forms.create(info).map_err(|error| match error {
         Error::AlreadyExists => Failure::Conflict("Form already exists".into()),
         Error::InvalidForm(message) => invalid_fields(&convert::readable(&message)),
@@ -67,11 +76,13 @@ pub async fn list(
     let (session, services) = owner(&invocation, &request.params.session_id)?;
     Ok(v5::SessionFormListResult {
         data: v5::SessionFormListResultData {
-            items: services
-                .forms
-                .list(Some(&session))
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
-                .map(info_wire)
+                .flat_map(|services| services.forms.list(Some(&session)))
+                .map(|info| info_wire(&info))
                 .collect::<Result<_, _>>()?,
         },
     })
@@ -85,11 +96,13 @@ pub async fn request_list(
     Ok(v5::FormRequestListResult {
         location: convert::location_info(&services.info),
         data: v5::FormRequestListResultData {
-            items: services
-                .forms
-                .list(None)
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
-                .map(info_wire)
+                .flat_map(|services| services.forms.list(None))
+                .map(|info| info_wire(&info))
                 .collect::<Result<_, _>>()?,
         },
     })
@@ -100,7 +113,7 @@ pub async fn get(
     request: v5::SessionFormGetRequest,
 ) -> Result<v5::SessionFormGetResult, Failure> {
     let (session, services) = owner(&invocation, &request.params.session_id)?;
-    let (_, info) = owned(&services, &session, &request.params.form_id)?;
+    let (_, _, info) = owned(&invocation, &services, &session, &request.params.form_id)?;
     Ok(v5::SessionFormGetResult {
         data: info_wire(&info)?,
     })
@@ -111,9 +124,8 @@ pub async fn state(
     request: v5::SessionFormStateRequest,
 ) -> Result<v5::SessionFormStateResult, Failure> {
     let (session, services) = owner(&invocation, &request.params.session_id)?;
-    let (id, _) = owned(&services, &session, &request.params.form_id)?;
-    let state = services
-        .forms
+    let (forms, id, _) = owned(&invocation, &services, &session, &request.params.form_id)?;
+    let state = forms
         .state(&id)
         .map_err(|error| failure(error, &request.params.form_id))?;
     Ok(v5::SessionFormStateResult {
@@ -126,13 +138,12 @@ pub async fn reply(
     request: v5::SessionFormReplyRequest,
 ) -> Result<v5::SessionFormReplyResult, Failure> {
     let (session, services) = owner(&invocation, &request.params.session_id)?;
-    let (id, _) = owned(&services, &session, &request.params.form_id)?;
+    let (forms, id, _) = owned(&invocation, &services, &session, &request.params.form_id)?;
     let mut answer = JsonObject::new();
     for entry in &request.payload.answer.entries {
         answer.insert(convert::domain(&entry.key)?, value_json(&entry.value)?);
     }
-    services
-        .forms
+    forms
         .reply(&id, form::Answer(answer))
         .map_err(|error| failure(error, &request.params.form_id))?;
     Ok(v5::SessionFormReplyResult { data: v5::Empty {} })
@@ -143,9 +154,8 @@ pub async fn cancel(
     request: v5::SessionFormCancelRequest,
 ) -> Result<v5::SessionFormCancelResult, Failure> {
     let (session, services) = owner(&invocation, &request.params.session_id)?;
-    let (id, _) = owned(&services, &session, &request.params.form_id)?;
-    services
-        .forms
+    let (forms, id, _) = owned(&invocation, &services, &session, &request.params.form_id)?;
+    forms
         .cancel(&id)
         .map_err(|error| failure(error, &request.params.form_id))?;
     Ok(v5::SessionFormCancelResult { data: v5::Empty {} })
@@ -179,17 +189,32 @@ fn owner(
 }
 
 fn owned(
+    invocation: &Invocation,
     services: &LocationServices,
     session: &LosslessString,
     requested: &v5::LosslessString,
-) -> Result<(form::Id, form::Info), Failure> {
+) -> Result<
+    (
+        ycoding_core::tools::policy::forms::Forms,
+        form::Id,
+        form::Info,
+    ),
+    Failure,
+> {
     let id = convert::identifier::<form::Id>(requested)?;
-    services
-        .forms
-        .get(&id)
-        .ok()
-        .filter(|info| &info.session_id == session)
-        .map(|info| (id, info))
+    invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .into_iter()
+        .find_map(|services| {
+            services
+                .forms
+                .get(&id)
+                .ok()
+                .filter(|info| &info.session_id == session)
+                .map(|info| (services.forms.clone(), id.clone(), info))
+        })
         .ok_or_else(|| missing(requested))
 }
 

@@ -551,7 +551,7 @@ async fn make_platform(
                 .unwrap(),
         ),
         pty: Arc::new(pty::Pty::new(path.into())),
-        tickets: Mutex::new(pty::ticket::Tickets::default()),
+        tickets: Arc::new(Mutex::new(pty::ticket::Tickets::default())),
         config: Arc::new(
             Configuration::load(LoadOptions {
                 directory: path.into(),

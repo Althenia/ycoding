@@ -15,12 +15,14 @@ pub async fn list(
     let (_, services) = invocation.core()?.locations.session(&session)?;
     Ok(v5::SessionQuestionListResult {
         data: v5::SessionQuestionListResultData {
-            items: services
-                .questions
-                .list()
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
+                .flat_map(|services| services.questions.list())
                 .filter(|pending| pending.session_id == session)
-                .map(wire)
+                .map(|request| wire(&request))
                 .collect::<Result<_, _>>()?,
         },
     })
@@ -34,11 +36,13 @@ pub async fn request_list(
     Ok(v5::QuestionRequestListResult {
         location: convert::location_info(&services.info),
         data: v5::QuestionRequestListResultData {
-            items: services
-                .questions
-                .list()
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
-                .map(wire)
+                .flat_map(|services| services.questions.list())
+                .map(|request| wire(&request))
                 .collect::<Result<_, _>>()?,
         },
     })
@@ -50,6 +54,7 @@ pub async fn reply(
 ) -> Result<v5::SessionQuestionReplyResult, Failure> {
     let session = invocation.session(&request.params.session_id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
+    let services = pending_owner(&invocation, &services, &session, &request.params.request_id)?;
     let id = owned(&services, &session, &request.params.request_id)?;
     let answers = request
         .payload
@@ -71,6 +76,7 @@ pub async fn reject(
 ) -> Result<v5::SessionQuestionRejectResult, Failure> {
     let session = invocation.session(&request.params.session_id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
+    let services = pending_owner(&invocation, &services, &session, &request.params.request_id)?;
     let id = owned(&services, &session, &request.params.request_id)?;
     services
         .questions
@@ -80,7 +86,7 @@ pub async fn reject(
 }
 
 fn owned(
-    services: &LocationServices,
+    services: &crate::locations::ServiceSet,
     session: &SessionId,
     requested: &v5::LosslessString,
 ) -> Result<question::Id, Failure> {
@@ -91,6 +97,28 @@ fn owned(
         .iter()
         .any(|pending| pending.id == id && &pending.session_id == session)
         .then_some(id)
+        .ok_or_else(|| missing(requested))
+}
+
+fn pending_owner(
+    invocation: &Invocation,
+    services: &LocationServices,
+    session: &SessionId,
+    requested: &v5::LosslessString,
+) -> Result<std::sync::Arc<crate::locations::ServiceSet>, Failure> {
+    let id = convert::identifier::<question::Id>(requested)?;
+    invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .into_iter()
+        .find(|services| {
+            services
+                .questions
+                .list()
+                .iter()
+                .any(|request| request.id == id && &request.session_id == session)
+        })
         .ok_or_else(|| missing(requested))
 }
 

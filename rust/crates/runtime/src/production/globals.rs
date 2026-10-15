@@ -5,7 +5,7 @@ use ycoding_core::{
     event_feed::Feed,
     platform::{browser, computer, git, repository_cache, ripgrep_binary},
     resources::{auth, catalog, credential, discovery, model, project_artifact},
-    session::store::Service,
+    session::{execution, store::Service},
     ycoding_store::Client,
 };
 
@@ -30,6 +30,7 @@ pub(super) struct Globals {
     pub meetings: Meetings,
     pub watcher: Arc<ycoding_core::platform::filesystem::watcher::Service>,
     pub computer: Arc<ycoding_core::platform::computer::service::Coordinator>,
+    pub locations: Arc<std::sync::OnceLock<crate::locations::WeakLocations>>,
     computer_client: Arc<ComputerClient>,
     controls: tokio::sync::Mutex<Option<super::controls::Owner>>,
     worker: Mutex<Option<catalog::models_dev::RefreshWorker>>,
@@ -182,33 +183,6 @@ impl Globals {
             computer_client.clone(),
             platform,
         );
-        let paired = browser.clone();
-        let native = computer.clone();
-        let controls = composition.run(async {
-            super::controls::Owner::start(
-                events.clone(),
-                Arc::new(move |session, lifecycle| {
-                    let paired = paired.clone();
-                    let native = native.clone();
-                    Box::pin(async move {
-                        let browser = paired
-                            .lifecycle(&session, lifecycle)
-                            .await
-                            .map_err(|_| unavailable("paired browser Session release"));
-                        let computer = native
-                            .release_session(
-                                &session
-                                    .as_lossless()
-                                    .to_utf8()
-                                    .map_err(|_| unavailable("Session identity"))?,
-                            )
-                            .await
-                            .map_err(|_| unavailable("computer Session release"));
-                        browser.and(computer)
-                    })
-                }),
-            )
-        })?;
         let repositories = Arc::new(repository_cache::Service::new(
             roots.repos.clone(),
             roots.state.clone(),
@@ -218,8 +192,6 @@ impl Globals {
             ripgrep_binary::Service::new(roots.bin.clone())
                 .map_err(|_| unavailable("ripgrep acquisition"))?,
         );
-        // The refresh worker is the only owner started here; starting it last keeps every
-        // earlier failure free of started work beyond the composition runtime, which Drop joins.
         let worker = composition.run(async {
             catalog
                 .get()
@@ -227,7 +199,7 @@ impl Globals {
                 .map_err(|_| unavailable("model catalog"))?;
             Ok(catalog.start())
         })?;
-        Ok(Arc::new(Self {
+        let globals = Arc::new(Self {
             composition,
             catalog,
             providers,
@@ -250,10 +222,96 @@ impl Globals {
                 true,
             )),
             computer,
+            locations: Default::default(),
             computer_client,
-            controls: tokio::sync::Mutex::new(Some(controls)),
+            controls: tokio::sync::Mutex::new(None),
             worker: Mutex::new(worker),
-        }))
+        });
+        globals.composition.run(async {
+            *globals.controls.lock().await = Some(globals.control_owner(events)?);
+            Ok(())
+        })?;
+        Ok(globals)
+    }
+
+    fn control_owner(&self, events: Feed) -> Result<super::controls::Owner, Failure> {
+        let paired = self.browser.clone();
+        let native = self.computer.clone();
+        let locations = self.locations.clone();
+        super::controls::Owner::start(
+            events,
+            Arc::new(move |session, lifecycle| {
+                let paired = paired.clone();
+                let native = native.clone();
+                let locations = locations.get().and_then(|locations| locations.upgrade());
+                Box::pin(async move {
+                    if let Some(execution) = execution::Execution::global() {
+                        let _ = execution.request_interrupt(&session);
+                    }
+                    let local = match locations {
+                        Some(locations) => locations.release_controls(&session).await,
+                        None => Ok(()),
+                    };
+                    let browser = paired
+                        .lifecycle(&session, lifecycle)
+                        .await
+                        .map_err(|_| unavailable("paired browser Session release"));
+                    let computer = native
+                        .release_session(
+                            &session
+                                .as_lossless()
+                                .to_utf8()
+                                .map_err(|_| unavailable("Session identity"))?,
+                        )
+                        .await
+                        .map_err(|_| unavailable("computer Session release"));
+                    if let Some(execution) = execution::Execution::global() {
+                        execution.await_idle(&session).await;
+                    }
+                    local.and(browser).and(computer)
+                })
+            }),
+        )
+    }
+
+    pub async fn release_session(
+        &self,
+        session: ycoding_core::ycoding_schema::session::Id,
+    ) -> Result<(), Failure> {
+        match self.controls.lock().await.as_ref() {
+            Some(owner) => {
+                owner
+                    .release(session, browser::service::Lifecycle::Moved)
+                    .await
+            }
+            None => Err(unavailable("control lifecycle owner")),
+        }
+    }
+
+    pub async fn flush_controls(&self) -> Result<(), Failure> {
+        match self.controls.lock().await.as_ref() {
+            Some(owner) => owner.flush().await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn stop_controls(&self) -> Result<(), Failure> {
+        match self.controls.lock().await.take() {
+            Some(owner) => owner.close().await,
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn replace_computer(
+        &mut self,
+        computer: Arc<computer::service::Coordinator>,
+        events: Feed,
+    ) -> Result<(), Failure> {
+        self.stop_controls().await?;
+        self.computer = computer;
+        *self.controls.lock().await = Some(self.control_owner(events)?);
+        Ok(())
     }
 
     pub async fn close(&self) -> Result<(), Failure> {
@@ -269,10 +327,7 @@ impl Globals {
                 .map_err(|_| unavailable("model catalog worker")),
             None => Ok(()),
         };
-        let controls = match self.controls.lock().await.take() {
-            Some(controls) => controls.close().await,
-            None => Ok(()),
-        };
+        let controls = self.stop_controls().await;
         self.browser.shutdown();
         let computer = self
             .computer

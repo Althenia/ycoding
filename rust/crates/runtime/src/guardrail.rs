@@ -55,10 +55,17 @@ pub async fn request_list(
     let (_, services) = invocation.core()?.locations.session(&session)?;
     Ok(v5::SessionGuardrailRequestListResult {
         data: v5::SessionGuardrailRequestListResultData {
-            items: services
-                .guardrails
-                .for_session(&session)
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
+                .iter()
+                .map(|services| services.guardrails.for_session(&session))
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| failure(error, None))?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
                 .iter()
                 .map(wire)
                 .collect::<Result<_, _>>()?,
@@ -73,6 +80,22 @@ pub async fn reply(
     let session = invocation.session(&request.params.session_id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
     let id = convert::identifier::<guardrail::RequestId>(&request.params.request_id)?;
+    let services = invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .into_iter()
+        .find(|services| {
+            services
+                .guardrails
+                .for_session(&session)
+                .is_ok_and(|requests| requests.iter().any(|request| request.id == id))
+        })
+        .ok_or_else(|| {
+            Failure::GuardrailRequestNotFound(convert::readable(
+                &convert::domain(&request.params.request_id).unwrap_or_default(),
+            ))
+        })?;
     let reply = match v5::GuardrailReply::try_from(request.payload.reply) {
         Ok(v5::GuardrailReply::Once) => guardrail::Reply::Once,
         Ok(v5::GuardrailReply::Always) => guardrail::Reply::Always,

@@ -83,29 +83,33 @@ pub async fn status(
         }
         locations.push(info.location.clone());
         let services = target::verify(core, &info.id)?.1;
-        for permission in services.permissions.list() {
-            if let Some(owner) = root(&permission.session_id) {
-                requests.insert(owner);
+        for services in core.locations.policy_sets(&services.info) {
+            for permission in services.permissions.list() {
+                if let Some(owner) = root(&permission.session_id) {
+                    requests.insert(owner);
+                }
             }
-        }
-        for form in services.forms.list(None) {
-            if let Some(owner) = session::Id::new(form.session_id.clone())
-                .ok()
-                .and_then(|id| root(&id))
-            {
-                requests.insert(owner);
+            for form in services.forms.list(None) {
+                if let Some(owner) = session::Id::new(form.session_id.clone())
+                    .ok()
+                    .and_then(|id| root(&id))
+                {
+                    requests.insert(owner);
+                }
             }
         }
     }
     for root in &running {
-        if !target::verify(core, root)?
-            .1
-            .guardrails
-            .for_session(root)
-            .map_err(|_| target::error(10, "Guardrail requests unavailable"))?
-            .is_empty()
-        {
-            requests.insert(root.clone());
+        let owner = target::verify(core, root)?.1;
+        for services in core.locations.policy_sets(&owner.info) {
+            if !services
+                .guardrails
+                .for_session(root)
+                .map_err(|_| target::error(10, "Guardrail requests unavailable"))?
+                .is_empty()
+            {
+                requests.insert(root.clone());
+            }
         }
     }
     let attention = requests

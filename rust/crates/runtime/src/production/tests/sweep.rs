@@ -9,6 +9,167 @@ use ycoding_core::ycoding_store::{
     tuple_key,
 };
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_location_boot_refreshes_copies_once_and_reload_does_not_repeat_it() {
+    let f = fixture("{}", "{}");
+    let missing = f
+        .directory()
+        .join("missing-copy")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let row = ycoding_core::ycoding_store::project::Directory {
+        project_id: "prj_one".into(),
+        directory: missing.clone().into(),
+        type_: Some("copy".into()),
+        strategy: Some("git_worktree".into()),
+        time_created: 1,
+    };
+    let first = row.clone();
+    f.store
+        .submit(move |tx| ycoding_core::ycoding_store::project::DirectoryTable::insert(tx, &first))
+        .unwrap()
+        .await
+        .unwrap();
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let wake = notify.clone();
+    let updates = f
+        .feed
+        .subscribe_types(
+            ycoding_core::event_feed::Scope::Global,
+            &["project.directories.updated"],
+            move || wake.notify_one(),
+        )
+        .unwrap();
+    let locations = f.locations();
+    let held = f.services(&locations);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if f.store
+                .client()
+                .snapshot()
+                .unwrap()
+                .scan::<ycoding_core::ycoding_store::project::DirectoryTable>(
+                    std::ops::Bound::Unbounded,
+                    std::ops::Bound::Unbounded,
+                    100,
+                )
+                .unwrap()
+                .iter()
+                .all(|row| row.directory.as_str() != Some(&missing))
+            {
+                break;
+            }
+            notify.notified().await;
+        }
+    })
+    .await
+    .unwrap();
+    f.store
+        .submit(move |tx| ycoding_core::ycoding_store::project::DirectoryTable::insert(tx, &row))
+        .unwrap()
+        .await
+        .unwrap();
+    let _again = f.services(&locations);
+    locations.reload(&held.info).unwrap();
+    locations.close().unwrap();
+    assert!(
+        f.store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<ycoding_core::ycoding_store::project::DirectoryTable>(
+                std::ops::Bound::Unbounded,
+                std::ops::Bound::Unbounded,
+                100
+            )
+            .unwrap()
+            .iter()
+            .any(|row| row.directory.as_str() == Some(&missing)),
+        "reload and repeated acquire cannot repeat the boot-only refresh"
+    );
+    assert_eq!(std::iter::from_fn(|| updates.next().unwrap()).count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repository_observer_publishes_files_and_head_and_joins_on_eviction() {
+    let f = fixture("{}", "{}");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(f.directory())
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(f.directory().join(".git/ycoding"), "prj_one").unwrap();
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let wake = notify.clone();
+    let changes = f
+        .feed
+        .subscribe_types(
+            ycoding_core::event_feed::Scope::Global,
+            &["filesystem.changed", "vcs.branch.updated"],
+            move || wake.notify_one(),
+        )
+        .unwrap();
+    let locations = f.locations();
+    let held = f.services(&locations);
+    std::fs::write(f.directory().join("observed.txt"), "Observed content").unwrap();
+    std::fs::write(f.directory().join(".git/HEAD"), "ref: refs/heads/next\n").unwrap();
+    let mut filesystem = false;
+    let mut branch = false;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !(filesystem && branch) {
+            notify.notified().await;
+            while let Some(item) = changes.next().unwrap() {
+                let ycoding_core::event_feed::Payload::Ephemeral(event) = &item.payload else {
+                    panic!()
+                };
+                assert_eq!(
+                    event.location.as_ref().unwrap().directory,
+                    held.info.directory
+                );
+                match &event.data {
+                    ycoding_core::event_feed::Data::FilesystemChanged(data) => {
+                        filesystem |= data
+                            .file
+                            .as_str()
+                            .is_some_and(|file| file.ends_with("observed.txt"))
+                    }
+                    ycoding_core::event_feed::Data::VcsBranchUpdated(data) => {
+                        branch |=
+                            data.branch.as_ref().and_then(|branch| branch.as_str()) == Some("next")
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    locations
+        .evict(held.info.directory.as_lossless(), None)
+        .unwrap();
+    assert_eq!(
+        f.factory.globals.watcher.active_count().unwrap(),
+        0,
+        "eviction joins configuration and repository observer subscriptions even with a held generation"
+    );
+    locations.close().unwrap();
+}
+
+#[test]
+fn home_location_without_a_repository_has_no_ordinary_filesystem_observer_to_join() {
+    let f = fixture("{}", "{}");
+    let locations = f.locations();
+    let home = locations
+        .location(&f.roots.home.to_str().unwrap().into(), None)
+        .unwrap();
+    assert!(home.production.is_some());
+    locations.close().unwrap();
+}
+
 #[tokio::test]
 async fn production_startup_and_hourly_sweep_prune_local_only() {
     let f = fixture("{}", "{}");

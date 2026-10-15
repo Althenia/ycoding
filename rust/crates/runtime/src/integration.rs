@@ -168,6 +168,7 @@ pub async fn key(
         )
         .await
         .map_err(authorization)?;
+    invocation.core()?.locations.credentials_changed().await?;
     Ok(v5::IntegrationConnectKeyResult { data: v5::Empty {} })
 }
 
@@ -249,6 +250,7 @@ pub async fn oauth_complete(
         )
         .await
         .map_err(authorization)?;
+    invocation.core()?.locations.credentials_changed().await?;
     Ok(v5::IntegrationOauthCompleteResult { data: v5::Empty {} })
 }
 

@@ -7,6 +7,360 @@ use ycoding_core::{
 
 const TEXT: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Finished\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_runner_titles_only_the_first_promoted_prompt_and_uses_reference_guidance() {
+    let (endpoint, mut requests, stop, server) = provider(vec![TEXT.into(), TEXT.into()]).await;
+    let f = fixture("{}", &policy(&endpoint, "{}"));
+    std::fs::write(f.directory().join("ycoding.json"), format!(r#"{{"model":{{"providerID":"openai","model":"gpt-runtime"}},"providers":{{"openai":{{"settings":{{"baseURL":"{endpoint}"}}}}}},"references":{{"manual":{{"path":".","description":"Production reference requirement"}}}}}}"#)).unwrap();
+    let locations = f.locations();
+    let held = f.services(&locations);
+    admit(&f, "ses_one", "first_title").await;
+    Coordinator::new(Arc::new(held.production.as_ref().unwrap().runner.clone()))
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        f.sessions()
+            .get(&session::Id::new("ses_one").unwrap())
+            .unwrap()
+            .unwrap()
+            .title
+            .as_str(),
+        Some("Run the requested check")
+    );
+    assert!(
+        stringify_json(&requests.recv().await.unwrap())
+            .contains("Production reference requirement")
+    );
+    locations.reload(&held.info).unwrap();
+    admit(&f, "ses_one", "second_title").await;
+    let fresh = f.services(&locations);
+    Coordinator::new(Arc::new(fresh.production.as_ref().unwrap().runner.clone()))
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    let renamed = f
+        .store
+        .client()
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_core::ycoding_store::session::EventTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            100,
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.type_.as_str() == Some("session.renamed.1"))
+        .count();
+    assert_eq!(
+        renamed, 1,
+        "reload and subsequent prompts must not rename twice"
+    );
+    requests.recv().await.unwrap();
+    assert!(
+        requests.try_recv().is_err(),
+        "local titles must not call a provider"
+    );
+    locations.close().unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wellknown_sources_rebuild_with_the_latest_saved_key_and_explicit_refresh_resolves_unchanged_manifests()
+ {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let manifest = format!(
+        r#"{{"auth":{{"command":["fixture-login"],"env":"TOKEN"}},"config":{{"agents":{{"god":{{"description":"embedded"}}}}}},"remote_config":{{"url":"{endpoint}/configuration","headers":{{"authorization":"Bearer {{env:TOKEN}}"}}}}}}"#
+    );
+    let revision = Arc::new(std::sync::atomic::AtomicU16::new(1));
+    let current = revision.clone();
+    let (send, mut keys) = mpsc::unbounded_channel();
+    let router = axum::Router::new()
+        .route("/.well-known/ycoding", axum::routing::get(move || { let manifest = manifest.clone(); async move { manifest } }))
+        .route("/configuration", axum::routing::get(move |headers: axum::http::HeaderMap| {
+            send.send(headers.get("authorization").unwrap().to_str().unwrap().to_owned()).unwrap();
+            let revision = current.load(std::sync::atomic::Ordering::Acquire);
+            async move {
+                (axum::http::StatusCode::from_u16(if revision == 500 { 500 } else { 200 }).unwrap(), format!(r#"{{"username":"remote-{revision}","agents":{{"god":{{"description":"remote"}}}}}}"#))
+            }
+        }));
+    let (stop, stopped) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+    let mut f = fixture(
+        "{}",
+        r#"{"username":"project","agents":{"god":{"description":"project"}}}"#,
+    );
+    Arc::get_mut(&mut f.factory).unwrap().options.content =
+        Some(r#"{"agents":{"god":{"description":"inline"}}}"#.into());
+    f.factory.globals.wellknown.add(&endpoint, 1).await.unwrap();
+    let locations = f.locations();
+    let first = f.services(&locations);
+    assert_eq!(
+        first
+            .production
+            .as_ref()
+            .unwrap()
+            .configuration
+            .latest("username"),
+        Some(&JsonValue::String("project".into()))
+    );
+    assert!(
+        keys.try_recv().is_err(),
+        "an unauthenticated source cannot resolve configuration"
+    );
+    let key = |key: &str| {
+        Secret::new(
+            ycoding_core::ycoding_schema::credential::Value::Key(
+                ycoding_core::ycoding_schema::credential::Key {
+                    key: key.into(),
+                    metadata: None,
+                },
+            )
+            .encode(),
+        )
+        .unwrap()
+    };
+    f.factory
+        .credentials
+        .create(
+            "wk_first".into(),
+            endpoint.as_str().into(),
+            Some("First".into()),
+            key("first"),
+            2,
+        )
+        .await
+        .unwrap();
+    locations.credentials_changed().await.unwrap();
+    let second = f.services(&locations);
+    assert_eq!(
+        second
+            .production
+            .as_ref()
+            .unwrap()
+            .configuration
+            .latest("username"),
+        Some(&JsonValue::String("remote-1".into()))
+    );
+    assert_eq!(description(&second).as_deref(), Some("inline"));
+    assert_eq!(keys.recv().await.unwrap(), "Bearer first");
+    f.factory
+        .credentials
+        .create(
+            "wk_second".into(),
+            endpoint.as_str().into(),
+            Some("Second".into()),
+            key("second"),
+            3,
+        )
+        .await
+        .unwrap();
+    f.factory
+        .credentials
+        .activate("wk_first".into(), 4)
+        .await
+        .unwrap();
+    locations.credentials_changed().await.unwrap();
+    assert_eq!(
+        keys.recv().await.unwrap(),
+        "Bearer second",
+        "configuration selects the latest saved key, not the active profile"
+    );
+    revision.store(2, std::sync::atomic::Ordering::Release);
+    assert!(!f.factory.globals.wellknown.refresh().await.unwrap());
+    locations.reload(&first.info).unwrap();
+    let refreshed = f.services(&locations);
+    assert_eq!(
+        refreshed
+            .production
+            .as_ref()
+            .unwrap()
+            .configuration
+            .latest("username"),
+        Some(&JsonValue::String("remote-2".into()))
+    );
+    assert_eq!(
+        first
+            .production
+            .as_ref()
+            .unwrap()
+            .configuration
+            .latest("username"),
+        Some(&JsonValue::String("project".into())),
+        "held configuration remains immutable"
+    );
+    revision.store(500, std::sync::atomic::Ordering::Release);
+    assert!(locations.reload(&first.info).is_err());
+    assert_eq!(
+        f.services(&locations)
+            .production
+            .as_ref()
+            .unwrap()
+            .generation,
+        refreshed.production.as_ref().unwrap().generation
+    );
+    revision.store(2, std::sync::atomic::Ordering::Release);
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let wake = notify.clone();
+    let updates = f
+        .feed
+        .subscribe_types(
+            ycoding_core::event_feed::Scope::Global,
+            &["config.updated"],
+            move || wake.notify_one(),
+        )
+        .unwrap();
+    f.factory
+        .globals
+        .wellknown
+        .remove(&endpoint, 5)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if f.services(&locations)
+                .production
+                .as_ref()
+                .unwrap()
+                .configuration
+                .latest("username")
+                == Some(&JsonValue::String("project".into()))
+            {
+                break;
+            }
+            notify.notified().await;
+            while updates.next().unwrap().is_some() {}
+        }
+    })
+    .await
+    .unwrap();
+    locations.close().unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn production_reference_acquisition_is_cached_and_only_explicit_refresh_fetches_the_remote_branch()
+ {
+    let remote = filesystem_fixture::Fixture::new();
+    remote.repository();
+    remote.git(&["init", "--bare", "origin.git"]);
+    remote.write("README.md", "one");
+    remote.git(&["add", "README.md"]);
+    remote.git(&["commit", "-m", "one"]);
+    let local = url::Url::from_file_path(remote.0.join("origin.git"))
+        .unwrap()
+        .to_string();
+    remote.git(&["remote", "add", "origin", &local]);
+    remote.git(&["push", "-u", "origin", "main"]);
+    remote.git(&["--git-dir", "origin.git", "update-server-info"]);
+    remote.git(&[
+        "--git-dir",
+        "origin.git",
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/main",
+    ]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}/repo.git", listener.local_addr().unwrap());
+    let bare = remote.0.join("origin.git");
+    let router = axum::Router::new().route(
+        "/repo.git/{*path}",
+        axum::routing::get(
+            move |axum::extract::Path(path): axum::extract::Path<String>| {
+                let bare = bare.clone();
+                async move {
+                    if path.split('/').any(|part| part == "..") {
+                        return axum::http::Response::builder()
+                            .status(400)
+                            .body(axum::body::Body::empty())
+                            .unwrap();
+                    }
+                    match tokio::fs::read(bare.join(path)).await {
+                        Ok(bytes) => axum::http::Response::new(axum::body::Body::from(bytes)),
+                        Err(_) => axum::http::Response::builder()
+                            .status(404)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    }
+                }
+            },
+        ),
+    );
+    let (stop, stopped) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+    let f = fixture(
+        "{}",
+        &format!(r#"{{"references":{{"lib":{{"repository":"{origin}","branch":"main"}}}}}}"#),
+    );
+    let target = ycoding_core::platform::repository_cache::parse_remote(&origin, None)
+        .unwrap()
+        .cache_path(&f.roots.repos);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    remote.git(&["clone", &local, target.to_str().unwrap()]);
+    filesystem_fixture::git(&target, &["config", "remote.origin.url", &origin]);
+    let locations = f.locations();
+    let first = f.services(&locations);
+    assert_eq!(
+        std::fs::read_to_string(target.join("README.md")).unwrap(),
+        "one"
+    );
+    remote.write("README.md", "two");
+    remote.git(&["add", "README.md"]);
+    remote.git(&["commit", "-m", "two"]);
+    remote.git(&["push"]);
+    remote.git(&["--git-dir", "origin.git", "update-server-info"]);
+    locations
+        .reload_generation(&first.info, first.production.as_ref().unwrap().generation)
+        .unwrap();
+    let cached = f.services(&locations);
+    assert!(!Arc::ptr_eq(
+        &first.production.as_ref().unwrap().references,
+        &cached.production.as_ref().unwrap().references
+    ));
+    assert_eq!(
+        std::fs::read_to_string(target.join("README.md")).unwrap(),
+        "one",
+        "ordinary rebuilds must not fetch or reset a reference"
+    );
+    locations.reload(&first.info).unwrap();
+    let fetched = f.services(&locations);
+    assert_eq!(
+        std::fs::read_to_string(target.join("README.md")).unwrap(),
+        "two"
+    );
+    stop.send(()).unwrap();
+    server.await.unwrap();
+    assert!(locations.reload(&first.info).is_err());
+    assert_eq!(
+        f.services(&locations)
+            .production
+            .as_ref()
+            .unwrap()
+            .generation,
+        fetched.production.as_ref().unwrap().generation,
+        "failed explicit fetch keeps the published reference generation"
+    );
+    locations.close().unwrap();
+}
+
 async fn admit(f: &Fixture, session: &str, suffix: &str) {
     f.sessions().admit(pending::Request {
         id: ycoding_core::ycoding_schema::session_message::Id::new(format!("msg_{suffix}")).unwrap(),

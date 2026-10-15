@@ -246,8 +246,15 @@ async fn change(
 ) -> Result<(), Failure> {
     let core = invocation.core()?;
     let id = invocation.session(session_id)?;
+    let archive = change == Change::Archive;
     match core.sessions.change(&id, change).await {
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            if archive {
+                let _ = core.execution.interrupt(&id).await;
+                core.locations.cancel_session(&id).await?;
+            }
+            Ok(())
+        }
         Ok(false) => Err(Failure::SessionNotFound(convert::readable(
             id.as_lossless(),
         ))),

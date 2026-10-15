@@ -495,6 +495,8 @@ async fn session_remove(
 ) -> Result<v5::SessionRemoveResult, Failure> {
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
+    let _ = core.execution.interrupt(&id).await;
+    core.locations.cancel_session(&id).await?;
     let removed = core
         .sessions
         .remove(&id)

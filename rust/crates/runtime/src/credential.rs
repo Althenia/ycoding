@@ -17,6 +17,7 @@ pub async fn update(
         )
         .await
         .map_err(credential_unavailable)?;
+    core.locations.credentials_changed().await?;
     Ok(v5::CredentialUpdateResult { data: v5::Empty {} })
 }
 
@@ -32,6 +33,7 @@ pub async fn activate(
         )
         .await
         .map_err(credential_unavailable)?;
+    core.locations.credentials_changed().await?;
     Ok(v5::CredentialActivateResult { data: v5::Empty {} })
 }
 
@@ -47,6 +49,7 @@ pub async fn remove(
         )
         .await
         .map_err(credential_unavailable)?;
+    core.locations.credentials_changed().await?;
     Ok(v5::CredentialRemoveResult { data: v5::Empty {} })
 }
 

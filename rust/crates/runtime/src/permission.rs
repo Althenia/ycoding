@@ -23,6 +23,15 @@ pub async fn create(
             .and_then(permission::Id::new)
             .map_err(|_| Failure::Unavailable("permission ID generation failed".into()))?,
     };
+    if invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .iter()
+        .any(|services| services.permissions.get(&id).is_some())
+    {
+        return Err(failure(Error::Duplicate));
+    }
     let admission = services
         .permissions
         .ask(
@@ -84,11 +93,13 @@ pub async fn list(
     let (_, services) = invocation.core()?.locations.session(&session)?;
     Ok(v5::SessionPermissionListResult {
         data: v5::SessionPermissionListResultData {
-            items: services
-                .permissions
-                .for_session(&session)
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
-                .map(wire)
+                .flat_map(|services| services.permissions.for_session(&session))
+                .map(|request| wire(&request))
                 .collect::<Result<_, _>>()?,
         },
     })
@@ -101,10 +112,17 @@ pub async fn get(
     let session = invocation.session(&request.params.session_id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
     let id = convert::identifier::<permission::Id>(&request.params.request_id)?;
-    let owned = services
-        .permissions
-        .get(&id)
-        .filter(|found| found.session_id == session)
+    let owned = invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .iter()
+        .find_map(|services| {
+            services
+                .permissions
+                .get(&id)
+                .filter(|found| found.session_id == session)
+        })
         .ok_or_else(|| missing(&request.params.request_id))?;
     Ok(v5::SessionPermissionGetResult {
         data: wire(&owned)?,
@@ -118,6 +136,18 @@ pub async fn reply(
     let session = invocation.session(&request.params.session_id)?;
     let (_, services) = invocation.core()?.locations.session(&session)?;
     let id = convert::identifier::<permission::Id>(&request.params.request_id)?;
+    let services = invocation
+        .core()?
+        .locations
+        .policy_sets(&services.info)
+        .into_iter()
+        .find(|services| {
+            services
+                .permissions
+                .get(&id)
+                .is_some_and(|found| found.session_id == session)
+        })
+        .ok_or_else(|| missing(&request.params.request_id))?;
     services
         .permissions
         .get(&id)
@@ -157,11 +187,13 @@ pub async fn request_list(
     Ok(v5::PermissionRequestListResult {
         location: convert::location_info(&services.info),
         data: v5::PermissionRequestListResultData {
-            items: services
-                .permissions
-                .list()
+            items: invocation
+                .core()?
+                .locations
+                .policy_sets(&services.info)
                 .iter()
-                .map(wire)
+                .flat_map(|services| services.permissions.list())
+                .map(|request| wire(&request))
                 .collect::<Result<_, _>>()?,
         },
     })

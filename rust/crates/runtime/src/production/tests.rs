@@ -29,6 +29,10 @@ use ycoding_core::{
 #[allow(dead_code)]
 mod catalog_fixture;
 
+#[path = "../../../core/tests/filesystem_fixture.rs"]
+#[allow(dead_code)]
+mod filesystem_fixture;
+
 const MODELS: &str = r#"{"openai":{"id":"openai","name":"OpenAI","api":"http://127.0.0.1:1","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192},"cost":{"input":2,"output":3}},"gpt-helper":{"id":"gpt-helper","name":"Helper","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":false,"limit":{"context":64000,"output":4096},"cost":{"input":1,"output":2}}}}}"#;
 
 static FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -171,6 +175,7 @@ fn fixture_with(
     .unwrap();
     Fixture {
         factory: Arc::new(Factory {
+            catalog_refresh: false,
             options: config::LoadOptions {
                 directory,
                 roots: roots.clone(),
@@ -179,7 +184,6 @@ fn fixture_with(
                 content: None,
                 env,
             },
-            snapshots: models_dev::normalize(&parse_json(MODELS).unwrap()).unwrap(),
             client: client.clone(),
             events: feed.clone(),
             credentials,
@@ -190,6 +194,7 @@ fn fixture_with(
                 Ok(())
             }),
             cursor: None,
+            cursor_agent: None,
             steer: None,
             ripgrep: "rg".into(),
             globals,
@@ -224,6 +229,7 @@ impl Fixture {
         )
         .with_factory(self.factory.clone());
         let _ = self.factory.locations.set(locations.downgrade());
+        let _ = self.factory.globals.locations.set(locations.downgrade());
         locations
     }
     fn services(&self, locations: &Locations) -> Arc<LocationServices> {
@@ -1203,6 +1209,7 @@ fn helper_model_priority_keeps_explicit_unavailable_selections_closed() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cursor_models_require_and_use_a_location_owned_host_context() {
+    use tokio::io::AsyncBufReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let discovery = tokio::spawn(async move {
@@ -1236,7 +1243,6 @@ async fn cursor_models_require_and_use_a_location_owned_host_context() {
         .await
         .endpoints
         .insert("cursor".into(), endpoint);
-    Arc::get_mut(&mut f.factory).unwrap().snapshots = models_dev::normalize(&parse_json(r#"{"cursor":{"id":"cursor","name":"Cursor","env":["CURSOR_API_KEY"],"npm":"cursor-opencode-provider","models":{"cursor-model":{"id":"cursor-model","name":"Cursor model","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap()).unwrap();
     {
         let locations = f.locations();
         let (info, services) = locations
@@ -1258,8 +1264,41 @@ async fn cursor_models_require_and_use_a_location_owned_host_context() {
             Runtime::new(ycoding_core::ycoding_ai::cursor::transport::Options::default()).unwrap(),
         ),
     });
-    let (info, services) = f
-        .locations()
+    let frames = [
+        ycoding_core::ycoding_ai::cursor::framing::encode(
+            0,
+            &[
+                10, 11, 10, 9, 10, 7, b'a', b'n', b's', b'w', b'e', b'r', b'!',
+            ],
+        )
+        .unwrap(),
+        ycoding_core::ycoding_ai::cursor::framing::encode(0, &[10, 2, 114, 0]).unwrap(),
+    ]
+    .concat();
+    let mut peer = tokio::process::Command::new("bun")
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cursor-generate.mjs"))
+        .env("CURSOR_RESPONSE", format!("{frames:?}"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut output = tokio::io::BufReader::new(peer.stdout.take().unwrap()).lines();
+    let port = tokio::time::timeout(Duration::from_secs(5), output.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    Arc::get_mut(&mut f.factory).unwrap().cursor_agent = Some(
+        ycoding_core::ycoding_ai::cursor::transport::Endpoint::loopback(
+            ([127, 0, 0, 1], port).into(),
+        )
+        .unwrap(),
+    );
+    let locations = f.locations();
+    let (info, services) = locations
         .session(&session::Id::new("ses_one").unwrap())
         .unwrap();
     assert!(services.production.as_ref().unwrap().runner.resolves(
@@ -1267,7 +1306,102 @@ async fn cursor_models_require_and_use_a_location_owned_host_context() {
         Role::Prompt,
         services.agents.get(&"prompt".into()).unwrap()
     ));
+    let composed = services.production.as_ref().unwrap();
+    assert!(
+        matches!(composed.generate.text(generate::Input { prompt: "No fallback".into(), model: Some(ycoding_core::ycoding_schema::model::Ref { provider_id: ycoding_core::ycoding_schema::provider::Id("cursor".into()), id: "cursor-model".into(), profile: Some(ycoding_core::ycoding_schema::model::ProfileName("Missing".into())), variant: None }) }).await, Err(generate::Error::Selection(message)) if message.contains("Profile unavailable"))
+    );
+    let key = |value: &str| {
+        Secret::new(
+            ycoding_core::ycoding_schema::credential::Value::Key(
+                ycoding_core::ycoding_schema::credential::Key {
+                    key: value.into(),
+                    metadata: None,
+                },
+            )
+            .encode(),
+        )
+        .unwrap()
+    };
+    f.factory
+        .credentials
+        .create(
+            "cursor_work".into(),
+            "cursor".into(),
+            Some("Work".into()),
+            key("selected-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    f.factory
+        .credentials
+        .create(
+            "cursor_default".into(),
+            "cursor".into(),
+            Some("Default".into()),
+            key("different-key"),
+            2,
+        )
+        .await
+        .unwrap();
+    locations.credentials_changed().await.unwrap();
+    let current = f.services(&locations);
+    let composed = current.production.as_ref().unwrap();
+    let generated = tokio::time::timeout(
+        Duration::from_secs(5),
+        composed.generate.text(generate::Input {
+            prompt: "Generate through the selected Cursor account".into(),
+            model: Some(ycoding_core::ycoding_schema::model::Ref {
+                provider_id: ycoding_core::ycoding_schema::provider::Id("cursor".into()),
+                id: "cursor-model".into(),
+                profile: Some(ycoding_core::ycoding_schema::model::ProfileName(
+                    "Work".into(),
+                )),
+                variant: None,
+            }),
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(generated.as_str(), Some("answer!"));
+    let JsonValue::Object(observed) = parse_json(
+        &tokio::time::timeout(Duration::from_secs(5), output.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        observed.get(&"authorization".into()),
+        Some(&JsonValue::String("Bearer selected-key".into()))
+    );
+    assert_eq!(observed.get(&"session".into()), Some(&JsonValue::Null));
+    let Some(JsonValue::String(body)) = observed.get(&"body".into()) else {
+        panic!()
+    };
+    let encoded_directory = current
+        .info
+        .directory
+        .as_lossless()
+        .to_utf8()
+        .unwrap()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert!(
+        body.as_str().unwrap().contains(&encoded_directory),
+        "the actual native Cursor Run must carry its Location context"
+    );
+    peer.start_kill().unwrap();
+    peer.wait().await.unwrap();
+    locations.close().unwrap();
     discovery.abort();
+    assert!(discovery.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]
@@ -2064,6 +2198,295 @@ async fn durable_session_deletion_releases_the_shared_browser_admission() {
     f.factory.globals.close().await.unwrap();
 }
 
+type NativeCall = (
+    ycoding_core::platform::computer::types::Request,
+    tokio::sync::watch::Receiver<bool>,
+    oneshot::Sender<ycoding_core::platform::computer::types::Success>,
+);
+
+struct NativeBoundary(mpsc::UnboundedSender<NativeCall>);
+impl ycoding_core::platform::computer::service::Invoke for NativeBoundary {
+    fn invoke<'a>(
+        &'a self,
+        request: ycoding_core::platform::computer::types::Request,
+        signal: tokio::sync::watch::Receiver<bool>,
+    ) -> ycoding_core::platform::computer::Future<
+        'a,
+        Result<
+            ycoding_core::platform::computer::types::Success,
+            ycoding_core::platform::computer::types::NativeError,
+        >,
+    > {
+        Box::pin(async move {
+            let (send, receive) = oneshot::channel();
+            self.0.send((request, signal, send)).unwrap();
+            Ok(receive.await.unwrap())
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ownership_end_cancels_held_generation_requests_and_native_work_without_late_effects() {
+    use ycoding_core::platform::computer::{
+        service::Coordinator,
+        types::{Owner, Request, Success, Target},
+    };
+    use ycoding_core::ycoding_schema::{guardrail, permission};
+    for cause in ["move", "archive", "delete", "agent", "evict"] {
+        let mut f = fixture(
+            "{}",
+            r#"{"agents":{"god":{"permissions":[{"action":"pending","resource":"*","effect":"ask"}]},"other":{"description":"Other agent"}}}"#,
+        );
+        let (native, mut calls) = mpsc::unbounded_channel();
+        let feed = f.feed.clone();
+        Arc::get_mut(&mut Arc::get_mut(&mut f.factory).unwrap().globals)
+            .unwrap()
+            .replace_computer(
+                Coordinator::new(Arc::new(NativeBoundary(native)), "darwin"),
+                feed,
+            )
+            .await
+            .unwrap();
+        let mut foreign = catalog_fixture::record("ses_foreign");
+        foreign.directory = f.directory().to_str().unwrap().into();
+        f.store
+            .submit(move |tx| SessionTable::insert(tx, &foreign))
+            .unwrap()
+            .await
+            .unwrap();
+        let locations = f.locations();
+        let held = f.services(&locations);
+        let id = session::Id::new("ses_one").unwrap();
+        let requested = permission::Request::decode(&parse_json(r#"{"id":"per_pending","sessionID":"ses_one","action":"pending","resources":["asset"],"save":["asset"]}"#).unwrap()).unwrap();
+        let permission = held
+            .permissions
+            .ask(requested.clone(), Some("god".into()))
+            .unwrap()
+            .wait
+            .unwrap();
+        let question = question::Request::decode(&parse_json(r#"{"id":"que_pending","sessionID":"ses_one","questions":[{"question":"Continue?","header":"Choose","options":[{"label":"Yes","description":"Continue"}]}]}"#).unwrap()).unwrap();
+        let Admission::Pending(answer) = held.questions.ask(question.clone()).unwrap() else {
+            panic!()
+        };
+        let form = form::Info::decode(&parse_json(r#"{"id":"frm_pending","sessionID":"ses_one","title":"Choose","fields":[{"key":"name","type":"string","required":true}]}"#).unwrap()).unwrap();
+        let formed = held.forms.ask(form.clone()).unwrap();
+        let foreign_form = form::Info::decode(&parse_json(r#"{"id":"frm_foreign","sessionID":"ses_foreign","title":"Other Session","fields":[{"key":"name","type":"string","required":true}]}"#).unwrap()).unwrap();
+        held.forms.create(foreign_form.clone()).unwrap();
+        let review = held
+            .guardrails
+            .assert(Input {
+                session_id: id.clone(),
+                action: "shell".into(),
+                resources: vec![
+                    format!(
+                        "rm -rf '{}'",
+                        std::fs::canonicalize(f.directory()).unwrap().display()
+                    )
+                    .into(),
+                ],
+                metadata: None,
+                skip_review: false,
+                holder: None,
+            })
+            .unwrap();
+        let review_id = review.request.unwrap().id;
+        let reviewed = review.wait.unwrap();
+        let computer = held.production.as_ref().unwrap().computer.clone();
+        let target = Target::Desktop {
+            bundle_id: "com.example.fixture".into(),
+            pid: 101,
+            window_id: 202,
+        };
+        let native_request = Request::inspect(
+            Owner {
+                session_id: "ses_one".into(),
+                call_id: "held-native".into(),
+            },
+            target.clone(),
+        )
+        .unwrap();
+        let executing = tokio::spawn({
+            let computer = computer.clone();
+            async move { computer.execute(native_request).await }
+        });
+        let (native_request, mut cancelled, late) =
+            tokio::time::timeout(Duration::from_secs(5), calls.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        locations.reload(&held.info).unwrap();
+        let current = f.services(&locations);
+        assert!(Arc::ptr_eq(
+            &computer,
+            &current.production.as_ref().unwrap().computer
+        ));
+        assert_eq!(
+            locations
+                .policy_sets(&current.info)
+                .iter()
+                .flat_map(|services| services.permissions.for_session(&id))
+                .count(),
+            1,
+            "requests remain addressable in their held generation after reload"
+        );
+        match cause {
+            "move" => {
+                f.sessions()
+                    .publish(ycoding_core::ycoding_store::session::NewEvent {
+                        id: "evt_pending_move".into(),
+                        aggregate_id: "ses_one".into(),
+                        created: crate::ids::now_millis(),
+                        type_: "session.moved.1".into(),
+                        data: parse_json(&format!(
+                            r#"{{"sessionID":"ses_one","location":{{"directory":"{}"}}}}"#,
+                            f.directory().display()
+                        ))
+                        .unwrap(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            "archive" => {
+                f.sessions()
+                    .change(&id, ycoding_core::session::lifecycle::Change::Archive)
+                    .await
+                    .unwrap();
+            }
+            "delete" => {
+                f.sessions().remove(&id).await.unwrap();
+            }
+            "agent" => {
+                current
+                    .production
+                    .as_ref()
+                    .unwrap()
+                    .runner
+                    .switch_agent(&id, &"other".into())
+                    .await
+                    .unwrap();
+            }
+            "evict" => {
+                locations
+                    .evict(held.info.directory.as_lossless(), None)
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            cancelled.wait_for(|cancelled| *cancelled),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), permission)
+                .await
+                .expect(cause)
+                .unwrap()
+                .is_err(),
+            "{cause}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), answer)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err(),
+            "{cause}"
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), formed)
+                .await
+                .unwrap()
+                .unwrap(),
+            form::State::Cancelled,
+            "{cause}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), reviewed)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err(),
+            "{cause}"
+        );
+        assert!(
+            held.permissions
+                .reply(&requested.id, permission::Reply("always".into()), None)
+                .is_err()
+        );
+        assert!(
+            held.saved.list(None).unwrap().is_empty(),
+            "cancelled approvals cannot persist a late grant"
+        );
+        assert!(
+            held.questions
+                .reply(&question.id, vec![vec!["Yes".into()]])
+                .is_err()
+        );
+        assert!(
+            held.forms
+                .reply(
+                    &form.id,
+                    form::Answer::decode(&parse_json(r#"{"name":"late"}"#).unwrap()).unwrap()
+                )
+                .is_err()
+        );
+        assert!(
+            held.guardrails
+                .reply(&id, &review_id, guardrail::Reply::Once)
+                .is_err()
+        );
+        assert_eq!(
+            held.forms.state(&foreign_form.id).unwrap(),
+            if cause == "evict" {
+                form::State::Cancelled
+            } else {
+                form::State::Pending
+            },
+            "cancellation must preserve another Session unless its Location ends"
+        );
+        let other = Request::inspect(
+            Owner {
+                session_id: "ses_foreign".into(),
+                call_id: "foreign-native".into(),
+            },
+            target,
+        )
+        .unwrap();
+        assert!(
+            computer.execute(other.clone()).await.is_err(),
+            "native target stays locked until physical settlement"
+        );
+        late.send(Success {
+            action: native_request.operation,
+            revision: "late".into(),
+            detail: Default::default(),
+        })
+        .unwrap();
+        assert!(
+            executing.await.unwrap().is_err(),
+            "a cancelled native success cannot revive the claim"
+        );
+        let other = tokio::spawn({
+            let computer = computer.clone();
+            async move { computer.execute(other).await }
+        });
+        let (request, _, settled) = calls.recv().await.unwrap();
+        settled
+            .send(Success {
+                action: request.operation,
+                revision: "fresh".into(),
+                detail: Default::default(),
+            })
+            .unwrap();
+        assert!(other.await.unwrap().is_ok());
+        locations.close().unwrap();
+        f.factory.globals.close().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn control_lifecycle_keeps_processing_after_release_failure_and_reports_it_on_close() {
     let f = fixture("{}", "{}");
@@ -2148,6 +2571,60 @@ fn next_generation(f: &Fixture, locations: &Locations, after: u64) -> Arc<Locati
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_and_explicit_control_releases_share_one_serial_owner_and_flush_boundary() {
+    let f = fixture("{}", "{}");
+    let (entered, mut calls) = mpsc::unbounded_channel();
+    let (resume, blocked) = oneshot::channel();
+    let blocked = Arc::new(Mutex::new(Some(blocked)));
+    let owner = Arc::new(
+        controls::Owner::start(
+            f.feed.clone(),
+            Arc::new(move |session, _| {
+                let entered = entered.clone();
+                let blocked = blocked.lock().unwrap().take();
+                Box::pin(async move {
+                    entered.send(session).unwrap();
+                    if let Some(blocked) = blocked {
+                        blocked.await.unwrap();
+                    }
+                    Ok(())
+                })
+            }),
+        )
+        .unwrap(),
+    );
+    let id = session::Id::new("ses_one").unwrap();
+    f.sessions()
+        .change(&id, ycoding_core::session::lifecycle::Change::Archive)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), calls.recv())
+            .await
+            .unwrap(),
+        Some(id.clone())
+    );
+    let second = tokio::spawn({
+        let owner = owner.clone();
+        let id = id.clone();
+        async move {
+            owner
+                .release(
+                    id,
+                    ycoding_core::platform::browser::service::Lifecycle::Moved,
+                )
+                .await
+        }
+    });
+    assert!(calls.try_recv().is_err());
+    resume.send(()).unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(calls.try_recv().unwrap(), id);
+    owner.flush().await.unwrap();
+    Arc::try_unwrap(owner).ok().unwrap().close().await.unwrap();
+}
+
 #[test]
 fn configuration_changes_replace_the_location_generation_and_failures_keep_the_current_one() {
     let f = fixture("{}", r#"{"agents":{"god":{"description":"first"}}}"#);
@@ -2186,6 +2663,151 @@ fn configuration_changes_replace_the_location_generation_and_failures_keep_the_c
     let third = next_generation(&f, &locations, generation);
     assert_eq!(description(&third).as_deref(), Some("third"));
     drop((held, third));
+    locations.close().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_preserves_location_process_and_ticket_owners() {
+    let f = fixture("{}", "{}");
+    let locations = f.locations();
+    let held = f.services(&locations);
+    let old = held.production.as_ref().unwrap();
+    let terminal = old.platform.pty.create(ycoding_core::ycoding_schema::pty::CreateInput::decode(&parse_json(&format!(r#"{{"sessionID":"ses_one","command":"/bin/sh","args":["-c","printf READY; read x; printf 'PTY:%s' \"$x\""],"cwd":"{}","maxRuntimeSeconds":10}}"#, f.directory().display())).unwrap()).unwrap(), Some(&old.configuration)).await.unwrap();
+    let owner = session::Id::new("ses_one").unwrap();
+    let mut attachment = old
+        .platform
+        .pty
+        .attach(
+            &terminal.id,
+            &owner,
+            Some(1),
+            0,
+            ycoding_core::ycoding_schema::pty::Access::Inspect,
+            None,
+        )
+        .unwrap();
+    attachment.activate();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut text = String::from_utf8_lossy(&attachment.replay.data).into_owned();
+        while !text.contains("READY") {
+            let ycoding_core::platform::pty::Delivery::Chunk(chunk) =
+                attachment.recv().await.unwrap()
+            else {
+                panic!("PTY ended before input");
+            };
+            text.push_str(&String::from_utf8_lossy(&chunk.data));
+        }
+    })
+    .await
+    .unwrap();
+    let ticket_scope = ycoding_core::platform::pty::ticket::Scope {
+        pty_id: terminal.id.clone(),
+        session_id: session::Id::new("ses_one").unwrap(),
+        access: ycoding_core::ycoding_schema::pty::Access::Inspect,
+        generation: 1,
+        fence: None,
+        directory: Some(f.directory().to_str().unwrap().into()),
+        workspace_id: None,
+    };
+    let ticket = old
+        .platform
+        .tickets
+        .lock()
+        .unwrap()
+        .issue(ticket_scope.clone())
+        .unwrap();
+    locations.reload(&held.info).unwrap();
+    let fresh = f.services(&locations);
+    let current = fresh.production.as_ref().unwrap();
+    assert!(
+        Arc::ptr_eq(&old.platform.shell, &current.platform.shell),
+        "reload must keep running shells"
+    );
+    assert!(
+        Arc::ptr_eq(&old.platform.pty, &current.platform.pty),
+        "reload must keep PTYs"
+    );
+    assert!(Arc::ptr_eq(&old.platform.copies, &current.platform.copies));
+    let other = f.directory().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let other = locations
+        .location(&other.to_str().unwrap().into(), None)
+        .unwrap();
+    assert!(
+        !other
+            .production
+            .as_ref()
+            .unwrap()
+            .platform
+            .tickets
+            .lock()
+            .unwrap()
+            .consume(ticket.ticket.as_str().unwrap(), &ticket_scope)
+    );
+    assert!(
+        other
+            .production
+            .as_ref()
+            .unwrap()
+            .platform
+            .pty
+            .get(&terminal.id, &owner)
+            .is_err()
+    );
+    assert!(
+        current
+            .platform
+            .tickets
+            .lock()
+            .unwrap()
+            .consume(ticket.ticket.as_str().unwrap(), &ticket_scope),
+        "a pre-reload ticket belongs to the same Location owner"
+    );
+    assert!(
+        !old.platform
+            .tickets
+            .lock()
+            .unwrap()
+            .consume(ticket.ticket.as_str().unwrap(), &ticket_scope),
+        "tickets remain one-shot across generations"
+    );
+    current
+        .platform
+        .pty
+        .write(
+            &terminal.id,
+            &owner,
+            1,
+            1,
+            ycoding_core::ycoding_schema::pty::Actor::Agent,
+            "after-reload\n",
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut text = String::new();
+        while !text.contains("PTY:after-reload") {
+            let ycoding_core::platform::pty::Delivery::Chunk(chunk) =
+                attachment.recv().await.unwrap()
+            else {
+                panic!("PTY ended without the post-reload input");
+            };
+            text.push_str(&String::from_utf8_lossy(&chunk.data));
+        }
+    })
+    .await
+    .unwrap();
+    let exited = current
+        .platform
+        .pty
+        .wait(&terminal.id, &owner)
+        .await
+        .unwrap();
+    assert_eq!(exited.exit_code.unwrap().get(), 0);
+    assert!(!Arc::ptr_eq(
+        &current.platform.shell,
+        &other.production.as_ref().unwrap().platform.shell
+    ));
     locations.close().unwrap();
 }
 

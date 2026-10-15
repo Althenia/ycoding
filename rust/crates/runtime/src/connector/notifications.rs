@@ -190,33 +190,36 @@ impl Notifications {
                 .locations
                 .session(members[0])
                 .map_err(|_| Error::Transport)?;
-            for request in services.permissions.list() {
-                need(
-                    request.session_id.as_lossless(),
-                    v5::AttentionNeed::Permission,
-                );
-            }
-            for request in services.questions.list() {
-                need(
-                    request.session_id.as_lossless(),
-                    v5::AttentionNeed::Question,
-                );
-            }
-            for form in services.forms.list(None) {
-                need(&form.session_id, v5::AttentionNeed::Question);
-            }
-            let mut reviewed = BTreeSet::new();
-            for member in members {
-                if !root(member.as_lossless(), &sessions).is_some_and(|root| reviewed.insert(root))
-                {
-                    continue;
+            for services in core.locations.policy_sets(&services.info) {
+                for request in services.permissions.list() {
+                    need(
+                        request.session_id.as_lossless(),
+                        v5::AttentionNeed::Permission,
+                    );
                 }
-                for request in services
-                    .guardrails
-                    .for_session(member)
-                    .map_err(|_| Error::Transport)?
-                {
-                    need(request.session_id.as_lossless(), v5::AttentionNeed::Review);
+                for request in services.questions.list() {
+                    need(
+                        request.session_id.as_lossless(),
+                        v5::AttentionNeed::Question,
+                    );
+                }
+                for form in services.forms.list(None) {
+                    need(&form.session_id, v5::AttentionNeed::Question);
+                }
+                let mut reviewed = BTreeSet::new();
+                for member in members {
+                    if !root(member.as_lossless(), &sessions)
+                        .is_some_and(|root| reviewed.insert(root))
+                    {
+                        continue;
+                    }
+                    for request in services
+                        .guardrails
+                        .for_session(member)
+                        .map_err(|_| Error::Transport)?
+                    {
+                        need(request.session_id.as_lossless(), v5::AttentionNeed::Review);
+                    }
                 }
             }
         }

@@ -558,6 +558,9 @@ async fn switch_agent(
         .switch_agent(&id, &convert::domain(&request.payload.agent)?)
         .await
         .map_err(failure)?;
+    let core = invocation.core()?;
+    let _ = core.execution.interrupt(&id).await;
+    core.locations.cancel_session(&id).await?;
     Ok(v5::SessionSwitchAgentResult { data: v5::Empty {} })
 }
 
@@ -737,6 +740,7 @@ async fn move_session(
         )
         .await
         .map_err(failure)?;
+    core.locations.cancel_session(&id).await?;
     Ok(v5::SessionMoveResult { data: v5::Empty {} })
 }
 

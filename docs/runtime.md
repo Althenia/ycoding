@@ -6,6 +6,40 @@ This document specifies the Rust-backend beta's runtime behavior. Exact types an
 
 Rust `launch` installs observability, resolves channel roots, imports/opens redb, composes production Core, binds the listener, and publishes authenticated readiness and owned registration. Production supplies the Session runner and helper generation, tools, MCP, configured process extensions, artifacts, native-control services, maintenance, and the opt-in remote connector. Each Location has a replaceable service generation; held calls retain their captured services through reload.
 
+Replacement builds use current model discovery, credential/account inventories,
+configuration documents and authenticated well-known sources. Model-source,
+well-known-source and connection updates rebuild acquired Locations. Each
+successful replacement installs its catalog, policy and runner before publishing
+catalog/configuration updates; a failed discovery, reference acquisition, MCP
+replacement or service build keeps the previous usable generation. MCP replacement
+restores its previous configured definitions on failure. A held generation retains
+its tools, instructions, extension processes and artifact-source registration until
+its calls and pending requests release it.
+
+Shells, PTYs, one-shot PTY tickets, filesystem/search services, project-copy services
+and native-control handles belong to the Location across generation replacements;
+configuration snapshots remain generation-owned. Tickets cannot be consumed by
+another Location or replayed through a different generation. Initial Location boot
+refreshes project copies once. The Location observer publishes ordinary filesystem
+changes and branch changes observed through repository HEAD; eviction stops and
+joins both repository and configuration observers.
+
+Ordinary reference acquisition uses cached repository materialization. Explicit
+resource refresh fetches and resets configured Git references under the shared
+repository-cache lock; ordinary reads and step-boundary rebuilds do not fetch.
+
+Permission, question, Form and guardrail replies resolve pending owners across
+held generations. One process-wide owner serializes durable lifecycle events and
+explicit cancellation. Session movement, archive, deletion, agent switch and Location
+eviction interrupt active execution, cancel pending requests and release native work.
+Runtime cannot individually cancel an ID-less guardrail concurrency-cap waiter
+outside active execution. Cancellation rejects late
+replies and prevents late native success from restoring a claim; the native target
+stays locked until physical settlement. Location shutdown joins observers,
+extensions, MCP watchers, artifact governors and process/native owners before the
+Store closes. Startup settles interrupted execution without replaying a provider
+call.
+
 The registered skill tool holds a non-owning MCP handle. MCP skill loads and resource reads retain the service through settlement; an idle skill tool does not keep a replaced generation alive. External service holders keep that generation in use until released.
 
 Canonical Session records, pending inputs, events, instruction blobs, autonomy, tasks, credentials, and artifacts live in the local Store. Usage and latency reports use derived DuckDB analytics. Neither a UI read model nor a report table owns canonical execution history. Store open fails closed for an unreadable or unsupported catalog/codec; startup does not reset or overwrite it.
@@ -17,6 +51,15 @@ Beta uses `ycoding-beta` roots. First start imports stable Core SQLite through p
 The opt-in Rust Meeting service separates capture, local transcript storage and analysis lifecycles. `ycoding meeting` or `ycoding serve --meeting` enables it; the runtime compiles its live-page and Python-worker assets, while local Python/speech prerequisites remain required. One tool-free analysis Session per meeting uses model/profile resolution, bounded finalized evidence and rolling checkpoints. Native human review and revision/read-back checks own consequential knowledge writes. TUI components do not own recording, and recovery never implies a live source reconnected. Stable-history import preserves transcripts, findings, summaries, plans, and proposals without arming capture; an import failure leaves the Location available and reports the Meeting startup failure.
 
 ## Sessions
+
+### Automatic titles
+
+The first promoted user prompt of a root Session automatically applies
+`efficiency.title`: `local` derives a title without a provider call, `model` uses the
+title helper with its selected model/account and local fallback, and `off` leaves
+the title unchanged. Child Sessions are excluded. Reopening, waking, subsequent
+prompts and Location generation replacement do not independently invoke the title
+helper or repeat the first-prompt rename.
 
 ### Command palettes
 
@@ -45,6 +88,11 @@ TUI and web selectors distinguish **Use provider default**, explicit profiles, a
 Model and effort choices use the selected profile's advertised inventory, including models unavailable to the provider default. An explicit profile's variant list is authoritative; absent variants do not inherit another account's effort choices. Same-provider model and fast-mode changes retain an unavailable profile as blocked rather than clearing it implicitly. Authenticated custom-provider discovery stores separate inventories per profile.
 
 Runtime resolution applies configured provider and model overlays to the selected account's inventory. An account snapshot must preserve configured endpoints and request options without importing another account's discovered fields.
+
+Stateless `generate.text` uses the Location's same model resolver and a real Cursor
+host containing that Location's workspace context. Explicit profiles remain strict:
+an unavailable or replaced selection fails rather than using the active default
+account. Stateless generation does not admit Session messages.
 
 The TUI Usage overview labels model rows with their recorded named profile selection. Unnamed historical records remain unnamed, and provider-wide local spend remains separate from account billing; a profile label is not a historical account-identity claim.
 

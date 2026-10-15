@@ -3,6 +3,7 @@ mod controls;
 mod globals;
 mod mcp_owner;
 mod meeting;
+mod observer;
 mod refresh;
 #[cfg(test)]
 mod tests;
@@ -86,11 +87,12 @@ pub struct Composed {
     launch: ycoding_core::extension::Launch,
     pub(crate) generation: u64,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    watch_stop: watch::Sender<bool>,
     governor:
         tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
     mcp_tools: tokio::sync::Mutex<Option<ycoding_core::tools::builtin::mcp::McpTools>>,
-    controls: tokio::sync::Mutex<Option<controls::Owner>>,
     mcp_owner: Arc<mcp_owner::Owner>,
+    pending: crate::locations::Pending,
     closed: std::sync::atomic::AtomicBool,
     _registration: Registration,
     _meeting: Option<Registration>,
@@ -104,11 +106,14 @@ pub(crate) struct Prepared {
     source: ycoding_core::resources::project_artifact::source::Service,
     commands: Arc<command::Service>,
     skills: Arc<tokio::sync::Mutex<skill::Service>>,
+    refresh: reference::Refresh,
+    models_updated: watch::Receiver<u64>,
+    wellknown_updated: watch::Receiver<u64>,
 }
 
 pub(crate) struct Factory {
     options: config::LoadOptions,
-    snapshots: Vec<models_dev::Snapshot>,
+    catalog_refresh: bool,
     client: Client,
     events: Feed,
     credentials: credential::Service,
@@ -116,6 +121,8 @@ pub(crate) struct Factory {
     git: Arc<git::Service>,
     publisher: policy::Publisher,
     cursor: Option<Cursor>,
+    #[cfg(test)]
+    cursor_agent: Option<ycoding_core::ycoding_ai::cursor::transport::Endpoint>,
     pub steer: Option<Arc<dyn autonomy::Steer>>,
     ripgrep: std::path::PathBuf,
     globals: Arc<globals::Globals>,
@@ -196,14 +203,14 @@ impl Core {
         globals: Arc<globals::Globals>,
         started: &mut Started,
     ) -> Result<Self, Failure> {
-        let snapshots = globals.catalog.get().await.map_err(|error| {
+        globals.catalog.get().await.map_err(|error| {
             eprintln!("production composition diagnostic: stage=model catalog; category={error:?}");
             Failure::Unavailable("model catalog unavailable".into())
         })?;
         let feed = events.clone();
         let factory = Arc::new(Factory {
             options: production.configuration,
-            snapshots,
+            catalog_refresh: production.catalog.fetch,
             client: client.clone(),
             events: events.clone(),
             credentials,
@@ -216,6 +223,8 @@ impl Core {
                 Ok(())
             }),
             cursor: production.cursor,
+            #[cfg(test)]
+            cursor_agent: None,
             steer: production.steer,
             ripgrep: production.ripgrep,
             globals,
@@ -242,6 +251,7 @@ impl Core {
         .with_factory(factory.clone());
         started.locations = Some(locations.clone());
         let _ = factory.locations.set(locations.downgrade());
+        let _ = factory.globals.locations.set(locations.downgrade());
         let goal_locations = locations.clone();
         let steer = factory.steer.clone().unwrap_or_else(|| {
             Arc::new(goal::Service::new(
@@ -292,6 +302,8 @@ impl Core {
         let resolver_locations = locations.clone();
         let catalog_roots = factory.options.roots.clone();
         let move_artifacts = factory.globals.artifacts.clone();
+        let catalog_globals = factory.globals.clone();
+        let catalog_refresh = factory.catalog_refresh;
         let catalogs = Arc::new(move |info: &location::Info| {
             let services = resolver_locations
                 .location(
@@ -306,10 +318,24 @@ impl Core {
             let held = services.clone();
             let refresh_locations = resolver_locations.clone();
             let refresh_info = info.clone();
+            let refresh_globals = catalog_globals.clone();
             let refresh: crate::services::CatalogTask = Arc::new(move || {
                 let locations = refresh_locations.clone();
                 let info = refresh_info.clone();
+                let globals = refresh_globals.clone();
                 Box::pin(async move {
+                    globals
+                        .wellknown
+                        .refresh()
+                        .await
+                        .map_err(|_| "WellKnown refresh failed".to_owned())?;
+                    if catalog_refresh {
+                        globals
+                            .catalog
+                            .refresh(true)
+                            .await
+                            .map_err(|_| "Model discovery refresh failed".to_owned())?;
+                    }
                     tokio::task::spawn_blocking(move || locations.reload(&info))
                         .await
                         .map_err(|_| "Location reload worker failed".to_owned())?
@@ -603,6 +629,7 @@ async fn release(
             Some(maintenance) => maintenance.stop().await,
             None => Ok(()),
         },
+        globals.stop_controls().await,
         locations.map_or(Ok(()), Locations::close),
         globals.close().await,
         credentials
@@ -615,6 +642,56 @@ async fn release(
 }
 
 impl Factory {
+    pub(crate) async fn cancel_session(
+        &self,
+        session: &ycoding_core::ycoding_schema::session::Id,
+    ) -> Result<(), Failure> {
+        self.globals.release_session(session.clone()).await
+    }
+    pub(crate) fn evict(&self, services: &crate::locations::ServiceSet) -> Result<(), Failure> {
+        self.globals.composition.run(async {
+            let Some(composed) = &services.production else {
+                return Ok(());
+            };
+            let tasks = composed.stop_tasks().await;
+            let observer = composed.mcp_owner.stop_observer().await;
+            let controls = self.globals.flush_controls().await;
+            let sessions = Service::new(self.client.clone())
+                .list(&ycoding_core::session::list::Query::default())
+                .map_err(|_| unavailable("evicted Session inventory"))?;
+            let mut ownership = None;
+            for session in sessions.iter().filter(|session| {
+                session.location.directory == services.info.directory
+                    && session.location.workspace_id == services.info.workspace_id
+            }) {
+                if let Some(execution) = execution::Execution::global() {
+                    let _ = execution.request_interrupt(&session.id);
+                }
+                if let Err(error) = self.globals.release_session(session.id.clone()).await {
+                    ownership.get_or_insert(error);
+                }
+                if let Some(execution) = execution::Execution::global() {
+                    execution.await_idle(&session.id).await;
+                }
+            }
+            let isolated = composed
+                .isolated
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("evicted isolated browser"));
+            let computer = composed
+                .computer
+                .release_location()
+                .await
+                .map_err(|_| unavailable("evicted computer work"));
+            tasks
+                .and(observer)
+                .and(controls)
+                .and(ownership.map_or(Ok(()), Err))
+                .and(isolated)
+                .and(computer)
+        })
+    }
     pub(crate) fn close(&self, services: &crate::locations::ServiceSet) -> Result<(), Failure> {
         self.globals.composition.run(async {
             if let Some(composed) = &services.production {
@@ -630,13 +707,33 @@ impl Factory {
         project_id: &LosslessString,
         project_directory: &LosslessString,
     ) -> Result<Prepared, Failure> {
+        self.prepare_refresh(directory, workspace, project_id, project_directory, false)
+    }
+
+    pub(crate) fn prepare_refresh(
+        &self,
+        directory: &LosslessString,
+        workspace: Option<&LosslessString>,
+        project_id: &LosslessString,
+        project_directory: &LosslessString,
+        force: bool,
+    ) -> Result<Prepared, Failure> {
         let mut options = self.options.clone();
         options.directory = directory
             .to_utf8()
             .map_err(|_| unavailable("Location directory"))?
             .into();
+        let models_updated = self.globals.catalog.refreshed();
+        let wellknown_updated = self.globals.wellknown.updated();
+        let sources = self.globals.composition.run(async {
+            self.globals
+                .wellknown
+                .configuration(&self.credentials)
+                .await
+                .map_err(|_| unavailable("WellKnown configuration"))
+        })?;
         let disk = Arc::new(
-            config::Configuration::load(options)
+            config::Configuration::load_with_sources(options, sources)
                 .map_err(|_| unavailable("Location configuration"))?
                 .with_mutation_policy(config::MutationPolicy(Arc::new(|_| true))),
         );
@@ -647,35 +744,20 @@ impl Factory {
                 .finish(),
         )
         .map_err(|_| unavailable("Location identity"))?;
-        disk.event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("Location configuration events"))?;
         let mut catalog = self.globals.composition.run(async {
             let mut accounts = self.globals.accounts.lock().await;
-            let documents = disk
-                .entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    config::Entry::Document { info, .. } => Some(info.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            catalog::Catalog::compose_with_accounts(
-                self.snapshots.clone(),
-                &documents,
+            catalog::Catalog::compose_current(
+                &self.globals.catalog,
+                &disk,
                 &self.credentials,
                 &mut accounts,
                 crate::ids::now_millis(),
-                false,
+                force,
             )
             .await
             .map(|composition| composition.catalog)
             .map_err(|_| unavailable("configured account catalog"))
         })?;
-        catalog
-            .event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("Location catalog events"))?;
         for record in &mut catalog.providers {
             if record
                 .provider
@@ -702,11 +784,6 @@ impl Factory {
             }
         }
         let mut configuration = self.configuration(&disk)?;
-        configuration
-            .agents
-            .event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("Location agent events"))?;
         let path = |text: &LosslessString| {
             text.to_utf8()
                 .map(std::path::PathBuf::from)
@@ -716,10 +793,6 @@ impl Factory {
         let roots = &self.options.roots;
         let commands = command::Service::from_entries(&disk.entries, &mut vec![])
             .map_err(|_| unavailable("command catalog"))?;
-        commands
-            .event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("Location command events"))?;
         let skills = skill::Service::from_entries(
             &disk.entries,
             &location_directory,
@@ -727,10 +800,6 @@ impl Factory {
             &roots.cache,
         )
         .map_err(|_| unavailable("skill catalog"))?;
-        skills
-            .event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("Location skill events"))?;
         let source = ycoding_core::resources::project_artifact::source::Service::new(
             ycoding_core::resources::project_artifact::source::Options {
                 client: self.client.clone(),
@@ -764,6 +833,13 @@ impl Factory {
             source,
             commands: Arc::new(catalogs.commands),
             skills: Arc::new(tokio::sync::Mutex::new(catalogs.skills)),
+            refresh: if force {
+                reference::Refresh::Fetch
+            } else {
+                reference::Refresh::Cached
+            },
+            models_updated,
+            wellknown_updated,
         })
     }
 
@@ -901,531 +977,582 @@ impl Factory {
             .map_err(|_| unavailable("workspace memory"))?,
         );
         let mcp_owner = match previous {
-            Some(previous) => {
-                previous.mcp_owner.configure(self, &prepared)?;
-                previous
-                    .mcp_owner
-                    .reload(&previous.configuration, &prepared.disk)
-                    .await?;
-                previous.mcp_owner.clone()
-            }
-            None => self.start_mcp(services, &prepared, &directory).await?,
+            Some(previous) => previous.mcp_owner.clone(),
+            None => self.start_mcp(&prepared, &directory).await?,
         };
-        let integrations = mcp_owner.integrations.clone();
-        let mcp = mcp_owner.mcp.clone();
-        let shell = Arc::new(
-            ycoding_core::platform::shell::Shell::new(
-                roots,
-                directory.clone(),
-                services
-                    .info
-                    .project
-                    .id
-                    .as_lossless()
-                    .as_str()
-                    .ok_or_else(|| unavailable("Project identity"))?,
-                self.client.clone(),
-            )
-            .await
-            .map_err(|_| unavailable("Location shell"))?,
-        );
-        shell
-            .event_source
-            .bind(
-                self.events.clone(),
-                Some(location::Ref {
-                    directory: services.info.directory.clone(),
-                    workspace_id: services.info.workspace_id.clone(),
+        let release_on_failure = mcp_owner.clone();
+        let result = async {
+            let integrations = mcp_owner.integrations.clone();
+            let mcp = mcp_owner.mcp.clone();
+            let platform = match previous {
+                Some(previous) => Arc::new(crate::services::PlatformServices {
+                    shell: previous.platform.shell.clone(),
+                    pty: previous.platform.pty.clone(),
+                    tickets: previous.platform.tickets.clone(),
+                    config: prepared.disk.clone(),
+                    filesystem: previous.platform.filesystem.clone(),
+                    search: previous.platform.search.clone(),
+                    git: previous.platform.git.clone(),
+                    copies: previous.platform.copies.clone(),
                 }),
-            )
-            .map_err(|_| unavailable("shell events"))?;
-        let pty = Arc::new(ycoding_core::platform::pty::Pty::new(directory.clone()));
-        pty.event_source
-            .bind(
-                self.events.clone(),
-                Some(location::Ref {
-                    directory: services.info.directory.clone(),
-                    workspace_id: services.info.workspace_id.clone(),
-                }),
-            )
-            .map_err(|_| unavailable("PTY events"))?;
-        let copies = Arc::new(
-            ycoding_core::platform::project_copy::Copies::new(
-                &directory,
-                self.git.clone(),
-                self.client.clone(),
-                self.publisher.clone(),
-            )
-            .map_err(|_| unavailable("project copies"))?,
-        );
-        let search_globals = self.globals.clone();
-        let vcs = repository.is_some();
-        let platform = Arc::new(crate::services::PlatformServices {
-            shell,
-            pty,
-            tickets: Mutex::new(Default::default()),
-            config: prepared.disk.clone(),
-            filesystem: Arc::new(
-                ycoding_core::platform::filesystem::Location::new(&directory)
-                    .map_err(|_| unavailable("Location filesystem"))?,
-            ),
-            search: Arc::new(
-                ycoding_core::platform::filesystem::search::Service::deferred(
-                    &directory,
-                    Arc::new(move || {
-                        let binary = search_globals
-                            .composition
-                            .run(async {
-                                search_globals
-                                    .ripgrep
-                                    .filepath()
-                                    .await
-                                    .map_err(|_| unavailable("ripgrep acquisition"))
-                            })
-                            .map_err(|_| std::io::Error::other("ripgrep acquisition failed"))?;
-                        Ok(
+                None => {
+                    let shell = Arc::new(
+                        ycoding_core::platform::shell::Shell::new(
+                            roots,
+                            directory.clone(),
+                            services
+                                .info
+                                .project
+                                .id
+                                .as_lossless()
+                                .as_str()
+                                .ok_or_else(|| unavailable("Project identity"))?,
+                            self.client.clone(),
+                        )
+                        .await
+                        .map_err(|_| unavailable("Location shell"))?,
+                    );
+                    shell
+                        .event_source
+                        .bind(
+                            self.events.clone(),
+                            Some(location::Ref {
+                                directory: services.info.directory.clone(),
+                                workspace_id: services.info.workspace_id.clone(),
+                            }),
+                        )
+                        .map_err(|_| unavailable("shell events"))?;
+                    let pty = Arc::new(ycoding_core::platform::pty::Pty::new(directory.clone()));
+                    pty.event_source
+                        .bind(
+                            self.events.clone(),
+                            Some(location::Ref {
+                                directory: services.info.directory.clone(),
+                                workspace_id: services.info.workspace_id.clone(),
+                            }),
+                        )
+                        .map_err(|_| unavailable("PTY events"))?;
+                    let copies = Arc::new(
+                        ycoding_core::platform::project_copy::Copies::new(
+                            &directory,
+                            self.git.clone(),
+                            self.client.clone(),
+                            self.publisher.clone(),
+                        )
+                        .map_err(|_| unavailable("project copies"))?,
+                    );
+                    let search_globals = self.globals.clone();
+                    let vcs = repository.is_some();
+                    Arc::new(crate::services::PlatformServices {
+                        shell,
+                        pty,
+                        tickets: Arc::new(Mutex::new(Default::default())),
+                        config: prepared.disk.clone(),
+                        filesystem: Arc::new(
+                            ycoding_core::platform::filesystem::Location::new(&directory)
+                                .map_err(|_| unavailable("Location filesystem"))?,
+                        ),
+                        search: Arc::new(
+                            ycoding_core::platform::filesystem::search::Service::deferred(
+                                &directory,
+                                Arc::new(move || {
+                                    let binary = search_globals
+                                        .composition
+                                        .run(async {
+                                            search_globals
+                                                .ripgrep
+                                                .filepath()
+                                                .await
+                                                .map_err(|_| unavailable("ripgrep acquisition"))
+                                        })
+                                        .map_err(|_| {
+                                            std::io::Error::other("ripgrep acquisition failed")
+                                        })?;
+                                    Ok(
                             ycoding_core::platform::filesystem::search::Backend::Automatic {
                                 vcs,
                                 binary,
                             },
                         )
-                    }),
-                )
-                .map_err(|_| unavailable("Location search"))?,
-            ),
-            git: self.git.clone(),
-            copies,
-        });
-        let commands = prepared.commands.clone();
-        let references = Arc::new(
-            reference::Service::from_entries(
-                &prepared.disk.entries,
-                &directory,
-                roots,
-                &mut vec![],
-            )
-            .map_err(|_| unavailable("reference catalog"))?,
-        );
-        references
-            .event_source
-            .bind(
-                self.events.clone(),
-                Some(location::Ref {
-                    directory: services.info.directory.clone(),
-                    workspace_id: services.info.workspace_id.clone(),
-                }),
-            )
-            .map_err(|_| unavailable("Location reference events"))?;
-        for reference in references.list() {
-            if let ycoding_core::ycoding_schema::reference::Source::Git(source) = &reference.source
-            {
-                let source = source.clone();
-                let repositories = self.globals.repositories.clone();
-                tokio::task::spawn_blocking(move || {
-                    let reference = ycoding_core::platform::repository_cache::parse_remote(
-                        source
-                            .repository
-                            .as_str()
-                            .ok_or_else(|| unavailable("reference repository"))?,
-                        None,
-                    )
-                    .map_err(|_| unavailable("reference repository"))?;
-                    repositories
-                        .ensure(ycoding_core::platform::repository_cache::EnsureInput {
-                            reference: &reference,
-                            refresh: false,
-                            branch: source.branch.as_ref().and_then(|branch| branch.as_str()),
-                        })
-                        .map_err(|_| unavailable("reference acquisition"))
-                })
-                .await
-                .map_err(|_| unavailable("reference acquisition worker"))??;
-            }
-        }
-        let skills = prepared.skills.clone();
-        let isolated = ycoding_core::platform::browser::isolated::Service::new(
-            self.globals.isolated_executor.clone(),
-            self.globals.admission.clone(),
-            self.globals.sessions.clone(),
-            Default::default(),
-        );
-        let computer = Arc::new(self.globals.computer.service());
-        let isolated_control = Arc::downgrade(&isolated);
-        let controls = controls::Owner::start(
-            self.events.clone(),
-            Arc::new(move |session, _| {
-                let isolated = isolated_control.upgrade();
-                Box::pin(async move {
-                    match isolated {
-                        Some(isolated) => isolated
-                            .release_session(&session)
-                            .await
-                            .map_err(|_| unavailable("isolated browser Session release")),
-                        None => Ok(()),
-                    }
-                })
-            }),
-        )?;
-        let (registry, registration) = tools::compose(
-            self,
-            services,
-            prepared.disk.clone(),
-            memory.clone(),
-            &platform,
-            tools::Handles {
-                isolated: &isolated,
-                computer: &computer,
-                skills: skills.clone(),
-                mcp: &mcp,
-                artifacts: prepared.source.clone(),
-            },
-        )?;
-        let clock: Arc<dyn runner::Clock> = Arc::new(runner::WallClock);
-        let instruction_clock = clock.clone();
-        let mut instructions = ycoding_core::instructions::builtins::load(
-            ycoding_core::instructions::builtins::Environment {
-                directory: directory.to_string_lossy().into_owned(),
-                project_root: project.to_string_lossy().into_owned(),
-                git: repository.is_some(),
-                platform: std::env::consts::OS.into(),
-            },
-            Arc::new(move || instruction_clock.now()),
-        );
-        instructions.push(instruction_sources::ambient_with_capabilities(
-            ycoding_core::resources::instruction_discovery::Options {
-                directory: directory.clone(),
-                project_root: project.clone(),
-                global_config: roots.config.clone(),
-                project: self.options.project,
-                max_bytes: None,
-            },
-            prepared.disk.capabilities.clone(),
-        ));
-        instructions.push(memory::instructions::source());
-        instructions.push(ycoding_core::resources::project_artifact::instructions::source());
-        let cursor_host = || {
-            self.cursor
-                .as_ref()
-                .map(|cursor| {
-                    let context = cursor::context::build(
-                        &directory,
-                        &[],
-                        &cursor::context::Environment {
-                            global_config_dir: roots.config.clone(),
-                            cache_dir: roots.cache.clone(),
-                            home: roots.home.clone(),
-                            project_discovery_disabled: !self.options.project,
-                        },
-                    );
-                    Ok(cursor::route::Host {
-                        identity: cursor.identity.clone(),
-                        context: RequestContext::new(
-                            context
-                                .encode()
-                                .map_err(|_| unavailable("Cursor context"))?,
-                        )
-                        .map_err(|_| unavailable("Cursor context"))?,
-                        runtime: cursor.runtime.clone(),
-                        known_mcp_servers: context.known_mcp_servers,
-                        extensions: Default::default(),
+                                }),
+                            )
+                            .map_err(|_| unavailable("Location search"))?,
+                        ),
+                        git: self.git.clone(),
+                        copies,
                     })
+                }
+            };
+            let commands = prepared.commands.clone();
+            let references = Arc::new(
+                reference::Service::from_entries(
+                    &prepared.disk.entries,
+                    &directory,
+                    roots,
+                    &mut vec![],
+                )
+                .map_err(|_| unavailable("reference catalog"))?,
+            );
+            let materialized = references.clone();
+            let repositories = self.globals.repositories.clone();
+            let refresh = prepared.refresh;
+            tokio::task::spawn_blocking(move || materialized.materialize(&repositories, refresh))
+                .await
+                .map_err(|_| unavailable("reference acquisition worker"))?
+                .map_err(|_| unavailable("reference acquisition"))?;
+            let skills = prepared.skills.clone();
+            let isolated = previous
+                .map(|previous| previous.isolated.clone())
+                .unwrap_or_else(|| {
+                    ycoding_core::platform::browser::isolated::Service::new(
+                        self.globals.isolated_executor.clone(),
+                        self.globals.admission.clone(),
+                        self.globals.sessions.clone(),
+                        Default::default(),
+                    )
+                });
+            let computer = previous
+                .map(|previous| previous.computer.clone())
+                .unwrap_or_else(|| Arc::new(self.globals.computer.service()));
+            let pending = services.pending();
+            let (registry, registration) = tools::compose(
+                self,
+                services,
+                prepared.disk.clone(),
+                memory.clone(),
+                &platform,
+                tools::Handles {
+                    isolated: &isolated,
+                    computer: &computer,
+                    skills: skills.clone(),
+                    mcp: &mcp,
+                    artifacts: prepared.source.clone(),
+                },
+            )?;
+            let clock: Arc<dyn runner::Clock> = Arc::new(runner::WallClock);
+            let instruction_clock = clock.clone();
+            let mut instructions = ycoding_core::instructions::builtins::load(
+                ycoding_core::instructions::builtins::Environment {
+                    directory: directory.to_string_lossy().into_owned(),
+                    project_root: project.to_string_lossy().into_owned(),
+                    git: repository.is_some(),
+                    platform: std::env::consts::OS.into(),
+                },
+                Arc::new(move || instruction_clock.now()),
+            );
+            instructions.push(instruction_sources::ambient_with_capabilities(
+                ycoding_core::resources::instruction_discovery::Options {
+                    directory: directory.clone(),
+                    project_root: project.clone(),
+                    global_config: roots.config.clone(),
+                    project: self.options.project,
+                    max_bytes: None,
+                },
+                prepared.disk.capabilities.clone(),
+            ));
+            instructions.push(memory::instructions::source());
+            instructions.push(ycoding_core::resources::project_artifact::instructions::source());
+            let cursor_host = || {
+                self.cursor
+                    .as_ref()
+                    .map(|cursor| {
+                        let context = cursor::context::build(
+                            &directory,
+                            &[],
+                            &cursor::context::Environment {
+                                global_config_dir: roots.config.clone(),
+                                cache_dir: roots.cache.clone(),
+                                home: roots.home.clone(),
+                                project_discovery_disabled: !self.options.project,
+                            },
+                        );
+                        Ok(cursor::route::Host {
+                            identity: cursor.identity.clone(),
+                            context: RequestContext::new(
+                                context
+                                    .encode()
+                                    .map_err(|_| unavailable("Cursor context"))?,
+                            )
+                            .map_err(|_| unavailable("Cursor context"))?,
+                            runtime: cursor.runtime.clone(),
+                            known_mcp_servers: context.known_mcp_servers,
+                            extensions: cursor::route::Extensions {
+                                #[cfg(test)]
+                                agent: self.cursor_agent.clone(),
+                                ..Default::default()
+                            },
+                        })
+                    })
+                    .transpose()
+            };
+            let cursor = cursor_host()?;
+            let compaction = prepared
+                .disk
+                .values("compaction")
+                .map(compaction_policy::Info::decode)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| unavailable("compaction configuration"))?;
+            let attachments = Arc::new(
+                attachment_store::Store::new(roots.data.clone())
+                    .map_err(|_| unavailable("managed attachments"))?,
+            );
+            let helpers = policy::helper::Settings::from_configuration(&prepared.disk)
+                .map_err(|_| unavailable("helper model configuration"))?;
+            let meeting = self
+                .globals
+                .meetings
+                .attach(
+                    &self.client,
+                    roots,
+                    self.options
+                        .env
+                        .get("XDG_DATA_HOME")
+                        .map(std::path::Path::new),
+                    self.options.env.get("YCODING_CHANNEL").map(String::as_str) == Some("beta"),
+                    meeting::Target {
+                        reference: location::Ref {
+                            directory: services.info.directory.clone(),
+                            workspace_id: services.info.workspace_id.clone(),
+                        },
+                        project: ycoding_core::ycoding_schema::project::Id::new(
+                            services.info.project.id.as_lossless().clone(),
+                        )
+                        .map_err(|_| unavailable("Project identity"))?,
+                        project_directory: &project,
+                        git: &self.git,
+                        directory: &directory,
+                        mcp: mcp.clone(),
+                    },
+                )
+                .await;
+            let meeting_history = meeting
+                .as_ref()
+                .map(|meeting| {
+                    ycoding_core::meeting::history::register(&registry, meeting.database.clone())
                 })
                 .transpose()
-        };
-        let cursor = cursor_host()?;
-        let compaction = prepared
-            .disk
-            .values("compaction")
-            .map(compaction_policy::Info::decode)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| unavailable("compaction configuration"))?;
-        let attachments = Arc::new(
-            attachment_store::Store::new(roots.data.clone())
-                .map_err(|_| unavailable("managed attachments"))?,
-        );
-        let helpers = policy::helper::Settings::from_configuration(&prepared.disk)
-            .map_err(|_| unavailable("helper model configuration"))?;
-        let meeting = self
-            .globals
-            .meetings
-            .attach(
-                &self.client,
-                roots,
-                self.options
-                    .env
-                    .get("XDG_DATA_HOME")
-                    .map(std::path::Path::new),
-                self.options.env.get("YCODING_CHANNEL").map(String::as_str) == Some("beta"),
-                meeting::Target {
-                    reference: location::Ref {
-                        directory: services.info.directory.clone(),
-                        workspace_id: services.info.workspace_id.clone(),
-                    },
-                    project: ycoding_core::ycoding_schema::project::Id::new(
-                        services.info.project.id.as_lossless().clone(),
+                .map_err(|_| unavailable("meeting history tool"))?;
+            let helper_models = Arc::new(policy::helper::Models {
+                models: prepared.models.clone(),
+                credentials: self.credentials.clone(),
+                auth: self.globals.preparation.clone(),
+                cursor: cursor_host()?,
+                claude: Some(self.globals.claude.clone()),
+                store: Service::new(self.client.clone()),
+                settings: helpers.clone(),
+            });
+            let generate_cursor = cursor_host()?.map(Arc::new);
+            let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
+                prepared.disk.clone(),
+                helper_models.clone(),
+                self.executor.clone(),
+            );
+            let session_tools =
+                self.session_tools(services, &prepared, &compaction, helper_models.clone());
+            let session_registration = session_tools
+                .as_ref()
+                .map(|tools| {
+                    registry.register(
+                        tools.clone().entries(),
+                        ycoding_core::tools::registry::Options::direct(),
                     )
-                    .map_err(|_| unavailable("Project identity"))?,
-                    project_directory: &project,
-                    git: &self.git,
-                    directory: &directory,
-                    mcp: mcp.clone(),
-                },
-            )
-            .await;
-        let meeting_history = meeting
-            .as_ref()
-            .map(|meeting| {
-                ycoding_core::meeting::history::register(&registry, meeting.database.clone())
-            })
-            .transpose()
-            .map_err(|_| unavailable("meeting history tool"))?;
-        let helper_models = Arc::new(policy::helper::Models {
-            models: prepared.models.clone(),
-            credentials: self.credentials.clone(),
-            auth: self.globals.preparation.clone(),
-            cursor: cursor_host()?,
-            claude: Some(self.globals.claude.clone()),
-            store: Service::new(self.client.clone()),
-            settings: helpers.clone(),
-        });
-        let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
-            prepared.disk.clone(),
-            helper_models.clone(),
-            self.executor.clone(),
-        );
-        let session_tools =
-            self.session_tools(services, &prepared, &compaction, helper_models.clone());
-        let session_registration = session_tools
-            .as_ref()
-            .map(|tools| {
-                registry.register(
-                    tools.clone().entries(),
-                    ycoding_core::tools::registry::Options::direct(),
-                )
-            })
-            .transpose()
-            .map_err(|_| unavailable("Session tool registration"))?;
-        let snapshots: Arc<dyn ycoding_core::session::revert::Snapshots + Send + Sync> =
-            Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
-                self.git.clone(),
-                roots.data.clone(),
-                services
-                    .info
-                    .project
-                    .id
-                    .as_lossless()
-                    .to_utf8()
-                    .map_err(|_| unavailable("Project identity"))?,
-                project.clone(),
-                directory.clone(),
-                prepared.configuration.snapshots.enabled,
-            ));
-        let reference = location::Ref {
-            directory: services.info.directory.clone(),
-            workspace_id: services.info.workspace_id.clone(),
-        };
-        let launch = ycoding_core::extension::Launch {
-            rules: configured_rules(&prepared.disk, &roots.home)?,
-            cancellation: Default::default(),
-        };
-        // The governor, extensions, MCP tool watcher and generation tasks start after every
-        // fallible step, so a failed compose cannot leave them running.
-        let governor = prepared
-            .source
-            .start(&self.events)
-            .map_err(|_| unavailable("project artifact governor"))?;
-        let leaf = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
-            permissions: services.permissions.clone(),
-            guardrails: services.guardrails.clone(),
-        });
-        let mcp_tools = ycoding_core::tools::builtin::mcp::McpTools::start(
-            Arc::new(mcp.as_ref().clone()),
-            registry.clone(),
-            leaf.clone(),
-            execution::Execution::global().map(|execution| {
-                ycoding_core::tools::builtin::mcp::Background {
-                    jobs: execution.jobs().clone(),
-                    notifier: runner::mcp_notifier(
-                        Service::new(self.client.clone()),
-                        Arc::new(runner::WallClock),
-                        Arc::new(move |id| execution.wake(id)),
-                    ),
-                }
-            }),
-        );
-        let activation = Arc::new(ycoding_core::extension::Activation::new(
-            directory.clone(),
-            ycoding_core::extension::Options::default(),
-            registry.clone(),
-            leaf,
-            launch.clone(),
-            ycoding_core::extension::Host {
-                mcp: Some(Arc::new(mcp.as_ref().clone())),
-                integrations: Some(integrations.clone()),
-                sessions: Some(ycoding_core::extension::SessionHost {
-                    store: Service::new(self.client.clone()),
-                    location: reference.clone(),
-                    services: Some(Arc::new({
-                        let locations = self.locations.get().cloned();
-                        let reference = reference.clone();
-                        move || {
-                            let locations = locations
-                                .as_ref()
-                                .and_then(|locations| locations.upgrade())
-                                .ok_or(ycoding_core::extension::Error::Stopped)?;
-                            let services = locations
-                                .location(
-                                    reference.directory.as_lossless(),
-                                    reference.workspace_id.as_ref().map(|id| id.as_lossless()),
-                                )
-                                .map_err(|_| ycoding_core::extension::Error::Stopped)?;
-                            let composed = services
-                                .production
-                                .as_ref()
-                                .filter(|composed| composed.generation == generation)
-                                .ok_or(ycoding_core::extension::Error::Stopped)?;
-                            Ok(ycoding_core::extension::SessionServices {
-                                runner: composed.runner.clone(),
-                                generate: composed.session_generate.clone(),
-                                commands: composed.commands.clone(),
-                                configuration: composed.configuration.clone(),
-                            })
-                        }
-                    })),
-                }),
-            },
-        ));
-        if activation
-            .event_source
-            .bind(self.events.clone(), Some(reference.clone()))
-            .is_err()
-        {
-            if governor.close().await.is_err() {
-                tracing::error!("project artifact governor close after a failed compose failed");
-            }
-            return Err(unavailable("plugin events"));
-        }
-        let mut extension_diagnostics = Vec::new();
-        if let Err(error) = activation.reload(&prepared.disk).await {
-            tracing::error!(%error, "process extension configuration rejected");
-            extension_diagnostics.push(extension_diagnostic(None, error));
-        }
-        extension_diagnostics.extend(
-            activation
-                .failures()
-                .await
-                .into_iter()
-                .map(|(identity, error)| extension_diagnostic(Some(&identity), error)),
-        );
-        let plugins = activation.plugin_list().await;
-        let extensions = activation.extensions().await;
-        let mut tasks = vec![self.watch(&prepared.disk, generation, services.info.clone())];
-        if boot {
-            let copies = platform.copies.clone();
-            let project = services.info.project.id.as_lossless().clone();
-            tasks.push(tokio::spawn(async move {
-                if copies.refresh(project).await.is_err() {
-                    tracing::warn!("project copy refresh failed");
-                }
-            }));
-        }
-        let instruction_context = ycoding_core::session::instruction_assembly::Context {
-            configuration: prepared.disk.clone(),
-            registry: registry.clone(),
-            skills: skills.clone(),
-            mcp: Arc::downgrade(&mcp),
-        };
-        let refresh = self.refresh(services.info.clone());
-        let session_generate = Arc::new(ycoding_core::session::generate::Service {
-            store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
-            location: reference.clone(),
-            agents: services.agents.clone(),
-            models: helper_models,
-            executor: self.executor.clone(),
-            attachments: attachments.clone(),
-            instructions: instructions.clone(),
-            instruction_context: Some(instruction_context.clone()),
-            refresh: refresh.clone(),
-            extensions: extensions.clone(),
-        });
-        let runner = runner::Local::new(runner::Services {
-            snapshots: Some(snapshots),
-            store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
-            events: self.events.clone(),
-            location: location::Ref {
+                })
+                .transpose()
+                .map_err(|_| unavailable("Session tool registration"))?;
+            let snapshots: Arc<dyn ycoding_core::session::revert::Snapshots + Send + Sync> =
+                Arc::new(ycoding_core::session::snapshot::GitSnapshots::new(
+                    self.git.clone(),
+                    roots.data.clone(),
+                    services
+                        .info
+                        .project
+                        .id
+                        .as_lossless()
+                        .to_utf8()
+                        .map_err(|_| unavailable("Project identity"))?,
+                    project.clone(),
+                    directory.clone(),
+                    prepared.configuration.snapshots.enabled,
+                ));
+            let reference = location::Ref {
                 directory: services.info.directory.clone(),
                 workspace_id: services.info.workspace_id.clone(),
-            },
-            models: prepared.models.clone(),
-            agents: services.agents.clone(),
-            credentials: self.credentials.clone(),
-            tools: registry.clone(),
-            attachments,
-            instructions,
-            analysis: meeting.map(|meeting| meeting.analysis),
-            configuration: Some(prepared.disk.clone()),
-            image_analyzer: Some(image_analyzer),
-            extensions,
-            session_tools,
-            clock,
-            executor: self.executor.clone(),
-            compaction: compaction_policy::resolve(&compaction),
-            guardrails: services.guardrails.clone(),
-            helpers,
-            cursor,
-            claude: Some(self.globals.claude.clone()),
-            auth: Some(self.globals.preparation.clone()),
-            skill_resolver: Some(Arc::new(SkillResolver(skills.clone()))),
-        })
-        .with_instructions(instruction_context);
-        let runner = match refresh {
-            Some(refresh) => runner.with_refresh(refresh),
-            None => runner,
-        };
-        let generate = Arc::new(generate::Service {
-            models: prepared.models.clone(),
-            credentials: self.credentials.clone(),
-            integrations: integrations.clone(),
-            executor: self.executor.clone(),
-            cursor: None,
-        });
-        mcp_owner
-            .generations
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        Ok(Composed {
-            configuration: prepared.disk,
-            models: prepared.models,
-            credentials: self.credentials.clone(),
-            tools: registry,
-            memory,
-            runner,
-            steer: self.steer.clone(),
-            platform,
-            integrations,
-            mcp,
-            isolated,
-            computer,
-            commands,
-            references,
-            skills,
-            generate,
-            session_generate,
-            paired: self.globals.browser.clone(),
-            activation,
-            extension_diagnostics,
-            plugins,
-            launch,
-            generation,
-            tasks: Mutex::new(tasks),
-            governor: tokio::sync::Mutex::new(Some(governor)),
-            mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
-            controls: tokio::sync::Mutex::new(Some(controls)),
-            mcp_owner,
-            closed: std::sync::atomic::AtomicBool::new(false),
-            _registration: registration,
-            _meeting: meeting_history,
-            _session_tools: session_registration,
-        })
+            };
+            let launch = ycoding_core::extension::Launch {
+                rules: configured_rules(&prepared.disk, &roots.home)?,
+                cancellation: Default::default(),
+            };
+            let (watch_stop, stopped) = watch::channel(false);
+            let watcher = self.watch(&prepared, generation, services.info.clone(), stopped)?;
+            let governor = prepared
+                .source
+                .start(&self.events)
+                .map_err(|_| unavailable("project artifact governor"))?;
+            let leaf = Arc::new(ycoding_core::tools::context::policy::LeafPolicy {
+                permissions: services.permissions.clone(),
+                guardrails: services.guardrails.clone(),
+            });
+            let mcp_tools = ycoding_core::tools::builtin::mcp::McpTools::start(
+                Arc::new(mcp.as_ref().clone()),
+                registry.clone(),
+                leaf.clone(),
+                execution::Execution::global().map(|execution| {
+                    ycoding_core::tools::builtin::mcp::Background {
+                        jobs: execution.jobs().clone(),
+                        notifier: runner::mcp_notifier(
+                            Service::new(self.client.clone()),
+                            Arc::new(runner::WallClock),
+                            Arc::new(move |id| execution.wake(id)),
+                        ),
+                    }
+                }),
+            );
+            let activation = Arc::new(ycoding_core::extension::Activation::new(
+                directory.clone(),
+                ycoding_core::extension::Options::default(),
+                registry.clone(),
+                leaf,
+                launch.clone(),
+                ycoding_core::extension::Host {
+                    mcp: Some(Arc::new(mcp.as_ref().clone())),
+                    integrations: Some(integrations.clone()),
+                    sessions: Some(ycoding_core::extension::SessionHost {
+                        store: Service::new(self.client.clone()),
+                        location: reference.clone(),
+                        services: Some(Arc::new({
+                            let locations = self.locations.get().cloned();
+                            let reference = reference.clone();
+                            move || {
+                                let locations = locations
+                                    .as_ref()
+                                    .and_then(|locations| locations.upgrade())
+                                    .ok_or(ycoding_core::extension::Error::Stopped)?;
+                                let services = locations
+                                    .location(
+                                        reference.directory.as_lossless(),
+                                        reference.workspace_id.as_ref().map(|id| id.as_lossless()),
+                                    )
+                                    .map_err(|_| ycoding_core::extension::Error::Stopped)?;
+                                let composed = services
+                                    .production
+                                    .as_ref()
+                                    .filter(|composed| composed.generation == generation)
+                                    .ok_or(ycoding_core::extension::Error::Stopped)?;
+                                Ok(ycoding_core::extension::SessionServices {
+                                    runner: composed.runner.clone(),
+                                    generate: composed.session_generate.clone(),
+                                    commands: composed.commands.clone(),
+                                    configuration: composed.configuration.clone(),
+                                })
+                            }
+                        })),
+                    }),
+                },
+            ));
+            let mut extension_diagnostics = Vec::new();
+            if let Err(error) = activation.reload(&prepared.disk).await {
+                tracing::error!(%error, "process extension configuration rejected");
+                extension_diagnostics.push(extension_diagnostic(None, error));
+            }
+            extension_diagnostics.extend(
+                activation
+                    .failures()
+                    .await
+                    .into_iter()
+                    .map(|(identity, error)| extension_diagnostic(Some(&identity), error)),
+            );
+            let plugins = activation.plugin_list().await;
+            let extensions = activation.extensions().await;
+            let instruction_context = ycoding_core::session::instruction_assembly::Context {
+                configuration: prepared.disk.clone(),
+                registry: registry.clone(),
+                skills: skills.clone(),
+                references: references.clone(),
+                mcp: Arc::downgrade(&mcp),
+            };
+            let refresh = self.refresh(services.info.clone());
+            let title = Arc::new(ycoding_core::session::title::Service::new(
+                Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
+                services.agents.clone(),
+                helper_models.clone(),
+                self.executor.clone(),
+            ));
+            let session_generate = Arc::new(ycoding_core::session::generate::Service {
+                store: Service::new(self.client.clone())
+                    .with_artifact_source(prepared.source.clone()),
+                location: reference.clone(),
+                agents: services.agents.clone(),
+                models: helper_models,
+                executor: self.executor.clone(),
+                attachments: attachments.clone(),
+                instructions: instructions.clone(),
+                instruction_context: Some(instruction_context.clone()),
+                refresh: refresh.clone(),
+                extensions: extensions.clone(),
+            });
+            let runner = runner::Local::new(runner::Services {
+                snapshots: Some(snapshots),
+                store: Service::new(self.client.clone())
+                    .with_artifact_source(prepared.source.clone()),
+                events: self.events.clone(),
+                location: location::Ref {
+                    directory: services.info.directory.clone(),
+                    workspace_id: services.info.workspace_id.clone(),
+                },
+                models: prepared.models.clone(),
+                agents: services.agents.clone(),
+                credentials: self.credentials.clone(),
+                tools: registry.clone(),
+                attachments,
+                instructions,
+                analysis: meeting.map(|meeting| meeting.analysis),
+                configuration: Some(prepared.disk.clone()),
+                image_analyzer: Some(image_analyzer),
+                extensions,
+                session_tools,
+                clock,
+                executor: self.executor.clone(),
+                compaction: compaction_policy::resolve(&compaction),
+                guardrails: services.guardrails.clone(),
+                helpers,
+                cursor,
+                claude: Some(self.globals.claude.clone()),
+                auth: Some(self.globals.preparation.clone()),
+                skill_resolver: Some(Arc::new(SkillResolver(skills.clone()))),
+            })
+            .with_instructions(instruction_context)
+            .with_title(title);
+            let runner = match refresh {
+                Some(refresh) => runner.with_refresh(refresh),
+                None => runner,
+            };
+            let generate = Arc::new(generate::Service {
+                models: prepared.models.clone(),
+                credentials: self.credentials.clone(),
+                integrations: integrations.clone(),
+                executor: self.executor.clone(),
+                cursor: generate_cursor,
+            });
+            mcp_owner
+                .generations
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let composed = Composed {
+                configuration: prepared.disk,
+                models: prepared.models,
+                credentials: self.credentials.clone(),
+                tools: registry,
+                memory,
+                runner,
+                steer: self.steer.clone(),
+                platform,
+                integrations,
+                mcp,
+                isolated,
+                computer,
+                commands,
+                references,
+                skills,
+                generate,
+                session_generate,
+                paired: self.globals.browser.clone(),
+                activation,
+                extension_diagnostics,
+                plugins,
+                launch,
+                generation,
+                tasks: Mutex::new(Vec::new()),
+                watch_stop,
+                governor: tokio::sync::Mutex::new(Some(governor)),
+                mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
+                mcp_owner,
+                pending,
+                closed: std::sync::atomic::AtomicBool::new(false),
+                _registration: registration,
+                _meeting: meeting_history,
+                _session_tools: session_registration,
+            };
+            let committed = async {
+                if previous.is_some() && !composed.extension_diagnostics.is_empty() {
+                    return Err(unavailable("process extension replacement"));
+                }
+                if let Some(previous) = previous {
+                    composed
+                        .mcp_owner
+                        .reload(&previous.configuration, &composed.configuration)
+                        .await?;
+                    if let Err(error) = composed.mcp_owner.configure(self, &composed.models) {
+                        if composed
+                            .mcp_owner
+                            .reload(&composed.configuration, &previous.configuration)
+                            .await
+                            .is_err()
+                        {
+                            tracing::error!("MCP restoration after rejected integrations failed");
+                        }
+                        return Err(error);
+                    }
+                }
+                composed
+                    .mcp_owner
+                    .observe(self, services, &composed.configuration, &directory)
+                    .await?;
+                let skills = composed.skills.lock().await.event_source.clone();
+                let catalog = composed.models.catalog();
+                for source in [
+                    &composed.configuration.event_source,
+                    &catalog.event_source,
+                    &services.agents.event_source,
+                    &composed.commands.event_source,
+                    &composed.references.event_source,
+                    &skills,
+                    &composed.activation.event_source,
+                ] {
+                    source
+                        .bind(self.events.clone(), Some(reference.clone()))
+                        .map_err(|_| unavailable("Location generation events"))?;
+                }
+                composed
+                    .mcp
+                    .bind_events(self.events.clone(), Some(reference.clone()))
+                    .map_err(|_| unavailable("MCP events"))?;
+                composed
+                    .integrations
+                    .bind_events(self.events.clone(), Some(reference.clone()))
+                    .map_err(|_| unavailable("integration events"))?;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = committed {
+                if composed.close().await.is_err() {
+                    tracing::error!("failed Location replacement release failed");
+                }
+                return Err(error);
+            }
+            composed
+                .tasks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(tokio::spawn(watcher));
+            if boot {
+                let copies = composed.platform.copies.clone();
+                let project = services.info.project.id.as_lossless().clone();
+                composed
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(tokio::spawn(async move {
+                        if copies.refresh(project).await.is_err() {
+                            tracing::warn!("project copy refresh failed");
+                        }
+                    }));
+            }
+            Ok(composed)
+        }
+        .await;
+        if result.is_err() && previous.is_none() && release_on_failure.close().await.is_err() {
+            tracing::error!("failed initial Location owner release failed");
+        }
+        result
     }
 }
 
@@ -1434,11 +1561,13 @@ impl Factory {
     // Location while this generation is current; a failed rebuild keeps it and keeps watching.
     fn watch(
         &self,
-        disk: &config::Configuration,
+        prepared: &Prepared,
         generation: u64,
         info: location::Info,
-    ) -> JoinHandle<()> {
+        mut stopped: watch::Receiver<bool>,
+    ) -> Result<crate::dispatch::Boxed<()>, Failure> {
         use ycoding_core::platform::filesystem::watcher::{Input, Kind};
+        let disk = &prepared.disk;
         let directories = disk
             .entries
             .iter()
@@ -1484,7 +1613,19 @@ impl Factory {
             })
             .collect::<Vec<_>>();
         let locations = self.locations.get().cloned();
-        tokio::spawn(async move {
+        let mut models = prepared.models_updated.clone();
+        let mut wellknown = prepared.wellknown_updated.clone();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notified = notify.clone();
+        let connections = self
+            .events
+            .subscribe_types(
+                ycoding_core::event_feed::Scope::Global,
+                &["integration.connection.updated"],
+                move || notified.notify_one(),
+            )
+            .map_err(|_| unavailable("connection source subscription"))?;
+        Ok(Box::pin(async move {
             let Some(locations) = locations else { return };
             let (sender, mut updates) = tokio::sync::mpsc::unbounded_channel();
             let mut forwarders = tokio::task::JoinSet::new();
@@ -1499,16 +1640,28 @@ impl Factory {
                 });
             }
             drop(sender);
-            while updates.recv().await.is_some() {
+            loop {
+                tokio::select! {
+                    _ = stopped.changed() => break,
+                    result = models.changed() => if result.is_err() { break; },
+                    result = wellknown.changed() => if result.is_err() { break; },
+                    _ = notify.notified() => {
+                        while let Ok(Some(_)) = connections.next() {}
+                    },
+                    Some(()) = updates.recv() => {},
+                }
                 loop {
-                    match tokio::time::timeout(Duration::from_millis(100), updates.recv()).await {
-                        Ok(Some(())) => {}
-                        Ok(None) => return,
-                        Err(_) => break,
+                    tokio::select! {
+                        _ = stopped.changed() => break,
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => break,
+                        Some(()) = updates.recv() => {},
                     }
                 }
+                if *stopped.borrow() {
+                    break;
+                }
                 let Some(locations) = locations.upgrade() else {
-                    return;
+                    break;
                 };
                 let info = info.clone();
                 match tokio::task::spawn_blocking(move || {
@@ -1516,14 +1669,16 @@ impl Factory {
                 })
                 .await
                 {
-                    Ok(Ok(_)) => return,
+                    Ok(Ok(_)) => break,
                     Ok(Err(_)) => tracing::error!(
                         "configuration reload failed; the current Location generation stays active"
                     ),
                     Err(_) => tracing::error!("configuration reload worker failed"),
                 }
             }
-        })
+            forwarders.abort_all();
+            while forwarders.join_next().await.is_some() {}
+        }))
     }
 }
 
@@ -1922,32 +2077,39 @@ async fn notifications(
 }
 
 impl Composed {
+    async fn stop_tasks(&self) -> Result<(), Failure> {
+        self.watch_stop.send_replace(true);
+        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut failure = None;
+        for task in tasks {
+            if task.await.is_err() {
+                failure.get_or_insert_with(|| unavailable("Location worker settlement"));
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
     pub(crate) fn in_use(&self) -> bool {
         // The browser tool of this generation holds one isolated-browser reference.
         Arc::strong_count(&self.platform) > 1
+            || self.pending.in_use()
             || (self
                 .mcp_owner
                 .generations
                 .load(std::sync::atomic::Ordering::Acquire)
                 == 1
                 && Arc::strong_count(&self.mcp) > Arc::strong_count(&self.mcp_owner) + 1)
-            || Arc::strong_count(&self.isolated) > 2
+            || Arc::strong_count(&self.isolated)
+                > 2 * self
+                    .mcp_owner
+                    .generations
+                    .load(std::sync::atomic::Ordering::Acquire)
     }
     pub(crate) async fn close(&self) -> Result<(), Failure> {
         if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return Ok(());
         }
-        let controls = match self.controls.lock().await.take() {
-            Some(controls) => controls.close().await,
-            None => Ok(()),
-        };
-        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));
-        for task in &tasks {
-            task.abort();
-        }
-        for task in tasks {
-            let _ = task.await;
-        }
+        self.pending.shutdown();
+        let tasks = self.stop_tasks().await;
         self.launch.cancellation.cancel();
         self.activation.close().await;
         // A watcher that ended on a registration failure kept the previous tool batch; it is
@@ -1964,30 +2126,51 @@ impl Composed {
                 .map_err(|_| unavailable("project artifact governor")),
             None => Ok(()),
         };
-        let isolated = self
-            .isolated
-            .shutdown()
-            .await
-            .map_err(|_| unavailable("isolated browser shutdown"));
-        let computer = self
-            .computer
-            .release_location()
-            .await
-            .map_err(|_| unavailable("computer Location release"));
-        let mcp = self.mcp_owner.retire().await;
-        let shell = self
-            .platform
-            .shell
-            .shutdown()
-            .await
-            .map_err(|_| unavailable("shell shutdown"));
-        let pty = self
-            .platform
-            .pty
-            .shutdown()
-            .await
-            .map_err(|_| unavailable("PTY shutdown"));
-        controls
+        let last = self
+            .mcp_owner
+            .generations
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
+            == 1;
+        let isolated = if last {
+            self.isolated
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("isolated browser shutdown"))
+        } else {
+            Ok(())
+        };
+        let computer = if last {
+            self.computer
+                .release_location()
+                .await
+                .map_err(|_| unavailable("computer Location release"))
+        } else {
+            Ok(())
+        };
+        let mcp = if last {
+            self.mcp_owner.close().await
+        } else {
+            Ok(())
+        };
+        let shell = if last {
+            self.platform
+                .shell
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("shell shutdown"))
+        } else {
+            Ok(())
+        };
+        let pty = if last {
+            self.platform
+                .pty
+                .shutdown()
+                .await
+                .map_err(|_| unavailable("PTY shutdown"))
+        } else {
+            Ok(())
+        };
+        tasks
             .and(governor)
             .and(isolated)
             .and(computer)

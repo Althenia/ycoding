@@ -101,10 +101,19 @@ The document order is:
 Example order:
 
 ```text
-global -> explicit file -> project -> inline content
+global -> explicit file -> project -> authenticated well-known sources -> inline content
 ```
 
 Within one directory, `ycoding.jsonc` is loaded after `ycoding.json` and therefore has higher priority for fields it defines.
+
+Well-known configuration participates only when its integration has a saved key.
+Resolution binds to the latest saved key for that integration, independently of
+the active provider profile, and checks that the selected credential is still
+current after resolution. Embedded documents precede remote documents from the
+same manifest. Source updates and credential or connection changes rebuild
+acquired Locations; an explicit resource refresh resolves configuration again
+even when the manifest is unchanged. A resolution or rebuild failure retains the
+published Location generation and reports the failure without exposing key values.
 
 Project discovery walks upward from the current directory. It is not limited to the detected project root. Set `YCODING_CONFIG_PROJECT_DISABLE=true` or `YCODING_DISABLE_PROJECT_CONFIG=true` to disable project discovery.
 
@@ -428,6 +437,18 @@ The field reference below expands the overview. `unset` means the field is optio
 | `efficiency.openai_responses_state`                                                                                          | `stored` \| `stateless`                                                                                         | `stored`                        | Direct OpenAI Responses storage mode. Stored mode permits compatible response-ID continuation; stateless mode replays opaque provider state.                                      |
 | `experimental.subagent_depth`                                                                                                | non-negative integer                                                                                            | `1`                             | Maximum nesting depth.                                                                                                                                                            |
 | `experimental.policies`                                                                                                      | `Config.Policy.Info[]`                                                                                          | unset                           | Ordered configured-resource policies.                                                                                                                                             |
+
+Configured-resource policy uses `provider.use` with a provider-ID resource and an
+`allow` or `deny` effect. Policy documents load in reverse document-source order;
+within each source the last matching statement wins. A matching statement in a
+broader source therefore overrides one in a narrower source. Unmatched resources
+default to allow. Action and resource patterns support `*` and `?`.
+
+Denial removes the provider's models and integration references from available
+catalogs and rejects model selection before account preparation, discovery or
+generation effects. Resource policy does not grant tool permissions or delete
+saved credentials. Reload rebuilds policy with the catalog before publishing the
+replacement generation.
 
 ### Provider-usage reporting
 
@@ -1099,7 +1120,9 @@ credentials separately through `integration.connect.key` and `credential.activat
 
 `mcp.configure` persists a typed server definition in `mcp.servers.<name>` and
 reloads it. Environment values, headers and OAuth secrets remain in that
-configuration definition. Reload success is not an external connection check;
+configuration definition. A replacement that reports failed startup restores the
+previous configured definitions and retains the usable Location generation;
+authentication-required and intentionally disabled states remain explicit.
 `mcp.add` is live-only.
 
 `ycoding mcp add` uses `mcp.configure` with project scope, or global scope with `--global`. It reports the backend-selected target; it does not edit a frontend-local configuration file.

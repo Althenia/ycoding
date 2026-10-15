@@ -18,8 +18,8 @@ use ycoding_core::{
     session::{execution::Execution, store::Service as SessionStore},
     tools::context::Context,
     ycoding_schema::{
-        DomainDecode, JsonValue, location, model, parse_json, provider, session, session_message,
-        session_pending, stringify_json,
+        DomainDecode, DomainEncode, JsonValue, location, model, parse_json, provider, session,
+        session_message, session_pending, stringify_json,
     },
     ycoding_store::{
         IndexOrder, IndexQuery, KeyPart, Metadata, Options, Store, project,
@@ -48,7 +48,33 @@ async fn production_flow() {
     let scripted = replies.clone();
     let hold = Arc::new(tokio::sync::Mutex::new(None::<oneshot::Receiver<()>>));
     let held = hold.clone();
+    let current_catalog = Arc::new(Mutex::new(String::new()));
+    let catalog_reply = current_catalog.clone();
+    let discovery_status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+    let discovery_reply = discovery_status.clone();
+    let discovery_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let discovered = discovery_calls.clone();
     let router = axum::Router::new()
+        .route(
+            "/catalog/api.json",
+            axum::routing::get(move || {
+                let body = catalog_reply.lock().unwrap().clone();
+                async move { body }
+            }),
+        )
+        .route(
+            "/models",
+            axum::routing::get(move || {
+                let status = discovery_reply.load(std::sync::atomic::Ordering::Acquire);
+                discovered.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        r#"{"object":"list","data":[{"id":"discovered-model"}]}"#,
+                    )
+                }
+            }),
+        )
         .route(
             "/fixture",
             axum::routing::get(|| async { "local fetch result" }),
@@ -158,6 +184,7 @@ async fn production_flow() {
     )
     .unwrap();
     std::fs::write(&catalog_file, r#"{"openai":{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime test","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":8192},"cost":{"input":2,"output":3}},"gpt-helper":{"id":"gpt-helper","name":"Helper test","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":false,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":8192},"cost":{"input":1,"output":2}}}}}"#).unwrap();
+    *current_catalog.lock().unwrap() = std::fs::read_to_string(&catalog_file).unwrap();
     let configuration = config::LoadOptions {
         directory: root.join("project"),
         roots: roots.clone(),
@@ -363,11 +390,11 @@ async fn production_flow() {
         Production {
             configuration,
             catalog: models_dev::Options {
-                source: "https://models.dev/api.json".into(),
-                cache: roots.cache.join("catalog.json"),
-                file: Some(catalog_file),
+                source: format!("{endpoint}/catalog"),
+                cache: catalog_file.clone(),
+                file: None,
                 bundled: None,
-                fetch: false,
+                fetch: true,
                 user_agent: "ycoding/test".into(),
             },
             cursor: None,
@@ -1142,6 +1169,16 @@ async fn production_flow() {
     let request = received.recv().await.unwrap();
     let encoded = ycoding_core::ycoding_schema::stringify_json(&request);
     assert!(encoded.contains("Respond with the verification result"));
+    assert_eq!(
+        core.sessions
+            .get(&session::Id::new("ses_production").unwrap())
+            .unwrap()
+            .unwrap()
+            .title
+            .as_str(),
+        Some("Respond with the verification result"),
+        "first prompt titles must run through the production Session runner"
+    );
     assert!(
         encoded.contains(r#""name":"subagent""#),
         "Session tools reach the model"
@@ -1501,6 +1538,19 @@ async fn production_flow() {
         .and_then(|shell| shell.pid)
         .unwrap()
         .get();
+    RefreshFlow {
+        core: &core,
+        root: &root,
+        endpoint: &endpoint,
+        catalog: &current_catalog,
+        status: &discovery_status,
+        calls: &discovery_calls,
+        hold: &hold,
+        received: &mut received,
+        wire: &mut wire,
+    }
+    .run()
+    .await;
     let (release_held, held_reply) = oneshot::channel();
     *hold.lock().await = Some(held_reply);
     prompt_input(
@@ -1560,6 +1610,409 @@ async fn production_flow() {
     stop_model.send(()).unwrap();
     model_server.await.unwrap();
     store.shutdown().unwrap();
+}
+
+struct RefreshFlow<'a> {
+    core: &'a Core,
+    root: &'a std::path::Path,
+    endpoint: &'a str,
+    catalog: &'a Arc<Mutex<String>>,
+    status: &'a Arc<std::sync::atomic::AtomicU16>,
+    calls: &'a Arc<std::sync::atomic::AtomicUsize>,
+    hold: &'a Arc<tokio::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+    received: &'a mut mpsc::UnboundedReceiver<JsonValue>,
+    wire: &'a mut support::Client,
+}
+
+impl RefreshFlow<'_> {
+    async fn run(&mut self) {
+        let (_, first) = self
+            .core
+            .locations
+            .session(&session::Id::new("ses_production").unwrap())
+            .unwrap();
+        let (_, other) = self
+            .core
+            .locations
+            .session(&session::Id::new("ses_other_location").unwrap())
+            .unwrap();
+        let again = self
+            .core
+            .locations
+            .location(first.info.directory.as_lossless(), None)
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &first.production.as_ref().unwrap().models,
+            &again.production.as_ref().unwrap().models
+        ));
+        let catalog = self.core.catalogs.as_ref().unwrap();
+        let original = catalog(&first.info).unwrap();
+        let generator = original.generate.clone();
+        let (release, waiting) = oneshot::channel();
+        *self.hold.lock().await = Some(waiting);
+        let held = tokio::spawn(async move {
+            generator
+                .text(ycoding_core::resources::generate::Input {
+                    prompt: "Held old-generation request".into(),
+                    model: Some(model::Ref {
+                        provider_id: provider::Id("openai".into()),
+                        id: "gpt-runtime".into(),
+                        profile: None,
+                        variant: None,
+                    }),
+                })
+                .await
+        });
+        assert!(
+            stringify_json(&self.received.recv().await.unwrap())
+                .contains("Held old-generation request")
+        );
+        {
+            let mut current = self.catalog.lock().unwrap();
+            *current = current.replace("Runtime test", "Current catalog");
+        }
+        let path = self.root.join("project/ycoding.json");
+        let JsonValue::Object(mut configuration) =
+            parse_json(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        else {
+            panic!()
+        };
+        let JsonValue::Object(mut providers) =
+            configuration.get(&"providers".into()).unwrap().clone()
+        else {
+            panic!()
+        };
+        providers.insert("local".into(), parse_json(&format!(r#"{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"baseURL":"{}","apiKey":"synthetic-key"}},"catalog":{{"source":"openai-models"}}}}"#, self.endpoint)).unwrap());
+        configuration.insert("providers".into(), JsonValue::Object(providers));
+        configuration.insert(
+            "experimental".into(),
+            parse_json(
+                r#"{"policies":[{"action":"provider.use","resource":"local","effect":"deny"}]}"#,
+            )
+            .unwrap(),
+        );
+        let notified = Arc::new(Notify::new());
+        let wake = notified.clone();
+        let updates = self
+            .core
+            .events
+            .subscribe(Scope::Global, None, move || wake.notify_one())
+            .unwrap();
+        std::fs::write(
+            &path,
+            stringify_json(&JsonValue::Object(configuration.clone())),
+        )
+        .unwrap();
+        (original.refresh)().await.unwrap();
+        let current = catalog(&first.info).unwrap();
+        assert!(!Arc::ptr_eq(&current.models, &original.models));
+        assert!(
+            !current
+                .models
+                .catalog()
+                .provider_permitted(&provider::Id("local".into()))
+        );
+        assert!(
+            !current
+                .models
+                .catalog()
+                .integrations()
+                .iter()
+                .any(|reference| reference.provider_id.0.as_str() == Some("local"))
+        );
+        assert_eq!(
+            self.calls.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "denied discovery must have no HTTP effects"
+        );
+        assert!(
+            current
+                .models
+                .catalog()
+                .providers
+                .iter()
+                .flat_map(|provider| &provider.models)
+                .any(|model| model.name.as_str() == Some("Current catalog"))
+        );
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if catalog(&other.info)
+                    .unwrap()
+                    .models
+                    .catalog()
+                    .providers
+                    .iter()
+                    .flat_map(|provider| &provider.models)
+                    .any(|model| model.name.as_str() == Some("Current catalog"))
+                {
+                    break;
+                }
+                notified.notified().await;
+                while updates.next().unwrap().is_some() {}
+            }
+        })
+        .await
+        .unwrap();
+        let table = self.root.join("mcp-refresh.json");
+        std::fs::write(&table, format!(r#"{{"log":"{}","capabilities":{{"tools":{{}}}},"responses":{{"tools/list":{{"":{{"tools":[{{"name":"retained","inputSchema":{{"type":"object"}}}}]}}}}}}}}"#, table.with_extension("log").display())).unwrap();
+        let mcp = parse_json(&format!(
+            r#"{{"servers":{{"refresh":{{"type":"local","command":["python3","{}","{}"]}}}}}}"#,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/mcp_table.py"),
+            table.display()
+        ))
+        .unwrap();
+        configuration.insert(
+            "experimental".into(),
+            parse_json(
+                r#"{"policies":[{"action":"provider.use","resource":"local","effect":"allow"}]}"#,
+            )
+            .unwrap(),
+        );
+        configuration.insert("mcp".into(), mcp.clone());
+        let JsonValue::Object(mut agents) = configuration.get(&"agents".into()).unwrap().clone()
+        else {
+            panic!()
+        };
+        agents.insert("pending-owner".into(), parse_json(r#"{"description":"Pending owner","permissions":[{"action":"*","resource":"*","effect":"ask"}]}"#).unwrap());
+        configuration.insert("agents".into(), JsonValue::Object(agents));
+        std::fs::write(
+            &path,
+            stringify_json(&JsonValue::Object(configuration.clone())),
+        )
+        .unwrap();
+        (current.refresh)().await.unwrap();
+        let usable = catalog(&first.info).unwrap();
+        assert!(
+            usable
+                .models
+                .catalog()
+                .available(&self.core.credentials.all().unwrap())
+                .iter()
+                .any(|model| model.id.as_str() == Some("discovered-model"))
+        );
+        let (_, owner) = self
+            .core
+            .locations
+            .session(&session::Id::new("ses_production").unwrap())
+            .unwrap();
+        let mcp_owner = owner.production.as_ref().unwrap().mcp.clone();
+        assert!(
+            mcp_owner
+                .tools()
+                .await
+                .unwrap()
+                .iter()
+                .any(|tool| tool.definition["name"] == "retained")
+        );
+        assert!(Arc::ptr_eq(
+            &first.production.as_ref().unwrap().platform.shell,
+            &owner.production.as_ref().unwrap().platform.shell
+        ));
+        assert!(Arc::ptr_eq(
+            &first.production.as_ref().unwrap().platform.pty,
+            &owner.production.as_ref().unwrap().platform.pty
+        ));
+        self.replies_across_reload(&owner, &usable).await;
+        let usable = catalog(&first.info).unwrap();
+        configuration.insert("mcp".into(), parse_json(r#"{"servers":{"refresh":{"type":"local","command":["/ycoding-nonexistent-mcp"]}}}"#).unwrap());
+        self.status.store(500, std::sync::atomic::Ordering::Release);
+        std::fs::write(
+            &path,
+            stringify_json(&JsonValue::Object(configuration.clone())),
+        )
+        .unwrap();
+        assert!((usable.refresh)().await.is_err());
+        assert!(
+            Arc::ptr_eq(&usable.models, &catalog(&first.info).unwrap().models),
+            "failed discovery retains the complete usable generation"
+        );
+        assert!(
+            mcp_owner
+                .tools()
+                .await
+                .unwrap()
+                .iter()
+                .any(|tool| tool.definition["name"] == "retained"),
+            "a later composition failure must not mutate shared MCP definitions"
+        );
+        self.status.store(200, std::sync::atomic::Ordering::Release);
+        assert!(
+            (usable.refresh)().await.is_err(),
+            "failed MCP replacement cannot publish success"
+        );
+        assert!(Arc::ptr_eq(
+            &usable.models,
+            &catalog(&first.info).unwrap().models
+        ));
+        assert!(
+            mcp_owner
+                .tools()
+                .await
+                .unwrap()
+                .iter()
+                .any(|tool| tool.definition["name"] == "retained"),
+            "failed replacement restores the prior real MCP process"
+        );
+        configuration.insert("mcp".into(), mcp);
+        std::fs::write(&path, stringify_json(&JsonValue::Object(configuration))).unwrap();
+        (usable.refresh)().await.unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            held.await.unwrap().unwrap().as_str(),
+            Some("Run the focused tests")
+        );
+    }
+
+    async fn replies_across_reload(
+        &mut self,
+        owner: &ycoding_runtime::LocationServices,
+        catalog: &ycoding_runtime::CatalogServices,
+    ) {
+        use ycoding_core::{
+            process::guardrails::Input,
+            tools::policy::questions::Admission,
+            ycoding_schema::{form, permission, question},
+        };
+        let id = session::Id::new("ses_production").unwrap();
+        let permission = owner.permissions.ask(permission::Request::decode(&parse_json(r#"{"id":"per_held_generation","sessionID":"ses_production","action":"read","resources":["asset"]}"#).unwrap()).unwrap(), Some("pending-owner".into())).unwrap().wait.unwrap();
+        let Admission::Pending(question) = owner.questions.ask(question::Request::decode(&parse_json(r#"{"id":"que_held_generation","sessionID":"ses_production","questions":[{"question":"Continue?","header":"Choose","options":[{"label":"One","description":"Continue"}]}]}"#).unwrap()).unwrap()).unwrap() else { panic!() };
+        let form = owner.forms.ask(form::Info::decode(&parse_json(r#"{"id":"frm_held_generation","sessionID":"ses_production","title":"Continue","fields":[{"key":"name","type":"string","required":false}]}"#).unwrap()).unwrap()).unwrap();
+        let review = owner
+            .guardrails
+            .assert(Input {
+                session_id: id,
+                action: "shell".into(),
+                resources: vec![
+                    format!(
+                        "rm -rf '{}'",
+                        std::fs::canonicalize(self.root.join("project"))
+                            .unwrap()
+                            .display()
+                    )
+                    .into(),
+                ],
+                metadata: None,
+                skip_review: false,
+                holder: None,
+            })
+            .unwrap();
+        let JsonValue::String(request_id) = review.request.as_ref().unwrap().id.encode() else {
+            panic!()
+        };
+        let request_id = support::text(request_id.as_str().unwrap());
+        let review = review.wait.unwrap();
+        (catalog.refresh)().await.unwrap();
+        let scope = support::session_scope("ses_production");
+        let permissions: v5::SessionPermissionListResult = support::success(
+            self.wire
+                .call(
+                    "session.permission.list",
+                    scope.clone(),
+                    v5::SessionPermissionListRequest {
+                        params: v5::SessionPermissionListRequestParams {
+                            session_id: support::text("ses_production"),
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+        );
+        assert!(
+            permissions
+                .data
+                .items
+                .iter()
+                .any(|request| support::units(&request.id) == "per_held_generation")
+        );
+        let _: v5::SessionPermissionReplyResult = support::success(
+            self.wire
+                .call(
+                    "session.permission.reply",
+                    scope.clone(),
+                    v5::SessionPermissionReplyRequest {
+                        params: v5::SessionPermissionReplyRequestParams {
+                            session_id: support::text("ses_production"),
+                            request_id: support::text("per_held_generation"),
+                        },
+                        payload: v5::SessionPermissionReplyRequestPayload {
+                            reply: v5::PermissionReply::Once as i32,
+                            message: None,
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+        );
+        let _: v5::SessionQuestionReplyResult = support::success(
+            self.wire
+                .call(
+                    "session.question.reply",
+                    scope.clone(),
+                    v5::SessionQuestionReplyRequest {
+                        params: v5::SessionQuestionReplyRequestParams {
+                            session_id: support::text("ses_production"),
+                            request_id: support::text("que_held_generation"),
+                        },
+                        payload: v5::QuestionReply {
+                            answers: v5::QuestionReplyAnswers {
+                                items: vec![v5::QuestionAnswer {
+                                    items: vec![support::text("One")],
+                                }],
+                            },
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+        );
+        let _: v5::SessionFormReplyResult = support::success(
+            self.wire
+                .call(
+                    "session.form.reply",
+                    support::wire::form_scope("ses_production"),
+                    v5::SessionFormReplyRequest {
+                        params: v5::SessionFormReplyRequestParams {
+                            session_id: support::text("ses_production"),
+                            form_id: support::text("frm_held_generation"),
+                        },
+                        payload: v5::FormReply {
+                            answer: v5::FormAnswer {
+                                entries: Vec::new(),
+                            },
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+        );
+        let _: v5::SessionGuardrailRequestReplyResult = support::success(
+            self.wire
+                .call(
+                    "session.guardrail.request.reply",
+                    scope,
+                    v5::SessionGuardrailRequestReplyRequest {
+                        params: v5::SessionGuardrailRequestReplyRequestParams {
+                            session_id: support::text("ses_production"),
+                            request_id,
+                        },
+                        payload: v5::SessionGuardrailRequestReplyRequestPayload {
+                            reply: v5::GuardrailReply::Once as i32,
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+        );
+        assert!(permission.await.unwrap().is_ok());
+        assert_eq!(
+            question.await.unwrap().unwrap(),
+            vec![vec![ycoding_core::ycoding_schema::LosslessString::from(
+                "One"
+            )]]
+        );
+        assert!(matches!(form.await.unwrap(), form::State::Answered(_)));
+        assert!(review.await.unwrap().is_ok());
+    }
 }
 
 async fn prompt_input(execution: &Execution, session: &str, event: &str, text: &str) {

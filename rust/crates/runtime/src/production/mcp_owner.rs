@@ -1,19 +1,14 @@
 use super::{Factory, Prepared, unavailable};
 use crate::dispatch::Failure;
-use std::sync::{
-    Arc, Mutex, PoisonError,
-    atomic::{AtomicUsize, Ordering},
-};
-use ycoding_core::{
-    resources::{auth, mcp},
-    ycoding_schema::location,
-};
+use std::sync::{Arc, Mutex, PoisonError, atomic::AtomicUsize};
+use ycoding_core::resources::{auth, mcp};
 
 pub(super) struct Owner {
     pub mcp: Arc<mcp::Service>,
     pub integrations: auth::integration::Registry,
     pub generations: AtomicUsize,
     registration: Mutex<auth::integration::Registration>,
+    observer: tokio::sync::Mutex<Option<super::observer::Owner>>,
 }
 
 impl Owner {
@@ -41,18 +36,23 @@ impl Owner {
         }
         let previous = definitions(previous)?;
         let current = definitions(current)?;
-        for (name, _) in &previous.servers {
-            if !current.servers.iter().any(|(current, _)| current == name) {
-                self.mcp
-                    .remove(
-                        name.as_str()
-                            .ok_or_else(|| unavailable("MCP server name"))?,
-                    )
-                    .await
-                    .map_err(|_| unavailable("MCP server removal"))?;
+        if let Err(error) = self.apply(&previous, &current, true).await {
+            if self.apply(&current, &previous, false).await.is_err() {
+                tracing::error!("MCP replacement rollback failed");
             }
+            return Err(error);
         }
-        for (name, configuration) in current.servers {
+        Ok(())
+    }
+
+    async fn apply(
+        &self,
+        previous: &mcp::configuration::Definitions,
+        current: &mcp::configuration::Definitions,
+        check: bool,
+    ) -> Result<(), Failure> {
+        let mut changed = Vec::new();
+        for (name, configuration) in &current.servers {
             if previous
                 .servers
                 .iter()
@@ -64,17 +64,63 @@ impl Owner {
                 .add(
                     name.as_str()
                         .ok_or_else(|| unavailable("MCP server name"))?,
-                    configuration,
+                    configuration.clone(),
                 )
                 .await
                 .map_err(|_| unavailable("MCP server reload"))?;
+            changed.push(name);
+        }
+        self.mcp
+            .tools()
+            .await
+            .map_err(|_| unavailable("MCP replacement readiness"))?;
+        if check
+            && self
+                .mcp
+                .servers()
+                .map_err(|_| unavailable("MCP replacement status"))?
+                .iter()
+                .any(|server| {
+                    changed
+                        .iter()
+                        .any(|name| name.as_str() == Some(server.name.as_str()))
+                        && matches!(
+                            server.status,
+                            ycoding_core::ycoding_schema::mcp::Status::Failed(_)
+                        )
+                })
+        {
+            return Err(unavailable("MCP replacement startup"));
+        }
+        let existing = self
+            .mcp
+            .servers()
+            .map_err(|_| unavailable("MCP server inventory"))?;
+        for (name, _) in &previous.servers {
+            if !current.servers.iter().any(|(current, _)| current == name)
+                && existing
+                    .iter()
+                    .any(|server| name.as_str() == Some(server.name.as_str()))
+            {
+                self.mcp
+                    .remove(
+                        name.as_str()
+                            .ok_or_else(|| unavailable("MCP server name"))?,
+                    )
+                    .await
+                    .map_err(|_| unavailable("MCP server removal"))?;
+            }
         }
         Ok(())
     }
 
-    pub fn configure(&self, factory: &Factory, prepared: &Prepared) -> Result<(), Failure> {
+    pub fn configure(
+        &self,
+        factory: &Factory,
+        models: &ycoding_core::resources::model::Resolver,
+    ) -> Result<(), Failure> {
         let mut auth = factory.globals.auth.clone();
-        auth.register_endpoints(&prepared.models.catalog());
+        auth.register_endpoints(&models.catalog());
         let registration = self
             .integrations
             .transform(move |draft| draft.extend(&auth))
@@ -85,10 +131,8 @@ impl Owner {
             .unwrap_or_else(PoisonError::into_inner) = registration;
         Ok(())
     }
-    pub async fn retire(&self) -> Result<(), Failure> {
-        if self.generations.fetch_sub(1, Ordering::AcqRel) != 1 {
-            return Ok(());
-        }
+    pub async fn close(&self) -> Result<(), Failure> {
+        let observer = self.stop_observer().await;
         let mcp = self
             .mcp
             .shutdown()
@@ -99,14 +143,34 @@ impl Owner {
             .shutdown()
             .await
             .map_err(|_| unavailable("integration shutdown"));
-        mcp.and(integrations)
+        observer.and(mcp).and(integrations)
+    }
+
+    pub async fn stop_observer(&self) -> Result<(), Failure> {
+        match self.observer.lock().await.take() {
+            Some(observer) => observer.close().await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn observe(
+        &self,
+        factory: &Factory,
+        services: &crate::locations::ServiceSet,
+        configuration: &ycoding_core::resources::config::Configuration,
+        directory: &std::path::Path,
+    ) -> Result<(), Failure> {
+        let mut observer = self.observer.lock().await;
+        if observer.is_none() {
+            *observer = super::observer::Owner::start(factory, services, configuration, directory)?;
+        }
+        Ok(())
     }
 }
 
 impl Factory {
     pub(super) async fn start_mcp(
         &self,
-        services: &crate::locations::ServiceSet,
         prepared: &Prepared,
         directory: &std::path::Path,
     ) -> Result<Arc<Owner>, Failure> {
@@ -116,13 +180,6 @@ impl Factory {
             self.globals.preparation.clone(),
             Some(self.globals.claude.clone()),
         );
-        let reference = location::Ref {
-            directory: services.info.directory.clone(),
-            workspace_id: services.info.workspace_id.clone(),
-        };
-        integrations
-            .bind_events(self.events.clone(), Some(reference.clone()))
-            .map_err(|_| unavailable("integration events"))?;
         let mut auth = self.globals.auth.clone();
         auth.register_endpoints(&prepared.models.catalog());
         let registration = integrations
@@ -147,13 +204,12 @@ impl Factory {
             )
             .map_err(|_| unavailable("MCP service"))?,
         );
-        mcp.bind_events(self.events.clone(), Some(reference))
-            .map_err(|_| unavailable("MCP events"))?;
         Ok(Arc::new(Owner {
             mcp,
             integrations,
             generations: AtomicUsize::new(0),
             registration: Mutex::new(registration),
+            observer: tokio::sync::Mutex::new(None),
         }))
     }
 }

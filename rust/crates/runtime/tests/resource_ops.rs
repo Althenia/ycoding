@@ -106,7 +106,7 @@ impl Fixture {
                     .unwrap(),
             ),
             pty: Arc::new(pty::Pty::new(root.clone())),
-            tickets: Mutex::new(pty::ticket::Tickets::default()),
+            tickets: Arc::new(Mutex::new(pty::ticket::Tickets::default())),
             config,
             filesystem: Arc::new(filesystem::Location::new(&root).unwrap()),
             search,
