@@ -294,6 +294,8 @@ for (const width of [390, 1280])
         ),
       ).toBe(true)
       await page.evaluate(`window.activityOpen('ses_running')`)
+      expect(await page.evaluate<string>(`location.pathname`)).toBe("/remote/session")
+      expect(await page.evaluate<string>(`new URLSearchParams(location.search).get('session_id')`)).toBe("ses_running")
       await wait(
         page,
         `document.querySelector('[aria-label="Open Team"]')?.getAttribute('aria-description') === 'Activity unreported'`,
