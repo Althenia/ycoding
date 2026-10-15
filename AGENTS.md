@@ -74,7 +74,7 @@ Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
 ## Release practices
 
-- Ship stable releases from `main` and the Rust backend beta channel from `rust-backend`; start beta at `0.11.0-beta.1` and use `vX.Y.Z-beta.N` tags. Verify beta tag ancestry against `rust-backend` and stable tag ancestry against `main`; preserve every source verification, build, packaging, smoke, and deployment gate and the exact archive entry set.
+- Ship stable releases from `main` and the Rust backend beta channel from `beta`; start beta at `0.11.0-beta.1` and use `vX.Y.Z-beta.N` tags. Verify beta tag ancestry against `beta` and stable tag ancestry against `main`; preserve every source verification, build, packaging, smoke, and deployment gate and the exact archive entry set.
 - Publish beta tags as GitHub prereleases with `--prerelease --latest=false`; never promote them to latest. Deploy beta tags with `--env beta` to Worker `ycoding-cloud-beta` at `beta.ycoding.althenia.app`; keep stable deployments unchanged.
 - Keep the default installer on stable `releases/latest`. Resolve the newest published, non-draft beta prerelease for `--beta` or `YCODING_CHANNEL=beta`; let `YCODING_VERSION` pin an exact version. Derive updater selection from the running version: beta builds select the higher of the newest beta and newest stable, and stable builds never select beta automatically. Keep beta data separate and import a copy on first start without changing stable data. Switch back with the normal stable installer.
 

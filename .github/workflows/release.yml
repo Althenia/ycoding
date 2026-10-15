@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           branch=main
-          case "$GITHUB_REF_NAME" in v*-beta.*) branch=rust-backend ;; esac
+          case "$GITHUB_REF_NAME" in v*-beta.*) branch=beta ;; esac
           git fetch --no-tags origin "$branch:refs/remotes/origin/$branch"
           git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"
 

@@ -452,7 +452,7 @@ test.each(["0.10.6", "0.11.0-beta.1", "0.11.0-beta.10"])("release version valida
 
 test.each([
   ["v0.10.6", "main", "bun run deploy:cloudflare", ""],
-  ["v0.11.0-beta.1", "rust-backend", "bun run deploy:cloudflare --env beta", "--prerelease --latest=false"],
+  ["v0.11.0-beta.1", "beta", "bun run deploy:cloudflare --env beta", "--prerelease --latest=false"],
 ])("%s selects the release branch, deploy environment and publication flags", (tag, branch, deploy, flags) => {
   const sourceStep = workflow.split("      - name: Verify tag is reachable from release branch")[1]!.split("      - name:")[0]!.split("        run: |\n")[1]!
   const deployStep = workflow.split("      - name: Deploy to Cloudflare")[1]!.split("        run: |\n")[1]!
