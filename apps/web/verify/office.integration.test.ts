@@ -604,7 +604,7 @@ describe("remote Office presentation", () => {
       expect(
         await until(
           page,
-          `document.querySelector('.office-workspace canvas')!==null&&window.__officeGame.scene.getScene('office').latestFrames.length===3`,
+          `providerAuthState().connection.kind==='connected'&&document.querySelector('.office-workspace canvas')!==null&&window.__officeGame.scene.getScene('office').latestFrames.length===3&&window.__officeGame.scene.getScene('office').latestFrames.every(frame=>frame.actor.status==='idle')`,
           150,
         ),
       ).toBe(true)
@@ -816,6 +816,9 @@ describe("remote Office presentation", () => {
         document.querySelector('button[aria-label="Send prompt"]').click()
       })()`)
       expect(await until(page, `document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
+      await page.evaluate(
+        `document.querySelector('.mutation-toast--unknown .yc-toast__close').focus({preventScroll:true})`,
+      )
       await choosePresentation(page, "Office")
       expect(
         await until(
@@ -837,6 +840,7 @@ describe("remote Office presentation", () => {
       }
       await choosePresentation(page, "Conversation")
       expect(await until(page, `document.querySelector('.mutation-toast--unknown') !== null`)).toBe(true)
+      await page.evaluate(`document.querySelector('[aria-label="Jump to latest"]')?.click()`)
       expect(await page.evaluate<number>(`remoteOperationReport().operations['session.prompt'] ?? 0`)).toBe(1)
       expect(
         await until(
@@ -844,6 +848,11 @@ describe("remote Office presentation", () => {
           `document.querySelectorAll('.mutation-toast--unknown button,.transcript-message__send-error button').length === 2`,
         ),
       ).toBe(true)
+      expect(
+        await page.evaluate<string>(
+          `document.querySelector('.transcript-message__send-error button').textContent.trim()`,
+        ),
+      ).toBe("Retry send")
     } finally {
       await page.close()
     }
