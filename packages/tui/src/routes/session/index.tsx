@@ -507,7 +507,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       return {
         type: "awaiting-input",
         count: 1,
-        elapsed: session() ? (Date.now() - session()!.time.created) / 1000 : undefined,
+        startedAt: child.question.time,
       } as const
     // Durable execution status is the only truth about a running Session. Deriving readiness from
     // messages alone reported "ready" while a drain worked between steps, with no open assistant

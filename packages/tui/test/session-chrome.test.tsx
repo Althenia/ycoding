@@ -900,6 +900,47 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
+  test("updates the waiting-question timer and removes it after the question settles", async () => {
+    const config = createTuiResolvedConfig()
+    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+      import("../src/config"),
+      import("../src/context/theme"),
+    ])
+    let setState!: (state: SessionHeaderState) => void
+    function LiveHeader() {
+      const [state, set] = createSignal<SessionHeaderState>({ type: "awaiting-input", count: 1, startedAt: Date.now() - 1_000 })
+      setState = set
+      return <Header {...identity} state={state()} />
+    }
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider config={config}>
+                <LiveHeader />
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 160, height: 6, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes("? awaiting input · 1."))
+    const initial = app.captureCharFrame()
+    await Bun.sleep(1_100)
+    expect(app.captureCharFrame()).not.toBe(initial)
+    expect(app.captureCharFrame()).toMatch(/\? awaiting input · 2\./)
+    setState({ type: "ready" })
+    await app.waitForFrame((frame) => frame.includes("ready"))
+    const settled = app.captureCharFrame()
+    expect(settled).not.toContain("awaiting input")
+    await Bun.sleep(200)
+    expect(app.captureCharFrame()).toBe(settled)
+    app.renderer.destroy()
+  })
+
 })
 
 describe("footer branch identity", () => {
