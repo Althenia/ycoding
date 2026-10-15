@@ -19,7 +19,7 @@ import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
-import { HttpClientResponse } from "effect/unstable/http"
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -6519,6 +6519,372 @@ describe("SessionRunnerLLM", () => {
       streamStarted = undefined
     }),
   )
+
+  it.effect("preserves explicit raw OpenRouter Messages effort across variant changes on the final wire", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const entry = CatalogModel.Info.make({
+        id: CatalogModel.ID.make("anthropic/claude-opus-5"),
+        modelID: CatalogModel.ID.make("anthropic/claude-opus-5"),
+        providerID: Provider.ID.make("anthropic"),
+        name: "Raw effort fixture",
+        package: Provider.aisdk("@ai-sdk/anthropic"),
+        settings: { apiKey: "fixture", baseURL: "https://openrouter.ai/api/v1" },
+        headers: {},
+        body: { output_config: { effort: "low" } },
+        variants: ["low", "high"].map((id) => ({ id: CatalogModel.VariantID.make(id), settings: { effort: id } })),
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        status: "active",
+        enabled: true,
+        limit: testLimits,
+        cost: [],
+        time: { released: 0 },
+      })
+      catalogModel = entry
+      const wires: Record<string, unknown>[] = []
+      for (const variant of ["low", "high"] as const) {
+        const ref = CatalogModel.Ref.make({
+          id: entry.id,
+          providerID: entry.providerID,
+          variant: CatalogModel.VariantID.make(variant),
+        })
+        currentModel = yield* SessionRunnerModel.fromCatalogModel(
+          yield* SessionRunnerModel.withVariant(entry, ref.variant),
+        )
+        yield* events.publish(SessionEvent.ModelSelected, { sessionID, model: ref })
+        yield* admit(session, `Input ${variant}`)
+        yield* session.resume(sessionID)
+        yield* LLMClient.generate(requests.at(-1)!).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, {
+            execute: (request) =>
+              Effect.gen(function* () {
+                const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+                expect(web.url).toBe("https://openrouter.ai/api/v1/messages")
+                const body = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(
+                  yield* Effect.promise(() => web.json()),
+                )
+                wires.push(body)
+                expect(body.output_config).toEqual({ effort: "low" })
+                expect(
+                  (body.messages as Record<string, unknown>[]).some(
+                    (message) => message.role === "system" && "output_config" in message,
+                  ),
+                ).toBe(false)
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response(
+                    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n',
+                    { headers: { "content-type": "text/event-stream" } },
+                  ),
+                )
+              }),
+          }),
+        )
+      }
+      expect(wires).toHaveLength(2)
+    }),
+  )
+
+  it.effect("defers Anthropic tool-only effort changes to new user input and preserves an omitted baseline", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const entry = CatalogModel.Info.make({
+        id: CatalogModel.ID.make("claude-opus-5-5"),
+        modelID: CatalogModel.ID.make("claude-opus-5-5"),
+        providerID: Provider.ID.make("anthropic"),
+        name: "Effort fixture",
+        package: Provider.aisdk("@ai-sdk/anthropic"),
+        settings: { apiKey: "fixture-key" },
+        headers: {},
+        body: {},
+        variants: [{ id: CatalogModel.VariantID.make("low"), settings: { effort: "low" } }],
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        status: "active",
+        enabled: true,
+        limit: testLimits,
+        cost: [],
+        time: { released: 0 },
+      })
+      catalogModel = entry
+      const select = (variant?: "low") =>
+        Effect.gen(function* () {
+          const ref = CatalogModel.Ref.make({
+            providerID: entry.providerID,
+            id: entry.id,
+            ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+          })
+          const selected = yield* SessionRunnerModel.withVariant(entry, ref.variant)
+          currentModel = yield* SessionRunnerModel.fromCatalogModel(selected)
+          yield* events.publish(SessionEvent.ModelSelected, { sessionID, model: ref })
+        })
+      yield* select()
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      responses = [reply.tool("call-effort", "echo", { text: "Result" }), reply.text("Tool complete", "tool-done")]
+      yield* admit(session, "Use a tool")
+      const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(toolExecutionsStarted)
+      yield* select("low")
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(running)
+      toolExecutionGate = undefined
+      toolExecutionsStarted = undefined
+      const toolOnly = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(requests.at(-1)!)
+      expect(toolOnly.body.output_config).toBeUndefined()
+      expect(
+        toolOnly.body.messages.filter((message) => message.role === "system" && message.output_config),
+      ).toHaveLength(0)
+      responses = undefined
+      yield* admit(session, "New input at low effort")
+      yield* session.resume(sessionID)
+      const changed = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(requests.at(-1)!)
+      expect(changed.body.output_config).toBeUndefined()
+      expect(changed.body.messages.filter((message) => message.role === "system" && message.output_config)).toEqual([
+        { role: "system", content: [], output_config: { effort: "low" } },
+      ])
+      yield* select()
+      yield* admit(session, "Return to model default")
+      yield* session.resume(sessionID)
+      const reset = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(requests.at(-1)!)
+      expect(reset.body.output_config).toBeUndefined()
+      expect(reset.body.messages.filter((message) => message.role === "system" && message.output_config)).toEqual([
+        { role: "system", content: [], output_config: { effort: "low" } },
+        { role: "system", content: [], output_config: { effort: "medium" } },
+      ])
+      expect(new Set(requests.map((request) => request.providerOptions?.openai?.promptCacheKey)).size).toBe(1)
+    }),
+  )
+
+  for (const scenario of [
+    {
+      provider: "openai",
+      id: "gpt-6.1-sol",
+      package: "@ai-sdk/openai",
+      option: "reasoningEffort",
+      mechanism: "configuration_update",
+    },
+    {
+      provider: "openai",
+      id: "gpt-6-astra",
+      package: "@ai-sdk/openai",
+      option: "reasoningEffort",
+      mechanism: "configuration_update",
+    },
+    {
+      provider: "anthropic",
+      id: "claude-opus-5-5",
+      package: "@ai-sdk/anthropic",
+      option: "effort",
+      mechanism: "output_config",
+    },
+    {
+      provider: "anthropic",
+      id: "claude-opus-4-8",
+      package: "@ai-sdk/anthropic",
+      option: "effort",
+      mechanism: undefined,
+    },
+    {
+      provider: "openrouter",
+      id: "openai/gpt-6-sol",
+      package: "@ycoding-ai/ai/providers/openrouter",
+      option: "effort",
+      mechanism: "configuration_update",
+    },
+    {
+      provider: "openrouter",
+      id: "anthropic/claude-opus-5",
+      package: "@ycoding-ai/ai/providers/openrouter",
+      option: "effort",
+      mechanism: "configuration_update",
+    },
+  ])
+    it.effect(`keeps ${scenario.id} Session cache identity across durable effort changes and replay`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const events = yield* EventRuntime.Service
+        catalogModel = CatalogModel.Info.make({
+          id: CatalogModel.ID.make(scenario.id),
+          modelID: CatalogModel.ID.make(scenario.id),
+          providerID: Provider.ID.make(scenario.provider),
+          name: "Effort fixture",
+          package: scenario.package.startsWith("@ycoding-ai/") ? scenario.package : Provider.aisdk(scenario.package),
+          settings: { apiKey: "fixture-key" },
+          headers: {},
+          body: {},
+          variants: ["low", "high"].map((id) => ({
+            id: CatalogModel.VariantID.make(id),
+            settings: scenario.provider === "openrouter" ? { reasoning: { effort: id } } : { [scenario.option]: id },
+          })),
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          status: "active",
+          enabled: true,
+          limit: testLimits,
+          cost: [],
+          time: { released: 0 },
+        })
+        const select = (variant: "low" | "high" | undefined) =>
+          Effect.gen(function* () {
+            const ref = CatalogModel.Ref.make({
+              providerID: catalogModel!.providerID,
+              id: catalogModel!.id,
+              ...(variant === undefined ? {} : { variant: CatalogModel.VariantID.make(variant) }),
+            })
+            currentModel = yield* SessionRunnerModel.fromCatalogModel(
+              yield* SessionRunnerModel.withVariant(catalogModel!, ref.variant),
+            )
+            yield* events.publish(SessionEvent.ModelSelected, { sessionID, model: ref })
+          })
+        const bodies: Record<string, unknown>[] = []
+        const controls: Record<string, unknown>[] = []
+        for (const [index, variant] of (["low", "high", "high", "low"] as const).entries()) {
+          response = reply.textWithResponse(`Answer ${index}`, `effort-answer-${index}`, `resp_effort_${index}`)
+          yield* select(variant)
+          yield* admit(session, `Input ${index}`)
+          if (index === 1) {
+            streamGate = yield* Deferred.make<void>()
+            streamStarted = yield* Deferred.make<void>()
+            const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
+            yield* Deferred.await(streamStarted)
+            const context = yield* SessionContext.Service
+            const modelRequests = yield* SessionModelRequest.Service
+            const loaded = yield* context.load(yield* context.select(sessionID))
+            const selected = yield* SessionRunnerModel.withVariant(catalogModel!, CatalogModel.VariantID.make("low"))
+            const lowModel = yield* SessionRunnerModel.fromCatalogModel(selected)
+            const control = yield* modelRequests.prepare({
+              context: loaded,
+              step: 1,
+              disableContinuation: true,
+              model: {
+                ...loaded.model,
+                model: lowModel,
+                ref: { ...loaded.model.ref, variant: CatalogModel.VariantID.make("low") },
+              },
+            })
+            controls.push((yield* LLMClient.prepare(control.request)).body as Record<string, unknown>)
+            yield* Deferred.succeed(streamGate, undefined)
+            yield* Fiber.join(running)
+            streamGate = undefined
+            streamStarted = undefined
+          }
+          if (index !== 1) yield* session.resume(sessionID)
+          const request = requests.at(-1)!
+          const body = (yield* LLMClient.prepare(request)).body as Record<string, unknown>
+          bodies.push(body)
+          const serialized = JSON.stringify(body)
+          if (index > 0 && !body.previous_response_id) expect(serialized).toContain(scenario.mechanism ?? '"effort"')
+          const options = body[scenario.provider === "anthropic" ? "output_config" : "reasoning"]
+          expect(options).toMatchObject({ effort: scenario.mechanism === undefined ? variant : "low" })
+        }
+        expect(new Set(requests.map((request) => request.providerOptions?.openai?.promptCacheKey)).size).toBe(1)
+        const ledger = yield* SessionProviderRequest.Service
+        expect(new Set((yield* ledger.list(sessionID)).map((record) => record.promptCacheKey)).size).toBe(1)
+        const controlMessages = controls[0]![scenario.provider === "anthropic" ? "messages" : "input"] as Record<
+          string,
+          unknown
+        >[]
+        const changedMessages = bodies[1]![scenario.provider === "anthropic" ? "messages" : "input"] as Record<
+          string,
+          unknown
+        >[]
+        const change = changedMessages.findIndex(
+          (item) => item.type === "configuration_update" || "output_config" in item,
+        )
+        const prefixLength = change === -1 ? controlMessages.length : change
+        expect(JSON.stringify(changedMessages.slice(0, prefixLength))).toBe(
+          JSON.stringify(controlMessages.slice(0, prefixLength)),
+        )
+        if (scenario.mechanism !== undefined) {
+          const final = bodies[3]![scenario.provider === "anthropic" ? "messages" : "input"] as Record<
+            string,
+            unknown
+          >[]
+          const updates = final.filter((item) =>
+            scenario.provider === "anthropic"
+              ? item.role === "system" && "output_config" in item
+              : item.type === "configuration_update",
+          )
+          expect(updates).toHaveLength(2)
+          expect(updates[0]).toMatchObject(
+            scenario.provider === "anthropic"
+              ? { output_config: { effort: "high" } }
+              : { reasoning: { effort: "high" } },
+          )
+          expect(updates[1]).toMatchObject(
+            scenario.provider === "anthropic" ? { output_config: { effort: "low" } } : { reasoning: { effort: "low" } },
+          )
+        }
+        if (scenario.provider === "openai") {
+          expect(bodies[2]?.previous_response_id).toBe("resp_effort_1")
+          expect(JSON.stringify(bodies[2]?.input)).toContain("Input 2")
+          expect(JSON.stringify(bodies[2]?.input)).not.toContain("Input 1")
+        }
+        yield* replaySessionProjection(sessionID)
+        const context = yield* SessionContext.Service
+        const modelRequests = yield* SessionModelRequest.Service
+        const loaded = yield* context.load(yield* context.select(sessionID))
+        const reconstructed = yield* modelRequests.prepare({ context: loaded, step: 1, disableContinuation: true })
+        const replayed = yield* LLMClient.prepare(reconstructed.request)
+        expect(JSON.stringify(replayed.body)).toContain('"effort":"low"')
+        if (scenario.mechanism !== undefined) {
+          const body = replayed.body as Record<string, unknown>
+          const messages = body[scenario.provider === "anthropic" ? "messages" : "input"] as Record<string, unknown>[]
+          expect(
+            messages.filter((item) => item.type === "configuration_update" || "output_config" in item),
+          ).toHaveLength(2)
+        }
+        catalogModel = {
+          ...catalogModel!,
+          variants: catalogModel!.variants?.map((variant) =>
+            variant.id === "low"
+              ? {
+                  ...variant,
+                  settings:
+                    scenario.provider === "openrouter"
+                      ? { reasoning: { effort: "medium" } }
+                      : { [scenario.option]: "medium" },
+                }
+              : variant,
+          ),
+        }
+        yield* select("low")
+        yield* admit(session, "Use the edited catalog effort")
+        yield* session.resume(sessionID)
+        const edited = (yield* LLMClient.prepare(requests.at(-1)!)).body as Record<string, unknown>
+        const editedMessages = edited[scenario.provider === "anthropic" ? "messages" : "input"] as Record<
+          string,
+          unknown
+        >[]
+        const latest = editedMessages.findLast(
+          (item) => item.type === "configuration_update" || "output_config" in item,
+        )
+        const selectedEffort =
+          latest?.[scenario.provider === "anthropic" ? "output_config" : "reasoning"] ??
+          edited[scenario.provider === "anthropic" ? "output_config" : "reasoning"]
+        expect(selectedEffort).toMatchObject({ effort: "medium" })
+        if (scenario.id === "gpt-6-astra") {
+          yield* select(undefined)
+          yield* admit(session, "Use the provider default without guessing it")
+          yield* session.resume(sessionID)
+          const omitted = (yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(requests.at(-1)!)).body
+          expect(omitted.reasoning?.effort).toBeUndefined()
+          expect(omitted.input.some((item) => "type" in item && item.type === "configuration_update")).toBe(false)
+        }
+        yield* select("high")
+        compactionSummary = true
+        yield* session.compact({ sessionID })
+        yield* admit(session, "After compaction")
+        yield* session.resume(sessionID)
+        const compacted = (yield* LLMClient.prepare(requests.at(-1)!)).body as Record<string, unknown>
+        expect(compacted[scenario.provider === "anthropic" ? "output_config" : "reasoning"]).toMatchObject({
+          effort: "high",
+        })
+      }),
+    )
 
   it.effect("derives cache namespaces from final hooked system and tools", () =>
     Effect.gen(function* () {

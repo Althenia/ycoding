@@ -29,6 +29,7 @@ import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
 import { OpenAIImage } from "./utils/openai-image"
+import { mechanism, updateEffort } from "./utils/effort-update"
 
 const ADAPTER = "openai-responses"
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -117,6 +118,10 @@ const OpenAIResponsesMessagePhase = Schema.Literals(["commentary", "final_answer
 type OpenAIResponsesMessagePhase = Schema.Schema.Type<typeof OpenAIResponsesMessagePhase>
 
 const OpenAIResponsesInputItem = Schema.Union([
+  Schema.Struct({
+    type: Schema.tag("configuration_update"),
+    reasoning: Schema.Struct({ effort: Schema.String }),
+  }),
   // Plain string content is the default (backward-compatible with every
   // existing cassette); the array-of-blocks form is only produced when a
   // cache breakpoint must be marked (GPT-5.6+ with a `.cache` hint).
@@ -647,6 +652,17 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     previousResponseId === undefined ? 0 : Math.min(OpenAIOptions.continuationInputStart(request) ?? 0, request.messages.length)
 
   for (const message of pruneMessagesForServerCompaction(request).slice(continuationInputStart)) {
+    const updateProvider = updateEffort(message, "openrouter") === undefined ? "openai" : "openrouter"
+    const effortUpdate = updateEffort(message, updateProvider)
+    if (effortUpdate !== undefined) {
+      if (mechanism(request) !== updateProvider || message.role !== "system" || message.content.length !== 0)
+        return yield* ProviderShared.invalidRequest("OpenAI effort update requires a supported public GPT-6 Responses request")
+      const previous = input.at(-1)
+      if (previous && "type" in previous && previous.type === "configuration_update")
+        return yield* ProviderShared.invalidRequest("OpenAI effort updates cannot be adjacent")
+      input.push({ type: "configuration_update", reasoning: { effort: effortUpdate } })
+      continue
+    }
     if (ProviderShared.isRecord(message.native?.openai) && message.native.openai.compactionTrigger === true) {
       if (message.role !== "user" || message.content.length !== 0 ||
         !["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id))

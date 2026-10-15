@@ -26,6 +26,7 @@ import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { ANTHROPIC_EFFORT_BETA, mechanism, openRouterEndpoint, updateEffort } from "./utils/effort-update"
 
 const ADAPTER = "anthropic-messages"
 export const DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
@@ -139,7 +140,10 @@ type AnthropicToolResultBlock = Schema.Schema.Type<typeof AnthropicToolResultBlo
 const AnthropicMessage = Schema.Union([
   Schema.Struct({ role: Schema.Literal("user"), content: Schema.Array(AnthropicUserBlock) }),
   Schema.Struct({ role: Schema.Literal("assistant"), content: Schema.Array(AnthropicAssistantBlock) }),
-  Schema.Struct({ role: Schema.Literal("system"), content: Schema.Array(AnthropicTextBlock) }),
+  Schema.Struct({
+    role: Schema.Literal("system"), content: Schema.Array(AnthropicTextBlock),
+    output_config: Schema.optional(Schema.Struct({ effort: Schema.String })),
+  }),
 ]).pipe(Schema.toTaggedUnion("role"))
 type AnthropicMessage = Schema.Schema.Type<typeof AnthropicMessage>
 
@@ -449,6 +453,16 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
   const messages: AnthropicMessage[] = []
 
   for (const [index, message] of request.messages.entries()) {
+    const effortUpdate = updateEffort(message, "anthropic")
+    if (effortUpdate !== undefined) {
+      if (mechanism(request) !== "anthropic" || message.role !== "system" || message.content.length !== 0 ||
+        !(openRouterEndpoint(request.model.route.endpoint.baseURL ?? "")
+          ? ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+          : ["low", "medium", "high", "xhigh", "max"]).includes(effortUpdate))
+        return yield* invalid("Anthropic effort update requires a supported Messages endpoint, model and thinking mode")
+      messages.push({ role: "system", content: [], output_config: { effort: effortUpdate } })
+      continue
+    }
     if (message.role === "system") {
       if (splitsLocalToolResults(request.messages, index))
         return yield* invalid("Anthropic Messages system updates cannot split a local tool call from its tool result")
@@ -989,7 +1003,12 @@ export const route = Route.make({
   endpoint: Endpoint.path(PATH, { baseURL: DEFAULT_BASE_URL }),
   auth: Auth.none,
   framing: Framing.sse,
-  headers: () => ({ "anthropic-version": "2023-06-01" }),
+  headers: ({ request }) => ({
+    "anthropic-version": "2023-06-01",
+    ...(mechanism(request) === "anthropic" && !openRouterEndpoint(request.model.route.endpoint.baseURL ?? "")
+      ? { "anthropic-beta": ANTHROPIC_EFFORT_BETA }
+      : {}),
+  }),
 })
 
 export * as AnthropicMessages from "./anthropic-messages"

@@ -35,6 +35,7 @@ import { Hash } from "../util/hash"
 import { SessionMessage } from "./message"
 import { SessionProviderState } from "./provider-state"
 import { AttachmentStore } from "../attachment-store"
+import { SessionEffort } from "./effort"
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -299,25 +300,32 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           now,
           { promptCacheKey: baselineKey, systemDigest, toolDigest },
         )
-        const baseRequest = LLM.request({
-          model,
-          http: {
-            headers: SessionModelHeaders.make(session, {
-              ...options,
-              providerID: resolved.ref.providerID,
-              accountIdentityDigest: resolved.accountIdentityDigest,
-            }),
-          },
-          providerOptions: mergeProviderOptions(
-            cache.providerOptions,
-            directOpenAIResponses ? { openai: { store: responsesState === "stored" } } : undefined,
-          ),
-          cache: cache.cache,
-          system: contextEvent.system,
-          messages: contextEvent.messages,
-          tools: hookedTools,
-          toolChoice: toolsDisabled ? "none" : undefined,
+        const effortRequest = yield* SessionEffort.prepare({
+          db,
+          catalog,
+          context: { ...input.context, model: resolved },
+          namespace: baselineKey,
+          request: LLM.request({
+            model,
+            http: {
+              headers: SessionModelHeaders.make(session, {
+                ...options,
+                providerID: resolved.ref.providerID,
+                accountIdentityDigest: resolved.accountIdentityDigest,
+              }),
+            },
+            providerOptions: mergeProviderOptions(
+              cache.providerOptions,
+              directOpenAIResponses ? { openai: { store: responsesState === "stored" } } : undefined,
+            ),
+            cache: cache.cache,
+            system: contextEvent.system,
+            messages: contextEvent.messages,
+            tools: hookedTools,
+            toolChoice: toolsDisabled ? "none" : undefined,
+          }),
         })
+        const baseRequest = effortRequest.request
         const effectiveRequest = LLMRequest.update(baseRequest, {
           generation: mergeGenerationOptions(
             model.route.defaults.generation,
@@ -342,9 +350,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const authority = directOpenAIResponses
           ? yield* SessionContinuation.captureAuthority(db, session.id).pipe(Effect.orDie)
           : { generation: 0, contextRevision: 0 }
-        const volatileStart = contextEvent.messages.findLastIndex((message) => message.volatile !== true) + 1
-        const stableMessages = contextEvent.messages.slice(0, volatileStart)
-        const volatileMessages = contextEvent.messages.slice(volatileStart)
+        const volatileStart = baseRequest.messages.findLastIndex((message) => message.volatile !== true) + 1
+        const stableMessages = baseRequest.messages.slice(0, volatileStart)
+        const volatileMessages = baseRequest.messages.slice(volatileStart)
         const representedMessageCount = input.context.messages.length
         const representedThroughMessageID = input.context.messages.at(-1)?.id
         const continuationFingerprint: SessionContinuation.Fingerprint = {
@@ -399,11 +407,13 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 completeMessageIDs: input.context.messages.map((message) => message.id),
               })
         const continuationInputStart = state
-          ? loweredHistory
-              .slice(0, state.representedMessageCount)
-              .reduce((count, messages) => count + messages.length, 0) + 1
+          ? effortRequest.inputStart(
+              loweredHistory
+                .slice(0, state.representedMessageCount)
+                .reduce((count, messages) => count + messages.length, 0) + 1,
+            )
           : 0
-        const continuedMessages = state ? stableMessages : contextEvent.messages
+        const continuedMessages = state ? stableMessages : baseRequest.messages
         const transportRequest = !OpenAICodex.isWebSocketRoute(model.route.id)
           ? baseRequest
           : LLMRequest.update(baseRequest, {

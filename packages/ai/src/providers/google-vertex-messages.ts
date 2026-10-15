@@ -8,6 +8,7 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import { ProviderID, type ModelID, type ProviderOptions } from "../schema"
 import { GoogleVertexShared } from "./google-vertex-shared"
+import { ANTHROPIC_EFFORT_BETA, mechanism } from "../protocols/utils/effort-update"
 
 const VERSION = "vertex-2023-10-16" as const
 
@@ -54,6 +55,9 @@ const route = Route.make({
   endpoint: Endpoint.path(({ request }) => `/${request.model.id}:streamRawPredict`),
   auth: Auth.none,
   framing: Framing.sse,
+  headers: ({ request }): Record<string, string> => mechanism(request) === "anthropic"
+    ? { "anthropic-beta": ANTHROPIC_EFFORT_BETA }
+    : {},
 })
 
 export const routes = [route]

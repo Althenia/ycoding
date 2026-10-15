@@ -7,8 +7,137 @@ import { it } from "../lib/effect"
 import { fixedResponse } from "../lib/http"
 import { sseEvents } from "../lib/sse"
 import { applyCachePolicy } from "../../src/cache-policy"
+import { AnthropicCompatible, OpenAICompatible, OpenAICompatibleResponses } from "../../src/providers"
+import { HttpClientRequest } from "effect/unstable/http"
+import { dynamicResponse } from "../lib/http"
 
 describe("OpenRouter", () => {
+  it.effect("preserves an omitted OpenRouter baseline when current model defaults select an explicit effort", () =>
+    Effect.gen(function* () {
+      const first = OpenRouter.configure({ apiKey: "fixture" }).model("openai/gpt-6-sol")
+      const selected = OpenRouter.configure({
+        apiKey: "fixture",
+        providerOptions: { openrouter: { reasoning: { effort: "high" } } },
+      }).model("openai/gpt-6-sol")
+      const prefix = [Message.user("First input"), Message.assistant("First answer")]
+      const before = yield* LLMClient.prepare<OpenRouter.OpenRouterBody>(
+        LLM.request({ model: first, cache: "none", messages: prefix }),
+      )
+      const changedRequest = LLM.request({
+          model: selected,
+          cache: "none",
+          providerOptions: { openrouter: { reasoning: { effort: null } }, openai: { reasoningEffort: null } },
+          messages: [
+            ...prefix,
+            Message.make({ role: "system", content: [], native: { openrouter: { effort: "high" } } }),
+            Message.user("Next input"),
+          ],
+        })
+      const changed = yield* LLMClient.prepare<OpenRouter.OpenRouterBody>(changedRequest)
+      expect(changed.body.reasoning).toEqual(before.body.reasoning)
+      const transport = yield* OpenRouter.route.prepareTransport(changed.body, changedRequest)
+      const request = yield* HttpClientRequest.toWeb(transport.request).pipe(Effect.orDie)
+      const wire = (yield* Effect.promise(() => request.json())) as Record<string, unknown>
+      expect(wire.reasoning).not.toHaveProperty("effort")
+      expect(changed.body.input.at(-2)).toEqual({ type: "configuration_update", reasoning: { effort: "high" } })
+    }),
+  )
+
+  for (const id of ["openai/gpt-6-sol", "anthropic/claude-fable-5.1", "anthropic/claude-opus-5"]) {
+    it.effect(`preserves effort prefixes on every native OpenRouter API shape for ${id}`, () =>
+      Effect.gen(function* () {
+        const baseURL = "https://openrouter.ai/api/v1"
+        const models = [
+          { model: OpenRouter.configure({ apiKey: "fixture" }).model(id), provider: "openrouter", shape: "responses" },
+          {
+            model: OpenAICompatibleResponses.configure({ apiKey: "fixture", baseURL }).model(id),
+            provider: "openai",
+            shape: "responses",
+          },
+          {
+            model: OpenAICompatible.configure({ apiKey: "fixture", baseURL }).model(id),
+            provider: "openai",
+            shape: "chat",
+          },
+          {
+            model: AnthropicCompatible.configure({ apiKey: "fixture", baseURL }).model(id),
+            provider: "anthropic",
+            shape: "messages",
+          },
+        ]
+        for (const scenario of models) {
+          const key = scenario.provider === "openai" ? "reasoningEffort" : "effort"
+          const options = scenario.provider === "openrouter" ? { reasoning: { effort: "low" } } : { [key]: "low" }
+          const prefix = [Message.user("First input"), Message.assistant("First answer")]
+          const before = yield* LLMClient.prepare(
+            LLM.request({
+              model: scenario.model,
+              cache: "none",
+              messages: prefix,
+              providerOptions: { [scenario.provider]: options },
+            }),
+          )
+          const changed = LLM.request({
+            model: scenario.model,
+            cache: "none",
+            messages: [
+              ...prefix,
+              Message.make({ role: "system", content: [], native: { [scenario.provider]: { [key]: "high" } } }),
+              Message.user("Next input"),
+            ],
+            providerOptions: { [scenario.provider]: options },
+          })
+          expect(JSON.stringify((yield* LLMClient.prepare(changed)).body)).toContain(
+            scenario.shape === "messages" ? '"output_config":{"effort":"high"}' : '"configuration_update"',
+          )
+          yield* LLMClient.generate(changed).pipe(
+            Effect.provide(
+              dynamicResponse((input) =>
+                Effect.gen(function* () {
+                  const request = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
+                  const wire = yield* Effect.promise(() => request.json())
+                  expect(new URL(request.url).origin).toBe("https://openrouter.ai")
+                  const field = scenario.shape === "responses" ? "input" : "messages"
+                  const old = (before.body as Record<string, unknown>)[field] as unknown[]
+                  const body = wire as Record<string, unknown>
+                  const messages = body[field] as unknown[]
+                  expect(JSON.stringify(messages.slice(0, old.length))).toBe(JSON.stringify(old))
+                  expect(messages.at(-2)).toEqual(
+                    scenario.shape === "responses"
+                      ? { type: "configuration_update", reasoning: { effort: "high" } }
+                      : scenario.shape === "chat"
+                        ? { role: "system", content: "", configuration_update: { reasoning: { effort: "high" } } }
+                        : { role: "system", content: [], output_config: { effort: "high" } },
+                  )
+                  if (scenario.shape === "chat") expect(body.reasoning_effort).toBe("low")
+                  if (scenario.shape === "responses") expect(body.reasoning).toMatchObject({ effort: "low" })
+                  if (scenario.shape === "messages") {
+                    expect(body.output_config).toEqual({ effort: "low" })
+                    expect(request.headers.get("anthropic-beta")).toBeNull()
+                  }
+                  return input.respond(
+                    scenario.shape === "messages"
+                      ? sseEvents(
+                          { type: "message_delta", delta: { stop_reason: "end_turn" } },
+                          { type: "message_stop" },
+                        )
+                      : scenario.shape === "chat"
+                        ? sseEvents({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
+                        : sseEvents({
+                            type: "response.completed",
+                            response: { id: "resp_effort", status: "completed", output: [] },
+                          }),
+                    { headers: { "content-type": "text/event-stream" } },
+                  )
+                }),
+              ),
+            ),
+          )
+        }
+      }),
+    )
+  }
+
   it.effect("prepares OpenRouter models through the Responses route", () =>
     Effect.gen(function* () {
       const model = OpenRouter.configure({ apiKey: "test-key" }).model("openai/gpt-4o-mini")

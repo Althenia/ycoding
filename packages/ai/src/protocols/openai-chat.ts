@@ -23,6 +23,7 @@ import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
+import { mechanism, openRouterEndpoint, updateEffort } from "./utils/effort-update"
 
 const ADAPTER = "openai-chat"
 const IMAGE_MIMES = new Set<string>(ProviderShared.IMAGE_MIMES)
@@ -91,6 +92,7 @@ const OpenAIChatMessage = Schema.Union([
   Schema.Struct({
     role: Schema.Literal("system"),
     content: Schema.Union([Schema.String, Schema.Array(OpenAIChatSystemText)]),
+    configuration_update: Schema.optional(Schema.Struct({ reasoning: Schema.Struct({ effort: Schema.String }) })),
   }),
   Schema.Struct({
     role: Schema.Literal("user"),
@@ -471,6 +473,14 @@ const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: 
     messages.push({ role: "user", content: pendingImages.splice(0) })
   }
   for (const message of request.messages) {
+    const effortUpdate = updateEffort(message, "openai")
+    if (effortUpdate !== undefined) {
+      if (mechanism(request) !== "openai" || !openRouterEndpoint(request.model.route.endpoint.baseURL ?? "") || message.role !== "system" || message.content.length !== 0)
+        return yield* ProviderShared.invalidRequest("OpenAI Chat effort update requires a supported OpenRouter endpoint and model")
+      flushImages()
+      messages.push({ role: "system", content: "", configuration_update: { reasoning: { effort: effortUpdate } } })
+      continue
+    }
     if (message.role === "system") {
       if (
         request.model.route.id === "github-copilot-chat" &&

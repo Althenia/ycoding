@@ -1,5 +1,5 @@
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
-import { CacheHint, LLM } from "@ycoding-ai/ai"
+import { CacheHint, LLM, Message } from "@ycoding-ai/ai"
 import { LLMClient } from "@ycoding-ai/ai/route"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -13,7 +13,7 @@ import type { ClaudeCodeCredentialSource, ClaudeCodeCredentials } from "@ycoding
 import { Provider } from "@ycoding-ai/core/provider"
 import { Money } from "@ycoding-ai/schema/money"
 import { expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -543,6 +543,73 @@ it.effect("refreshes a 401 only in the selected managed profile", () =>
     expect(seen).toEqual(["Bearer stale-a", "Bearer fresh-a", "Bearer secret-b"])
     expect(stored.get(profileA)?.accessToken).toBe("fresh-a")
     expect(stored.get(profileB)?.accessToken).toBe("secret-b")
+  }),
+)
+
+it.effect("keeps Claude subscription effort changes top-level on the actual SDK wire", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    const credentials = yield* Credential.Service
+    const wires: Array<{ headers: Headers; body: Record<string, unknown> }> = []
+    const request = Object.assign(
+      async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const web = input instanceof Request ? new Request(input, init) : new Request(String(input), init)
+        expect(`${new URL(web.url).origin}${new URL(web.url).pathname}`).toBe("https://api.anthropic.com/v1/messages")
+        const body = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(await web.json())
+        wires.push({ headers: web.headers, body })
+        return Response.json({
+          id: "msg_effort",
+          type: "message",
+          role: "assistant",
+          model: body.model,
+          content: [{ type: "text", text: "Response" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    yield* credentials.create({
+      integrationID: Integration.ID.make("anthropic"),
+      value: Credential.OAuth.make({
+        type: "oauth",
+        methodID: claudeCodeMethodID,
+        access: profileA,
+        refresh: "",
+        expires: Number.MAX_SAFE_INTEGER,
+        metadata: { authKind: "claude-code", source: profileA, managed: true },
+      }),
+    })
+    yield* addPlugin(makeAnthropicPlugin({ credentialSource: source([account(profileA, "secret-a")]), fetch: request }))
+    for (const id of ["claude-opus-5-5", "claude-haiku-5-5"]) {
+      for (const effort of ["low", "high"]) {
+        const runtime = CatalogModel.Info.make({
+          ...CatalogModel.Info.empty(Provider.ID.anthropic, CatalogModel.ID.make(id)),
+          modelID: CatalogModel.ID.make(id),
+          package: Provider.aisdk("@ai-sdk/anthropic"),
+          settings: { apiKey: "claude-code", claudeCodeSource: profileA, effort, thinking: { type: "adaptive" } },
+          limit: { context: 1_000_000, output: 128_000 },
+        })
+        const model = yield* aisdk.model(runtime)
+        const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+          LLM.request({
+            model,
+            system: "Stable",
+            messages: [Message.user("First input"), Message.assistant("First answer"), Message.user("Next input")],
+          }),
+        )
+        const language = yield* aisdk.language(runtime)
+        yield* Effect.tryPromise(() => language.doGenerate(prepared.body))
+        const wire = wires.at(-1)!
+        expect(wire.headers.get("authorization")).toBe("Bearer secret-a")
+        expect(wire.headers.get("anthropic-beta")).not.toContain("mid-conversation-output-config-2026-07-01")
+        expect(wire.body.output_config).toEqual(id.includes("haiku") ? undefined : { effort })
+        expect(JSON.stringify(wire.body.messages)).not.toContain("output_config")
+        expect(wire.body.thinking).toEqual({ type: "adaptive" })
+      }
+    }
+    expect(wires).toHaveLength(4)
   }),
 )
 

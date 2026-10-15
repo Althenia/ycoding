@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { LLMRequest, TextVerbosity as TextVerbosityValue } from "../../schema"
 import { ReasoningEfforts, TextVerbosity } from "../../schema"
 import { isRecord } from "../shared"
+import { mechanism } from "./effort-update"
 
 export const OpenAIReasoningEfforts = ReasoningEfforts
 export type OpenAIReasoningEffort = string
@@ -270,6 +271,7 @@ export const resolvedReasoningContext = (request: LLMRequest) => {
 
 export const resolvedContextManagement = (request: LLMRequest) => {
   if (!supportsDirectGpt56(request.model.route.id, request.model.id)) return undefined
+  if (mechanism(request) === "openai") return contextManagement(request)
   return contextManagement(request) ?? defaultContextManagement(request.model.route.id, request.model.id)
 }
 

@@ -81,13 +81,18 @@ const bodyOptions = (input: unknown) => {
       : typeof (openrouter as Record<string, unknown>).session_id === "string"
         ? ((openrouter as Record<string, unknown>).session_id as string)
         : undefined
+  const reasoning = isRecord(openrouter.reasoning)
+    ? Object.fromEntries(
+        Object.entries(openrouter.reasoning).filter(([key, value]) => key !== "effort" || value !== null),
+      )
+    : undefined
   return {
     ...(openrouter.usage === true
       ? { usage: { include: true } }
       : isRecord(openrouter.usage)
         ? { usage: openrouter.usage }
         : {}),
-    ...(isRecord(openrouter.reasoning) ? { reasoning: openrouter.reasoning } : {}),
+    ...(reasoning && Object.keys(reasoning).length > 0 ? { reasoning } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(sessionID ? { session_id: sessionID } : {}),
   }

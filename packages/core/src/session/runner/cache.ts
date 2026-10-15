@@ -111,7 +111,6 @@ export const promptCacheNamespace = (
       workspaceID: input.workspaceID,
       providerID: input.providerID,
       modelID: input.modelID,
-      variant: input.variant,
       accountIdentityDigest: input.accountIdentityDigest,
       policyRevision: input.policyRevision,
       permissions: input.permissions.map((rule) => ({

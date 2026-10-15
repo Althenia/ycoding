@@ -50,6 +50,84 @@ const expectToolResult = (body: AnthropicMessages.AnthropicMessagesBody): Anthro
 }
 
 describe("Anthropic Messages route", () => {
+  it.effect("serializes supported per-message effort with the required beta and unchanged prefix", () =>
+    Effect.gen(function* () {
+      const selected = AnthropicMessages.route.model({ id: "claude-opus-5-5" })
+      const prefix = [Message.user("First input"), Message.assistant("First answer")]
+      const before = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model: selected,
+          system: "Stable",
+          cache: "none",
+          messages: prefix,
+          providerOptions: { anthropic: { effort: "high" } },
+        }),
+      )
+      const changedRequest = LLM.request({
+        model: selected,
+        system: "Stable",
+        cache: "none",
+        messages: [
+          ...prefix,
+          Message.make({ role: "system", content: [], native: { anthropic: { effort: "low" } } }),
+          Message.user("Next input"),
+        ],
+        providerOptions: { anthropic: { effort: "high" } },
+        http: { headers: { "anthropic-beta": "existing-beta" } },
+      })
+      const changed = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(changedRequest)
+      expect(JSON.stringify(changed.body.messages.slice(0, before.body.messages.length))).toBe(
+        JSON.stringify(before.body.messages),
+      )
+      expect(changed.body.system).toEqual(before.body.system)
+      expect(changed.body.messages.at(-2)).toEqual({ role: "system", content: [], output_config: { effort: "low" } })
+      expect(changed.body.output_config).toEqual({ effort: "high" })
+      for (const name of ["anthropic-beta", "Anthropic-Beta", "ANTHROPIC-BETA"]) {
+        const transport = yield* AnthropicMessages.route.prepareTransport(
+          changed.body,
+          LLM.updateRequest(changedRequest, {
+            http: { headers: { [name]: "existing-beta" } },
+          }),
+        )
+        expect(transport.request.headers["anthropic-beta"]).toBe(
+          "existing-beta,mid-conversation-output-config-2026-07-01",
+        )
+      }
+      const transport = yield* AnthropicMessages.route.prepareTransport(changed.body, changedRequest)
+      expect(transport.request.headers["anthropic-beta"]).toBe(
+        "existing-beta,mid-conversation-output-config-2026-07-01",
+      )
+      expect(transport.request.body._tag).toBe("Uint8Array")
+      if (transport.request.body._tag === "Uint8Array") {
+        const wire = JSON.parse(new TextDecoder().decode(transport.request.body.body))
+        expect(wire.messages.at(-2)).toEqual({ role: "system", content: [], output_config: { effort: "low" } })
+      }
+    }),
+  )
+
+  it.effect("rejects per-message effort on unsupported models and unverified compatible endpoints", () =>
+    Effect.gen(function* () {
+      for (const selected of [
+        AnthropicMessages.route.model({ id: "claude-opus-4-8" }),
+        AnthropicMessages.route.model({ id: "claude-fable-5" }),
+        AnthropicMessages.route
+          .with({ endpoint: { baseURL: "https://gateway.example/v1" } })
+          .model({ id: "claude-opus-5-5" }),
+      ]) {
+        const error = yield* LLMClient.prepare(
+          LLM.request({
+            model: selected,
+            messages: [
+              Message.user("Input"),
+              Message.make({ role: "system", content: [], native: { anthropic: { effort: "low" } } }),
+            ],
+          }),
+        ).pipe(Effect.flip)
+        expect(error.message).toContain("effort update")
+      }
+    }),
+  )
+
   it.effect("prepares Anthropic Messages target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(request)

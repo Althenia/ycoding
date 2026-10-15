@@ -9,6 +9,8 @@ import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { ExecuteTool } from "@ycoding-ai/core/tool/execute"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import { Effect, Schema } from "effect"
+import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
+import { Session } from "@ycoding-ai/core/session"
 
 const base = {
   projectID: "project",
@@ -234,7 +236,7 @@ test("isolates every cache sharing dimension", () => {
     workspaceID: "other-workspace",
     providerID: "anthropic",
     modelID: "claude",
-    variant: "reasoning",
+    accountIdentityDigest: "a".repeat(64),
     // Any value other than the live revision — the point is that a revision bump
     // rotates the namespace, so this must not be pinned to a literal that a
     // future bump could collide with.
@@ -248,9 +250,94 @@ test("isolates every cache sharing dimension", () => {
   expect(SessionRunnerCache.promptCacheNamespace({ ...base, workspaceID: undefined })).not.toBe(baseline)
 })
 
-test("hashes an absent variant as absent, never as a named variant", () => {
-  expect(SessionRunnerCache.promptCacheNamespace(base)).not.toBe(
+test("variant selection is not a cache namespace input", () => {
+  expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
     SessionRunnerCache.promptCacheNamespace({ ...base, variant: "default" }),
+  )
+})
+
+test("every route preserves namespace, generation and wire affinity across variant-only changes", async () => {
+  const routes = [
+    "openai-chat",
+    "openai-responses",
+    "openai-responses-websocket",
+    "openai-codex-responses",
+    "openai-codex-websocket-responses",
+    "github-copilot-chat",
+    "github-copilot-responses",
+    "openai-compatible-chat",
+    "openai-compatible-responses",
+    "openrouter",
+    "openrouter-responses",
+    "anthropic-messages",
+    "google-vertex-messages",
+    "google-vertex-gemini",
+    "google-vertex-chat",
+    "google-vertex-responses",
+    "gemini",
+    "bedrock-converse",
+    "runpod-ollama",
+    "runpod-vllm",
+    "azure-openai-responses",
+    "azure-openai-chat",
+    "cloudflare-ai-gateway",
+    "cloudflare-workers-ai",
+    "openai-images",
+    "google-images",
+    "xai-images",
+    "zai-images",
+    "ai-sdk:@ai-sdk/anthropic",
+    "ai-sdk:@ai-sdk/google-vertex/anthropic",
+    "ai-sdk:@ai-sdk/google",
+    "ai-sdk:@ai-sdk/google-vertex",
+    "ai-sdk:@ai-sdk/amazon-bedrock",
+    "ai-sdk:@ai-sdk/amazon-bedrock/mantle",
+    "ai-sdk:@ai-sdk/azure",
+    "ai-sdk:@ai-sdk/github-copilot",
+    "ai-sdk:@openrouter/ai-sdk-provider",
+    "ai-sdk:@ai-sdk/gateway",
+    "ai-sdk:@jerome-benoit/sap-ai-provider-v2",
+    "ai-sdk:@ai-sdk/xai",
+    "ai-sdk:@ai-sdk/mistral",
+    "ai-sdk:@ai-sdk/groq",
+    "ai-sdk:@ai-sdk/cerebras",
+    "ai-sdk:@ai-sdk/deepinfra",
+    "ai-sdk:@ai-sdk/togetherai",
+    "ai-sdk:venice-ai-sdk-provider",
+    "ai-sdk:ai-gateway-provider",
+    "ai-sdk:cursor-opencode-provider",
+    "unknown-custom-route",
+    "ai-sdk:@ai-sdk/alibaba",
+    "ai-sdk:@ai-sdk/cohere",
+    "ai-sdk:@ai-sdk/deepseek",
+    "ai-sdk:@ai-sdk/fireworks",
+    "ai-sdk:@ai-sdk/moonshotai",
+    "ai-sdk:@ai-sdk/perplexity",
+    "ai-sdk:@ai-sdk/replicate",
+    "ai-sdk:@ai-sdk/cloudflare",
+  ]
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* SessionCacheRuntime.Service
+      for (const routeID of routes) {
+        const values = yield* Effect.forEach([undefined, "low", "high", "fast", "custom"], (variant) =>
+          Effect.gen(function* () {
+            const input = { ...base, routeID, sessionID: "ses_variant_identity", variant }
+            const baselineKey = SessionRunnerCache.promptCacheNamespace(input)
+            const generation = yield* runtime.generation({
+              ...input,
+              sessionID: Session.ID.make(input.sessionID),
+              model: { providerID: base.providerID, id: base.modelID, variant },
+              systemDigest: SessionRunnerCache.systemDigest(base.system),
+              toolDigest: SessionRunnerCache.toolDigest(base.tools),
+              baselineKey,
+            })
+            return { generation, cache: SessionRunnerCache.providerOptions({ ...input, generation }) }
+          }),
+        )
+        for (const value of values) expect(value).toEqual(values[0])
+      }
+    }).pipe(Effect.provide(SessionCacheRuntime.layer)),
   )
 })
 
@@ -286,7 +373,6 @@ test("shares subagent prefixes only when every model-visible dimension is equal"
   const mismatches = [
     { providerID: "other-provider" },
     { modelID: "other-model" },
-    { variant: "high" },
     { projectID: "other-project" },
     { directory: "/other" },
     { workspaceID: "other-workspace" },

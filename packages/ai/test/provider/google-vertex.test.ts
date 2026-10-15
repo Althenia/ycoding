@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { LLM } from "../../src"
+import { LLM, Message } from "../../src"
 import { GoogleVertex, GoogleVertexChat, GoogleVertexMessages, GoogleVertexResponses } from "../../src/providers"
 import { LLMClient } from "../../src/route"
 import { it } from "../lib/effect"
@@ -10,6 +10,54 @@ import { deltaChunk, finishChunk } from "../lib/openai-chunks"
 import { sseEvents } from "../lib/sse"
 
 describe("Google Vertex providers", () => {
+  it.effect("sends Vertex effort directives with its beta while preserving top-level effort", () =>
+    Effect.gen(function* () {
+      yield* LLMClient.generate(
+        LLM.request({
+          model: GoogleVertexMessages.configure({
+            accessToken: "vertex-token",
+            project: "vertex-project",
+            location: "global",
+          }).model("claude-opus-5-5"),
+          providerOptions: { anthropic: { effort: "high" } },
+          messages: [
+            Message.user("First input"),
+            Message.assistant("First answer"),
+            Message.make({ role: "system", content: [], native: { anthropic: { effort: "low" } } }),
+            Message.user("Next input"),
+          ],
+        }),
+      ).pipe(
+        Effect.provide(
+          dynamicResponse((input) =>
+            Effect.gen(function* () {
+              const request = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
+              expect(request.url).toContain("aiplatform.googleapis.com")
+              expect(request.headers.get("anthropic-beta")).toContain("mid-conversation-output-config-2026-07-01")
+              expect(yield* Effect.promise(() => request.json())).toMatchObject({
+                anthropic_version: "vertex-2023-10-16",
+                output_config: { effort: "high" },
+                messages: [
+                  { role: "user", content: [{ type: "text", text: "First input" }] },
+                  { role: "assistant", content: [{ type: "text", text: "First answer" }] },
+                  { role: "system", content: [], output_config: { effort: "low" } },
+                  { role: "user", content: [{ type: "text", text: "Next input" }] },
+                ],
+              })
+              return input.respond(
+                sseEvents(
+                  { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } },
+                  { type: "message_stop" },
+                ),
+                { headers: { "content-type": "text/event-stream" } },
+              )
+            }),
+          ),
+        ),
+      )
+    }),
+  )
+
   it.effect("sends Gemini requests to the global Vertex endpoint", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(

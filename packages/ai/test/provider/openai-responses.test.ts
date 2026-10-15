@@ -45,6 +45,81 @@ const expectToolOutput = (body: OpenAIResponses.OpenAIResponsesBody): OpenAITool
 }
 
 describe("OpenAI Responses route", () => {
+  it.effect("serializes GPT-6 effort updates in place without rewriting prior input", () =>
+    Effect.gen(function* () {
+      const selected = OpenAI.configure({ apiKey: "fixture-key" }).responses("gpt-6.1-sol")
+      const prefix = [Message.user("First input"), Message.assistant("First answer")]
+      const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: selected,
+          system: "Stable",
+          messages: prefix,
+          providerOptions: { openai: { reasoningEffort: "low" } },
+        }),
+      )
+      const changedRequest = LLM.request({
+        model: selected,
+        system: "Stable",
+        messages: [
+          ...prefix,
+          Message.make({ role: "system", content: [], native: { openai: { reasoningEffort: "high" } } }),
+          Message.user("Next input"),
+        ],
+        providerOptions: { openai: { reasoningEffort: "low" } },
+      })
+      const changed = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(changedRequest)
+      expect(JSON.stringify(changed.body.input.slice(0, before.body.input.length))).toBe(
+        JSON.stringify(before.body.input),
+      )
+      expect(changed.body.input.at(-2)).toEqual({ type: "configuration_update", reasoning: { effort: "high" } })
+      expect(changed.body.reasoning?.effort).toBe("low")
+      expect(changed.body.context_management).toBeUndefined()
+      const transport = yield* OpenAIResponses.route.prepareTransport(changed.body, changedRequest)
+      const wire = yield* HttpClientRequest.toWeb(transport.request).pipe(Effect.orDie)
+      expect(wire.url).toBe("https://api.openai.com/v1/responses")
+      expect(yield* Effect.promise(() => wire.json())).toMatchObject({
+        reasoning: { effort: "low" },
+        input: [
+          { role: "system", content: "Stable" },
+          { role: "user", content: [{ type: "input_text", text: "First input" }] },
+          { role: "assistant", content: [{ type: "output_text", text: "First answer" }] },
+          { type: "configuration_update", reasoning: { effort: "high" } },
+          { role: "user", content: [{ type: "input_text", text: "Next input" }] },
+        ],
+      })
+      const socket = yield* OpenAIResponses.webSocketRoute.prepareTransport(changed.body, changedRequest)
+      expect(socket.url).toBe("wss://api.openai.com/v1/responses")
+      expect(JSON.parse(socket.encodedMessage)).toMatchObject({ type: "response.create", reasoning: { effort: "low" } })
+      expect(JSON.parse(socket.encodedMessage).input.at(-2)).toEqual({
+        type: "configuration_update",
+        reasoning: { effort: "high" },
+      })
+    }),
+  )
+
+  it.effect("rejects effort-update items on unsupported models and subscription or gateway endpoints", () =>
+    Effect.gen(function* () {
+      for (const selected of [
+        OpenAI.configure({ apiKey: "fixture-key" }).responses("gpt-5.6"),
+        OpenAI.configure({ apiKey: "fixture-key", baseURL: "https://gateway.example/v1" }).responses("gpt-6.1-sol"),
+        OpenAIResponses.route
+          .with({ id: "openai-codex-responses", endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" } })
+          .model({ id: "gpt-6.1-sol" }),
+      ]) {
+        const error = yield* LLMClient.prepare(
+          LLM.request({
+            model: selected,
+            messages: [
+              Message.make({ role: "system", content: [], native: { openai: { reasoningEffort: "high" } } }),
+              Message.user("Input"),
+            ],
+          }),
+        ).pipe(Effect.flip)
+        expect(error.message).toContain("effort update")
+      }
+    }),
+  )
+
   it.effect("prepares OpenAI Responses target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(request)

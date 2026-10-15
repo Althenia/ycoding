@@ -95,14 +95,19 @@ export const jsonRequestParts = <Body>(input: JsonRequestInput<Body>) =>
       input.request.http?.query,
     )
     const body = yield* bodyWithOverlay(input.body, input.request, input.encodeBody)
+    const generatedHeaders = input.headers?.({ request: input.request })
+    const beta = [...Object.entries(input.request.http?.headers ?? {}), ...Object.entries(generatedHeaders ?? {})]
+      .filter(([name]) => name.toLowerCase() === "anthropic-beta")
+      .flatMap(([, value]) => value.split(",").map((item) => item.trim()).filter(Boolean))
     const headers = yield* Auth.toEffect(input.auth)({
       request: input.request,
       method: "POST",
       url,
       body: body.bodyText,
       headers: Headers.fromInput({
-        ...input.headers?.({ request: input.request }),
-        ...input.request.http?.headers,
+        ...Object.fromEntries(Object.entries({ ...generatedHeaders, ...input.request.http?.headers })
+          .filter(([name]) => name.toLowerCase() !== "anthropic-beta")),
+        ...(beta.length === 0 ? {} : { "anthropic-beta": [...new Set(beta)].join(",") }),
       }),
     })
     return { url, jsonBody: body.jsonBody, bodyText: body.bodyText, headers }

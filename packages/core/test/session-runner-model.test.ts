@@ -3,9 +3,9 @@ import { LLM, Message, Model, SystemPart, ToolDefinition } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy";
 import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses";
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route";
-import { DateTime, Effect, Stream } from "effect";
+import { DateTime, Effect, Schema, Stream } from "effect";
 import { Money } from "@ycoding-ai/schema/money";
-import { Headers, HttpClientResponse } from "effect/unstable/http";
+import { Headers, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { Credential } from "@ycoding-ai/core/credential";
 import { Integration } from "@ycoding-ai/core/integration";
 import { CatalogModel } from "@ycoding-ai/core/model";
@@ -509,7 +509,7 @@ describe("SessionRunnerModel", () => {
 
       expect(selected.settings).toMatchObject({ reasoningEffort: "none" });
       expect(prepared.body.reasoning?.effort).toBe("none");
-      expect(namespace("none")).not.toBe(namespace());
+      expect(namespace("none")).toBe(namespace());
     }),
   );
 
@@ -1144,6 +1144,81 @@ describe("SessionRunnerModel", () => {
       expect(otherHeaders["session-id"]).toBe(otherCache.wirePromptCacheKey);
       expect(otherHeaders["thread-id"]).toBe(otherCache.wirePromptCacheKey);
       expect(otherHeaders["x-client-request-id"]).toBe(otherCache.wirePromptCacheKey);
+    }),
+  );
+
+  it.effect("changes Codex subscription effort only at the top level and preserves HTTP turn state", () =>
+    Effect.gen(function* () {
+      const credential = chatgptCredential();
+      const bodies: Record<string, unknown>[] = [];
+      const states: Array<string | undefined> = [];
+      for (const variant of ["low", "high"] as const) {
+        const entry = model(Provider.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          id: "gpt-6.1-sol",
+          modelID: "gpt-6.1-sol",
+          headers: {},
+          body: {},
+          variants: ["low", "high"].map((id) => ({
+            id: CatalogModel.VariantID.make(id),
+            settings: { reasoningEffort: id },
+          })),
+        });
+        const selected = yield* SessionRunnerModel.fromCatalogModel(
+          yield* SessionRunnerModel.withVariant(entry, CatalogModel.VariantID.make(variant)),
+          credential,
+        );
+        const cache = SessionRunnerCache.providerOptions({
+          projectID: "project",
+          directory: "/project",
+          providerID: "openai",
+          modelID: entry.id,
+          apiModelID: "gpt-6.1-sol",
+          sessionID: "ses_codex_effort",
+          variant,
+          routeID: selected.route.id,
+          policyRevision: CACHE_POLICY_REVISION,
+          permissions: [],
+          system: [],
+          tools: [],
+        });
+        yield* LLMClient.generate(
+          LLM.request({
+            model: selected,
+            messages: [Message.make({ id: "same-user-input", role: "user", content: "Input" })],
+            providerOptions: cache.providerOptions,
+          }),
+        ).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, {
+            execute: (request) =>
+              Effect.gen(function* () {
+                const wire = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie);
+                expect(wire.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+                bodies.push(
+                  Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(
+                    yield* Effect.promise(() => wire.json()),
+                  ),
+                );
+                states.push(request.headers["x-codex-turn-state"]);
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response(
+                    'data: {"type":"response.completed","response":{"id":"resp_effort","status":"completed","output":[]}}\n\n',
+                    {
+                      headers: { "content-type": "text/event-stream", "x-codex-turn-state": "stable-turn-state" },
+                    },
+                  ),
+                );
+              }),
+          }),
+        );
+      }
+      expect(states).toEqual([undefined, "stable-turn-state"]);
+      expect(bodies[0]?.reasoning).toMatchObject({ effort: "low" });
+      expect(bodies[1]?.reasoning).toMatchObject({ effort: "high" });
+      expect(bodies[0]?.prompt_cache_key).toBe(bodies[1]?.prompt_cache_key);
+      expect(JSON.stringify(bodies)).not.toContain("configuration_update");
     }),
   );
 
