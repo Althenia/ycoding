@@ -6,6 +6,7 @@ mod max_steps;
 mod messages;
 mod notifier;
 mod publisher;
+mod title;
 
 pub use ingress::{CommandInput, IngressError, ShellInput};
 pub use notifier::{Wake, mcp_notifier};
@@ -141,9 +142,16 @@ struct Inner {
     services: Services,
     refresh: Option<Refresh>,
     instructions: Option<super::instruction_assembly::Context>,
+    title: Option<Arc<super::title::Service>>,
+    titles: Mutex<BTreeMap<session::Id, TitleTask>>,
     providers: Result<model::ProviderContext, model::Error>,
     active: Mutex<BTreeMap<session::Id, Arc<Work>>>,
     ingress: Mutex<BTreeMap<ycoding_schema::LosslessString, Arc<tokio::sync::Mutex<()>>>>,
+}
+struct TitleTask {
+    cancellation: code_mode::Cancellation,
+    done: tokio::sync::watch::Receiver<bool>,
+    task: tokio::task::JoinHandle<Result<(), String>>,
 }
 #[derive(Clone)]
 pub struct Local(Arc<Inner>);
@@ -199,6 +207,8 @@ impl Local {
             services,
             refresh: None,
             instructions: None,
+            title: None,
+            titles: Mutex::new(BTreeMap::new()),
             providers,
             active: Mutex::new(BTreeMap::new()),
             ingress: Mutex::new(BTreeMap::new()),
@@ -214,6 +224,11 @@ impl Local {
         Arc::get_mut(&mut self.0)
             .expect("unshared runner")
             .instructions = Some(context);
+        self
+    }
+
+    pub fn with_title(mut self, title: Arc<super::title::Service>) -> Self {
+        Arc::get_mut(&mut self.0).expect("unshared runner").title = Some(title);
         self
     }
 
@@ -779,8 +794,25 @@ impl Local {
                         .promote_input(&session.id, &input.id, services.clock.now())
                         .await?
                     {
-                        super::pending::Promotion::Promoted
-                        | super::pending::Promotion::Reconciled => promoted += 1,
+                        super::pending::Promotion::Promoted => {
+                            promoted += 1;
+                            if input.type_.as_str() == Some("user")
+                                && session.parent_id.is_none()
+                                && let Some(title) = &local.0.title
+                                && services
+                                    .store
+                                    .first_user_message_if_only(&session.id)?
+                                    .is_some_and(|user| user.id.as_lossless() == &input.id)
+                            {
+                                self.start_title(
+                                    title.clone(),
+                                    session.clone(),
+                                    request.cancellation.clone(),
+                                    refreshed.as_ref().map(|current| current.owner.clone()),
+                                );
+                            }
+                        }
+                        super::pending::Promotion::Reconciled => promoted += 1,
                         super::pending::Promotion::Missing => break,
                     }
                     promoted_skills.extend(prepared.clone());
@@ -2147,50 +2179,56 @@ impl Local {
     fn cleanup(&self, id: session::Id, outcome: Outcome) -> RunFuture {
         let local = self.clone();
         Box::pin(async move {
-            let work = local
-                .0
-                .active
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .remove(&id);
-            if let Some(work) = work {
-                work.cancellation.cancel();
-                let mut tasks = work.tasks.lock().await;
-                tasks.abort_all();
-                let mut failure = outcome
-                    .err()
-                    .unwrap_or_else(|| error("aborted", "Step ownership ended before settlement"));
-                while let Some(result) = tasks.join_next().await {
-                    match result {
-                        Ok(Err(error)) if !matches!(error, Error::Interrupted(_)) => {
-                            failure = error
-                        }
-                        Err(error_) if !error_.is_cancelled() => failure = Error::Panicked,
-                        _ => {}
-                    }
-                }
-                drop(tasks);
-                local.fail(&id, &work, &failure).await?;
-                let recording = work
-                    .recording
+            let failed = outcome.is_err();
+            let cleanup = async {
+                let work = local
+                    .0
+                    .active
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .take();
-                if let Some(recording) = recording {
-                    // The interrupted Step stays the cause; recording its request is best effort.
-                    let _ = local
-                        .record_request(
-                            &recording.tracked,
-                            &recording.agent,
-                            &work,
-                            None,
-                            &recording.costs,
-                            &recording.route_id,
-                        )
-                        .await;
+                    .remove(&id);
+                if let Some(work) = work {
+                    work.cancellation.cancel();
+                    let mut tasks = work.tasks.lock().await;
+                    tasks.abort_all();
+                    let mut failure = outcome.err().unwrap_or_else(|| {
+                        error("aborted", "Step ownership ended before settlement")
+                    });
+                    while let Some(result) = tasks.join_next().await {
+                        match result {
+                            Ok(Err(error)) if !matches!(error, Error::Interrupted(_)) => {
+                                failure = error
+                            }
+                            Err(error_) if !error_.is_cancelled() => failure = Error::Panicked,
+                            _ => {}
+                        }
+                    }
+                    drop(tasks);
+                    local.fail(&id, &work, &failure).await?;
+                    let recording = work
+                        .recording
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take();
+                    if let Some(recording) = recording {
+                        // The interrupted Step stays the cause; recording its request is best effort.
+                        let _ = local
+                            .record_request(
+                                &recording.tracked,
+                                &recording.agent,
+                                &work,
+                                None,
+                                &recording.costs,
+                                &recording.route_id,
+                            )
+                            .await;
+                    }
                 }
+                Ok(())
             }
-            Ok(())
+            .await;
+            let title = local.settle_title(&id, failed).await;
+            cleanup.and(title)
         })
     }
 }
@@ -2249,7 +2287,14 @@ impl execution::Runner for Local {
     }
     fn drain(&self, request: DrainRequest) -> RunFuture {
         let local = self.clone();
-        Box::pin(async move { local.run(request).await })
+        Box::pin(async move {
+            let id = request.session_id.clone();
+            let outcome = local.run(request).await;
+            if outcome.is_ok() {
+                local.wait_title(&id).await;
+            }
+            outcome
+        })
     }
     fn settled(&self, id: session::Id, outcome: Outcome) -> RunFuture {
         self.cleanup(id, outcome)

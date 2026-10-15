@@ -86,6 +86,768 @@ fn analyzer(input: &Services) -> ycoding_core::session::image_analyzer::Service 
 }
 
 #[tokio::test]
+async fn first_admitted_root_prompt_automatically_renames_without_extra_model_work() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let input = services(
+        &store,
+        &endpoint,
+        "openai",
+        "@ai-sdk/openai-compatible",
+        "chat",
+        false,
+        "{}",
+    );
+    let coordinator = Coordinator::new(Arc::new(titled(input)));
+    let id = session::Id::new("ses_one").unwrap();
+    coordinator.run(&id).await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    server.await.unwrap();
+    assert!(requests.recv().await.is_some());
+    assert_eq!(provider_requests(&store).len(), 1);
+    assert_eq!(
+        service.get(&id).unwrap().unwrap().title.as_str(),
+        Some("Answer the prompt")
+    );
+}
+
+fn titled(input: Services) -> Local {
+    let title = Arc::new(ycoding_core::session::title::Service::new(
+        input.store.clone(),
+        input.agents.clone(),
+        Arc::new(ycoding_core::tools::policy::helper::Models {
+            models: input.models.clone(),
+            credentials: input.credentials.clone(),
+            auth: input.auth.clone().unwrap_or_default(),
+            cursor: None,
+            claude: input.claude.clone(),
+            store: input.store.clone(),
+            settings: input.helpers.clone(),
+        }),
+        input.executor.clone(),
+    ));
+    Local::new(input).with_title(title)
+}
+
+async fn rename(service: &Service, title: &str) {
+    service
+        .publish(ycoding_store::session::NewEvent {
+            id: format!(
+                "evt_rename_{}",
+                service
+                    .log(&session::Id::new("ses_one").unwrap(), None, 512)
+                    .unwrap()
+                    .watermark
+                    .unwrap_or_default()
+            )
+            .into(),
+            aggregate_id: "ses_one".into(),
+            created: 2,
+            type_: "session.renamed.1".into(),
+            data: ObjectEncoder::new()
+                .field("sessionID", "ses_one")
+                .field("title", title)
+                .finish(),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn first_prompt_title_skips_off_children_and_explicit_renames_and_survives_owner_replacement()
+{
+    use ycoding_core::tools::policy::helper::TitleMode;
+    for case in ["local", "off", "child", "renamed"] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        if case == "child" {
+            store
+                .submit(|tx| {
+                    let mut row = support::record("ses_one");
+                    row.parent_id = Some("ses_two".into());
+                    ycoding_store::session::SessionTable::put(tx, &row)
+                })
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
+        if case == "renamed" {
+            rename(&service, "Chosen title").await;
+        }
+        admit(&service).await;
+        let (endpoint, mut requests, server) = server(vec![TEXT, TEXT]).await;
+        let make = || {
+            let mut input = services(
+                &store,
+                &endpoint,
+                "openai",
+                "@ai-sdk/openai-compatible",
+                "chat",
+                false,
+                "{}",
+            );
+            input.helpers.title_mode = match case {
+                "off" => TitleMode::Off,
+                "local" => TitleMode::Local,
+                _ => TitleMode::Model,
+            };
+            input.agents = Arc::new(agent::Service::new(vec![
+                agent::empty("build".into()),
+                agent::empty("title".into()),
+            ]));
+            titled(input)
+        };
+        let id = session::Id::new("ses_one").unwrap();
+        let first = Coordinator::new(Arc::new(make()));
+        first.run(&id).await.unwrap();
+        first.shutdown().await.unwrap();
+        let expected = if case == "local" {
+            "Answer the prompt"
+        } else if case == "renamed" {
+            "Chosen title"
+        } else {
+            "Test"
+        };
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().title.as_str(),
+            Some(expected),
+            "{case}"
+        );
+        rename(&service, "User title after reopen").await;
+        admit(&service).await;
+        let reopened = Coordinator::new(Arc::new(make()));
+        reopened.run(&id).await.unwrap();
+        reopened.shutdown().await.unwrap();
+        server.await.unwrap();
+        assert!(requests.recv().await.is_some());
+        assert!(requests.recv().await.is_some());
+        assert_eq!(provider_requests(&store).len(), 2);
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().title.as_str(),
+            Some("User title after reopen")
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_title_uses_selected_helper_account_and_ordinary_ledger_once_even_after_failure() {
+    use ycoding_core::tools::policy::helper::{ModelSelection, Role, TitleMode};
+    for failed in [false, true] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        admit(&service).await;
+        let (chat_endpoint, mut chats, chat_server) = server(vec![TEXT, TEXT]).await;
+        let (title_endpoint, mut titles, title_server) =
+            server_status(vec![if failed { (400, "{}") } else { (200, TEXT) }]).await;
+        let mut input = services(
+            &store,
+            &chat_endpoint,
+            "openai",
+            "@ai-sdk/openai-compatible",
+            "chat",
+            false,
+            "{}",
+        );
+        let mut catalog = input.models.catalog().as_ref().clone();
+        catalog.configure(&[parse_json(&format!(r#"{{"providers":{{"openai":{{"models":{{"title-helper":{{"name":"Title helper","settings":{{"baseURL":"{title_endpoint}"}}}}}}}}}}}}"#)).unwrap()]).unwrap();
+        let title_account = input
+            .credentials
+            .create(
+                "title-key".into(),
+                "openai".into(),
+                Some("title-account".into()),
+                ycoding_store::resources::Secret::new(
+                    parse_json(r#"{"type":"key","key":"title-fixture"}"#).unwrap(),
+                )
+                .unwrap(),
+                1,
+            )
+            .await
+            .unwrap();
+        input
+            .credentials
+            .create(
+                "other-key".into(),
+                "openai".into(),
+                Some("other-account".into()),
+                ycoding_store::resources::Secret::new(
+                    parse_json(r#"{"type":"key","key":"wrong-fixture"}"#).unwrap(),
+                )
+                .unwrap(),
+                2,
+            )
+            .await
+            .unwrap();
+        input.models = Arc::new(model::Resolver::new(catalog));
+        input.helpers.title_mode = TitleMode::Model;
+        input.helpers.models.insert(
+            Role::Title,
+            ModelSelection::Model(
+                ycoding_schema::model::Ref::decode(
+                    &parse_json(
+                        r#"{"providerID":"openai","id":"title-helper","profile":"title-account"}"#,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            ),
+        );
+        input.agents = Arc::new(agent::Service::new(vec![
+            agent::empty("build".into()),
+            agent::empty("title".into()),
+        ]));
+        let id = session::Id::new("ses_one").unwrap();
+        let coordinator = Coordinator::new(Arc::new(titled(input)));
+        coordinator.run(&id).await.unwrap();
+        admit(&service).await;
+        coordinator.run(&id).await.unwrap();
+        coordinator.shutdown().await.unwrap();
+        chat_server.await.unwrap();
+        title_server.await.unwrap();
+        assert!(chats.recv().await.is_some());
+        assert!(chats.recv().await.is_some());
+        let request = wire(titles.recv().await.unwrap());
+        assert_eq!(request["model"], "title-helper");
+        assert_eq!(request["_testAuthorization"], "Bearer title-fixture");
+        assert_eq!(request["messages"][0]["content"], "Answer the prompt");
+        assert!(request.get("tools").is_none());
+        let ledger = provider_requests(&store);
+        let title = ledger
+            .iter()
+            .filter(|row| row.source.as_str() == Some("title"))
+            .collect::<Vec<_>>();
+        assert_eq!(title.len(), 1);
+        assert_eq!(ledger.len(), 3);
+        assert_eq!(title[0].agent.as_str(), Some("title"));
+        assert_eq!(
+            title[0].model.domain().unwrap().id.as_str(),
+            Some("title-helper")
+        );
+        assert_eq!(
+            title[0].model.domain().unwrap().profile.unwrap().0.as_str(),
+            Some("title-account")
+        );
+        assert_eq!(
+            title[0].input_id.as_ref().unwrap().as_str(),
+            Some("msg_input")
+        );
+        assert_eq!(title[0].attempts, 1);
+        assert_eq!(
+            title[0].connection_identity_digest,
+            Some(model::account_identity(&title_account))
+        );
+        assert_eq!(
+            ledger.iter().map(|row| row.request).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            event_types(&store)
+                .iter()
+                .filter(|kind| kind.as_str() == "session.step.started.1")
+                .count(),
+            2
+        );
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().title.as_str(),
+            Some(if failed {
+                "Answer the prompt"
+            } else {
+                "Answer"
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn in_flight_title_respects_same_value_explicit_rename_and_cancellation_without_replay() {
+    use ycoding_core::{
+        session::run_coordinator::InterruptReason,
+        tools::policy::helper::{ModelSelection, Role, TitleMode},
+    };
+    for cancelled in [false, true] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        admit(&service).await;
+        let (endpoint, mut chats, chat_server) = server(vec![TEXT, TEXT]).await;
+        let ended = Arc::new(tokio::sync::Notify::new());
+        let feed = ycoding_core::event_feed::Feed::attach(&store.client());
+        let _events = feed
+            .subscribe_types(
+                ycoding_core::event_feed::Scope::Session(session::Id::new("ses_one").unwrap()),
+                &["session.step.ended.1"],
+                {
+                    let ended = ended.clone();
+                    move || ended.notify_one()
+                },
+            )
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let title_endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().fallback(axum::routing::post({
+            let started = started.clone();
+            let release = release.clone();
+            move || {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    ([("content-type", "text/event-stream")], TEXT)
+                }
+            }
+        }));
+        let (stop, done) = tokio::sync::oneshot::channel();
+        let title_server = tokio::spawn(async {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = done.await;
+                })
+                .await
+                .unwrap();
+        });
+        let make = || {
+            let mut input = services(
+                &store,
+                &endpoint,
+                "openai",
+                "@ai-sdk/openai-compatible",
+                "chat",
+                false,
+                "{}",
+            );
+            let mut catalog = input.models.catalog().as_ref().clone();
+            catalog.configure(&[parse_json(&format!(r#"{{"providers":{{"openai":{{"models":{{"title-helper":{{"settings":{{"baseURL":"{title_endpoint}"}}}}}}}}}}}}"#)).unwrap()]).unwrap();
+            input.models = Arc::new(model::Resolver::new(catalog));
+            input.helpers.title_mode = TitleMode::Model;
+            input.helpers.models.insert(
+                Role::Title,
+                ModelSelection::Model(
+                    ycoding_schema::model::Ref::decode(
+                        &parse_json(r#"{"providerID":"openai","id":"title-helper"}"#).unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            );
+            input.agents = Arc::new(agent::Service::new(vec![
+                agent::empty("build".into()),
+                agent::empty("title".into()),
+            ]));
+            titled(input)
+        };
+        let id = session::Id::new("ses_one").unwrap();
+        let coordinator = Coordinator::new(Arc::new(make()));
+        let running = tokio::spawn({
+            let coordinator = coordinator.clone();
+            let id = id.clone();
+            async move { coordinator.run(&id).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        assert!(chats.recv().await.is_some());
+        tokio::time::timeout(std::time::Duration::from_secs(5), ended.notified())
+            .await
+            .unwrap();
+        if cancelled {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                coordinator.interrupt(&id, InterruptReason::User),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        } else {
+            rename(&service, "Test").await;
+        }
+        release.notify_one();
+        let outcome = running.await.unwrap();
+        assert!(outcome.is_ok() || cancelled, "{outcome:?}");
+        coordinator.shutdown().await.unwrap();
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().title.as_str(),
+            Some("Test")
+        );
+        let title = provider_requests(&store)
+            .into_iter()
+            .filter(|row| row.source.as_str() == Some("title"))
+            .collect::<Vec<_>>();
+        assert_eq!(title.len(), 1);
+        assert_eq!(title[0].attempts, 1);
+        admit(&service).await;
+        let reopened = Coordinator::new(Arc::new(make()));
+        reopened.run(&id).await.unwrap();
+        reopened.shutdown().await.unwrap();
+        assert!(chats.recv().await.is_some());
+        assert_eq!(
+            provider_requests(&store)
+                .iter()
+                .filter(|row| row.source.as_str() == Some("title"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            service.get(&id).unwrap().unwrap().title.as_str(),
+            Some("Test")
+        );
+        chat_server.await.unwrap();
+        stop.send(()).unwrap();
+        title_server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn reference_catalog_reaches_the_actual_first_request() {
+    use ycoding_core::resources::{mcp, reference, skill};
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let input = services(
+        &store,
+        &endpoint,
+        "openai",
+        "@ai-sdk/openai-compatible",
+        "chat",
+        false,
+        "{}",
+    );
+    let references = Arc::new(reference::Service::from_infos(vec![
+        ycoding_schema::reference::Info::decode(&parse_json(r#"{"name":"guide","path":"/guide","description":"Project API guide","source":{"type":"local","path":"/guide"}}"#).unwrap()).unwrap(),
+    ]));
+    let mcp = Arc::new(
+        mcp::Service::new(
+            &[],
+            "/project".into(),
+            "test".into(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let context = ycoding_core::session::instruction_assembly::Context {
+        configuration: input.configuration.clone().unwrap(),
+        registry: input.tools.clone(),
+        skills: Arc::new(tokio::sync::Mutex::new(skill::Service::new(
+            &std::env::temp_dir(),
+        ))),
+        mcp: Arc::downgrade(&mcp),
+        references,
+    };
+    let _read = input
+        .tools
+        .register(
+            vec![(
+                "read".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Read a file",
+                    JsonValue::Null,
+                    None,
+                    None,
+                    |_, _| {
+                        Box::pin(async {
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: JsonValue::Null,
+                                content: vec![],
+                            })
+                        })
+                    },
+                )),
+            )],
+            Default::default(),
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(input).with_instructions(context)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    coordinator.shutdown().await.unwrap();
+    server.await.unwrap();
+    mcp.shutdown().await.unwrap();
+    assert!(
+        ycoding_schema::stringify_json(&requests.recv().await.unwrap())
+            .contains("Project API guide")
+    );
+}
+
+#[tokio::test]
+async fn reference_add_change_remove_and_unchanged_generation_reach_requests_and_one_instruction_epoch()
+ {
+    use ycoding_core::resources::{mcp, reference, skill};
+    let store = support::store();
+    let service = Service::new(store.client());
+    let id = session::Id::new("ses_one").unwrap();
+    let (endpoint, mut requests, server) = server(vec![TEXT; 6]).await;
+    let mcp = Arc::new(
+        mcp::Service::new(
+            &[],
+            "/project".into(),
+            "test".into(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let mut epoch = None;
+    let mut hashes = Vec::new();
+    for (index, references, expected) in [
+        (
+            0,
+            r#"[{"name":"a","path":"/a","description":"Original guide","source":{"type":"local","path":"/a"}}]"#,
+            "Original guide",
+        ),
+        (
+            1,
+            r#"[{"name":"a","path":"/a","description":"Original guide","source":{"type":"local","path":"/a"}},{"name":"b","path":"/b","description":"Second guide","source":{"type":"local","path":"/b"}}]"#,
+            "New project references are available",
+        ),
+        (
+            2,
+            r#"[{"name":"a","path":"/a-v2","description":"Revised guide","source":{"type":"local","path":"/a-v2"}},{"name":"b","path":"/b","description":"Second guide","source":{"type":"local","path":"/b"}}]"#,
+            "This list supersedes the previous reference list",
+        ),
+        (
+            3,
+            r#"[{"name":"a","path":"/a-v2","description":"Revised guide","source":{"type":"local","path":"/a-v2"}}]"#,
+            "no longer available and must not be used: b",
+        ),
+        (4, "[]", reference::instructions::REMOVED),
+        (5, "[]", reference::instructions::REMOVED),
+    ] {
+        admit_input(
+            &service,
+            &format!("ref{index}"),
+            "Read the project guide",
+            "steer",
+        )
+        .await;
+        let input = services(
+            &store,
+            &endpoint,
+            "openai",
+            "@ai-sdk/openai-compatible",
+            "chat",
+            false,
+            "{}",
+        );
+        let _read = input
+            .tools
+            .register(
+                vec![(
+                    "read".into(),
+                    Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                        "Read a file",
+                        JsonValue::Null,
+                        None,
+                        None,
+                        |_, _| {
+                            Box::pin(async {
+                                Ok(ycoding_ai::llm::ToolOutput {
+                                    structured: JsonValue::Null,
+                                    content: vec![],
+                                })
+                            })
+                        },
+                    )),
+                )],
+                Default::default(),
+            )
+            .unwrap();
+        let context = ycoding_core::session::instruction_assembly::Context {
+            configuration: input.configuration.clone().unwrap(),
+            registry: input.tools.clone(),
+            skills: Arc::new(tokio::sync::Mutex::new(skill::Service::new(
+                &std::env::temp_dir(),
+            ))),
+            mcp: Arc::downgrade(&mcp),
+            references: Arc::new(reference::Service::from_infos(
+                Vec::decode(&parse_json(references).unwrap()).unwrap(),
+            )),
+        };
+        let coordinator = Coordinator::new(Arc::new(Local::new(input).with_instructions(context)));
+        coordinator.run(&id).await.unwrap();
+        coordinator.shutdown().await.unwrap();
+        let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+        assert!(request.contains(expected), "{index}: {request}");
+        if index >= 2 {
+            assert!(request.contains("Revised guide"));
+            assert!(request.contains("/a-v2"));
+        }
+        let state = store
+            .snapshot()
+            .unwrap()
+            .get::<ycoding_store::session::InstructionStateTable>(&ycoding_store::tuple_key(&[
+                ycoding_store::KeyPart::String(id.as_lossless()),
+            ]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(*epoch.get_or_insert(state.epoch_start), state.epoch_start);
+        hashes.push(
+            state
+                .current_values
+                .domain()
+                .unwrap()
+                .0
+                .get(&reference::instructions::KEY.into())
+                .cloned(),
+        );
+        assert_eq!(
+            event_types(&store)
+                .iter()
+                .filter(|kind| kind.as_str() == "session.instructions.updated.2")
+                .count(),
+            (index + 1).min(5)
+        );
+    }
+    assert!(hashes[..4].windows(2).all(|pair| pair[0] != pair[1]));
+    assert_eq!(hashes[4..], [None, None]);
+    server.await.unwrap();
+    mcp.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hidden_undescribed_denied_and_capability_inaccessible_references_never_enter_request_or_epoch()
+ {
+    use ycoding_core::resources::{mcp, reference, skill, tool_output_store};
+    for case in [
+        "hidden",
+        "undescribed",
+        "read-denied",
+        "path-denied",
+        "ceiling-denied",
+        "capability-denied",
+    ] {
+        let store = support::store();
+        let service = Service::new(store.client());
+        admit(&service).await;
+        let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+        let mut input = services(
+            &store,
+            &endpoint,
+            "openai",
+            "@ai-sdk/openai-compatible",
+            "chat",
+            false,
+            if case == "capability-denied" {
+                r#"{"capabilities":{"tools":{"enabled":false}}}"#
+            } else {
+                "{}"
+            },
+        );
+        let mut agent = agent::empty("build".into());
+        if ["read-denied", "path-denied"].contains(&case) {
+            agent.permissions.push(
+                ycoding_schema::permission::Rule::decode(
+                    &parse_json(&format!(
+                        r#"{{"action":"{}","resource":"{}","effect":"deny"}}"#,
+                        if case == "read-denied" {
+                            "read"
+                        } else {
+                            "external_directory"
+                        },
+                        if case == "read-denied" {
+                            "*"
+                        } else {
+                            "/secret/*"
+                        }
+                    ))
+                    .unwrap(),
+                )
+                .unwrap(),
+            );
+        }
+        if case == "ceiling-denied" {
+            store
+                .submit(|tx| {
+                    let mut row = support::record("ses_one");
+                    row.permission = Some(ycoding_store::session::Document::from_domain(
+                        &Vec::<ycoding_schema::permission::Rule>::decode(
+                            &parse_json(
+                                r#"[{"action":"read","resource":"/secret/*","effect":"deny"}]"#,
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap(),
+                    )?);
+                    ycoding_store::session::SessionTable::put(tx, &row)
+                })
+                .unwrap()
+                .wait()
+                .unwrap();
+        }
+        input.agents = Arc::new(agent::Service::new(vec![agent]));
+        input.tools = Arc::new(Registry::new(
+            Arc::new(tool_output_store::Store::new(
+                input.configuration.as_ref().unwrap().roots(),
+            )),
+            input.configuration.clone(),
+            Default::default(),
+            Arc::new(|a, b| a.cmp(b)),
+        ));
+        let _read = input
+            .tools
+            .register(
+                vec![(
+                    "read".into(),
+                    Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                        "Read a file",
+                        JsonValue::Null,
+                        None,
+                        None,
+                        |_, _| {
+                            Box::pin(async {
+                                Ok(ycoding_ai::llm::ToolOutput {
+                                    structured: JsonValue::Null,
+                                    content: vec![],
+                                })
+                            })
+                        },
+                    )),
+                )],
+                Default::default(),
+            )
+            .unwrap();
+        let mcp = Arc::new(
+            mcp::Service::new(
+                &[],
+                "/project".into(),
+                "test".into(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let context = ycoding_core::session::instruction_assembly::Context {
+            configuration: input.configuration.clone().unwrap(), registry: input.tools.clone(),
+            skills: Arc::new(tokio::sync::Mutex::new(skill::Service::new(&std::env::temp_dir()))), mcp: Arc::downgrade(&mcp),
+            references: Arc::new(reference::Service::from_infos(vec![ycoding_schema::reference::Info::decode(&parse_json(&format!(r#"{{"name":"secret-reference","path":"/secret","hidden":{},{}"source":{{"type":"local","path":"/secret"}}}}"#, case == "hidden", if case == "undescribed" { "" } else { "\"description\":\"secret-description\"," })).unwrap()).unwrap()])),
+        };
+        let coordinator = Coordinator::new(Arc::new(Local::new(input).with_instructions(context)));
+        coordinator
+            .run(&session::Id::new("ses_one").unwrap())
+            .await
+            .unwrap();
+        coordinator.shutdown().await.unwrap();
+        server.await.unwrap();
+        mcp.shutdown().await.unwrap();
+        let request = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+        assert!(!request.contains("secret-reference"), "{case}");
+        assert!(!request.contains("secret-description"), "{case}");
+        let events = service
+            .log(&session::Id::new("ses_one").unwrap(), None, 512)
+            .unwrap();
+        assert!(
+            !format!("{events:?}").contains(reference::instructions::KEY),
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn privacy_and_continuation_configuration_reaches_direct_responses() {
     for (state, mode, stored, continued, compacted) in [
         ("stateless", "on", false, false, false),

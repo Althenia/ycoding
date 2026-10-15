@@ -8,10 +8,16 @@ use crate::{
 };
 use std::{
     collections::BTreeSet,
+    ops::Bound,
     sync::{Arc, Mutex},
 };
 use ycoding_ai::{llm, route::Executor};
 use ycoding_schema::{LosslessString, ObjectEncoder, session};
+use ycoding_store::{
+    IndexOrder, IndexQuery, KeyPart,
+    session::{EventTable, NewEvent, SessionTable},
+    tuple_key,
+};
 
 pub struct Service {
     pub store: store::Service,
@@ -41,6 +47,18 @@ impl Service {
         cancellation: &Cancellation,
     ) -> Result<(), String> {
         if session.parent_id.is_some() {
+            return Ok(());
+        }
+        let prefix = rename_prefix(&session.id);
+        if !self
+            .store
+            .client
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .index_range::<EventTable>("event_aggregate_type_seq_idx", rename_query(&prefix))
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
             return Ok(());
         }
         let Some(user) = self
@@ -111,17 +129,63 @@ impl Service {
         if cancellation.is_cancelled() {
             return Ok(());
         }
-        helper::publish(
-            &self.store,
-            &session.id,
-            "session.renamed.1",
-            ObjectEncoder::new()
+        let session = session.clone();
+        let event = NewEvent {
+            id: super::projector::random_event_id()
+                .map_err(|error| error.to_string())?
+                .as_lossless()
+                .clone(),
+            aggregate_id: session.id.as_lossless().clone(),
+            type_: "session.renamed.1".into(),
+            data: ObjectEncoder::new()
                 .field("sessionID", &session.id)
                 .field("title", &title)
                 .finish(),
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .await
+            created: chrono::Utc::now().timestamp_millis(),
+        };
+        let cancellation = cancellation.clone();
+        self.store
+            .client
+            .submit(move |tx| {
+                let Some(row) = tx.get::<SessionTable>(&super::key(session.id.as_lossless()))?
+                else {
+                    return Ok(());
+                };
+                if cancellation.is_cancelled()
+                    || row.title != session.title
+                    || !tx
+                        .index_range::<EventTable>(
+                            "event_aggregate_type_seq_idx",
+                            rename_query(&prefix),
+                        )?
+                        .is_empty()
+                {
+                    return Ok(());
+                }
+                super::projector::append(tx, &event)?;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn rename_prefix(id: &session::Id) -> Vec<u8> {
+    tuple_key(&[
+        KeyPart::String(id.as_lossless()),
+        KeyPart::String(&"session.renamed.1".into()),
+    ])
+}
+
+fn rename_query(prefix: &[u8]) -> IndexQuery<'_> {
+    IndexQuery {
+        lower: Bound::Unbounded,
+        upper: Bound::Unbounded,
+        prefix: Some(prefix),
+        order: IndexOrder::Descending,
+        after: None,
+        limit: 1,
     }
 }
 fn first_line(value: &LosslessString) -> Option<LosslessString> {

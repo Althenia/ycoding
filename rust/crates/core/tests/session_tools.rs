@@ -2009,6 +2009,20 @@ async fn title_child_exclusion_unavailable_helper_and_model_length_bound_match_t
         Some("A local title")
     );
     assert!(h.server.seen.lock().unwrap().is_empty());
+    h.title()
+        .generate_for_first_prompt(&info, &Cancellation::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        h.store.get(&info.id).unwrap().unwrap().title.as_str(),
+        Some("A local title")
+    );
+    assert!(h.server.seen.lock().unwrap().is_empty());
+    h.close().await;
+
+    let h = Harness::new(TitleMode::Model, "{}").await;
+    h.prompt("A local title", "first").await;
+    let info = h.store.get(&h.context().session_id).unwrap().unwrap();
     h.server.set(Reply::Text("x".repeat(120)));
     h.title()
         .generate_for_first_prompt(&info, &Cancellation::default())

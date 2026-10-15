@@ -1,10 +1,13 @@
 use crate::{
     instructions::{self, Error, Observation, Source},
-    resources::{config, mcp, skill},
+    resources::{config, mcp, reference, skill},
     tools::{policy, registry::Registry},
 };
 use std::sync::{Arc, Weak};
-use ycoding_schema::{DomainDecode, JsonValue, LosslessString, agent, instruction, permission};
+use ycoding_schema::{
+    DomainDecode, JsonPath, JsonValue, LosslessString, ObjectDecoder, ObjectEncoder, agent,
+    instruction, permission,
+};
 
 #[derive(Clone)]
 pub struct Context {
@@ -12,6 +15,7 @@ pub struct Context {
     pub registry: Arc<Registry>,
     pub skills: Arc<tokio::sync::Mutex<skill::Service>>,
     pub mcp: Weak<mcp::Service>,
+    pub references: Arc<reference::Service>,
 }
 
 impl Context {
@@ -23,6 +27,55 @@ impl Context {
     ) -> Result<Vec<Source>, Error> {
         let permissions = super::tool_permissions(agent, ceiling);
         let available = self.registry.available(&permissions);
+        let permissions = policy::expand_permissions(
+            &permissions,
+            &self
+                .configuration
+                .roots()
+                .home
+                .to_string_lossy()
+                .as_ref()
+                .into(),
+        );
+        let references = self
+            .references
+            .list()
+            .iter()
+            .filter(|reference| {
+                reference.hidden != Some(true)
+                    && ["read", "glob", "grep", "shell"]
+                        .iter()
+                        .any(|tool| available.contains(*tool))
+                    && ["read", "external_directory"].iter().all(|action| {
+                        policy::evaluate(
+                            &(*action).into(),
+                            reference.path.as_lossless(),
+                            &permissions,
+                        )
+                        .effect
+                        .0
+                        .as_str()
+                            != Some("deny")
+                            && policy::evaluate(
+                                &(*action).into(),
+                                &instructions::join(
+                                    &[reference.path.as_lossless().clone(), "/*".into()],
+                                    "",
+                                ),
+                                &permissions,
+                            )
+                            .effect
+                            .0
+                            .as_str()
+                                != Some("deny")
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sources.push(reference_source(reference::instructions::summaries_by(
+            &references,
+            |a, b| a.cmp(b),
+        )));
         let mcp = self.mcp.upgrade().ok_or(Error::ReaderFailed)?;
         let mut skills = Vec::new();
         if available.contains("skill") {
@@ -86,6 +139,61 @@ impl Context {
             &self.registry,
         ))
     }
+}
+
+fn reference_source(references: Vec<reference::instructions::Summary>) -> Source {
+    let value = (!references.is_empty()).then(|| {
+        JsonValue::Array(
+            references
+                .iter()
+                .map(|reference| {
+                    ObjectEncoder::new()
+                        .field("name", &reference.name)
+                        .field("path", &reference.path)
+                        .optional("description", &reference.description)
+                        .finish()
+                })
+                .collect(),
+        )
+    });
+    Source {
+        key: instruction::Key::decode(&JsonValue::String(reference::instructions::KEY.into()))
+            .expect("reference instruction key"),
+        read: Arc::new(move || {
+            let value = value.clone();
+            Box::pin(async move { Ok(value.map_or(Observation::Removed, Observation::Value)) })
+        }),
+        initial: Arc::new(|value| {
+            Some(reference::instructions::render(&reference_summaries(
+                value,
+            )?))
+        }),
+        changed: Arc::new(|previous, current| {
+            Some(reference::instructions::changed(
+                &reference_summaries(previous)?,
+                &reference_summaries(current)?,
+            ))
+        }),
+        removed: Some(Arc::new(|_| Some(reference::instructions::REMOVED.into()))),
+    }
+}
+
+fn reference_summaries(value: &JsonValue) -> Option<Vec<reference::instructions::Summary>> {
+    let JsonValue::Array(values) = value else {
+        return None;
+    };
+    values
+        .iter()
+        .map(|value| {
+            let path = JsonPath::default();
+            let object = ObjectDecoder::new(value, &path).ok()?;
+            Some(reference::instructions::Summary {
+                name: object.field("name").ok()?,
+                path: object.field("path").ok()?,
+                description: object.optional("description").ok()?,
+            })
+        })
+        .collect()
 }
 
 fn permitted(id: &LosslessString, permissions: &[permission::Rule]) -> bool {
