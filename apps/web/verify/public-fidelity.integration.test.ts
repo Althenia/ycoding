@@ -5,7 +5,10 @@ import { launchBrowser } from "./cdp"
 
 const port = 4179
 const browserPath = process.env.YCODING_WEB_CHROME
-if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running this integration test.")
+if (!browserPath)
+  throw new Error(
+    "Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running this integration test.",
+  )
 
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
@@ -28,14 +31,22 @@ afterAll(async () => {
 })
 
 describe("public routes and design-system behavior", () => {
-  test("animates public entrances over time and leaves content visible without motion", async () => {
-    const page = await requireBrowser().openPage()
-    await page.setViewport(1440, 900)
-    for (const [path, selector] of [["/", ".hero__headline"], ["/docs/quickstart", ".docs-article > h1"], ["/changelog", ".release"]] as const) {
-      await page.setReducedMotion(false)
-      await page.setAnimationPlaybackRate(0)
-      await page.navigate(url(path))
-      const early = await page.evaluate<{ readonly opacity: number; readonly transform: string }>(`new Promise((resolve, reject) => {
+  for (const [path, selector] of [
+    ["/", ".hero__headline"],
+    ["/docs/quickstart", ".docs-article > h1"],
+    ["/changelog", ".release"],
+  ] as const)
+    test(`animates ${path} entrances over time and leaves content visible without motion`, async () => {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(1440, 900)
+        await page.setReducedMotion(false)
+        await page.setAnimationPlaybackRate(0)
+        await page.navigate(url(path))
+        const early = await page.evaluate<{
+          readonly opacity: number
+          readonly transform: string
+        }>(`new Promise((resolve, reject) => {
         const selector = ${JSON.stringify(selector)}
         const start = performance.now()
         const wait = () => {
@@ -48,46 +59,101 @@ describe("public routes and design-system behavior", () => {
         }
         wait()
       })`)
-      await page.setAnimationPlaybackRate(1)
-      const animated = await page.evaluate<{ readonly early: number; readonly middle: number; readonly settled: number; readonly transformChanged: boolean }>(`new Promise((resolve) => {
+        await page.setAnimationPlaybackRate(1)
+        const animated = await page.evaluate<{
+          readonly early: number
+          readonly middle: number
+          readonly settled: number
+          readonly transformChanged: boolean
+        }>(`new Promise((resolve, reject) => {
         const element = document.querySelector(${JSON.stringify(selector)})
-        setTimeout(() => {
+        const start=performance.now()
+        const sample=async () => {
           const middle = Number(getComputedStyle(element).opacity)
+          if(middle<=${early.opacity}) {
+            if(performance.now()-start>15000) return reject(new Error('entrance made no progress'))
+            return requestAnimationFrame(sample)
+          }
           const transformChanged = ${JSON.stringify(early.transform)} !== getComputedStyle(element).transform + getComputedStyle(element).translate
-          setTimeout(() => resolve({ early: ${early.opacity}, middle, settled: Number(getComputedStyle(element).opacity), transformChanged }), 700)
-        }, 100)
+          await Promise.all(element.getAnimations().map(animation=>animation.finished))
+          resolve({ early: ${early.opacity}, middle, settled: Number(getComputedStyle(element).opacity), transformChanged })
+        }
+        requestAnimationFrame(sample)
       })`)
-      expect(animated.early).toBeLessThan(1)
-      expect(animated.middle).toBeGreaterThan(animated.early)
-      expect(animated.settled).toBe(1)
-      expect(animated.transformChanged).toBe(true)
+        expect(animated.early).toBeLessThan(1)
+        expect(animated.middle).toBeGreaterThan(animated.early)
+        expect(animated.settled).toBe(1)
+        expect(animated.transformChanged).toBe(true)
+        await page.setReducedMotion(true)
+        expect(
+          await page.evaluate<number>(
+            `Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`,
+          ),
+        ).toBe(1)
+        await page.evaluate<void>(`document.documentElement.removeAttribute('data-motion')`)
+        expect(
+          await page.evaluate<number>(
+            `Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`,
+          ),
+        ).toBe(1)
+      } finally {
+        await page.close()
+      }
+    })
+
+  test("keeps landing content visible without a motion gate and static under reduced motion", async () => {
+    const page = await requireBrowser().openPage()
+    try {
       await page.setReducedMotion(true)
-      expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`)).toBe(1)
+      await page.navigate(url("/"))
+      expect(
+        await page.evaluate<{ readonly gate?: string; readonly opacity: number; readonly animations: number }>(
+          `({ gate: document.documentElement.dataset.motion, opacity: Number(getComputedStyle(document.querySelector('.hero__headline')).opacity), animations: document.querySelector('.hero__headline').getAnimations().length })`,
+        ),
+      ).toEqual({ opacity: 1, animations: 0 })
+      await page.setViewport(390, 844)
+      await page.setReducedMotion(false)
+      await page.navigate(url("/"))
+      expect(
+        await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`),
+      ).toBe(0)
       await page.evaluate<void>(`document.documentElement.removeAttribute('data-motion')`)
-      expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).opacity)`)).toBe(1)
+      expect(
+        await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`),
+      ).toBe(1)
+      await page.evaluate<void>(`document.documentElement.dataset.motion = 'on'`)
+      await page.setReducedMotion(true)
+      expect(
+        await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`),
+      ).toBe(1)
+    } finally {
+      await page.close()
     }
-    await page.setReducedMotion(true)
-    await page.navigate(url("/"))
-    expect(await page.evaluate<{ readonly gate?: string; readonly opacity: number; readonly animations: number }>(`({ gate: document.documentElement.dataset.motion, opacity: Number(getComputedStyle(document.querySelector('.hero__headline')).opacity), animations: document.querySelector('.hero__headline').getAnimations().length })`)).toEqual({ opacity: 1, animations: 0 })
-    await page.setViewport(390, 844)
-    await page.setReducedMotion(false)
-    await page.navigate(url("/"))
-    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(0)
-    await page.evaluate<void>(`document.documentElement.removeAttribute('data-motion')`)
-    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(1)
-    await page.evaluate<void>(`document.documentElement.dataset.motion = 'on'`)
-    await page.setReducedMotion(true)
-    expect(await page.evaluate<number>(`Number(getComputedStyle(document.querySelector('.feature:last-child')).opacity)`)).toBe(1)
-    await page.close()
   })
 
   test("reveals scrolled cards and sections without changing document geometry", async () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)
-    for (const [path, selector] of [["/", ".feature"], ["/docs/quickstart", ".docs-article .doc-section"], ["/changelog", ".release"]] as const) {
+    for (const [path, selector] of [
+      ["/", ".feature"],
+      ["/docs/quickstart", ".docs-article .doc-section"],
+      ["/changelog", ".release"],
+    ] as const) {
       await page.navigate(url(path))
-      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
-      const motion = await page.evaluate<{ readonly before: number; readonly early: number; readonly middle: number; readonly heightBefore: number; readonly heightAfter: number }>(`new Promise((resolve, reject) => {
+      for (
+        let attempt = 0;
+        attempt < 50 &&
+        !(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) instanceof HTMLElement`));
+        attempt += 1
+      )
+        await Bun.sleep(100)
+      const motion = await page.evaluate<{
+        readonly before: number
+        readonly early: number
+        readonly middle: number
+        readonly heightBefore: number
+        readonly heightAfter: number
+      }>(`new Promise((resolve, reject) => {
         const element = [...document.querySelectorAll(${JSON.stringify(selector)})].at(-1)
         if (!(element instanceof HTMLElement)) return reject(new Error('reveal target missing: ' + ${JSON.stringify(path)}))
         const before = Number(getComputedStyle(element).opacity)
@@ -131,10 +197,16 @@ describe("public routes and design-system behavior", () => {
     })`)
     expect(early).toBeLessThan(1)
     await page.setAnimationPlaybackRate(1)
-    const later = await page.evaluate<number>(`new Promise((resolve) => setTimeout(() => resolve(Number(getComputedStyle(document.querySelector('.marketing > main')).opacity)), 120))`)
+    const later = await page.evaluate<number>(
+      `new Promise((resolve) => setTimeout(() => resolve(Number(getComputedStyle(document.querySelector('.marketing > main')).opacity)), 120))`,
+    )
     expect(later).toBeGreaterThan(early)
     await page.navigate(url("/docs/quickstart"))
-    const marker = await page.evaluate<{ readonly first: string; readonly moving: string; readonly settled: string }>(`new Promise((resolve, reject) => {
+    const marker = await page.evaluate<{
+      readonly first: string
+      readonly moving: string
+      readonly settled: string
+    }>(`new Promise((resolve, reject) => {
       const list = document.querySelector('.docs-toc__list')
       const headings = [...document.querySelectorAll('.doc-section > h2[id]')]
       if (!(list instanceof HTMLElement) || headings.length < 2) return reject(new Error('contents rail missing'))
@@ -168,7 +240,9 @@ describe("public routes and design-system behavior", () => {
       heading.scrollIntoView()
       return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(heading.id))))
     })()`)
-    expect(await page.evaluate<string>(`document.querySelector('.docs-toc__list a[aria-current="location"]')?.hash ?? ""`)).toBe(`#${active}`)
+    expect(
+      await page.evaluate<string>(`document.querySelector('.docs-toc__list a[aria-current="location"]')?.hash ?? ""`),
+    ).toBe(`#${active}`)
     await page.close()
   })
 
@@ -233,7 +307,12 @@ describe("public routes and design-system behavior", () => {
       })`)
     }
     expect(await radii("/", [".button--primary", ".feature", ".code-block"])).toEqual(["10px", "10px", "10px"])
-    expect(await radii("/docs", [".docs-bar__nav-toggle", ".docs-search-trigger", ".doc-section", ".card"])).toEqual(["10px", "10px", "10px", "10px"])
+    expect(await radii("/docs", [".docs-bar__nav-toggle", ".docs-search-trigger", ".doc-section", ".card"])).toEqual([
+      "10px",
+      "10px",
+      "10px",
+      "10px",
+    ])
     expect(await radii("/docs/quickstart", [".code-block", ".callout"])).toEqual(["10px", "10px"])
     expect(await radii("/changelog", [".release", ".filters__option"])).toEqual(["10px", "10px"])
     await page.setViewport(390, 844)
@@ -246,12 +325,18 @@ describe("public routes and design-system behavior", () => {
 
   test("keeps every published public route nonblank, in-flow, and within its viewport", async () => {
     const page = await requireBrowser().openPage()
-    for (const [width, height] of [[1440, 900], [768, 1024], [390, 844]] as const) {
+    for (const [width, height] of [
+      [1440, 900],
+      [768, 1024],
+      [390, 844],
+    ] as const) {
       await page.setViewport(width, height)
       for (const theme of ["light", "dark"] as const) {
         for (const path of SITEMAP_PATHS) {
           await page.navigate(url(path))
-          await page.evaluate<boolean>(`(() => { document.documentElement.dataset.theme = ${JSON.stringify(theme)}; return true })()`)
+          await page.evaluate<boolean>(
+            `(() => { document.documentElement.dataset.theme = ${JSON.stringify(theme)}; return true })()`,
+          )
           const layout = await page.evaluate<{
             readonly overflow: boolean
             readonly mainHeight: number
@@ -283,7 +368,11 @@ describe("public routes and design-system behavior", () => {
   test("keeps the install action and product footer destinations available", async () => {
     const page = await requireBrowser().openPage()
     await page.navigate(url("/"))
-    const before = await page.evaluate<{ readonly copyVisible: boolean; readonly headVisible: boolean; readonly footerLinks: readonly string[] }>(`(() => {
+    const before = await page.evaluate<{
+      readonly copyVisible: boolean
+      readonly headVisible: boolean
+      readonly footerLinks: readonly string[]
+    }>(`(() => {
       const copy = document.querySelector(".hero .code-block__copy")
       const head = document.querySelector(".hero .code-block__head")
       return { copyVisible: copy instanceof HTMLElement && getComputedStyle(copy).display !== "none", headVisible: head instanceof HTMLElement && getComputedStyle(head).display !== "none", footerLinks: [...document.querySelectorAll(".footer__columns a")].map(link => link.getAttribute("href")) }
@@ -291,8 +380,12 @@ describe("public routes and design-system behavior", () => {
     expect(before.copyVisible).toBe(true)
     expect(before.headVisible).toBe(true)
     expect(before.footerLinks).toContain("/remote")
-    await page.evaluate<void>(`document.querySelector(".hero .code-block__copy")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
-    expect(await page.evaluate<string>(`document.querySelector(".hero .code-block__copy")?.getAttribute("aria-label")`)).toBe("Copied")
+    await page.evaluate<void>(
+      `document.querySelector(".hero .code-block__copy")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`,
+    )
+    expect(
+      await page.evaluate<string>(`document.querySelector(".hero .code-block__copy")?.getAttribute("aria-label")`),
+    ).toBe("Copied")
     await page.close()
   })
 
@@ -306,9 +399,19 @@ describe("public routes and design-system behavior", () => {
       readonly headerActionVisible: boolean
       readonly hero: { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
       readonly content: { readonly left: number; readonly right: number }
-      readonly headline: { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
+      readonly headline: {
+        readonly top: number
+        readonly bottom: number
+        readonly left: number
+        readonly right: number
+      }
       readonly support: { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
-      readonly actionBounds: readonly { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }[]
+      readonly actionBounds: readonly {
+        readonly top: number
+        readonly bottom: number
+        readonly left: number
+        readonly right: number
+      }[]
       readonly code: { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
       readonly featureTop: number
       readonly supportSize: number
@@ -383,7 +486,7 @@ describe("public routes and design-system behavior", () => {
       }
     })()`)
     expect(Math.max(...layout.heights)).toBeLessThanOrEqual(145)
-    expect(layout.descriptions.every(description => description.length > 0)).toBe(true)
+    expect(layout.descriptions.every((description) => description.length > 0)).toBe(true)
     expect(layout.descriptionSize).toBeGreaterThanOrEqual(14)
     expect(layout.overflowing).toBe(false)
     await page.close()
@@ -427,7 +530,10 @@ describe("public routes and design-system behavior", () => {
     expect(footer.contained).toBe(true)
     expect(footer.overflowing).toBe(false)
     await page.setViewport(390, 844)
-    const mobile = await page.evaluate<{ readonly linkHeights: readonly number[]; readonly overflowing: boolean }>(`(() => ({
+    const mobile = await page.evaluate<{
+      readonly linkHeights: readonly number[]
+      readonly overflowing: boolean
+    }>(`(() => ({
       linkHeights: [...document.querySelectorAll('.marketing .footer__columns a')].map(link => link.getBoundingClientRect().height),
       overflowing: document.documentElement.scrollWidth > innerWidth,
     }))()`)
@@ -596,11 +702,11 @@ describe("public routes and design-system behavior", () => {
     })()`)
     expect(layout.ledeSize).toBe(14)
     expect(layout.sections).toBe(4)
-    expect(layout.sectionPadding.every(padding => padding <= 12)).toBe(true)
+    expect(layout.sectionPadding.every((padding) => padding <= 12)).toBe(true)
     expect(layout.codePadding).toHaveLength(1)
-    expect(layout.codePadding.every(padding => padding <= 8)).toBe(true)
+    expect(layout.codePadding.every((padding) => padding <= 8)).toBe(true)
     expect(layout.copyHeights).toHaveLength(1)
-    expect(layout.copyHeights.every(height => height >= 44)).toBe(true)
+    expect(layout.copyHeights.every((height) => height >= 44)).toBe(true)
     expect(layout.tableCellPadding).toBeLessThanOrEqual(8)
     expect(layout.overflowing).toBe(false)
     await page.close()
@@ -610,7 +716,11 @@ describe("public routes and design-system behavior", () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)
     await page.navigate(url("/changelog"))
-    const before = await page.evaluate<{ readonly labels: readonly string[]; readonly heights: readonly number[]; readonly yearTrigger: boolean }>(`(() => {
+    const before = await page.evaluate<{
+      readonly labels: readonly string[]
+      readonly heights: readonly number[]
+      readonly yearTrigger: boolean
+    }>(`(() => {
       const filters = [...document.querySelectorAll('.release__inline-filters button')]
       const yearTrigger = document.querySelector('.docs--changelog .docs-bar__nav-toggle')
       return {
@@ -622,14 +732,16 @@ describe("public routes and design-system behavior", () => {
     expect(before.labels).toEqual(["All", "Added", "Changed", "Fixed"])
     expect(Math.min(...before.heights)).toBeGreaterThanOrEqual(44)
     expect(before.yearTrigger).toBe(true)
-    await page.evaluate<boolean>(`(() => { const added = [...document.querySelectorAll('.release__inline-filters button')].find(button => button.textContent.trim() === 'Added'); if (!(added instanceof HTMLButtonElement)) return false; added.click(); return true })()`)
+    await page.evaluate<boolean>(
+      `(() => { const added = [...document.querySelectorAll('.release__inline-filters button')].find(button => button.textContent.trim() === 'Added'); if (!(added instanceof HTMLButtonElement)) return false; added.click(); return true })()`,
+    )
     const filtered = await page.evaluate<{ readonly pressed: boolean; readonly groups: readonly string[] }>(`(() => ({
       pressed: document.querySelector('.release__inline-filters button:nth-of-type(2)')?.getAttribute('aria-pressed') === 'true',
       groups: [...document.querySelectorAll('.release__change h4')].map(group => group.textContent.trim()),
     }))()`)
     expect(filtered.pressed).toBe(true)
     expect(filtered.groups.length).toBeGreaterThan(0)
-    expect(filtered.groups.every(group => group === "Added")).toBe(true)
+    expect(filtered.groups.every((group) => group === "Added")).toBe(true)
     await page.close()
   })
 
@@ -707,7 +819,10 @@ describe("public routes and design-system behavior", () => {
 
   test("uses the available changelog phone and tablet width without dropping release controls", async () => {
     const page = await requireBrowser().openPage()
-    for (const [width, left, minWidth] of [[390, 16, 354], [768, 24, 716]] as const) {
+    for (const [width, left, minWidth] of [
+      [390, 16, 354],
+      [768, 24, 716],
+    ] as const) {
       await page.setViewport(width, 1024)
       await page.navigate(url("/changelog"))
       await settleMotion(page)
@@ -872,7 +987,12 @@ describe("public routes and design-system behavior", () => {
     for (const width of [768, 1440] as const) {
       await page.setViewport(width, 900)
       await page.navigate(url("/not-a-route"))
-      const notFound = await page.evaluate<{ readonly card: { readonly left: number; readonly right: number }; readonly container: { readonly left: number; readonly right: number }; readonly links: readonly string[]; readonly overflowing: boolean }>(`(() => {
+      const notFound = await page.evaluate<{
+        readonly card: { readonly left: number; readonly right: number }
+        readonly container: { readonly left: number; readonly right: number }
+        readonly links: readonly string[]
+        readonly overflowing: boolean
+      }>(`(() => {
         const card = document.querySelector('.not-found__card')
         const container = document.querySelector('.app-header__inner')
         if (!(card instanceof HTMLElement) || !(container instanceof HTMLElement)) throw new Error('Not-found panel or site container missing')
@@ -891,7 +1011,12 @@ describe("public routes and design-system behavior", () => {
       expect(notFound.overflowing).toBe(false)
 
       await page.navigate(url("/offline.html"))
-      const offline = await page.evaluate<{ readonly card: { readonly left: number; readonly right: number }; readonly container: { readonly left: number; readonly right: number }; readonly links: readonly string[]; readonly overflowing: boolean }>(`(() => {
+      const offline = await page.evaluate<{
+        readonly card: { readonly left: number; readonly right: number }
+        readonly container: { readonly left: number; readonly right: number }
+        readonly links: readonly string[]
+        readonly overflowing: boolean
+      }>(`(() => {
         const card = document.querySelector('.offline-card')
         const container = document.querySelector('header')
         if (!(card instanceof HTMLElement) || !(container instanceof HTMLElement)) throw new Error('Offline panel or site container missing')
@@ -998,7 +1123,12 @@ describe("public routes and design-system behavior", () => {
   test("uses documentation group widths, changelog cards, and framed status content", async () => {
     const page = await requireBrowser().openPage()
     await page.navigate(url("/docs"))
-    const documentGroups = await page.evaluate<{ readonly tracks: readonly (readonly number[])[]; readonly cards: readonly number[]; readonly contentWidth: number; readonly overflow: boolean }>(`(() => {
+    const documentGroups = await page.evaluate<{
+      readonly tracks: readonly (readonly number[])[]
+      readonly cards: readonly number[]
+      readonly contentWidth: number
+      readonly overflow: boolean
+    }>(`(() => {
       const content=document.querySelector('.docs--index .docs-article')
       if (!(content instanceof HTMLElement)) throw new Error('Documentation index content is missing')
       return {
@@ -1009,22 +1139,45 @@ describe("public routes and design-system behavior", () => {
       }
     })()`)
     expect(documentGroups.tracks.length).toBeGreaterThan(0)
-    expect(documentGroups.tracks.every((tracks) => tracks.length >= 1 && tracks.length <= 3 && tracks.every((width) => Math.abs(width - tracks[0]!) <= 1))).toBe(true)
+    expect(
+      documentGroups.tracks.every(
+        (tracks) =>
+          tracks.length >= 1 && tracks.length <= 3 && tracks.every((width) => Math.abs(width - tracks[0]!) <= 1),
+      ),
+    ).toBe(true)
     expect(documentGroups.cards.every((width) => width >= 240 && width <= documentGroups.contentWidth + 1)).toBe(true)
     expect(documentGroups.overflow).toBe(false)
     await page.navigate(url("/changelog"))
-    expect(await page.evaluate<{ readonly columns: number; readonly before: string }>(`(() => { const release = document.querySelector(".releases--timeline .release"); if (!(release instanceof HTMLElement)) throw new Error("release missing"); return { columns: getComputedStyle(release).gridTemplateColumns.split(" ").length, before: getComputedStyle(release, "::before").content } })()`)).toEqual({ columns: 1, before: "none" })
+    expect(
+      await page.evaluate<{ readonly columns: number; readonly before: string }>(
+        `(() => { const release = document.querySelector(".releases--timeline .release"); if (!(release instanceof HTMLElement)) throw new Error("release missing"); return { columns: getComputedStyle(release).gridTemplateColumns.split(" ").length, before: getComputedStyle(release, "::before").content } })()`,
+      ),
+    ).toEqual({ columns: 1, before: "none" })
     await page.navigate(url("/not-a-route"))
-    expect(await page.evaluate<{ readonly border: number; readonly justifyItems: string; readonly actions: string }>(`(() => { const card = document.querySelector(".not-found__card"); if (!(card instanceof HTMLElement)) throw new Error("not-found card missing"); const actions = card.querySelector(".not-found__actions"); return { border: Number.parseFloat(getComputedStyle(card).borderTopWidth), justifyItems: getComputedStyle(card).justifyItems, actions: actions instanceof HTMLElement ? getComputedStyle(actions).justifyContent : "" } })()`)).toEqual({ border: 1, justifyItems: "start", actions: "start" })
+    expect(
+      await page.evaluate<{ readonly border: number; readonly justifyItems: string; readonly actions: string }>(
+        `(() => { const card = document.querySelector(".not-found__card"); if (!(card instanceof HTMLElement)) throw new Error("not-found card missing"); const actions = card.querySelector(".not-found__actions"); return { border: Number.parseFloat(getComputedStyle(card).borderTopWidth), justifyItems: getComputedStyle(card).justifyItems, actions: actions instanceof HTMLElement ? getComputedStyle(actions).justifyContent : "" } })()`,
+      ),
+    ).toEqual({ border: 1, justifyItems: "start", actions: "start" })
     await page.close()
   })
 
   test("renders changelog release status from the live changelog contract", async () => {
     const page = await requireBrowser().openPage()
     await page.navigate(url("/changelog"))
-    const releases = await page.evaluate<readonly { readonly version: string; readonly date: string; readonly tags: readonly string[] }[]>(`[...document.querySelectorAll(".releases--timeline .release")].map(release => ({ version: release.querySelector(".release__version")?.textContent?.trim() ?? "", date: release.querySelector(".release__date")?.textContent?.trim() ?? "", tags: [...release.querySelectorAll(".release__tags .tag")].map(tag => tag.textContent?.trim() ?? "") }))`)
-    expect(releases).toEqual(RELEASES.map((release) => ({ version: `v${release.version}`, date: release.date, tags: release.tags })))
-    expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll(".releases--timeline .tag")].map(tag => tag.textContent?.trim() ?? "").filter(tag => tag === "Latest" || tag === "Current")`)).toEqual([])
+    const releases = await page.evaluate<
+      readonly { readonly version: string; readonly date: string; readonly tags: readonly string[] }[]
+    >(
+      `[...document.querySelectorAll(".releases--timeline .release")].map(release => ({ version: release.querySelector(".release__version")?.textContent?.trim() ?? "", date: release.querySelector(".release__date")?.textContent?.trim() ?? "", tags: [...release.querySelectorAll(".release__tags .tag")].map(tag => tag.textContent?.trim() ?? "") }))`,
+    )
+    expect(releases).toEqual(
+      RELEASES.map((release) => ({ version: `v${release.version}`, date: release.date, tags: release.tags })),
+    )
+    expect(
+      await page.evaluate<readonly string[]>(
+        `[...document.querySelectorAll(".releases--timeline .tag")].map(tag => tag.textContent?.trim() ?? "").filter(tag => tag === "Latest" || tag === "Current")`,
+      ),
+    ).toEqual([])
     await page.close()
   })
 
@@ -1036,7 +1189,8 @@ describe("public routes and design-system behavior", () => {
       await settleMotion(page)
       for (const theme of ["light", "dark"] as const) {
         await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-        expect(await page.evaluate<boolean>(`(() => {
+        expect(
+          await page.evaluate<boolean>(`(() => {
           const grid = document.querySelector(".features__grid")
           const first = grid?.firstElementChild
           const last = grid?.lastElementChild
@@ -1044,7 +1198,8 @@ describe("public routes and design-system behavior", () => {
           const style = getComputedStyle(grid)
           const box = grid.getBoundingClientRect()
           return style.borderBlockStartStyle === "solid" && style.borderBlockStartWidth === "1px" && style.borderBlockStartColor !== "transparent" && Math.abs(box.left - first.getBoundingClientRect().left) < 1 && Math.abs(box.right - last.getBoundingClientRect().right) < 1
-        })()`)).toBe(true)
+        })()`),
+        ).toBe(true)
       }
     }
     await page.close()
@@ -1054,11 +1209,15 @@ describe("public routes and design-system behavior", () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)
     await page.navigate(url("/"))
-    const landing = await page.evaluate<{ readonly overflow: boolean; readonly copy: number }>(`({ overflow: document.documentElement.scrollWidth > innerWidth, copy: document.querySelector(".hero .code-block__copy")?.getBoundingClientRect().width ?? 0 })`)
+    const landing = await page.evaluate<{ readonly overflow: boolean; readonly copy: number }>(
+      `({ overflow: document.documentElement.scrollWidth > innerWidth, copy: document.querySelector(".hero .code-block__copy")?.getBoundingClientRect().width ?? 0 })`,
+    )
     expect(landing.overflow).toBe(false)
     expect(landing.copy).toBeGreaterThan(0)
     await page.navigate(url("/not-a-route"))
-    const actions = await page.evaluate<readonly { readonly width: number; readonly parent: number }[]>(`[...document.querySelectorAll(".not-found__actions .button")].map(button => { const box = button.getBoundingClientRect(); return { width: box.width, parent: button.parentElement?.getBoundingClientRect().width ?? 0 } })`)
+    const actions = await page.evaluate<readonly { readonly width: number; readonly parent: number }[]>(
+      `[...document.querySelectorAll(".not-found__actions .button")].map(button => { const box = button.getBoundingClientRect(); return { width: box.width, parent: button.parentElement?.getBoundingClientRect().width ?? 0 } })`,
+    )
     expect(actions).toHaveLength(2)
     expect(actions.every((action) => Math.abs(action.width - action.parent) < 1)).toBe(true)
     await page.close()
@@ -1069,7 +1228,24 @@ describe("public routes and design-system behavior", () => {
     const index = async (width: number) => {
       await page.setViewport(width, 900)
       await page.navigate(url("/docs"))
-      return page.evaluate<{ readonly navGettingStarted: string | undefined; readonly navUsage: string | undefined; readonly navUsageVisible: boolean; readonly indexGettingStarted: string | undefined; readonly indexUsage: string | undefined; readonly configuration: { readonly tracks: number; readonly summaries: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] }; readonly gettingStarted: { readonly borderedCards: number; readonly targetHeights: readonly number[]; readonly hrefs: readonly string[] } }>(`(() => {
+      return page.evaluate<{
+        readonly navGettingStarted: string | undefined
+        readonly navUsage: string | undefined
+        readonly navUsageVisible: boolean
+        readonly indexGettingStarted: string | undefined
+        readonly indexUsage: string | undefined
+        readonly configuration: {
+          readonly tracks: number
+          readonly summaries: number
+          readonly targetHeights: readonly number[]
+          readonly hrefs: readonly string[]
+        }
+        readonly gettingStarted: {
+          readonly borderedCards: number
+          readonly targetHeights: readonly number[]
+          readonly hrefs: readonly string[]
+        }
+      }>(`(() => {
         const group = name => document.querySelector('.docs-topic-index [data-doc-group="'+name+'"]')
         const measure = section => {
           if (!(section instanceof HTMLElement)) throw new Error("group missing")
@@ -1112,12 +1288,20 @@ describe("public routes and design-system behavior", () => {
     try {
       await page.setViewport(1440, 900)
       await page.navigate(url("/docs/quickstart"))
-      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.nav .nav__link--active, .docs-shell__nav .docs-nav__link--active')].map(link => link.getAttribute('aria-current') ?? '')`)).toEqual(["page", "page"])
+      expect(
+        await page.evaluate<readonly string[]>(
+          `[...document.querySelectorAll('.nav .nav__link--active, .docs-shell__nav .docs-nav__link--active')].map(link => link.getAttribute('aria-current') ?? '')`,
+        ),
+      ).toEqual(["page", "page"])
 
       await page.setViewport(390, 900)
       await page.navigate(url("/changelog"))
       await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
-      expect(await page.evaluate<string>(`document.querySelector('.primary-nav__routes .docs-nav__link--active')?.getAttribute('aria-current') ?? ''`)).toBe("page")
+      expect(
+        await page.evaluate<string>(
+          `document.querySelector('.primary-nav__routes .docs-nav__link--active')?.getAttribute('aria-current') ?? ''`,
+        ),
+      ).toBe("page")
     } finally {
       await page.close()
     }
@@ -1129,10 +1313,16 @@ describe("public routes and design-system behavior", () => {
       await page.setViewport(390, 900)
       await page.navigate(url("/docs/quickstart"))
       await page.evaluate(`document.querySelector('.docs-search-trigger')?.click()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('.overlay--docs-search')?.hasAttribute('open') === true`)).toBe(true)
+      expect(
+        await page.evaluate<boolean>(`document.querySelector('.overlay--docs-search')?.hasAttribute('open') === true`),
+      ).toBe(true)
       for (let step = 0; step < 6; step += 1) {
         await page.pressKey("Tab", "Tab", 9)
-        expect(await page.evaluate<boolean>(`document.querySelector('.overlay--docs-search')?.contains(document.activeElement) === true`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('.overlay--docs-search')?.contains(document.activeElement) === true`,
+          ),
+        ).toBe(true)
       }
     } finally {
       await page.close()
@@ -1144,12 +1334,22 @@ describe("public routes and design-system behavior", () => {
     const heading = async (path: string, width: number, selector = "h1") => {
       await page.setViewport(width, 900)
       await page.navigate(url(path))
-      return page.evaluate<{ readonly size: number; readonly line: number }>(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); if (!(element instanceof HTMLElement)) throw new Error("heading missing"); const style = getComputedStyle(element); return { size: Number.parseFloat(style.fontSize), line: Number.parseFloat(style.lineHeight) } })()`)
+      return page.evaluate<{ readonly size: number; readonly line: number }>(
+        `(() => { const element = document.querySelector(${JSON.stringify(selector)}); if (!(element instanceof HTMLElement)) throw new Error("heading missing"); const style = getComputedStyle(element); return { size: Number.parseFloat(style.fontSize), line: Number.parseFloat(style.lineHeight) } })()`,
+      )
     }
     await page.setViewport(768, 900)
     await page.navigate(url("/docs"))
-    for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.docs-bar__nav-toggle') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
-    await page.evaluate<void>(`document.querySelector(".docs-bar__nav-toggle")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
+    for (
+      let attempt = 0;
+      attempt < 50 &&
+      !(await page.evaluate<boolean>(`document.querySelector('.docs-bar__nav-toggle') instanceof HTMLElement`));
+      attempt += 1
+    )
+      await Bun.sleep(100)
+    await page.evaluate<void>(
+      `document.querySelector(".docs-bar__nav-toggle")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`,
+    )
     await page.evaluate<void>(`new Promise(resolve => {
       const wait = () => {
         const surface = document.querySelector('.overlay--docs-nav .overlay__surface')
@@ -1158,16 +1358,50 @@ describe("public routes and design-system behavior", () => {
       }
       wait()
     })`)
-    const drawer = await page.evaluate<{ readonly width: number; readonly left: number; readonly top: number; readonly height: number; readonly headerHeight: number; readonly close: number }>(`(() => { const dialog = document.querySelector(".overlay--docs-nav"); const surface = dialog?.querySelector(".overlay__surface"); const close = dialog?.querySelector(".overlay__close"); const header = document.querySelector(".app-header"); if (!(surface instanceof HTMLElement) || !(close instanceof HTMLElement) || !(header instanceof HTMLElement)) throw new Error("docs drawer missing"); const box = surface.getBoundingClientRect(); return { width: box.width, left: box.left, top: box.top, height: box.height, headerHeight: header.getBoundingClientRect().height, close: close.getBoundingClientRect().height } })()`)
-    expect(drawer).toEqual({ width: 320, left: 0, top: drawer.headerHeight, height: 900 - drawer.headerHeight, headerHeight: drawer.headerHeight, close: 44 })
+    const drawer = await page.evaluate<{
+      readonly width: number
+      readonly left: number
+      readonly top: number
+      readonly height: number
+      readonly headerHeight: number
+      readonly close: number
+    }>(
+      `(() => { const dialog = document.querySelector(".overlay--docs-nav"); const surface = dialog?.querySelector(".overlay__surface"); const close = dialog?.querySelector(".overlay__close"); const header = document.querySelector(".app-header"); if (!(surface instanceof HTMLElement) || !(close instanceof HTMLElement) || !(header instanceof HTMLElement)) throw new Error("docs drawer missing"); const box = surface.getBoundingClientRect(); return { width: box.width, left: box.left, top: box.top, height: box.height, headerHeight: header.getBoundingClientRect().height, close: close.getBoundingClientRect().height } })()`,
+    )
+    expect(drawer).toEqual({
+      width: 320,
+      left: 0,
+      top: drawer.headerHeight,
+      height: 900 - drawer.headerHeight,
+      headerHeight: drawer.headerHeight,
+      close: 44,
+    })
     await page.setViewport(1440, 900)
     await page.navigate(url("/docs"))
-    await page.evaluate<void>(`document.querySelector(".docs-search-trigger")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
-    expect(await page.evaluate<number>(`Number.parseFloat(getComputedStyle(document.querySelector(".overlay--docs-search .overlay__surface")).inlineSize)`)).toBe(620)
+    await page.evaluate<void>(
+      `document.querySelector(".docs-search-trigger")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`,
+    )
+    expect(
+      await page.evaluate<number>(
+        `Number.parseFloat(getComputedStyle(document.querySelector(".overlay--docs-search .overlay__surface")).inlineSize)`,
+      ),
+    ).toBe(620)
     await page.setViewport(390, 844)
     await page.navigate(url("/docs"))
-    await page.evaluate<void>(`document.querySelector(".app-header__menu")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
-    const primary = await page.evaluate<{ readonly width: number; readonly height: number; readonly brand: boolean; readonly routeBoxes: number; readonly activeRoute: string | undefined; readonly actionOrder: readonly string[]; readonly targets: readonly number[] }>(`(() => { const dialog = document.querySelector(".overlay--primary-nav"); const surface = dialog?.querySelector(".overlay__surface"); if (!(surface instanceof HTMLElement)) throw new Error("primary navigation missing"); const box = surface.getBoundingClientRect(); const targets = [...surface.querySelectorAll("a,button")].map(target => target.getBoundingClientRect().height); return { width: box.width, height: box.height, brand: !!surface.querySelector(".primary-nav__brand"), routeBoxes: surface.querySelectorAll(".primary-nav__routes .docs-nav__link").length, activeRoute: surface.querySelector(".primary-nav__routes .docs-nav__link--active")?.textContent?.trim(), actionOrder: [...surface.querySelectorAll(".primary-nav__actions > *")].map(action => action.textContent?.trim() ?? ""), targets } })()`)
+    await page.evaluate<void>(
+      `document.querySelector(".app-header__menu")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`,
+    )
+    const primary = await page.evaluate<{
+      readonly width: number
+      readonly height: number
+      readonly brand: boolean
+      readonly routeBoxes: number
+      readonly activeRoute: string | undefined
+      readonly actionOrder: readonly string[]
+      readonly targets: readonly number[]
+    }>(
+      `(() => { const dialog = document.querySelector(".overlay--primary-nav"); const surface = dialog?.querySelector(".overlay__surface"); if (!(surface instanceof HTMLElement)) throw new Error("primary navigation missing"); const box = surface.getBoundingClientRect(); const targets = [...surface.querySelectorAll("a,button")].map(target => target.getBoundingClientRect().height); return { width: box.width, height: box.height, brand: !!surface.querySelector(".primary-nav__brand"), routeBoxes: surface.querySelectorAll(".primary-nav__routes .docs-nav__link").length, activeRoute: surface.querySelector(".primary-nav__routes .docs-nav__link--active")?.textContent?.trim(), actionOrder: [...surface.querySelectorAll(".primary-nav__actions > *")].map(action => action.textContent?.trim() ?? ""), targets } })()`,
+    )
     expect(primary.width).toBe(390)
     expect(primary.height).toBe(844)
     expect(primary.brand).toBe(true)
@@ -1200,21 +1434,39 @@ describe("public routes and design-system behavior", () => {
     const page = await requireBrowser().openPage()
     await page.setViewport(390, 844)
     await page.navigate(url("/docs"))
-    await page.evaluate<void>(`(() => { const menu = document.querySelector(".app-header__menu"); if (!(menu instanceof HTMLButtonElement)) throw new Error("menu missing"); menu.dispatchEvent(new MouseEvent("click", { bubbles: true })); menu.focus(); window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })) })()`)
-    const opened = await page.evaluate<{ readonly dialogs: number; readonly inputIds: readonly string[] }>(`({ dialogs: document.querySelectorAll(".overlay--docs-search[open]").length, inputIds: [...document.querySelectorAll("#docs-search-field")].map(input => input.id) })`)
+    await page.evaluate<void>(
+      `(() => { const menu = document.querySelector(".app-header__menu"); if (!(menu instanceof HTMLButtonElement)) throw new Error("menu missing"); menu.dispatchEvent(new MouseEvent("click", { bubbles: true })); menu.focus(); window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })) })()`,
+    )
+    const opened = await page.evaluate<{ readonly dialogs: number; readonly inputIds: readonly string[] }>(
+      `({ dialogs: document.querySelectorAll(".overlay--docs-search[open]").length, inputIds: [...document.querySelectorAll("#docs-search-field")].map(input => input.id) })`,
+    )
     expect(opened.dialogs).toBe(1)
     expect(new Set(opened.inputIds).size).toBe(1)
     expect(opened.inputIds).toEqual(["docs-search-field"])
-    await page.evaluate<void>(`(() => { const input = document.querySelector(".overlay--docs-search #docs-search-field"); if (!(input instanceof HTMLInputElement)) throw new Error("search input missing"); input.value = "quickstart"; input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "quickstart" })) })()`)
+    await page.evaluate<void>(
+      `(() => { const input = document.querySelector(".overlay--docs-search #docs-search-field"); if (!(input instanceof HTMLInputElement)) throw new Error("search input missing"); input.value = "quickstart"; input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "quickstart" })) })()`,
+    )
     await page.pressEscape()
     await page.evaluate<void>(`new Promise(resolve => setTimeout(resolve, 50))`)
     expect(await page.evaluate<number>(`document.querySelectorAll(".overlay--primary-nav[open]").length`)).toBe(1)
     expect(await page.evaluate<number>(`document.querySelectorAll(".overlay--docs-search[open]").length`)).toBe(0)
-    expect(await page.evaluate<{ readonly tag: string; readonly className: string }>(`({ tag: document.activeElement?.tagName ?? "", className: document.activeElement instanceof HTMLElement ? document.activeElement.className : "" })`)).toEqual({ tag: "BUTTON", className: "docs-search-trigger" })
-    await page.evaluate<void>(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }))`)
-    await page.evaluate<void>(`document.querySelector(".overlay--docs-search .search__result")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`)
+    expect(
+      await page.evaluate<{ readonly tag: string; readonly className: string }>(
+        `({ tag: document.activeElement?.tagName ?? "", className: document.activeElement instanceof HTMLElement ? document.activeElement.className : "" })`,
+      ),
+    ).toEqual({ tag: "BUTTON", className: "docs-search-trigger" })
+    await page.evaluate<void>(
+      `window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }))`,
+    )
+    await page.evaluate<void>(
+      `document.querySelector(".overlay--docs-search .search__result")?.dispatchEvent(new MouseEvent("click", { bubbles: true }))`,
+    )
     await page.evaluate<void>(`new Promise(resolve => setTimeout(resolve, 50))`)
-    expect(await page.evaluate<{ readonly path: string; readonly dialogs: number }>(`({ path: location.pathname, dialogs: document.querySelectorAll("dialog[open]").length })`)).toEqual({ path: "/docs/quickstart", dialogs: 0 })
+    expect(
+      await page.evaluate<{ readonly path: string; readonly dialogs: number }>(
+        `({ path: location.pathname, dialogs: document.querySelectorAll("dialog[open]").length })`,
+      ),
+    ).toEqual({ path: "/docs/quickstart", dialogs: 0 })
     await page.close()
   }, 10_000)
 
@@ -1223,13 +1475,24 @@ describe("public routes and design-system behavior", () => {
     try {
       await page.setViewport(390, 844)
       await page.navigate(url("/docs"))
-      for (const [trigger, dialog] of [[".app-header__menu", ".overlay--primary-nav"], [".docs-bar__nav-toggle", ".overlay--docs-nav"]] as const) {
-        await page.evaluate(`document.querySelector('.skip-link')?.focus(); document.querySelector('${trigger}')?.click()`)
+      for (const [trigger, dialog] of [
+        [".app-header__menu", ".overlay--primary-nav"],
+        [".docs-bar__nav-toggle", ".overlay--docs-nav"],
+      ] as const) {
+        await page.evaluate(
+          `document.querySelector('.skip-link')?.focus(); document.querySelector('${trigger}')?.click()`,
+        )
         expect(await page.evaluate<boolean>(`document.querySelector('${dialog}[open]') !== null`)).toBe(true)
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.querySelector('${dialog}[open]') === null && document.activeElement === document.querySelector('${trigger}')`)).toBe(true)
+        expect(
+          await page.evaluate<boolean>(
+            `document.querySelector('${dialog}[open]') === null && document.activeElement === document.querySelector('${trigger}')`,
+          ),
+        ).toBe(true)
       }
-    } finally { await page.close() }
+    } finally {
+      await page.close()
+    }
   }, 10_000)
 })
 
