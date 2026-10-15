@@ -1,4 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { modelFixture, sessionFixture, v5Server } from "./fixture/v5-server"
 
@@ -29,6 +31,51 @@ describe("shipped TUI command surface", () => {
     ])
       expect(result.stdout).toContain(text)
     expect(result.stdout).not.toContain("--auto")
+  })
+
+  test("run help exposes the per-run config document and isolated data directory flags", async () => {
+    const result = await spawnCli(["run", "--help"])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("--config")
+    expect(result.stdout).toContain("highest-priority layer of a private server")
+    expect(result.stdout).toContain("--isolated")
+    expect(result.stdout).toContain("stored credentials are unavailable")
+  })
+
+  test.each([
+    [["--config", "missing.json", "--server", "http://127.0.0.1:9"], "cannot be combined with --server", undefined],
+    [["--isolated", "--server", "http://127.0.0.1:9"], "cannot be combined with --server", undefined],
+    [["--config", "missing-run-config.json"], "Cannot read --config file", undefined],
+    [["--config", "invalid.jsonc"], "is not valid JSON/JSONC", undefined],
+    [["--config", "valid.jsonc"], "--config cannot be combined with YCODING_CONFIG_CONTENT", "{}"],
+    [["--config", "valid.jsonc"], "--config cannot be combined with YCODING_CONFIG_CONTENT", ""],
+  ] as const)("run rejects %j before starting a server", async (args, message, content) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-run-config-"))
+    try {
+      const spawned = path.join(directory, "spawned")
+      const executable = path.join(directory, "runtime")
+      await fs.writeFile(executable, `#!/bin/sh\nprintf spawned > '${spawned}'\nexit 1\n`, { mode: 0o700 })
+      await fs.writeFile(path.join(directory, "invalid.jsonc"), '{ "capabilities": ')
+      await fs.writeFile(
+        path.join(directory, "valid.jsonc"),
+        '{ // per-run\n "capabilities": { "home_roots": false, }, }',
+      )
+      const result = await spawnCli(
+        ["run", "hello", ...args, ...(args.some((arg) => arg === "--isolated") ? [] : ["--isolated"])],
+        {
+          PWD: directory,
+          TMPDIR: directory,
+          YCODING_RUNTIME_EXECUTABLE: executable,
+          YCODING_CONFIG_CONTENT: content,
+        },
+      )
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout + result.stderr).toContain(message)
+      expect(await Bun.file(spawned).exists()).toBe(false)
+      expect((await fs.readdir(directory)).filter((name) => name.startsWith("ycoding-isolated-"))).toEqual([])
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
   })
 
   test.each(["4", "-1", "true"])("run rejects invalid --yolo level %s", async (level) => {
@@ -113,9 +160,10 @@ async function runTransport(args: string[], rejectAutonomy = false, root = false
   }
 }
 
-async function spawnCli(args: string[]) {
+async function spawnCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {
     cwd: path.resolve(import.meta.dir, ".."),
+    env: Object.fromEntries(Object.entries({ ...process.env, ...env }).filter(([, value]) => value !== undefined)),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

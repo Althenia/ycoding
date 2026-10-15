@@ -13,6 +13,8 @@ export default Runtime.handler(RunCommand, (input) => {
   return runCommand({
     server: Option.getOrUndefined(input.server),
     standalone: input.standalone,
+    config: Option.getOrUndefined(input.config),
+    isolated: input.isolated,
     message: [...input.message, ...(separator === -1 ? [] : process.argv.slice(separator + 1))],
     continue: input.continue,
     session: Option.getOrUndefined(input.session),

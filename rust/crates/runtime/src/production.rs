@@ -233,7 +233,9 @@ impl Core {
             generations: Default::default(),
         });
         let mut global = factory.options.clone();
-        global.directory = global.roots.config.clone();
+        if global.content.is_none() {
+            global.directory = global.roots.config.clone();
+        }
         global.project = false;
         let global =
             config::Configuration::load(global).map_err(|_| unavailable("global configuration"))?;
@@ -1924,7 +1926,9 @@ impl Maintenance {
                         break;
                     }
                     let mut options = factory.options.clone();
-                    options.directory = options.roots.config.clone();
+                    if options.content.is_none() {
+                        options.directory = options.roots.config.clone();
+                    }
                     options.project = false;
                     match config::Configuration::load(options) {
                         Ok(configuration) => {

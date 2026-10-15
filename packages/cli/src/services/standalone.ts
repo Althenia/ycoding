@@ -10,16 +10,18 @@ const decodeReady = Schema.decodeUnknownPromise(Schema.fromJsonString(Ready))
 
 type Options = {
   readonly command?: ReadonlyArray<string>
+  readonly env?: Readonly<Record<string, string>>
+  readonly cwd?: string
 }
 
 function command(password: string, options: Options) {
   const [executable, ...args] = options.command ?? []
   if (!executable) throw new Error("Failed to resolve standalone server command")
   return ChildProcess.make(executable, [...args, "--frontend-executable", process.execPath, "--stdio", "--port", "0"], {
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     // Explicit entry wins over anything inherited, so a user-exported
     // YCODING_PASSWORD cannot shadow the child's lease credential.
-    env: { ...runtimeEnvironment(), YCODING_PASSWORD: password },
+    env: { ...runtimeEnvironment(), ...options.env, YCODING_PASSWORD: password },
     extendEnv: true,
     // The server treats EOF on this pipe as the end of its ownership lease.
     // The OS closes it even when the TUI is killed before Effect finalizers run.
@@ -34,7 +36,7 @@ const makeEndpoint = Effect.fn("cli.standalone.endpoint")(function* (options: Op
   const password = randomBytes(32).toString("base64url")
   const executable = options.command ?? [yield* Effect.tryPromise(runtimeExecutable)]
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const proc = yield* spawner.spawn(command(password, { command: executable }))
+  const proc = yield* spawner.spawn(command(password, { ...options, command: executable }))
   const readyLine = yield* Deferred.make<string, Error>()
   // Keep draining stdout after readiness so later server writes cannot hit EPIPE.
   yield* proc.stdout.pipe(

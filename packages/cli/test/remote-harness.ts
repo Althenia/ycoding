@@ -158,11 +158,12 @@ const providerID = "isolated-stand-in"
 const modelID = "isolated-model"
 
 /** Declares the loopback provider in the isolated config document, never in user config. */
-function providerConfig(standIn: { readonly url: string }) {
+export function providerConfig(standIn: { readonly url: string }) {
   return JSON.stringify({
     providers: {
       [providerID]: {
         name: "Isolated stand-in",
+        package: "aisdk:@ai-sdk/openai-compatible",
         settings: { baseURL: `${standIn.url}/v1`, apiKey: "isolated-stand-in-key" },
         models: {
           [modelID]: {
@@ -176,8 +177,9 @@ function providerConfig(standIn: { readonly url: string }) {
   })
 }
 
-async function startProviderStandIn(fixture: ProviderFixture) {
+export async function startProviderStandIn(fixture: ProviderFixture) {
   const requests: unknown[] = []
+  const authorizations: (string | null)[] = []
   const held: Array<() => void> = []
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -187,6 +189,7 @@ async function startProviderStandIn(fixture: ProviderFixture) {
         return new Response("not found", { status: 404 })
       const body = await request.json()
       requests.push(body)
+      authorizations.push(request.headers.get("authorization"))
       const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
       const frames = fixture.reply?.(body) ?? [
@@ -217,6 +220,7 @@ async function startProviderStandIn(fixture: ProviderFixture) {
     modelID,
     url: `http://127.0.0.1:${server.port}`,
     requests: () => requests,
+    authorizations: () => authorizations,
     releaseAll: () => {
       for (const release of held.splice(0)) release()
     },

@@ -56,6 +56,18 @@ The importer validates the exact supported SQLite schema and resumes a recogniza
 
 Subsequent starts reuse the selected beta store and never merge later stable changes. Cancellation, panic and process death retain recognizable unactivated staging; incomplete copies start a fresh generation. After database publication, marker-loss recovery requires the same identity and retained sealed selection evidence; it never reimports or overwrites acknowledged beta database/resource writes. POSIX publication syncs candidates and directories before the selection record. Invalid or v1 markers, missing selected stores, incompatible storage and unbound existing stores refuse startup without rebind, reset, SQLite fallback or replacement. Original SQLite and resources remain unchanged. Private abandoned files are not discovery state. Core and lazy Meeting imports activate separately; this is not a cross-store coordinated cutover.
 
+## Private evaluation runs
+
+`ycoding run --config <file>` starts a private Rust server and applies the original JSON/JSONC document as `YCODING_CONFIG_CONTENT`, the highest-priority runtime layer. Comments and trailing commas are accepted. The file path resolves from `PWD` (or the process working directory); `{file:...}` references in that inline document resolve from the run directory, not the document's containing directory. Global and project configuration still participate below it.
+
+`ycoding run --isolated` starts a private server with fresh temporary data, cache, state and runtime scratch directories. Its canonical store is `<temporary data>/<namespace>/ycoding.redb`. Stored credentials and Sessions are unavailable; provider environment variables and explicit configuration still work. Existing stable data and beta import markers are outside the private roots and are neither imported nor activated. The temporary tree is removed after the child stops, including startup and run errors. User configuration remains a read source; unrelated user data, configuration, cache and state are unchanged. This isolates runtime storage, not tool or filesystem authority.
+
+```sh
+ycoding run --isolated --config ./eval.jsonc --model openai/gpt-5.6-sol "Inspect the fixture"
+```
+
+Either flag selects a private server and rejects `--server`. `--config` rejects an unreadable or malformed document and any defined `YCODING_CONFIG_CONTENT`, including an empty value, before allocating isolated data or spawning a server. Without these flags, `run` keeps its normal server selection. `--config` alone uses the normal persistent data roots; combine it with `--isolated` for disposable storage.
+
 ## Installation and release channels
 
 Stable installation uses `curl -fsSL https://ycoding.althenia.app/install.sh | sh` and resolves GitHub's latest stable release. The Rust backend beta channel starts at `0.11.0-beta.1`:
