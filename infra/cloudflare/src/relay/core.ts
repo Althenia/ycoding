@@ -1266,11 +1266,11 @@ export function createRelay(deps: RelayDeps) {
       ) {
         const scope = entry.scope
         const target = scope.target
-        if (target.case === "session")
+        if (target.case === "session") {
+          canonicalEpoch(peer, scope, entry.sourceEpoch)
           tasks.push(
             inLane(`${connectionID}:events:${target.value}`, async () => {
               if (!(await authorize(peer))) return
-              canonicalEpoch(peer, scope, entry.sourceEpoch)
               if (!alive(peer) || backendEpochs.get(target.value)?.epoch !== entry.sourceEpoch) return
               const subscriptions = [...acceptedInterests]
                 .filter(([, accepted]) => accepted.target.case === "session" && accepted.target.value === target.value)
@@ -1291,6 +1291,7 @@ export function createRelay(deps: RelayDeps) {
               }
             }),
           )
+        }
       }
       if (entry.type === "events") {
         const target = entry.batch.scope?.target
