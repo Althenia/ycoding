@@ -172,6 +172,112 @@ test("opens the newest window and keeps the visible message anchored when top sc
   }
 }, 30000)
 
+test("enables backward paging when Location hydration mounts the viewport after history settles", async () => {
+  const fixture = sessionHistoryFixture(200)
+  fixture.release()
+  const location = Promise.withResolvers<void>()
+  let data!: ReturnType<typeof useData>
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "commands",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+    route: async (url, request) => {
+      if (url.pathname === "/api/location") {
+        if (url.searchParams.get("location[directory]") !== "/tmp/ycoding-tui-perf/workspace") return undefined
+        await location.promise
+      }
+      return fixture.route(url, request)
+    },
+  })
+  const wait = async (ready: () => boolean) => {
+    const deadline = performance.now() + 5000
+    while (!ready() && performance.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(ready()).toBe(true)
+  }
+  try {
+    await wait(() => data.session.message.history(fixture.sessionID)?.status === "ready")
+    expect(data.session.message.list(fixture.sessionID)).toHaveLength(100)
+    expect(screen.scrollbox()).toBeUndefined()
+    await screen.renderOnce()
+    await screen.renderOnce()
+    location.resolve()
+    await wait(() => screen.frame().includes("Synthetic response 199"))
+    const scroll = screen.scrollbox()!
+    await screen.renderOnce()
+    await screen.renderOnce()
+    scroll.stickyScroll = false
+    scroll.scrollTo(0)
+    await wait(() => data.session.message.list(fixture.sessionID).length === 200)
+    expect(fixture.snapshotQueries).toEqual(["?limit=100", "?limit=100&before=fixture_cursor_100"])
+    expect(scroll.getRenderable("msg_000000")).toBeDefined()
+    expect(fixture.requests).not.toContain(`GET /api/session/${fixture.sessionID}/message`)
+  } finally {
+    location.resolve()
+    await screen.dispose()
+  }
+}, 30000)
+
+test("preserves top-of-viewport paging intent while the newest window refreshes", async () => {
+  const fixture = sessionHistoryFixture(200)
+  fixture.release()
+  const latest = Promise.withResolvers<void>()
+  let refreshing = false
+  let data!: ReturnType<typeof useData>
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    args: { sessionID: fixture.sessionID },
+    settle: "Synthetic response 199",
+    state: "/tmp/ycoding-tui-perf/state",
+    config: { session: { sidebar: "hide" } },
+    data: (value) => {
+      data = value
+    },
+    route: async (url, request) => {
+      if (refreshing && url.pathname.endsWith("/snapshot") && !url.searchParams.has("before")) await latest.promise
+      return fixture.route(url, request)
+    },
+  })
+  const wait = async (ready: () => boolean) => {
+    const deadline = performance.now() + 5000
+    while (!ready() && performance.now() < deadline) {
+      await screen.renderOnce()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(ready()).toBe(true)
+  }
+  try {
+    await screen.renderOnce()
+    await screen.renderOnce()
+    refreshing = true
+    data.session.message.invalidate(fixture.sessionID)
+    const refresh = data.session.message.sync(fixture.sessionID)
+    await wait(() => data.session.message.history(fixture.sessionID)?.status === "loading")
+    const scroll = screen.scrollbox()!
+    scroll.stickyScroll = false
+    scroll.scrollTo(0)
+    await screen.renderOnce()
+    await screen.renderOnce()
+    expect(data.session.message.list(fixture.sessionID)).toHaveLength(100)
+    latest.resolve()
+    await refresh
+    await wait(() => data.session.message.list(fixture.sessionID).length === 200)
+    expect(fixture.snapshotQueries).toEqual(["?limit=100", "?limit=100", "?limit=100&before=fixture_cursor_100"])
+  } finally {
+    latest.resolve()
+    await screen.dispose()
+  }
+}, 30000)
+
 function appendedAssistant(sessionID: string, id: string, text: string, seq: number): YCodingEvent[] {
   const envelope = {
     created: 100 + seq,

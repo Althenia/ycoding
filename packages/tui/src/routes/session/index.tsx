@@ -827,7 +827,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         return
       }
       editor.reconnect(info.location.directory)
-      if (!positioned) restoreViewport(sessionID)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -844,7 +843,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const saved = props.viewports?.get(sessionID)
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (route.sessionID !== sessionID || !scroll || scroll.isDestroyed || !rows.length) return
+        if (disposed || route.sessionID !== sessionID || !scroll || scroll.isDestroyed || !rows.length) return
         if (saved && !saved.follow) {
           setNavigationSlack(saved.navigationSlack)
           setNavigationMessage(saved.navigationMessage)
@@ -859,6 +858,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       })
     })
   }
+  createEffect(
+    on([contextReady, () => rows.length, () => client.connection.status()], ([ready, count, status]) => {
+      if (ready && count > 0 && status === "connected" && !positioned) restoreViewport(route.sessionID)
+    }),
+  )
   onCleanup(() => {
     if (!props.viewports || !scroll || scroll.isDestroyed) return
     props.viewports.set(mountedSessionID, {
@@ -918,15 +922,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       if (!disposed && route.sessionID === sessionID) setPaging(false)
     }
   }
-  let observedScrollTop: number | undefined
   const watchHistory = async () => {
     if (!positioned || disposed || !scroll || scroll.isDestroyed || paging()) return
     const position = scroll.scrollTop
-    const changed = observedScrollTop !== undefined && observedScrollTop !== position
-    observedScrollTop = position
     const atBottom = position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1
     setFollowing(mountedEnd() === rows.length && atBottom)
-    if (!changed || history()?.status === "loading" || history()?.status === "error") return
+    if (history()?.status === "loading" || history()?.status === "error") return
     if (position <= 8 && !atBottom && (mountedStart() > 0 || history()?.before)) void pageHistory()
     if (position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 8 && mountedEnd() < rows.length)
       void pageHistory("newer")

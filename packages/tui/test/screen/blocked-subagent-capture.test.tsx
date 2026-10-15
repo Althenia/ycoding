@@ -29,10 +29,15 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     const rows = await captureRoute({
       ...viewport,
       args: { sessionID },
-      settle: "Claude Sonnet 5",
-      stable: viewport.width === 80
-        ? ["Enter answer"]
-        : ["TEST-TRIAGE SUBAGENT", "Should I mark the pre-existing failures as expected, or fix them?", "test-triage (2 of 3)"],
+      settle: "? awaiting input ·",
+      stable:
+        viewport.width === 80
+          ? ["Enter answer"]
+          : [
+              "TEST-TRIAGE SUBAGENT",
+              "Should I mark the pre-existing failures as expected, or fix them?",
+              "test-triage (2 of 3)",
+            ],
       route,
     })
     expect(rows).toHaveLength(viewport.height)
@@ -77,7 +82,14 @@ function route(url: URL) {
   const child = { ...session(sessionID, "test-triage", now), parentID, agent: "general" }
   const siblings = [
     task("ses_docs", "docs-sync", "running", 1, now),
-    task(sessionID, "git stash · verify baseline   2 failing", "waiting", 2, now, "Should I mark the pre-existing failures as expected, or fix them?"),
+    task(
+      sessionID,
+      "git stash · verify baseline   2 failing",
+      "waiting",
+      2,
+      now,
+      "Should I mark the pre-existing failures as expected, or fix them?",
+    ),
     task("ses_keymap", "keymap-audit", "running", 3, now),
   ]
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
@@ -87,45 +99,150 @@ function route(url: URL) {
   if (["ses_docs", "ses_keymap"].some((id) => url.pathname === `/api/session/${id}`))
     return json({ data: { ...session(url.pathname.slice("/api/session/".length), "Sibling", now), parentID } })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
-    return sessionSnapshot(sessionID, [
+    return sessionSnapshot(
+      sessionID,
+      [
         {
           id: "msg_assistant",
           type: "assistant",
           agent: "general",
           model: { providerID: "anthropic", id: "claude-sonnet-5", variant: "fast" },
-          content: [{ type: "text", text: "Two provider tests fail on main before my changes. They assert a cache ratio of 0 when no tokens were read." }],
+          content: [
+            {
+              type: "text",
+              text: "Two provider tests fail on main before my changes. They assert a cache ratio of 0 when no tokens were read.",
+            },
+          ],
           time: { created: now - 230_000, completed: now - 222_000 },
         },
-        { id: "msg_user", type: "user", text: "Investigate the provider test baseline.", time: { created: now - 242_000 } },
-      ], { session: child })
+        {
+          id: "msg_user",
+          type: "user",
+          text: "Investigate the provider test baseline.",
+          time: { created: now - 242_000 },
+        },
+      ],
+      { session: child },
+    )
   if ([parentID, sessionID].some((id) => url.pathname === `/api/session/${id}/subagent`))
     return json({ data: siblings, summary: { total: 3, active: 3, running: 2, waiting: 1 }, cursor: {} })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
+  if (
+    [
+      `/api/session/${sessionID}/pending`,
+      `/api/session/${sessionID}/permission`,
+      `/api/session/${sessionID}/todo`,
+      `/api/session/${sessionID}/skills`,
+      `/api/session/${sessionID}/guardrail/request`,
+    ].includes(url.pathname)
+  )
+    return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: guardrail() })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: diagnostics() })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "", default: "" } })
   if (url.pathname === "/api/model") return json({ location, data: [model] })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
-  if (url.pathname === "/api/agent") return json({ location, data: [{ id: "general", name: "General", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }] })
-  if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/mcp", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
+  if (url.pathname === "/api/agent")
+    return json({
+      location,
+      data: [
+        {
+          id: "general",
+          name: "General",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
+    })
+  if (
+    [
+      "/api/integration",
+      "/api/command",
+      "/api/skill",
+      "/api/reference",
+      "/api/mcp",
+      "/api/shell",
+      "/api/permission/request",
+      "/api/form/request",
+    ].includes(url.pathname)
+  )
+    return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
-  if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
+  if (url.pathname === "/path")
+    return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
   return undefined
 }
 
 function session(id: string, title: string, now: number) {
-  return { id, title, projectID: "proj_blocked", location: { directory }, agent: "general", model: { providerID: "anthropic", id: "claude-sonnet-5", variant: "fast" }, cost: 0.63, tokens: { input: 31_200, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: now - 242_000, updated: now } }
+  return {
+    id,
+    title,
+    projectID: "proj_blocked",
+    location: { directory },
+    agent: "general",
+    model: { providerID: "anthropic", id: "claude-sonnet-5", variant: "fast" },
+    cost: 0.63,
+    tokens: { input: 31_200, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: now - 242_000, updated: now },
+  }
 }
 
-function task(sessionID: string, description: string, state: "running" | "waiting", order: number, now: number, question?: string) {
+function task(
+  sessionID: string,
+  description: string,
+  state: "running" | "waiting",
+  order: number,
+  now: number,
+  question?: string,
+) {
   const agent = sessionID === "ses_docs" ? "docs-sync" : sessionID === "ses_keymap" ? "keymap-audit" : "test-triage"
-  return { sessionID, parentID, description, agent, model: { providerID: "anthropic", id: "claude-sonnet-5" }, background: true, state, ...(question ? { question: { id: "qst_blocked", text: question, time: now - 221_000 } } : {}), revision: 1, time: { created: now - (5 - order) * 60_000, updated: now } }
+  return {
+    sessionID,
+    parentID,
+    description,
+    agent,
+    model: { providerID: "anthropic", id: "claude-sonnet-5" },
+    background: true,
+    state,
+    ...(question ? { question: { id: "qst_blocked", text: question, time: now - 221_000 } } : {}),
+    revision: 1,
+    time: { created: now - (5 - order) * 60_000, updated: now },
+  }
 }
 
 function guardrail() {
-  return { rootSessionID: parentID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] }
+  return {
+    rootSessionID: parentID,
+    profile: "standard",
+    customRules: 0,
+    approvals: 0,
+    blocked: 0,
+    counters: [],
+    invalidFiles: [],
+  }
 }
 
 function diagnostics() {
-  return { model: { providerID: "anthropic", id: "claude-sonnet-5" }, context: { total: 31_200, percent: 15 }, tokens: { uncachedInput: 31_200, output: 0, reasoning: 0, cacheRead: 68_000, cacheWrite: 0 }, cache: { eligible: 68_000, hitRatio: 0.68, mechanism: "anthropic-cache-control", readReported: true, writeReported: true }, requests: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: { input: 31_200, output: 0, reasoning: 0, cache: { read: 68_000, write: 0 } }, latestInvalidation: "stable-hit" } }
+  return {
+    model: { providerID: "anthropic", id: "claude-sonnet-5" },
+    context: { total: 31_200, percent: 15 },
+    tokens: { uncachedInput: 31_200, output: 0, reasoning: 0, cacheRead: 68_000, cacheWrite: 0 },
+    cache: {
+      eligible: 68_000,
+      hitRatio: 0.68,
+      mechanism: "anthropic-cache-control",
+      readReported: true,
+      writeReported: true,
+    },
+    requests: {
+      logical: 1,
+      physical: 1,
+      helpers: 0,
+      continued: 0,
+      fallback: 0,
+      tokens: { input: 31_200, output: 0, reasoning: 0, cache: { read: 68_000, write: 0 } },
+      latestInvalidation: "stable-hit",
+    },
+  }
 }

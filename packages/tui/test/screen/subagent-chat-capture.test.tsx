@@ -29,7 +29,7 @@ test("captures populated subagent chat states at reference terminal dimensions",
     const lines = await captureRoute({
       ...viewport,
       args: { sessionID },
-      settle: "Claude Sonnet 5",
+      settle: "thinking ·",
       stable: ["Claude Sonnet 5", "◦ docs-sync", viewport.width >= 120 ? "18.4K / 200K · 9%" : "$0.41"],
       route,
     })

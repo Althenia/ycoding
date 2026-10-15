@@ -4,23 +4,33 @@ import { readdir, readFile } from "node:fs/promises"
 
 test("TUI-BOUNDARY source and tests import no Core or Server module", async () => {
   const root = path.resolve(import.meta.dir, "..")
-  const entries = await readdir(root, { recursive: true, withFileTypes: true })
+  const files = await sourceFiles(root)
   const violations = (
     await Promise.all(
-      entries
-        .filter(
-          (entry) => entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) && !entry.parentPath.includes("node_modules"),
+      files.map(async (file) => {
+        const source = await readFile(file, "utf8")
+        return /(?:from\s*|import\s*\(|export\s*.*from\s*)["'][^"']*(?:@ycoding-ai\/(?:core|server)|packages\/(?:core|server))[\/"']/.test(
+          source,
         )
-        .map(async (entry) => {
-          const file = path.join(entry.parentPath, entry.name)
-          const source = await readFile(file, "utf8")
-          return /(?:from\s*|import\s*\(|export\s*.*from\s*)["'][^"']*(?:@ycoding-ai\/(?:core|server)|packages\/(?:core|server))[\/"']/.test(
-            source,
-          )
-            ? path.relative(root, file)
-            : undefined
-        }),
+          ? path.relative(root, file)
+          : undefined
+      }),
     )
   ).filter((value) => value !== undefined)
   expect(violations).toEqual([])
 })
+
+async function sourceFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  return (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.name !== "node_modules")
+        .map(async (entry) => {
+          const file = path.join(directory, entry.name)
+          if (entry.isDirectory()) return sourceFiles(file)
+          return entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [file] : []
+        }),
+    )
+  ).flat()
+}

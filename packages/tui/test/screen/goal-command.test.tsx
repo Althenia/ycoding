@@ -7,6 +7,7 @@ import type { SessionAutonomyState, YCodingEvent } from "@ycoding-ai/client"
 import { materializeClipboardImage } from "../../src/clipboard"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
+import type { useData } from "../../src/context/data"
 
 // Distinct Location and Session from every other screen suite so the shared module mocks
 // installed by renderScreen cannot collide with a concurrent lane.
@@ -173,6 +174,7 @@ const route: FetchHandler = async (url, request) => {
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
+  if (url.pathname === "/api/model/default") return json({ location, data: { selection: session.model } })
   if (url.pathname === "/api/model")
     return json({
       location,
@@ -450,8 +452,18 @@ test("retains the goal draft after a failed PUT across a permission remount", as
 
 test("creates a landing session and sets its goal with the returned session ID", async () => {
   resetFixture({ mode: "normal", yolo: 0 })
-  const screen = await renderScreen({ width: 100, height: 69, route, settle: "Message YCoding…" })
+  let data!: ReturnType<typeof useData>
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    route,
+    settle: "Message YCoding…",
+    data: (value) => {
+      data = value
+    },
+  })
   try {
+    await waitFor(() => data.location.model.default()?.id === session.model.id, "landing model selection")
     await focusComposer(screen)
     await screen.input.typeText("/goal Investigate $reviewer and /command references")
     await submitComposer(screen)
