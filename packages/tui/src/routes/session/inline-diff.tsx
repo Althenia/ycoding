@@ -41,6 +41,7 @@ export type InlineDiffFile = {
   additions?: number
   deletions?: number
   status?: string
+  unavailable?: boolean
 }
 
 type InlineDiffFileStatus = "created" | "deleted" | "modified"
@@ -89,13 +90,23 @@ function inlineDiffSummary(file: InlineDiffFile) {
   }
 }
 
-export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean; view?: "split" | "unified" }) {
+export function InlineDiff(
+  props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean; view?: "split" | "unified" },
+) {
   const { theme, syntax } = useTheme()
   const patches = createMemo(() => props.files.filter((file) => parseInlineDiff(file.diff)?.patch))
   const hunkLines = createMemo(() => props.files.flatMap((file) => inlineDiffSummary(file).lines))
 
   return (
-    <box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1} flexShrink={0}>
+    <box
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={1}
+      paddingBottom={1}
+      gap={1}
+      flexShrink={0}
+    >
       <box
         flexDirection="column"
         border={props.heading === false ? [] : ["left", "right", "top", "bottom"]}
@@ -147,7 +158,13 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
           </box>
           <box height={1} flexShrink={0} border={["top"]} borderColor={theme.border.default} />
         </Show>
-        <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0} paddingLeft={props.view === "split" ? 5 : 0}>
+        <box
+          flexDirection="column"
+          paddingTop={1}
+          paddingBottom={1}
+          flexShrink={0}
+          paddingLeft={props.view === "split" ? 5 : 0}
+        >
           <Show
             when={props.view === "split"}
             fallback={
@@ -188,7 +205,9 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                           {item.lineNum.slice(0, 6)}
                         </span>
                         {"  "}
-                        {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
+                        {item.kind === "context"
+                          ? item.line
+                          : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
                       </text>
                     </box>
                   )

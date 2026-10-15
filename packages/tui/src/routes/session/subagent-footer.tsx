@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import type { SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type { V5Client } from "@ycoding-ai/client/v5"
 import { useRoute, useRouteData } from "../../context/route"
 import { useData } from "../../context/data"
 import { useTheme } from "../../context/theme"
@@ -104,25 +105,26 @@ function totalTokens(session: Pick<SessionInfo, "tokens">) {
 }
 
 export function subagentEconomics(
-  session: Pick<SessionInfo, "cost" | "tokens"> | undefined,
-  diagnostics: SessionCacheDiagnostics | null | undefined,
+  session: Awaited<ReturnType<V5Client["session"]["team"]["economics"]>>["data"][number] | undefined,
   parentTitle: string | undefined,
 ): SubagentEconomics | undefined {
   if (!session) return undefined
   const tokens = totalTokens(session)
-  const cacheHit =
-    diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}%`
+  const cacheHit = session.cacheHitRatio === undefined ? undefined : `${Math.round(session.cacheHitRatio * 100)}%`
   const hit = cacheHit === undefined ? undefined : `${cacheHit} hit`
-  const context = diagnostics
-    ? `${compactNumber(diagnostics.context.total)} / ${diagnostics.context.limit === undefined ? "unreported" : compactNumber(diagnostics.context.limit)}${diagnostics.context.percent === undefined ? "" : ` · ${diagnostics.context.percent}%`}`
-    : undefined
-  const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
-  const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
+  const percent =
+    session.contextTotal !== undefined && session.contextLimit
+      ? Math.round((session.contextTotal / session.contextLimit) * 100)
+      : undefined
+  const context =
+    session.contextTotal !== undefined
+      ? `${compactNumber(session.contextTotal)} / ${session.contextLimit === undefined ? "unreported" : compactNumber(session.contextLimit)}${percent === undefined ? "" : ` · ${percent}%`}`
+      : undefined
+  const reads = session.cacheRead === undefined ? undefined : number(session.cacheRead)
+  const writes = session.cacheWrite === undefined ? undefined : number(session.cacheWrite)
   const spent = money.format(session.cost)
   const summary = [
-    tokens > 0
-      ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}`
-      : undefined,
+    tokens > 0 ? `${Locale.number(tokens)}${percent === undefined ? "" : ` (${percent}%)`}` : undefined,
     hit,
     spent,
   ]
@@ -130,9 +132,9 @@ export function subagentEconomics(
     .join(" · ")
   const strip = [
     context ? `Context ${context}` : undefined,
-    diagnostics && !hit ? "hit unreported" : undefined,
-    diagnostics ? (reads ? `${reads} read` : "read unreported") : undefined,
-    diagnostics ? (writes ? `${writes} write` : "write unreported") : undefined,
+    hit ?? "hit unreported",
+    reads === undefined ? "read unreported" : `${reads} read`,
+    writes === undefined ? "write unreported" : `${writes} write`,
     spent,
     parentTitle ? `rolls up to ${parentTitle}` : undefined,
   ].filter((value): value is string => Boolean(value))
@@ -155,15 +157,6 @@ function compactNumber(value: number) {
 
 function number(value: number) {
   return new Intl.NumberFormat("en-US").format(value)
-}
-
-export function subagentSiblingEconomics(session: Pick<SessionInfo, "cost" | "tokens"> | undefined) {
-  if (!session) return undefined
-  const tokens = totalTokens(session)
-  const output = [money.format(session.cost), tokens > 0 ? Locale.number(tokens) : undefined]
-    .filter(Boolean)
-    .join(" · ")
-  return output || undefined
 }
 
 export function subagentFooterData(
@@ -339,7 +332,7 @@ export function SubagentFooterContent(props: {
   )
 }
 
-export function SubagentFooter(props: { reviewing?: boolean }) {
+export function SubagentFooter(props: { reviewing?: boolean; economics?: SubagentEconomics }) {
   const route = useRouteData("session")
   const navigation = useRoute()
   const data = useData()
@@ -350,24 +343,8 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
     return parent ? data.session.subagent.page(parent) : undefined
   })
   const siblings = createMemo(() => page()?.data ?? [])
-  const parent = createMemo(() => (parentID() ? data.session.get(parentID()!) : undefined))
 
-  createEffect(
-    on(
-      () => route.sessionID,
-      (sessionID) => void data.session.diagnostics.sync(sessionID).catch(() => undefined),
-    ),
-  )
-  createEffect(() => {
-    siblings().forEach((task) => {
-      if (data.session.get(task.sessionID)) return
-      void data.session.sync(task.sessionID).catch(() => undefined)
-    })
-  })
-
-  const economics = createMemo(() =>
-    subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title),
-  )
+  const economics = () => props.economics
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
   const current = createMemo(
     () => (page()?.offset ?? 0) + siblings().findIndex((task) => task.sessionID === route.sessionID) + 1,
@@ -400,12 +377,12 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
             </box>
             <box width={10} flexShrink={0}>
               <text fg={theme.text.subdued} wrapMode="none">
-                {economics()?.cacheHit} hit
+                {economics()?.cacheHit === undefined ? "unreported" : `${economics()?.cacheHit} hit`}
               </text>
             </box>
             <box flexShrink={0}>
               <text fg={theme.text.subdued} wrapMode="none">
-                {economics()?.spent} · durable · resumable
+                {economics()?.spent ?? "unreported"} · durable · resumable
               </text>
             </box>
             <box flexGrow={1} />
@@ -445,12 +422,12 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
           </box>
           <box width={10} flexShrink={0}>
             <text fg={theme.text.subdued} wrapMode="none">
-              {economics()?.cacheHit} hit
+              {economics()?.cacheHit === undefined ? "unreported" : `${economics()?.cacheHit} hit`}
             </text>
           </box>
           <box width={8} flexShrink={0}>
             <text fg={theme.text.subdued} wrapMode="none">
-              {economics()?.spent}
+              {economics()?.spent ?? "unreported"}
             </text>
           </box>
           <text fg={theme.text.feedback.warning.default} wrapMode="none">

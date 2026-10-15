@@ -17,7 +17,14 @@ import { SPINNER_FRAMES } from "../src/component/spinner-frames"
 import { toolLifecyclePresentation } from "../src/routes/session/activity-row"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
 import { resetRailExpansion } from "../src/routes/session/rail-section"
-import { createEventStream, createFetch, json, type FetchHandler, sessionSnapshot } from "./fixture/tui-client"
+import {
+  capturedGroup,
+  createEventStream,
+  createFetch,
+  json,
+  type FetchHandler,
+  sessionSnapshot,
+} from "./fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -657,6 +664,26 @@ function routeFor(
   todos: SessionTodoInfo[] = [],
 ) {
   return (url: URL) => {
+    if (url.pathname === `/api/session/${sessionID}/captured-changes`)
+      return json({
+        data:
+          messages === editTranscript || messages === editedTranscript
+            ? [
+                capturedGroup(
+                  messages === editTranscript ? "msg_assistant_edit" : "msg_assistant_edited",
+                  "packages/core/src/provider/usage.ts",
+                  patch,
+                  3,
+                  1,
+                ),
+                capturedGroup(
+                  messages === editTranscript ? "msg_assistant_edit" : "msg_assistant_edited",
+                  "docs/runtime.md",
+                  secondaryPatch,
+                ),
+              ]
+            : [],
+      })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -1455,20 +1482,23 @@ test("advances running tool elapsed time without changing terminal durations", a
 }, 60_000)
 
 test("renders subagent notifications as compact safe activity rows", async () => {
+  const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
+  const notificationRow = (frame: string) =>
+    frame
+      .split("\n")
+      .find(
+        (line) => line.includes("subagent") && line.includes("completed") && line.indexOf("subagent") < railStart,
+      ) ?? ""
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(subagentNotificationTranscript),
-    settle: "subagent",
+    settle: (screen) => notificationRow(screen.captureCharFrame()).length > 0,
   })
 
   try {
     const lines = screen.lines()
-    const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const row =
-      lines.find(
-        (line) => line.includes("subagent") && line.includes("completed") && line.indexOf("subagent") < railStart,
-      ) ?? ""
+    const row = notificationRow(screen.frame())
     const rowIndex = lines.indexOf(row)
 
     expect(row.indexOf("◦")).toBe(3)
@@ -1681,40 +1711,56 @@ test("renders a running Edit beside Shell on the compact activity grid", async (
 
 test("replaces a live completed Edit with Captured changes while its Shell sibling stays running", async () => {
   const started = Date.now() - 3_000
+  let completed = false
+  const initialRoute = routeFor([
+    { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
+    {
+      id: "msg_parallel_assistant",
+      type: "assistant",
+      agent: "build",
+      model: session.model,
+      content: [
+        {
+          type: "tool",
+          id: "call_parallel_edit",
+          name: "edit",
+          state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} },
+          time: { created: started, ran: started },
+        },
+        {
+          type: "tool",
+          id: "call_parallel_shell",
+          name: "shell",
+          state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} },
+          time: { created: started, ran: started },
+        },
+      ],
+      time: { created: 2 },
+    },
+  ])
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    route: routeFor([
-      { id: "msg_parallel_user", type: "user", text: "Edit while checking", time: { created: 1 } },
-      {
-        id: "msg_parallel_assistant",
-        type: "assistant",
-        agent: "build",
-        model: session.model,
-        content: [
-          {
-            type: "tool",
-            id: "call_parallel_edit",
-            name: "edit",
-            state: { status: "running", input: { path: "src/agent.ts" }, content: [], structured: {} },
-            time: { created: started, ran: started },
-          },
-          {
-            type: "tool",
-            id: "call_parallel_shell",
-            name: "shell",
-            state: { status: "running", input: { command: "bun test parallel-check" }, content: [], structured: {} },
-            time: { created: started, ran: started },
-          },
-        ],
-        time: { created: 2 },
-      },
-    ]),
+    route: (url) =>
+      url.pathname.endsWith("/captured-changes")
+        ? json({
+            data: completed
+              ? [
+                  capturedGroup(
+                    "msg_parallel_assistant",
+                    "src/agent.ts",
+                    "--- a/src/agent.ts\n+++ b/src/agent.ts\n@@ -1 +1 @@\n-old\n+new",
+                  ),
+                ]
+              : [],
+          })
+        : initialRoute(url),
     settle: "parallel-check",
   })
   try {
     expect(screen.frame()).toContain("src/agent.ts")
     await screen.waitForEventStream()
+    completed = true
     screen.events.emit({
       id: "evt_parallel_edit_success",
       created: started + 1,
@@ -1757,7 +1803,7 @@ test("keeps a running patch row honest beside the segment summary of its complet
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(editTranscript),
-    settle: "Applying the usage edit.",
+    settle: "Captured changes 2 files",
   })
 
   try {

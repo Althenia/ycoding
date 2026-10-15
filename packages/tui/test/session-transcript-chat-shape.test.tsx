@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import type { SessionMessageInfo } from "@ycoding-ai/client"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
-import { json, sessionSnapshot } from "./fixture/tui-client"
+import { capturedGroup, json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -229,6 +229,17 @@ const editTranscript = [
 
 function routeFor(messages: SessionMessageInfo[]) {
   return (url: URL) => {
+    if (url.pathname === `/api/session/${sessionID}/captured-changes`)
+      return json({
+        data:
+          messages === editTranscript
+            ? [
+                capturedGroup("msg_assistant_edit", "packages/core/src/provider/usage.ts", usagePatch, 3, 1),
+                capturedGroup("msg_assistant_edit", "docs/runtime.md", runtimePatch),
+                capturedGroup("msg_assistant_edit", "docs/configuration.md", configurationPatch, 2, 1),
+              ]
+            : [],
+      })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })

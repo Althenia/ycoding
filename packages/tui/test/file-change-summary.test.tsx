@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageInfo } from "@ycoding-ai/client"
-import { json, sessionSnapshot } from "./fixture/tui-client"
+import { capturedGroup, json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -136,7 +136,48 @@ const failedTranscript = asMessages([
   assistant("msg_assistant_failed", [editPart("call_edit_failed", "src/parent.ts", parentPatch, "error")]),
 ])
 function routeFor(messages: SessionMessageInfo[], options: { onFileChange?: () => void; running?: boolean } = {}) {
+  const captures =
+    new Map([
+      [singleTranscript, [capturedGroup("msg_assistant_complete", "src/parent.ts", parentPatch)]],
+      [
+        mergedTranscript,
+        [
+          {
+            ...capturedGroup("msg_assistant_complete", "src/parent.ts", parentPatch, 2, 2),
+            files: [
+              ...capturedGroup("msg_assistant_complete", "src/parent.ts", parentPatch).files,
+              ...capturedGroup("msg_assistant_complete", "src/parent.ts", secondPatch).files,
+            ],
+          },
+        ],
+      ],
+      [
+        segmentsTranscript,
+        [
+          capturedGroup("msg_reply_1", "src/parent.ts", parentPatch),
+          capturedGroup("msg_reply_3", "src/parent.ts", secondPatch),
+        ],
+      ],
+      [
+        compactedSegmentsTranscript,
+        [
+          capturedGroup("msg_reply_1", "src/first.ts", patchFor("src/first.ts", "first")),
+          capturedGroup("msg_reply_2", "src/second.ts", patchFor("src/second.ts", "second")),
+        ],
+      ],
+      [sixFilesTranscript, sixPaths.map((path) => capturedGroup("msg_assistant_six", path, patchFor(path, "new")))],
+      [runningStepTranscript, [capturedGroup("msg_step_live", "src/parent.ts", parentPatch)]],
+      [footerlessTranscript, [capturedGroup("msg_step_unknown", "src/parent.ts", parentPatch)]],
+      [
+        nextSegmentRunningTranscript,
+        [
+          capturedGroup("msg_reply_1", "src/first.ts", patchFor("src/first.ts", "first")),
+          capturedGroup("msg_step_2", "src/second.ts", patchFor("src/second.ts", "second")),
+        ],
+      ],
+    ]).get(messages) ?? []
   return (url: URL) => {
+    if (url.pathname === `/api/session/${sessionID}/captured-changes`) return json({ data: captures })
     if (url.pathname === "/api/session/active") return json({ data: options.running ? { [sessionID]: {} } : {} })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)

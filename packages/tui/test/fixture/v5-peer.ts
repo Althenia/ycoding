@@ -319,6 +319,11 @@ function scenario(dispatch: Dispatch) {
       const action = name.slice("session.".length)
       if (["list", "create", "active", "outstanding", "completions"].includes(action))
         return `/api/session${["list", "create"].includes(action) ? "" : `/${action}`}`
+      if (["capturedChanges.list", "team.economics", "family.activity"].includes(action)) {
+        const target = dispatch.request.scope?.target
+        if (target?.case !== "session") throw new Error(`Expected Session scope for ${name}`)
+        return `/api/session/${target.value}/${action === "capturedChanges.list" ? "captured-changes" : action.replaceAll(".", "/")}`
+      }
       const root = `/api/session/${params.sessionID ?? params.parentID}`
       if (["get", "remove"].includes(action)) return root
       if (action.startsWith("subagent.")) {
@@ -372,8 +377,9 @@ function scenario(dispatch: Dispatch) {
     if (name.startsWith("mcp.") && params.name) return `/api/mcp/${params.name}/${name.split(".").at(-1)}`
     return `/api/${locationPaths[name] ?? name.replace(/\.(list|get|create|set|remove|refresh)$/, "").replaceAll(".", "/")}`
   })()
-  const method =
-    name === "session.daybreak.set"
+  const method = ["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name)
+    ? "GET"
+    : name === "session.daybreak.set"
       ? "POST"
       : ["event.subscribe", "session.log"].includes(name)
         ? "GET"
@@ -402,6 +408,12 @@ function scenario(dispatch: Dispatch) {
     url.searchParams.append(key, String(value))
   }
   for (const [key, value] of Object.entries(input.query ?? {})) query(key, value)
+  if (
+    ["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name) &&
+    typeof input.payload === "object" &&
+    input.payload !== null
+  )
+    for (const [key, value] of Object.entries(input.payload)) query(key, value)
   const request = new Request(url, {
     method,
     headers: input.headers,
@@ -444,6 +456,18 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
           const value: unknown = text ? JSON.parse(text) : {}
           if (!response.ok) {
             const error = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {}
+            if (dispatch.operation.errorTypes.includes("ycoding.v5.Connector_Error"))
+              return peer.result(
+                dispatch,
+                {
+                  typeName: "ycoding.v5.Connector_Error",
+                  payload: encodeDomain("ycoding.v5.Connector_Error", {
+                    code: error.code ?? "internal_error",
+                    message: error.message ?? error.error ?? text,
+                  }),
+                },
+                true,
+              )
             const requested =
               typeof error._tag === "string"
                 ? error._tag
@@ -584,6 +608,18 @@ export function scriptedTransport(run: Scenario, events: EventSource) {
           peer.result(dispatch, { typeName: dispatch.operation.resultType, payload })
         })
         .catch((error) => {
+          if (dispatch.operation.errorTypes.includes("ycoding.v5.Connector_Error"))
+            return peer.result(
+              dispatch,
+              {
+                typeName: "ycoding.v5.Connector_Error",
+                payload: encodeDomain("ycoding.v5.Connector_Error", {
+                  code: "internal_error",
+                  message: `${dispatch.operation.diagnosticName}: ${String(error)}`,
+                }),
+              },
+              true,
+            )
           peer.result(
             dispatch,
             {

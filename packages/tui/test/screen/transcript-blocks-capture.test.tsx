@@ -7,7 +7,7 @@ import { InlineDiff } from "../../src/routes/session/inline-diff"
 import { InlineCommand } from "../../src/routes/session/inline-command"
 import { transcriptToolPresentation } from "../../src/routes/session"
 import { captureRoute } from "./capture"
-import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
+import { capturedGroup, json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { ConfigProvider } from "../../src/config"
 import { ThemeProvider } from "../../src/context/theme"
 import { TestTuiContexts } from "../fixture/tui-environment"
@@ -62,6 +62,8 @@ const diff = [
 ].join("\n")
 
 const route: FetchHandler = (url) => {
+  if (url.pathname === `/api/session/${sessionID}/captured-changes`)
+    return json({ data: [capturedGroup("msg_assistant", "packages/core/src/provider/usage.ts", diff, 3, 1)] })
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session, ...children], cursor: {} })
@@ -358,7 +360,7 @@ test("captures transcript blocks through the real session route", async () => {
         { id: "audit-tools", source: "file", spec: "audit-tools", target: "audit-tools", enabled: true, active: true },
       ],
       settle: "Claude Opus 5",
-      stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "MCP"],
+      stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "MCP", "Captured changes 1 file"],
     })
     const text = lines.join("\n")
 

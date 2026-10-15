@@ -27,6 +27,23 @@ export function json(data: unknown, init?: ResponseInit) {
   })
 }
 
+export function capturedGroup(
+  placementMessageID: string,
+  path: string,
+  diff: string,
+  additions = 1,
+  deletions = 1,
+): Awaited<ReturnType<V5Client["session"]["capturedChanges"]["list"]>>["data"][number] {
+  return {
+    placementMessageID,
+    path,
+    additions,
+    deletions,
+    status: "modified" as const,
+    files: [{ path, diff, additions, deletions, status: "modified" as const }],
+  }
+}
+
 export function sessionSnapshot(
   sessionID: string,
   messages: readonly unknown[],
@@ -212,6 +229,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/active") return json({ data: {} })
+    if (/^\/api\/session\/[^/]+\/(captured-changes|team\/economics|family\/activity)$/.test(url.pathname))
+      return json({ data: [] })
     if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))
       return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (/^\/api\/session\/[^/]+\/(pending|skills)$/.test(url.pathname)) return json({ data: [] })

@@ -4,7 +4,7 @@ import { testRender } from "@opentui/solid"
 import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createEffect } from "solid-js"
 import { ClientProvider } from "../../../src/context/client"
-import { DataProvider } from "../../../src/context/data"
+import { DataProvider, useData } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
 import { LocationProvider } from "../../../src/context/location"
 import { RouteProvider, useRoute } from "../../../src/context/route"
@@ -15,6 +15,12 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const module = await import("../../../src/routes/session/composer/subagents-tab")
+
+function SessionProbe(props: { sessionID: string }) {
+  const data = useData()
+  createEffect(() => void data.session.sync(props.sessionID).catch(() => undefined))
+  return null
+}
 
 async function renderMetadata(input: {
   model?: string
@@ -67,9 +73,18 @@ test("formats provider, model, and optional variant", () => {
   expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5", variant: "max" })).toBe(
     "anthropic/claude-sonnet-5#max",
   )
-  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("anthropic/claude-haiku-4-5")
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe(
+    "anthropic/claude-haiku-4-5",
+  )
   expect(module.formatSubagentModel(undefined)).toBeUndefined()
   expect(module.formatSubagentCacheHit(undefined)).toBe("—")
+  expect(module.formatSubagentCacheHit(0.74)).toBe("74% hit")
+  expect(
+    module.formatSubagentEconomics({
+      cost: 0.125,
+      tokens: { input: 1_000, output: 200, reasoning: 100, cache: { read: 900, write: 12 } },
+    }),
+  ).toBe("$0.13 · 2.2k")
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
 })
 
@@ -179,9 +194,12 @@ test("sections active and inactive tasks deterministically", () => {
   expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "ACTIVE", entries: entries.slice(0, 3) }])
   expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "INACTIVE", entries: entries.slice(3) }])
   expect(entries.find((entry) => entry.sessionID === "ses_alpha")).toMatchObject({ startedAt: 2, endedAt: 3 })
-  expect(module.formatSubagentEntryElapsed(entries.find((entry) => entry.sessionID === "ses_alpha")!, 99_000)).toBe("1ms")
+  expect(module.formatSubagentEntryElapsed(entries.find((entry) => entry.sessionID === "ses_alpha")!, 99_000)).toBe(
+    "1ms",
+  )
   expect(module.subagentScrollIndex(entries, 0)).toBe(1)
   expect(module.subagentScrollIndex(entries, 3)).toBe(6)
+  expect(module.subagentScrollIndex(entries, 3, new Set(["ses_running_new", "ses_running_old"]))).toBe(8)
   expect(module.subagentScrollIndex(entries.slice(3), 0)).toBe(1)
   expect(module.taskStatusLabel("waiting")).toBe("? awaiting")
   expect(module.taskStatusLabel("failed")).toBe("failed")
@@ -191,12 +209,50 @@ test("sections active and inactive tasks deterministically", () => {
 
 test("pinned subagents appear first in pin-time order", () => {
   const tasks: SessionOrchestrationTask[] = [
-    { sessionID: "ses_recent_pin", parentID: "ses_parent", description: "Recent", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "completed", revision: 1, time: { created: 1, updated: 2 }, pinnedAt: 20 },
-    { sessionID: "ses_running", parentID: "ses_parent", description: "Running", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: 1, time: { created: 1, updated: 2 } },
-    { sessionID: "ses_early_pin", parentID: "ses_parent", description: "Early", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: 1, time: { created: 1, updated: 2 }, pinnedAt: 10 },
+    {
+      sessionID: "ses_recent_pin",
+      parentID: "ses_parent",
+      description: "Recent",
+      agent: "reviewer",
+      model: { providerID: "openai", id: "gpt-5.6" },
+      background: true,
+      state: "completed",
+      revision: 1,
+      time: { created: 1, updated: 2 },
+      pinnedAt: 20,
+    },
+    {
+      sessionID: "ses_running",
+      parentID: "ses_parent",
+      description: "Running",
+      agent: "reviewer",
+      model: { providerID: "openai", id: "gpt-5.6" },
+      background: true,
+      state: "running",
+      revision: 1,
+      time: { created: 1, updated: 2 },
+    },
+    {
+      sessionID: "ses_early_pin",
+      parentID: "ses_parent",
+      description: "Early",
+      agent: "reviewer",
+      model: { providerID: "openai", id: "gpt-5.6" },
+      background: true,
+      state: "running",
+      revision: 1,
+      time: { created: 1, updated: 2 },
+      pinnedAt: 10,
+    },
   ]
-  expect(module.entriesFromTasks(tasks, "ses_parent").map((entry) => entry.sessionID)).toEqual(["ses_early_pin", "ses_recent_pin", "ses_running"])
-  expect(module.subagentSections(module.entriesFromTasks(tasks, "ses_parent")).map((section) => section.label)).toEqual(["PINNED", "ACTIVE"])
+  expect(module.entriesFromTasks(tasks, "ses_parent").map((entry) => entry.sessionID)).toEqual([
+    "ses_early_pin",
+    "ses_recent_pin",
+    "ses_running",
+  ])
+  expect(module.subagentSections(module.entriesFromTasks(tasks, "ses_parent")).map((section) => section.label)).toEqual(
+    ["PINNED", "ACTIVE"],
+  )
 })
 
 test("classifies every non-terminal orchestration state as active", () => {
@@ -277,7 +333,11 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
   let pinnedAt: number | undefined
   const calls = createFetch((url, request) => {
     if (url.pathname === "/api/session/ses_parent/subagent")
-      return json({ data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
+      return json({
+        data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }],
+        summary: { total: 1, active: 1, running: 0, waiting: 0 },
+        cursor: {},
+      })
     if (url.pathname === "/api/session/ses_child/pin") {
       pinRequests.push({ pathname: url.pathname, method: request.method })
       pinnedAt = request.method === "POST" ? 1_000 : undefined
@@ -305,7 +365,9 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
                       <LeaderProbe />
-                      <ToastProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></ToastProvider>
+                      <ToastProvider>
+                        <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      </ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -353,6 +415,220 @@ test("renders model and running status without a second task row", async () => {
     expect(modelRow).toBeDefined()
     expect(modelRow).toContain("openai/gpt-5.6-luna#high")
     expect(rows.filter((line) => line.includes("openai/gpt-5.6-luna#high"))).toHaveLength(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("reads and renders canonical local family economics and activity for the active direct-child page", async () => {
+  const tasks: SessionOrchestrationTask[] = [
+    {
+      sessionID: "ses_running",
+      parentID: "ses_parent",
+      description: "Review the implementation",
+      agent: "reviewer",
+      model: { providerID: "openai", id: "gpt-6-luna" },
+      background: true,
+      state: "running",
+      revision: 1,
+      time: { created: 1, updated: 1 },
+    },
+    {
+      sessionID: "ses_completed",
+      parentID: "ses_parent",
+      description: "Summarize the result",
+      agent: "general",
+      model: { providerID: "openai", id: "gpt-6-sol" },
+      background: true,
+      state: "completed",
+      revision: 1,
+      time: { created: 2, updated: 3 },
+    },
+  ]
+  const requests: string[] = []
+  const calls = createFetch((url) => {
+    requests.push(url.pathname + url.search)
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: tasks, summary: { total: tasks.length, active: 1, running: 1, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_parent")
+      return json({
+        data: {
+          id: "ses_parent",
+          title: "Parent Session",
+          projectID: "proj_test",
+          location: { directory: "/tmp/ycoding" },
+          agent: "general",
+          model: { providerID: "openai", id: "gpt-6-luna" },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1, updated: 1 },
+        },
+      })
+    if (url.pathname === "/api/session/ses_parent/team/economics")
+      return json({
+        data: [
+          {
+            sessionID: "ses_running",
+            cost: 0.125,
+            tokens: { input: 1_000, output: 200, reasoning: 100, cache: { read: 900, write: 12 } },
+            cacheHitRatio: 0.74,
+            contextTotal: 54_015,
+            contextLimit: 1_050_000,
+            cacheRead: 900,
+            cacheWrite: 12,
+          },
+          {
+            sessionID: "ses_completed",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        ],
+      })
+    if (url.pathname === "/api/session/ses_parent/family/activity")
+      return json({
+        data: [
+          { sessionID: "ses_parent", executing: false },
+          {
+            sessionID: "ses_running",
+            executing: true,
+            activity: { kind: "tool", room: "developer", text: "Editing src/main.ts" },
+          },
+          {
+            sessionID: "ses_completed",
+            executing: false,
+            activity: { kind: "replying", room: "developer", text: "Replying to completed member" },
+          },
+        ],
+      })
+    return undefined
+  })
+  const client = createApi(calls.fetch)
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={client}>
+                <DataProvider>
+                  <SessionProbe sessionID="ses_parent" />
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <ToastProvider>
+                        <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      </ToastProvider>
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 180, height: 32 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame(
+      (frame) => frame.includes("Review the implementation") && frame.includes("Editing src/main.ts"),
+    )
+    const familyRequests = requests.filter((url) => /\/(team\/economics|family\/activity)/.test(url))
+    expect(familyRequests).toHaveLength(2)
+    for (const request of familyRequests) {
+      const url = new URL(request, "http://test")
+      expect(url.searchParams.get("sessionIDs[0]")).toBe("ses_running")
+      expect(url.searchParams.get("sessionIDs[1]")).toBe("ses_completed")
+    }
+    expect(requests.some((url) => /\/ses_(running|completed)\/(diagnostics|snapshot)$/.test(url))).toBe(false)
+    expect(app.captureCharFrame()).toContain("74% hit")
+    expect(app.captureCharFrame()).toContain("$0.13")
+    expect(app.captureCharFrame()).toContain("2.2k")
+    expect(app.captureCharFrame()).toContain("Editing src/main.ts")
+    expect(app.captureCharFrame()).not.toContain("Replying to completed member")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("shows a retrying family-read state instead of inferred activity after read failures", async () => {
+  const task: SessionOrchestrationTask = {
+    sessionID: "ses_running",
+    parentID: "ses_parent",
+    description: "Review the implementation",
+    agent: "reviewer",
+    model: { providerID: "openai", id: "gpt-6-luna" },
+    background: true,
+    state: "running",
+    revision: 1,
+    time: { created: 1, updated: 1 },
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: [task], summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: {} })
+    if (
+      url.pathname === "/api/session/ses_parent/team/economics" ||
+      url.pathname === "/api/session/ses_parent/family/activity"
+    )
+      return json({ code: "internal_error", message: "unavailable" }, { status: 500 })
+    if (url.pathname === "/api/session/ses_parent")
+      return json({
+        data: {
+          id: "ses_parent",
+          title: "Parent Session",
+          projectID: "proj_test",
+          location: { directory: "/tmp/ycoding" },
+          agent: "general",
+          model: { providerID: "openai", id: "gpt-6-luna" },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1, updated: 1 },
+        },
+      })
+    return undefined
+  })
+  const client = createApi(calls.fetch)
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={client}>
+                <DataProvider>
+                  <SessionProbe sessionID="ses_parent" />
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <ToastProvider>
+                        <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      </ToastProvider>
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 120, height: 32 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame(
+      (frame) => frame.includes("Review the implementation") && frame.includes("Family read unavailable · retrying"),
+    )
+    expect(app.captureCharFrame()).not.toContain("Editing src/main.ts")
   } finally {
     app.renderer.destroy()
   }

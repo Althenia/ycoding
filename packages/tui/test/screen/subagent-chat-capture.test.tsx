@@ -30,7 +30,7 @@ test("captures populated subagent chat states at reference terminal dimensions",
       ...viewport,
       args: { sessionID },
       settle: "Claude Sonnet 5",
-      stable: ["Claude Sonnet 5", "◦ docs-sync"],
+      stable: ["Claude Sonnet 5", "◦ docs-sync", viewport.width >= 120 ? "18.4K / 200K · 9%" : "$0.41"],
       route,
     })
     expect(lines).toHaveLength(viewport.height)
@@ -122,6 +122,21 @@ function createTask(sessionID: string, agent: string, state: "running" | "waitin
   }
 }
 function route(url: URL) {
+  if (url.pathname === `/api/session/${parentID}/team/economics`)
+    return json({
+      data: [
+        {
+          sessionID,
+          cost: child.cost,
+          tokens: child.tokens,
+          contextTotal: 18_400,
+          contextLimit: 200_000,
+          cacheHitRatio: 0.74,
+          cacheRead: 41_208,
+          cacheWrite: 2_048,
+        },
+      ],
+    })
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [parent, child], cursor: {} })

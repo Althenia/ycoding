@@ -1,4 +1,4 @@
-import type { SessionCacheDiagnostics, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createMemo, For, Show, createEffect, createSignal, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
@@ -57,8 +57,26 @@ export function formatSubagentModel(model: { providerID: string; id: string; var
   return formatDiagnosticsModel(model)
 }
 
-export function formatSubagentCacheHit(diagnostics: SessionCacheDiagnostics | null | undefined) {
-  return diagnostics?.cache.hitRatio === undefined ? "—" : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
+export function formatSubagentCacheHit(cacheHitRatio: number | undefined) {
+  return cacheHitRatio === undefined ? "—" : `${Math.round(cacheHitRatio * 100)}% hit`
+}
+
+export function formatSubagentEconomics(economics: {
+  cost: number
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+}) {
+  const tokens =
+    economics.tokens.input +
+    economics.tokens.output +
+    economics.tokens.reasoning +
+    economics.tokens.cache.read +
+    economics.tokens.cache.write
+  return [
+    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(economics.cost),
+    tokens > 0 ? Locale.number(tokens) : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ")
 }
 
 export function formatSubagentElapsed(startedAt: number | undefined, now: number) {
@@ -114,10 +132,21 @@ export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
   ]
 }
 
-export function subagentScrollIndex(entries: ReadonlyArray<SubagentEntry>, index: number) {
+export function subagentScrollIndex(
+  entries: ReadonlyArray<SubagentEntry>,
+  index: number,
+  activitySessionIDs: ReadonlySet<string> = new Set(),
+) {
   const active = entries.filter((entry) => isActiveSubagent(entry.status)).length
   const questionRowsBefore = entries.slice(0, index).filter((entry) => entry.awaitingInput).length
-  return index + Number(active > 0) + Number(index >= active && entries.length > active) + questionRowsBefore
+  const activityRowsBefore = entries.slice(0, index).filter((entry) => activitySessionIDs.has(entry.sessionID)).length
+  return (
+    index +
+    Number(active > 0) +
+    Number(index >= active && entries.length > active) +
+    questionRowsBefore +
+    activityRowsBefore
+  )
 }
 
 export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
@@ -158,6 +187,7 @@ function subagentMetadata(input: {
   model?: string
   status?: string
   cacheHit?: string
+  economics?: string
   elapsed?: string
 }) {
   const budget =
@@ -168,7 +198,7 @@ function subagentMetadata(input: {
     AGENT_WIDTH -
     TITLE_MIN_WIDTH -
     4
-  const fields = [input.model, input.status, input.cacheHit, input.elapsed].filter(
+  const fields = [input.model, input.status, input.cacheHit, input.economics, input.elapsed].filter(
     (value): value is string => Boolean(value),
   )
   for (let count = fields.length; count > 1; count--) {
@@ -178,7 +208,13 @@ function subagentMetadata(input: {
   return Locale.truncateWidth(fields[0] ?? "", budget)
 }
 
-export function SubagentMetadata(props: { model?: string; cacheHit?: string; elapsed?: string; status?: string }) {
+export function SubagentMetadata(props: {
+  model?: string
+  cacheHit?: string
+  economics?: string
+  elapsed?: string
+  status?: string
+}) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const metadata = createMemo(() =>
@@ -187,6 +223,7 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
       model: props.model,
       status: props.status,
       cacheHit: props.cacheHit,
+      economics: props.economics,
       elapsed: props.elapsed,
     }),
   )
@@ -218,11 +255,34 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
+  const familyRootID = createMemo(() => {
+    const parent = data.session.get(parentID())
+    if (!parent) return undefined
+    return parent.parentID ? undefined : parentID()
+  })
   const page = createMemo(() => data.session.subagent.page(parentID()))
   const pager = createMemo(() => data.session.subagent.navigation(parentID()))
   const allEntries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
   const entries = createMemo(() => allEntries())
   const sections = createMemo(() => subagentSections(entries()))
+  const [familyRead, setFamilyRead] = createSignal<{
+    economics: Awaited<ReturnType<typeof client.api.session.team.economics>>["data"]
+    activity: Awaited<ReturnType<typeof client.api.session.family.activity>>["data"]
+    failed: boolean
+  }>()
+  let familyReadAt: number | undefined
+  const economicsBySession = createMemo(
+    () => new Map(familyRead()?.economics.map((item) => [item.sessionID, item]) ?? []),
+  )
+  const activityBySession = createMemo(
+    () =>
+      new Map(
+        familyRead()
+          ?.activity.filter((item) => item.executing && item.activity)
+          .map((item) => [item.sessionID, item]) ?? [],
+      ),
+  )
+  const activitySessionIDs = createMemo(() => new Set(activityBySession().keys()))
   const [now, setNow] = createSignal(Date.now())
 
   createEffect(() => {
@@ -231,11 +291,56 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
   })
   createEffect(() => {
-    if (!composer.active("subagents")) return
-    allEntries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
+    const rootID = familyRootID()
+    const sessionIDs = entries().map((entry) => entry.sessionID)
+    if (
+      !composer.active("subagents") ||
+      !rootID ||
+      client.connection.status() !== "connected" ||
+      sessionIDs.length === 0
+    ) {
+      setFamilyRead(undefined)
+      return
+    }
+    setFamilyRead(undefined)
+    let active = true
+    let pending = false
+    const controller = new AbortController()
+    const refresh = () => {
+      if (pending || (familyReadAt !== undefined && Date.now() - familyReadAt < 3_000)) return
+      pending = true
+      familyReadAt = Date.now()
+      void Promise.all([
+        client.api.session.team.economics({ sessionID: rootID, sessionIDs }, { signal: controller.signal }),
+        client.api.session.family.activity({ sessionID: rootID, sessionIDs }, { signal: controller.signal }),
+      ])
+        .then(([economics, activity]) => {
+          if (!active) return
+          setFamilyRead({ economics: economics.data, activity: activity.data, failed: false })
+        })
+        .catch(() => {
+          if (!active) return
+          setFamilyRead({ economics: [], activity: [], failed: true })
+        })
+        .finally(() => {
+          pending = false
+        })
+    }
+    refresh()
+    const timer = setInterval(refresh, 3_000)
+    onCleanup(() => {
+      active = false
+      controller.abort()
+      clearInterval(timer)
+    })
   })
   createEffect(() => {
-    if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
+    if (
+      dimensions().width < 100 ||
+      !composer.active("subagents") ||
+      !entries().some((entry) => entry.status === "running")
+    )
+      return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -288,7 +393,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
 
   function scrollToIndex(index: number, center: boolean) {
     if (!scroll) return
-    const rowIndex = subagentScrollIndex(entries(), index)
+    const rowIndex = subagentScrollIndex(entries(), index, activitySessionIDs())
     if (center) {
       scroll.scrollTo(Math.max(0, rowIndex - Math.floor(scroll.viewport.height / 2)))
       return
@@ -313,8 +418,14 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
           { label: "Enter", shortcut: "attach", gapAfter: 3 },
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           ...(canCancelSubagent(entry.status) ? [{ label: "⌃x k", shortcut: "cancel", gapAfter: 4 }] : []),
-          { label: shortcuts.get("composer.subagent.pin.toggle") ?? "p", shortcut: entry.pinnedAt === undefined ? "pin" : "unpin", gapAfter: 3 },
-          ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: shortcuts.get("composer.subagent.answer") ?? "r", shortcut: "answer", gapAfter: 3 }] : []),
+          {
+            label: shortcuts.get("composer.subagent.pin.toggle") ?? "p",
+            shortcut: entry.pinnedAt === undefined ? "pin" : "unpin",
+            gapAfter: 3,
+          },
+          ...(entry.status === "waiting" && entry.awaitingInput
+            ? [{ label: shortcuts.get("composer.subagent.answer") ?? "r", shortcut: "answer", gapAfter: 3 }]
+            : []),
           ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
           ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
@@ -352,7 +463,9 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         bind: "ctrl+n",
         run() {
           if (!pager().older) return
-          void data.session.subagent.loadOlder(parentID()).catch((error) => console.error("Failed to load older subagents", error))
+          void data.session.subagent
+            .loadOlder(parentID())
+            .catch((error) => console.error("Failed to load older subagents", error))
         },
       },
       {
@@ -362,7 +475,9 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         bind: "ctrl+p",
         run() {
           if (!pager().newer) return
-          void data.session.subagent.loadNewer(parentID()).catch((error) => console.error("Failed to load newer subagents", error))
+          void data.session.subagent
+            .loadNewer(parentID())
+            .catch((error) => console.error("Failed to load newer subagents", error))
         },
       },
       {
@@ -407,9 +522,11 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         run() {
           const entry = selectedEntry()
           if (!entry) return
-          void (entry.pinnedAt === undefined
-            ? client.api.session.pin({ sessionID: entry.sessionID })
-            : client.api.session.unpin({ sessionID: entry.sessionID }))
+          void (
+            entry.pinnedAt === undefined
+              ? client.api.session.pin({ sessionID: entry.sessionID })
+              : client.api.session.unpin({ sessionID: entry.sessionID })
+          )
             .then(() => {
               const id = parentID()
               data.session.subagent.invalidate(id)
@@ -468,6 +585,8 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                     const entryIndex = createMemo(() => entries().indexOf(entry))
                     const active = createMemo(() => entryIndex() === selected())
                     const awaitingInput = createMemo(() => entry.awaitingInput)
+                    const economics = createMemo(() => economicsBySession().get(entry.sessionID))
+                    const activity = createMemo(() => activityBySession().get(entry.sessionID)?.activity?.text)
                     const statusColor = createMemo(() => {
                       if (awaitingInput()) return theme.text.feedback.warning.default
                       if (entry.status === "running") return theme.text.feedback.success.default
@@ -498,25 +617,29 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                           </box>
                           <box flexShrink={0}>
                             <text
-                              fg={
-                                active() || entry.current
-                                  ? theme.text.feedback.info.default
-                                  : theme.text.default
-                              }
+                              fg={active() || entry.current ? theme.text.feedback.info.default : theme.text.default}
                               attributes={active() ? TextAttributes.BOLD : undefined}
                               wrapMode="none"
                             >
                               {Locale.truncateWidth(entry.agent, AGENT_WIDTH)}
                             </text>
                           </box>
-                          <box flexDirection="row" minWidth={0} flexGrow={1} flexShrink={1} paddingLeft={2} paddingRight={2}>
+                          <box
+                            flexDirection="row"
+                            minWidth={0}
+                            flexGrow={1}
+                            flexShrink={1}
+                            paddingLeft={2}
+                            paddingRight={2}
+                          >
                             <text fg={theme.text.subdued} wrapMode="none" truncate>
                               {`· ${entry.title}`}
                             </text>
                           </box>
                           <SubagentMetadata
                             model={entry.model}
-                            cacheHit={formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID))}
+                            cacheHit={formatSubagentCacheHit(economics()?.cacheHitRatio)}
+                            economics={economics() ? formatSubagentEconomics(economics()!) : undefined}
                             elapsed={formatSubagentEntryElapsed(entry, now())}
                             status={entry.status === "running" ? "attached" : undefined}
                           />
@@ -528,6 +651,15 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                             </text>
                           </box>
                         </Show>
+                        <Show when={activity()}>
+                          {(value) => (
+                            <box paddingLeft={16}>
+                              <text fg={theme.text.subdued} wrapMode="none" truncate>
+                                {value()}
+                              </text>
+                            </box>
+                          )}
+                        </Show>
                       </>
                     )
                   }}
@@ -536,15 +668,24 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
             )}
           </For>
         </Show>
+        <Show when={familyRead()?.failed}>
+          <text fg={theme.text.feedback.warning.default}>Family read unavailable · retrying</text>
+        </Show>
         <Show when={pager().older || pager().newer}>
           <box flexDirection="row" gap={3} paddingTop={1}>
             <Show when={pager().newer}>
-              <text fg={theme.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
+              <text
+                fg={theme.text.action.primary.default}
+                onMouseUp={() => void data.session.subagent.loadNewer(parentID())}
+              >
                 newer
               </text>
             </Show>
             <Show when={pager().older}>
-              <text fg={theme.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
+              <text
+                fg={theme.text.action.primary.default}
+                onMouseUp={() => void data.session.subagent.loadOlder(parentID())}
+              >
                 {page()?.position === "top"
                   ? `+${Math.max(0, (page()?.summary.total ?? 0) - (page()?.data.length ?? 0))} more`
                   : "older"}

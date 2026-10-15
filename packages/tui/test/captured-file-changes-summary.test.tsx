@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageInfo } from "@ycoding-ai/client"
 import { capturedChangeSendID } from "@ycoding-ai/client/captured-change-correlation"
-import { json, sessionSnapshot } from "./fixture/tui-client"
+import { capturedGroup, json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -119,12 +119,23 @@ const childTranscript = [
 ] as SessionMessageInfo[]
 function routeFor(messages: SessionMessageInfo[], onMessages?: (sessionID: string) => void) {
   return (url: URL) => {
+    if (url.pathname === `/api/session/${sessionID}/captured-changes`)
+      return json({
+        data: [
+          capturedGroup("msg_reply_1", "src/parent.ts", patchFor("src/parent.ts", "true")),
+          capturedGroup("msg_reply_1", "src/child.ts", patchFor("src/child.ts", "true")),
+          capturedGroup("msg_reply_2", "src/later.ts", patchFor("src/later.ts", "true")),
+        ],
+      })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, messages, { session })
-    if (url.pathname === "/api/session/ses_child/snapshot") return sessionSnapshot("ses_child", childTranscript)
+    if (url.pathname === "/api/session/ses_child/snapshot") {
+      onMessages?.("ses_child")
+      return sessionSnapshot("ses_child", childTranscript)
+    }
     if (url.pathname === "/api/session/ses_foreign/snapshot") {
       onMessages?.("ses_foreign")
       return sessionSnapshot("ses_foreign", childTranscript)

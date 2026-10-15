@@ -81,10 +81,7 @@ async function renderEconomics(width = 120) {
                   }}
                   siblingEconomics={{ ses_paid: "$0.13 · 1.6K" }}
                 />
-                <picker.SubagentMetadata
-                  model="openai/gpt-5.6-terra#high"
-                  status="attached"
-                />
+                <picker.SubagentMetadata model="openai/gpt-5.6-terra#high" status="attached" />
                 <context.SidebarCacheContent diagnostics={() => diagnostics} cost={() => 0} />
               </box>
             </Keymap.Provider>
@@ -155,11 +152,16 @@ test("does not invent hit telemetry for a child with zero or missing usage", asy
 })
 
 test("renders missing subagent pricing as an estimated zero", () => {
-  const value = footer.subagentEconomics({ cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, undefined, undefined)
+  const value = footer.subagentEconomics(
+    { sessionID: "ses_child", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    undefined,
+  )
   expect(value?.spent).toBe("$0.00")
   expect(value?.strip).toContain("$0.00")
-  expect(footer.subagentSiblingEconomics({ cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })).toBe("$0.00")
-  expect(footer.subagentFooterData({ agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, cost: 0 }, undefined).usage?.cost).toBe("$0.00")
+  expect(
+    footer.subagentFooterData({ agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, cost: 0 }, undefined)
+      .usage?.cost,
+  ).toBe("$0.00")
 })
 
 test("fits delegated economics in the 80-column band", async () => {

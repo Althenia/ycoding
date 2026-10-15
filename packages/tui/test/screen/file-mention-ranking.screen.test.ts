@@ -105,13 +105,15 @@ function composer(node: Renderable): TextareaRenderable | undefined {
   return node.getChildren().map(composer).find(Boolean)
 }
 
-async function until(predicate: () => boolean) {
+async function until(predicate: () => boolean, diagnostics?: () => unknown) {
   const deadline = Date.now() + 5000
   while (Date.now() < deadline) {
     if (predicate()) return
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
-  throw new Error("Expected file mention transition did not occur")
+  throw new Error(
+    `Expected file mention transition did not occur${diagnostics ? `: ${JSON.stringify(diagnostics())}` : ""}`,
+  )
 }
 
 test.each([
@@ -130,10 +132,14 @@ test.each([
       settle: "Message YCoding…",
     })
     try {
+      const editorPresentBeforeTyping = !!composer(screen.renderer.root)
       const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
       await screen.mouse.click(3, row)
       await screen.input.typeText("@agents")
-      await until(() => screen.frame().includes("packages/containers/") && screen.frame().includes("AGENTS.md"))
+      await until(
+        () => screen.frame().includes("packages/containers/") && screen.frame().includes("AGENTS.md"),
+        () => ({ editorPresentBeforeTyping, draft: composer(screen.renderer.root)?.plainText, frame: screen.frame() }),
+      )
       await screen.renderOnce()
       const lines = screen.lines()
       const file = lines.findIndex((line) => line.includes("AGENTS.md") && !line.includes("docs/"))
@@ -166,10 +172,14 @@ test("the folder row after the best match still drills with one trailing separat
     settle: "Message YCoding…",
   })
   try {
+    const editorPresentBeforeTyping = !!composer(screen.renderer.root)
     const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
     await screen.mouse.click(3, row)
     await screen.input.typeText("@agents")
-    await until(() => screen.frame().includes("packages/containers/") && screen.frame().includes("AGENTS.md"))
+    await until(
+      () => screen.frame().includes("packages/containers/") && screen.frame().includes("AGENTS.md"),
+      () => ({ editorPresentBeforeTyping, draft: composer(screen.renderer.root)?.plainText, frame: screen.frame() }),
+    )
     screen.input.pressKey("ARROW_DOWN")
     screen.input.pressKey("TAB")
     await until(() => composer(screen.renderer.root)?.plainText === "@packages/containers/")

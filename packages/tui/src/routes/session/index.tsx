@@ -50,14 +50,8 @@ import type {
   SessionAutonomyState,
   SessionOrchestrationTask,
 } from "@ycoding-ai/client"
-import {
-  capturedChildSessionIDs,
-  capturedPartPatches,
-  capturedPatch,
-  groupCapturedPatches,
-  summarizeCapturedChanges,
-} from "@ycoding-ai/client/file-change-summary"
-import { capturedChangeSendID } from "@ycoding-ai/client/captured-change-correlation"
+import type { V5Client } from "@ycoding-ai/client/v5"
+import { capturedPartPatches, capturedPatch, groupCapturedPatches } from "@ycoding-ai/client/file-change-summary"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { contextCompositionBar } from "../../util/provider-usage"
@@ -86,17 +80,11 @@ import { DialogTimeline } from "./dialog-timeline"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
 import { Footer } from "./footer"
-import {
-  hydrateSubagentPage,
-  navigateSubagentSibling,
-  subagentEconomics,
-  subagentSiblingEconomics,
-  SubagentFooter,
-} from "./subagent-footer"
+import { hydrateSubagentPage, navigateSubagentSibling, subagentEconomics, SubagentFooter } from "./subagent-footer"
 import { SubagentSiblingSwitcher } from "./subagent-sibling-switcher"
 import { SubagentEconomicsSurface } from "./subagent-economics"
 import { SubagentAnswerComposer, SubagentBlockedSurface, SubagentQuestionNotice } from "./subagent-blocked"
-import { createCapturedChildHydration } from "./captured-child-hydration"
+import { createCapturedChanges } from "./captured-changes"
 import { BtwContext, BtwFooter } from "./btw"
 import { SubagentTodos } from "./subagent-todos"
 import { filetype } from "../../util/filetype"
@@ -226,21 +214,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const messages = () => data.session.message.list(route.sessionID)
   const [currentSkillIDs, setCurrentSkillIDs] = createSignal<ReadonlySet<string>>()
   const activeSkills = createMemo(() => currentSkillIDs() ?? activeSkillIDs(messages()))
-  const dispatchedChildKey = createMemo(() =>
-    session()?.parentID ? "" : capturedChildSessionIDs(messages()).join(","),
-  )
-  const capturedChildren = createCapturedChildHydration({
+  const captured = createCapturedChanges({
     sessionID: () => route.sessionID,
-    parentID: () => session()?.parentID,
-    dispatched: dispatchedChildKey,
+    ready: () => ["ready", "paging"].includes(data.session.message.history(route.sessionID)?.status ?? ""),
+    revision: () =>
+      messages()
+        .map((message) => message.id)
+        .join(","),
   })
-  const capturedUnits = createMemo(() =>
-    summarizeCapturedChanges(
-      messages(),
-      new Map(capturedChildren.ids().map((sessionID) => [sessionID, data.session.message.list(sessionID)])),
-      (messageID, callID) => capturedChangeSendID(route.sessionID, messageID, callID),
-    ),
-  )
   const location = createMemo(() => session()?.location)
   const currentLocation = useLocation()
 
@@ -681,9 +662,39 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       subagent: true,
     }
   })
-  const economics = createMemo(() =>
-    subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title),
+  const [memberEconomics, setMemberEconomics] =
+    createSignal<Awaited<ReturnType<V5Client["session"]["team"]["economics"]>>["data"][number]>()
+  createEffect(
+    on(
+      [
+        () => route.sessionID,
+        parentID,
+        () => client.connection.status(),
+        () => JSON.stringify({ cost: session()?.cost, tokens: session()?.tokens }),
+      ],
+      ([id, rootID, status]) => {
+        setMemberEconomics(undefined)
+        if (!rootID || status !== "connected") return
+        const controller = new AbortController()
+        let active = true
+        void client.api.session.team
+          .economics({ sessionID: rootID, sessionIDs: [id] }, { signal: controller.signal })
+          .then(
+            (result) => {
+              if (active) setMemberEconomics(result.data.find((member) => member.sessionID === id))
+            },
+            () => {
+              if (active) setMemberEconomics(undefined)
+            },
+          )
+        onCleanup(() => {
+          active = false
+          controller.abort()
+        })
+      },
+    ),
   )
+  const economics = createMemo(() => subagentEconomics(memberEconomics(), parent()?.title))
   const blockedQuestion = createMemo(() =>
     currentTask()?.state === "waiting" ? currentTask()?.question?.text : undefined,
   )
@@ -722,41 +733,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const editor = useEditorContext()
   const rows = createSessionRows(() => route.sessionID)
   const capturedAnchors = createMemo(() => {
-    const anchors = new Map<
-      SessionRow,
-      { files: InlineDiffFile[]; hydration: ReturnType<typeof capturedChildren.status>; children: string[] }
-    >()
-    const units = new Map(capturedUnits().map((unit) => [unit.placementMessageID, unit]))
-    const groups = messages().reduce<SessionMessageInfo[][]>((groups, message) => {
-      if (message.type === "user" || groups.length === 0) {
-        groups.push([message])
-        return groups
-      }
-      groups.at(-1)!.push(message)
-      return groups
-    }, [])
-    groups.forEach((group, index) => {
-      const assistants = group.filter((message) => message.type === "assistant")
-      const placement = assistants.at(-1)?.id
-      if (!placement || !data.session.message.get(route.sessionID, placement)) return
-      const children = capturedChildSessionIDs(group)
-      const childHydration = capturedChildren.status(children)
-      const hydration =
-        index === 0 && group[0]?.type !== "user" && data.session.message.history(route.sessionID)?.before
-          ? {
-              loading: childHydration?.loading ?? false,
-              failed: childHydration?.failed ?? 0,
-              error: childHydration?.error,
-            }
-          : childHydration
-      const unit = units.get(placement)
-      if (!unit && !hydration) return
+    const anchors = new Map<SessionRow, InlineDiffGroup[]>()
+    captured.state().groups.forEach((group) => {
+      if (!data.session.message.get(route.sessionID, group.placementMessageID)) return
       const anchor = rows.findLast(
         (row) =>
           (row.type === "part" || row.type === "group" || row.type === "assistant-footer") &&
-          assistants.some((assistant) => assistant.id === sessionRowMessageID(row)),
+          sessionRowMessageID(row) === group.placementMessageID,
       )
-      if (anchor) anchors.set(anchor, { files: unit?.files.flatMap((file) => file.files) ?? [], hydration, children })
+      if (anchor) anchors.set(anchor, [...(anchors.get(anchor) ?? []), group])
     })
     return anchors
   })
@@ -1182,9 +1167,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.captured-changes.retry",
       title: "Retry captured changes",
       group: "Session",
-      enabled: () => Boolean(capturedChildren.status(dispatchedChildKey().split(","))?.error),
+      enabled: () => Boolean(captured.state().error),
       run: () => {
-        capturedChildren.retry()
+        captured.retry()
         dialog.clear()
       },
     },
@@ -1941,50 +1926,22 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                       <Show when={capturedAnchors().get(row)}>
                         {(capture) => (
                           <box width="100%" marginTop={1} flexShrink={0} visible={!blockedQuestion()}>
-                            <FileChangeBlock
-                              files={capture().files}
-                              label="Captured changes"
-                              collapsed
-                              incomplete={!!capture().hydration}
-                            />
-                            <Show
-                              when={
-                                capture().hydration?.loading ||
-                                (capture().hydration?.failed ?? 0) > 0 ||
-                                capture().hydration?.error
-                              }
-                            >
-                              <box paddingLeft={8} flexDirection="column">
-                                <text
-                                  fg={
-                                    capture().hydration?.loading
-                                      ? theme.text.subdued
-                                      : theme.text.feedback.warning.default
-                                  }
-                                >
-                                  {capture().hydration?.loading
-                                    ? "Child changes loading…"
-                                    : (capture().hydration?.failed ?? 0) > 0
-                                      ? `${capture().hydration?.failed} ${capture().hydration?.failed === 1 ? "child" : "children"} unavailable`
-                                      : "Child membership unavailable"}
-                                </text>
-                                <Show when={capture().hydration?.error}>
-                                  <text fg={theme.text.subdued}>{capture().hydration?.error}</text>
-                                  <text
-                                    fg={theme.text.action.primary.default}
-                                    onMouseUp={() => capturedChildren.retry(capture().children)}
-                                  >
-                                    Retry child changes
-                                  </text>
-                                </Show>
-                              </box>
-                            </Show>
+                            <FileChangeBlock groups={capture()} label="Captured changes" collapsed />
                           </box>
                         )}
                       </Show>
                     </>
                   )}
                 </For>
+                <Show when={captured.state().error}>
+                  <box paddingLeft={8} flexDirection="column">
+                    <text fg={theme.text.feedback.warning.default}>Captured changes unavailable</text>
+                    <text fg={theme.text.subdued}>{captured.state().error}</text>
+                    <text fg={theme.text.action.primary.default} onMouseUp={() => captured.retry()}>
+                      Retry captured changes
+                    </text>
+                  </box>
+                </Show>
                 <BackgroundToolHint messages={messages()} />
                 <Show when={mountedEnd() < rows.length}>
                   <text fg={theme.text.subdued} onMouseUp={() => void pageHistory("newer")}>
@@ -2173,7 +2130,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       <Switch>
         <Match when={btw() && parentID()}>{(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}</Match>
         <Match when={subagent()}>
-          <SubagentFooter reviewing={disabled()} />
+          <SubagentFooter reviewing={disabled()} economics={economics()} />
         </Match>
         <Match when={true}>
           <Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} />
@@ -3839,24 +3796,25 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
  * transcript's usual expand interaction.
  */
 function FileChangeBlock(props: {
-  files: InlineDiffFile[]
+  files?: InlineDiffFile[]
+  groups?: InlineDiffGroup[]
   label?: string
   collapsed?: boolean
-  incomplete?: boolean
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
-  const files = createMemo(() =>
-    groupCapturedPatches(
-      props.files.flatMap((file) => {
-        const parsed = capturedPatch(file.diff, file.path, file.status)
-        return parsed ? [parsed] : []
-      }),
-    ),
+  const files = createMemo(
+    () =>
+      props.groups ??
+      groupCapturedPatches(
+        (props.files ?? []).flatMap((file) => {
+          const parsed = capturedPatch(file.diff, file.path, file.status)
+          return parsed ? [parsed] : []
+        }),
+      ),
   )
   const summary = createMemo(
-    () =>
-      `${props.label ?? "Edited"} ${files().length}${props.incomplete ? " known" : ""} ${files().length === 1 ? "file" : "files"}${props.incomplete ? " · incomplete" : ""}`,
+    () => `${props.label ?? "Edited"} ${files().length} ${files().length === 1 ? "file" : "files"}`,
   )
   const [expanded, setExpanded] = createSignal(!props.collapsed)
   const counts = createMemo(() => {
@@ -3949,11 +3907,16 @@ function FileChangeRow(props: { file: InlineDiffGroup }) {
         </Show>
       </box>
       <Show when={expanded()}>
+        <Show when={props.file.files.some((file) => file.unavailable)}>
+          <text fg={theme.text.subdued} paddingLeft={8}>
+            Patch unavailable
+          </text>
+        </Show>
         <InlineDiff
           path={props.file.path}
           additions={props.file.additions}
           deletions={props.file.deletions}
-          files={props.file.files}
+          files={props.file.files.filter((file) => !file.unavailable)}
           heading={false}
           wrapMode={ctx.diffWrapMode()}
           view={diffViewForWidth(ctx.config.diffs?.view, ctx.width - 17)}

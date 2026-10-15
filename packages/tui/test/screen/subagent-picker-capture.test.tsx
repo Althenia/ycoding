@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
-import { createEffect } from "solid-js"
+import { createEffect, onMount } from "solid-js"
 import { Composer } from "../../src/routes/session/composer"
 import { Footer } from "../../src/routes/session/footer"
 import { Header } from "../../src/routes/session/header"
@@ -69,10 +69,14 @@ test("captures populated subagent picker states at reference terminal dimensions
     try {
       await waitFor(capture.frame, "Claude Opus 5")
       await waitFor(capture.frame, "ACTIVE")
+      if (viewport.width !== NARROW_VIEWPORT.width) await waitFor(capture.frame, "68% hit")
 
       const lines = capture.rows()
       expect(lines).toHaveLength(viewport.height)
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
+      expect(
+        capture.requests.filter((url) => children.some((child) => url === `/api/session/${child.id}/diagnostics`)),
+      ).toEqual([])
       expect(lines.join("\n")).toContain("Subagents")
       expect(lines.join("\n")).toContain("ACTIVE")
       expect(lines.join("\n")).toContain("INACTIVE")
@@ -174,7 +178,11 @@ test("keeps the parent header status informational while subagents are active", 
 
 async function boot(viewport: { width: number; height: number }) {
   const events = createEventStream()
-  const calls = createFetch(route, events)
+  const requests: string[] = []
+  const calls = createFetch((url) => {
+    requests.push(url.pathname)
+    return route(url)
+  }, events)
   const app = await testRender(
     () => (
       <TestTuiContexts directory={directory}>
@@ -215,6 +223,7 @@ async function boot(viewport: { width: number; height: number }) {
   app.renderer.start()
 
   return {
+    requests,
     frame: () => app.captureCharFrame(),
     rows: () => {
       const frame = app.captureCharFrame()
@@ -235,6 +244,7 @@ async function boot(viewport: { width: number; height: number }) {
 function SyncLocation() {
   const data = useData()
   const locationState = useLocation()
+  onMount(() => void data.session.sync(sessionID))
   createEffect(() => locationState.set(data.location.default()))
   return null
 }
@@ -286,6 +296,15 @@ function task(
 }
 
 function route(url: URL) {
+  if (url.pathname === `/api/session/${sessionID}/team/economics`)
+    return json({
+      data: children.map((child) => ({
+        sessionID: child.id,
+        cost: child.cost,
+        tokens: child.tokens,
+        cacheHitRatio: { ses_0a11ce02: 0.68, ses_0a11ce03: 0.74, ses_0a11ce04: 0.81 }[child.id],
+      })),
+    })
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session, ...children], cursor: {} })

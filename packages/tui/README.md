@@ -18,7 +18,7 @@ Frontend version and channel come from the executable's build constants. Status 
 
 Custom endpoint saving invokes `provider.configure` for the backend's global configuration target before connecting or activating a credential profile and refreshing provider read models. The TUI never writes provider configuration documents or embeds credential material in that configuration request.
 
-Family economics, activity, and captured changes are local presentation folds over loaded history and resident Session information. Captured changes retain T10's known/incomplete labelling, available root and authorized child patches, and failed-child-only retry. The shared Client correlation codec identifies dispatched inputs without importing runtime orchestration. The canonical captured-change list is all-or-error and cannot provide per-child retry. The three family projections admit Remote Client and Relay roles; the local TUI connection cannot invoke them.
+Family changes, economics and activity use the canonical v5 local operations. Captured changes read every opaque cursor page before displaying a complete snapshot at resident placement messages; a failed read shows its error and retries the complete projection without per-child transcript reads. The Subagents composer view reads economics for its resident direct-child page in one request and refreshes bounded activity at most every three seconds while connected and active. Tab close, route change and disconnect stop the activity loop. A selected child's economics strip and footer share one canonical result; unknown diagnostics remain unreported. All three family projections admit Local Client, Remote Client and Relay roles.
 
 ## Provider presentation
 
