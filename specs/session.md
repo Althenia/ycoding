@@ -26,6 +26,10 @@ State transitions publish version-2 `session.archived` or `session.unarchived` e
 
 Automatic retention deletion is deferred for v0.1.1 pending cross-process safety. See [archive and unarchive](../docs/runtime.md#archive-and-unarchive). Archiving does not start a deletion timer.
 
+## Deletion
+
+`DELETE /api/session/:sessionID` deletes the Session and every descendant, publishes `session.deleted` for each, and returns `204 No Content`. Deletion succeeds when the Session's stored directory no longer exists: it does not create that directory, and file reads and mutations at that Location fail without creating it.
+
 ## Pin Is Shared Session State
 
 `Session.Info.time.pinned` is optional and records the latest pin event time; clients order pinned Sessions by it. `POST /api/session/:sessionID/pin` pins one existing Session; `DELETE /api/session/:sessionID/pin` unpins it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`. Managed child Sessions use these same operations.

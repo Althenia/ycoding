@@ -86,7 +86,6 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const git = yield* Git.Service
-    const locationRoot = yield* fs.realPath(location.directory)
 
     const repositoryWorktree = Effect.fnUntraced(function* (target: string) {
       const resolved = yield* resolvePath(path.resolve(target)).pipe(
@@ -153,6 +152,7 @@ const layer = Layer.effect(
       const absolute = path.resolve(location.directory, input.path)
       const lexicallyInternal = FSUtil.contains(location.directory, absolute)
 
+      const locationRoot = yield* fs.realPath(location.directory)
       const resolved = yield* resolvePath(absolute)
       if (lexicallyInternal && !FSUtil.contains(locationRoot, resolved.canonical)) {
         return yield* new PathError({ path: input.path, reason: "location_escape" })

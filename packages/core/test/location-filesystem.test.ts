@@ -66,4 +66,16 @@ describe("FileSystem", () => {
       }).pipe(provide(directory)),
     ),
   )
+
+  it.live("builds for a missing directory and fails reads without creating it", () =>
+    withTmp((parent) => {
+      const directory = path.join(parent, "missing")
+      return Effect.gen(function* () {
+        const service = yield* FileSystem.Service
+        expect(Exit.isFailure(yield* service.list().pipe(Effect.exit))).toBe(true)
+        expect(Exit.isFailure(yield* service.read({ path: RelativePath.make("a.txt") }).pipe(Effect.exit))).toBe(true)
+        expect(yield* Effect.promise(() => fs.stat(directory).then(() => true, () => false))).toBe(false)
+      }).pipe(provide(directory))
+    }),
+  )
 })
