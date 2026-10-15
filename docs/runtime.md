@@ -212,7 +212,7 @@ The revision 5 connection delivers filesystem and managed-attachment assets as o
 
 Local revision 5 Form callers select a recorded Location's global namespace with `Scope.global_form { directory, workspace_id? }` and params.sessionID `global`. This scope supports create/list/get/state/reply/cancel without a Session row and isolates ownership by the selected Location. Global Form settlement events retain the global owner and publish as sessionless ephemeral events; other event owners retain strict Session-ID validation. Real-Session forms continue to resolve placement from that Session. Remote Form callers remain restricted to verified real Sessions and cannot select this global namespace.
 
-Both the full TUI and Mini retain each pending global Form's owning Location for replies and cancellation. The local Client rejects global Form replies and cancellations before transmission, so those presentations cannot settle global Forms through that Client.
+Both the full TUI and Mini reply to and cancel global Forms using the Form's backend-resolved Location, independently of the client's default Location. Full TUI tracks global Forms by Location and ID; Mini filters global Form events by its active Location. Settlement removes the matching displayed Form, and reconnect refreshes pending Forms from canonical reads. A sent mutation with an unknown outcome is not replayed; a late result for an older Form does not clear a newer answer draft. Cancellation errors use the existing Form error display.
 
 ### Execution ownership
 

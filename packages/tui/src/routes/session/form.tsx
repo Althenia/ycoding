@@ -178,6 +178,15 @@ export function FormPrompt(props: { form: FormWithLocation }) {
     setStore("error", "")
   }
 
+  function reportError(error: unknown) {
+    setStore(
+      "error",
+      typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+        ? error.message
+        : "Form request failed",
+    )
+  }
+
   function replySingle(field: FormAnswerField, value: FormValue) {
     client.api.form
       .reply(
@@ -188,14 +197,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
         },
         requestOptions(props.form),
       )
-      .catch((error: unknown) => {
-        setStore(
-          "error",
-          typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
-            ? error.message
-            : "Invalid answer",
-        )
-      })
+      .catch(reportError)
   }
 
   function pick(value: FormValue, customValue?: string) {
@@ -348,7 +350,9 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function cancel() {
-    void client.api.form.cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form))
+    void client.api.form
+      .cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form))
+      .catch(reportError)
   }
 
   function openExternal() {
@@ -414,14 +418,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
         },
         requestOptions(props.form),
       )
-      .catch((error: unknown) => {
-        setStore(
-          "error",
-          typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
-            ? error.message
-            : "Invalid answer",
-        )
-      })
+      .catch(reportError)
   }
 
   onMount(() => onCleanup(keymap.mode.push(FORM_MODE)))
@@ -449,10 +446,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
         group: "Form",
         run: () => {
           if (textual()) {
-            void client.api.form.cancel(
-              { sessionID: props.form.sessionID, formID: props.form.id },
-              requestOptions(props.form),
-            )
+            cancel()
             return
           }
           setStore("editing", false)
@@ -729,9 +723,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                 {external().url}
               </text>
               <text
-                fg={
-                  store.answers[external().key] === true ? theme.text.feedback.success.default : theme.text.subdued
-                }
+                fg={store.answers[external().key] === true ? theme.text.feedback.success.default : theme.text.subdued}
               >
                 {store.answers[external().key] === true
                   ? "✓ Acknowledged"
@@ -797,9 +789,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                       >
                         <box flexDirection="row">
                           <box
-                            backgroundColor={
-                              active() ? theme.background.formfield.focused : theme.background.default
-                            }
+                            backgroundColor={active() ? theme.background.formfield.focused : theme.background.default}
                             paddingRight={1}
                           >
                             <text
@@ -807,9 +797,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                             >{`${i() + 1}.`}</text>
                           </box>
                           <box
-                            backgroundColor={
-                              active() ? theme.background.formfield.focused : theme.background.default
-                            }
+                            backgroundColor={active() ? theme.background.formfield.focused : theme.background.default}
                           >
                             <text
                               fg={
@@ -854,9 +842,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                           {`${rows().length + 1}.`}
                         </text>
                       </box>
-                      <box
-                        backgroundColor={other() ? theme.background.formfield.focused : theme.background.default}
-                      >
+                      <box backgroundColor={other() ? theme.background.formfield.focused : theme.background.default}>
                         <text
                           fg={
                             other()

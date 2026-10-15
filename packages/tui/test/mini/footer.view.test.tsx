@@ -121,7 +121,8 @@ async function renderFooter(
     onCycle?: () => void
     onSubmit?: (prompt: RunPrompt) => boolean
     view?: FooterView
-    onFormReply?: (input: unknown) => void
+    onFormReply?: (input: unknown) => void | Promise<void>
+    onFormCancel?: (input: unknown) => void | Promise<void>
     browserAddress?: string
     onChromePair?: () => Promise<{ secret: string; expiresAt: number }>
     onChromeStatus?: () => Promise<{ state: "unavailable" | "connected" | "pairing" | "paused"; paired?: boolean }>
@@ -157,7 +158,7 @@ async function renderFooter(
           onSubmit={input.onSubmit ?? (() => true)}
           onPermissionReply={() => {}}
           onFormReply={(value) => input.onFormReply?.(value)}
-          onFormCancel={() => {}}
+          onFormCancel={(value) => input.onFormCancel?.(value)}
           browserAddress={input.browserAddress ? () => input.browserAddress : undefined}
           onChromePair={input.onChromePair}
           onChromeStatus={input.onChromeStatus ?? (async () => ({ state: "unavailable" }))}
@@ -197,6 +198,62 @@ async function renderFooter(
     },
   }
 }
+
+test.each(["reply", "cancel"] as const)(
+  "an uncertain Mini global Form %s cannot clear a newer rendered draft",
+  async (mutation) => {
+    const sent = Promise.withResolvers<void>()
+    const response = Promise.withResolvers<void>()
+    let requests = 0
+    const send = async () => {
+      requests++
+      sent.resolve()
+      await response.promise
+    }
+    const app = await renderFooter({
+      view: {
+        type: "form",
+        request: {
+          id: "frm_old",
+          sessionID: "global",
+          title: "Old global Form",
+          location: { directory: "/selected" },
+          fields: [{ key: "ok", type: mutation === "reply" ? "boolean" : "string" }],
+        },
+      },
+      onFormReply: send,
+      onFormCancel: send,
+      height: 16,
+    })
+    try {
+      await app.renderOnce()
+      if (mutation === "reply") app.mockInput.pressEnter()
+      else app.mockInput.pressEscape()
+      await sent.promise
+      app.setView({
+        type: "form",
+        request: {
+          id: "frm_new",
+          sessionID: "global",
+          title: "New global Form",
+          location: { directory: "/selected" },
+          fields: [{ key: "draft", type: "string" }],
+        },
+      })
+      await app.renderOnce()
+      await app.mockInput.typeText("keep newer draft")
+      await app.renderOnce()
+      response.reject(new Error("Connection replaced; outcome unknown"))
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("New global Form")
+      expect(app.captureCharFrame()).toContain("keep newer draft")
+      expect(requests).toBe(1)
+    } finally {
+      response.resolve()
+      app.cleanup()
+    }
+  },
+)
 
 test("direct footer preserves a partial multi-field form draft across permission preemption", async () => {
   const request: FormInfo = {

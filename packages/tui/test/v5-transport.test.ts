@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test"
-import { V5ClientError } from "@ycoding-ai/client/v5"
 import { createApi, createEventStream, createFetch, createLogStream, json, sessionSnapshot } from "./fixture/tui-client"
 
 test("Ready produces a local connection event and snapshot paging preserves opaque cursors", async () => {
@@ -54,23 +53,35 @@ test("reconnect never replays a transmitted prompt and keeps unsent distinct fro
   }
 })
 
-test("global Form settlement rejects explicitly without transmitting a reply", async () => {
-  let replies = 0
+test("reconnect never replays a transmitted global Form reply or cancel", async () => {
+  const sent = Promise.withResolvers<void>()
+  const cancelSent = Promise.withResolvers<void>()
+  const response = Promise.withResolvers<Response>()
+  let mutations = 0
   const fixture = createFetch((url) => {
-    if (url.pathname.includes("/reply")) replies++
-    return undefined
+    if (!url.pathname.endsWith("/reply") && !url.pathname.endsWith("/cancel")) return
+    mutations++
+    sent.resolve()
+    if (mutations === 2) cancelSent.resolve()
+    return response.promise
   })
   const api = createApi(fixture.fetch)
   try {
-    await expect(api.form.reply({ sessionID: "global", formID: "frm_global", answer: {} })).rejects.toBeInstanceOf(
-      V5ClientError,
-    )
-    await expect(api.form.cancel({ sessionID: "global", formID: "frm_global" })).rejects.toMatchObject({
-      status: "unsupported",
-    })
-    expect(replies).toBe(0)
+    const result = api.form
+      .reply({ sessionID: "global", formID: "frm_global", answer: {} })
+      .catch((error: unknown) => error)
+    await sent.promise
+    await api.transport.reconnect()
+    expect(await result).toMatchObject({ status: "unknown" })
+    expect(mutations).toBe(1)
+    const cancelled = api.form.cancel({ sessionID: "global", formID: "frm_global" }).catch((error: unknown) => error)
+    await cancelSent.promise
+    await api.transport.reconnect()
+    expect(await cancelled).toMatchObject({ status: "unknown" })
+    expect(mutations).toBe(2)
   } finally {
     api.transport.close()
+    response.resolve(new Response(null, { status: 204 }))
   }
 })
 

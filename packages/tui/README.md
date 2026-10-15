@@ -28,7 +28,9 @@ OpenAI and Anthropic appear in the Popular integration group; other backend inte
 
 ## Protocol limitations
 
-Global Form reply/cancel and attachment/asset reads require the client/protocol phase-B contract. The TUI calls canonical methods and displays their explicit failures; it does not use another transport. The Rust runtime must serve `location.get` and the Session command, compact, switchAgent, switchModel, skill, skills, resolveSkillConflict, shell, subagent.launch, generate, and move methods before those reads/actions can succeed. File-bearing prompt admission requires runtime attachment resolution. `generate.text` has a registered Location-scoped runtime handler.
+Full and Mini TUI reply to and cancel global Forms using the Form's backend-resolved Location, independently of the client's default Location. Full TUI tracks global Forms by Location and ID; Mini filters global Form events by its active Location. Settlement removes the matching displayed Form, and reconnect refreshes pending Forms from canonical reads. A sent mutation with an unknown outcome is not replayed; a late result for an older Form does not clear a newer answer draft. Cancellation errors use the existing Form error display.
+
+The TUI calls canonical methods and displays their explicit failures; it does not use another transport. File-bearing prompt admission requires runtime attachment resolution. `generate.text` has a registered Location-scoped runtime handler.
 
 The runtime event connection must forward ephemeral public events as well as durable Session events. The TUI depends on live text/reasoning/tool-input deltas, usage/diagnostics/prediction updates, permissions, questions, forms, guardrails, catalog/config/resource/MCP changes, shell/PTY changes, todo changes, and TUI controls. Snapshot and reconnect reconciliation remain canonical, but cannot substitute for absent live event delivery.
 
@@ -51,3 +53,5 @@ Retain the newest-100 snapshot, opaque older paging, watermark discard, resident
 `bun run --cwd packages/tui test:integration:browser` requires `YCODING_V5_TEST_URL` to identify a disposable Rust runtime with ready Core and isolated-browser services, plus optional `YCODING_V5_TEST_PASSWORD` for Basic authentication. It also requires macOS arm64 and installed Chrome 152 or newer. The harness exercises the real v5 client and actual Start/Stop display against that backend; it does not launch the TypeScript HTTP server.
 
 The custom-endpoint credential integration suite requires the same disposable runtime endpoint and `YCODING_V5_TEST_CONFIG_DIR`, its empty watched configuration directory. The caller owns disposal of that runtime and directory. Provider-side Chat/Responses SSE remains an external provider protocol, not a TUI-to-backend transport.
+
+`YCODING_TEST_RUST_RUNTIME="$PWD/rust/target/debug/ycoding-runtime" bun test --cwd packages/tui --timeout 120000 ./test-integration/global-forms-rust.test.tsx` launches disposable Rust runtimes and exercises real global Form reply/cancel, reconnect, and rendered removal through full FormPrompt and Mini runtime/RunFormBody. It runs no provider work. `test-integration/global-forms.matrix.json` maps the routing, display, and uncertainty cases; scripted-peer/render regressions live in the normal TUI suite.

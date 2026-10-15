@@ -29,7 +29,7 @@ import { decodeDomain, encodeDomain } from "./codec.js"
 import { V5ClientError } from "./error.js"
 import { assetResult } from "./asset.js"
 import { DeliveryStream } from "./stream.js"
-import { globalScope, requireSupportedForm } from "./surface.js"
+import { globalScope } from "./surface.js"
 import type { Binding } from "./surface.js"
 
 export type Socket = {
@@ -114,7 +114,6 @@ export class LocalTransport {
   }
 
   async call<A>(binding: Binding, data: Record<string, unknown>, input: unknown, options?: RequestOptions): Promise<A> {
-    requireSupportedForm(binding, input)
     return (await this.execute(this.#owner, binding, data, input, options)) as A
   }
 
@@ -395,20 +394,20 @@ export class LocalTransport {
     if (query && selected !== undefined && !query.location) query.location = selected
     const location =
       typeof selected === "object" && selected !== null && "directory" in selected ? selected.directory : undefined
+    const workspace =
+      typeof selected === "object" && selected !== null
+        ? "workspaceID" in selected
+          ? selected.workspaceID
+          : "workspace" in selected
+            ? selected.workspace
+            : undefined
+        : undefined
     if (
       operation.diagnosticName === "session.create" &&
       typeof data.payload === "object" &&
       data.payload !== null &&
       !("location" in data.payload && data.payload.location !== undefined)
     ) {
-      const workspace =
-        typeof selected === "object" && selected !== null
-          ? "workspaceID" in selected
-            ? selected.workspaceID
-            : "workspace" in selected
-              ? selected.workspace
-              : undefined
-          : undefined
       data.payload = { ...data.payload, location: { directory: location ?? process.cwd(), workspaceID: workspace } }
     }
     const target = operation.diagnosticName === "event.subscribe" ? globalScope() : undefined
@@ -426,7 +425,16 @@ export class LocalTransport {
               })
             : operation.scope === ScopeKind.FORM
               ? create(ScopeSchema, {
-                  target: { case: "form", value: String(params?.sessionID ?? identity.sessionID ?? "") },
+                  target:
+                    (params?.sessionID ?? identity.sessionID) === "global"
+                      ? {
+                          case: "globalForm",
+                          value: {
+                            directory: encodeLossless(typeof location === "string" ? location : process.cwd()),
+                            ...(typeof workspace === "string" ? { workspaceId: encodeLossless(workspace) } : {}),
+                          },
+                        }
+                      : { case: "form", value: String(params?.sessionID ?? identity.sessionID ?? "") },
                 })
               : create(ScopeSchema, {
                   target: {

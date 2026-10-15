@@ -44,6 +44,7 @@ import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
 import { errorMessage } from "../util/error"
 import { isCompactionCheckpoint } from "../util/session"
+import { formKey } from "../util/form"
 
 export type DataSessionHistory = {
   status: "loading" | "paging" | "ready" | "error"
@@ -1991,7 +1992,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           break
         case "form.created":
-          if (store.session.form[event.data.form.sessionID]?.some((form) => form.id === event.data.form.id)) break
+          if (
+            store.session.form[event.data.form.sessionID]?.some(
+              (form) => formKey(form) === formKey({ ...event.data.form, location: event.location }),
+            )
+          )
+            break
           setStore("session", "form", event.data.form.sessionID, [
             ...(store.session.form[event.data.form.sessionID] ?? []),
             event.data.form.sessionID === "global" ? { ...event.data.form, location: event.location } : event.data.form,
@@ -2003,7 +2009,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             "session",
             "form",
             event.data.sessionID,
-            (store.session.form[event.data.sessionID] ?? []).filter((form) => form.id !== event.data.id),
+            (store.session.form[event.data.sessionID] ?? []).filter(
+              (form) => formKey(form) !== formKey({ ...event.data, location: event.location }),
+            ),
           )
           break
         case "shell.created":

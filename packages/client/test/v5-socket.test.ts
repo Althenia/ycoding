@@ -26,19 +26,41 @@ const endpoint = { url: "http://127.0.0.1:12345" }
 
 test("fork and revert preserve HistoryPrunedError fields and generated guard", async () => {
   const peer = new ScriptedPeer()
-  const error = { _tag: "HistoryPrunedError", sessionID: "ses_owner", messageID: "msg_pruned", message: "History was compacted" }
-  peer.onRequest = (dispatch) => peer.result(dispatch, {
-    typeName: HistoryPrunedErrorSchema.typeName,
-    payload: encodeStrict(HistoryPrunedErrorSchema, create(HistoryPrunedErrorSchema, {
-      Tag: 1,
-      sessionID: { encoding: { case: "utf8", value: error.sessionID } },
-      messageID: { encoding: { case: "utf8", value: error.messageID } },
-      message: { encoding: { case: "utf8", value: error.message } },
-    })),
-  }, true)
-  const client = make({ endpoint, socket: () => { queueMicrotask(() => peer.socket.open()); return peer.socket } })
+  const error = {
+    _tag: "HistoryPrunedError",
+    sessionID: "ses_owner",
+    messageID: "msg_pruned",
+    message: "History was compacted",
+  }
+  peer.onRequest = (dispatch) =>
+    peer.result(
+      dispatch,
+      {
+        typeName: HistoryPrunedErrorSchema.typeName,
+        payload: encodeStrict(
+          HistoryPrunedErrorSchema,
+          create(HistoryPrunedErrorSchema, {
+            Tag: 1,
+            sessionID: { encoding: { case: "utf8", value: error.sessionID } },
+            messageID: { encoding: { case: "utf8", value: error.messageID } },
+            message: { encoding: { case: "utf8", value: error.message } },
+          }),
+        ),
+      },
+      true,
+    )
+  const client = make({
+    endpoint,
+    socket: () => {
+      queueMicrotask(() => peer.socket.open())
+      return peer.socket
+    },
+  })
   try {
-    for (const action of [() => client.session.fork({ sessionID: error.sessionID, messageID: error.messageID }), () => client.session.revert.stage({ sessionID: error.sessionID, messageID: error.messageID })]) {
+    for (const action of [
+      () => client.session.fork({ sessionID: error.sessionID, messageID: error.messageID }),
+      () => client.session.revert.stage({ sessionID: error.sessionID, messageID: error.messageID }),
+    ]) {
       const rejected = await action().catch((error: unknown) => error)
       expect(rejected).toEqual(error)
       expect(isHistoryPrunedError(rejected)).toBe(true)
@@ -387,7 +409,7 @@ test.each(["before", "after"] as const)(
   },
 )
 
-test("Session-owned Form paths work; global Form paths fail explicitly before transmission", async () => {
+test("Session-owned Form settlement retains its Session scope and payload owner", async () => {
   const peer = new ScriptedPeer()
   peer.onRequest = (dispatch) =>
     peer.result(dispatch, {
@@ -402,13 +424,6 @@ test("Session-owned Form paths work; global Form paths fail explicitly before tr
     },
   })
   try {
-    await expect(client.form.cancel({ sessionID: "global", formID: "form_global" })).rejects.toMatchObject({
-      status: "unsupported",
-      operation: "form.cancel",
-    })
-    await expect(
-      client.form.reply({ sessionID: "global", formID: "form_global", answer: { field: "value" } }),
-    ).rejects.toMatchObject({ status: "unsupported", operation: "form.reply" })
     expect(await client.form.cancel({ sessionID: "ses_owner", formID: "form_owned" })).toBeUndefined()
     const request = peer.requests[0]
     expect(request.request.scope?.target).toEqual({ case: "form", value: "ses_owner" })

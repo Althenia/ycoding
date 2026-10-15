@@ -179,6 +179,8 @@ Everything is rectangular, aligned to character cells. No rounded corners. Borde
 
 ## Components
 
+Global Forms use the existing elevated FormPrompt and Mini RunFormBody treatments. Bind reply and cancel to the Form's Location and owner; remove only that matching pending Form on settlement. Reconnect must reconcile pending Forms without replaying a sent reply or cancel. Keep a newer answer draft intact when an older Form's result arrives, and show cancellation failures in the existing Form error ink. Verify real-runtime frames in `test-integration/global-forms-rust.test.tsx` and uncertain-outcome drafts in `test/cli/tui/form.test.tsx` and `test/mini/footer.view.test.tsx`.
+
 - **List row**: exactly one line. Layout: optional 2-column status glyph, title (bold if current), subdued description, right-aligned subdued footer (shortcut, count or time). Selected row = full-width primary band.
 - **Category header**: bold info-blue text on its own line, 3-column inset, blank line before (except the first).
 - **Current marker**: the current item shows a `●` or the word `current` in subdued text.

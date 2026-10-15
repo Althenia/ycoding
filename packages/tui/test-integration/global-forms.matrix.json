@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "feature": "Location-scoped global Form settlement",
+  "scope": "change",
+  "changed_capabilities": ["form.routing", "form.settlement", "form.uncertainty"],
+  "required_families": ["approval", "session"],
+  "cases": [
+    {
+      "id": "FORM-001",
+      "title": "Global Forms use the selected Location and reject foreign owners",
+      "family": "approval",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "regression",
+      "covers": ["form.routing"],
+      "preconditions": ["Disposable real Rust runtime", "Two distinct Locations and a Session-owned Form"],
+      "stimulus": [
+        "Create, list, read and settle global Forms with selected Location headers",
+        "Reply through the wrong Location and a foreign Session owner"
+      ],
+      "oracles": [
+        { "type": "state", "expected": "Correct reply is answered and cancel is cancelled" },
+        { "type": "side_effect", "expected": "Rejected attempts leave the intended Form pending" }
+      ],
+      "negative": ["No foreign Form is settled", "Configured default does not override explicit Location"],
+      "determinism": ["Runtime readiness handshake", "Await typed results and canonical state reads"],
+      "cleanup": ["Close client and dispose isolated runtime roots"],
+      "platforms": ["macOS native Rust and binary v5"]
+    },
+    {
+      "id": "FORM-002",
+      "title": "Full and Mini render pending Forms and remove settled Forms after reconnect",
+      "family": "session",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "recovery",
+      "covers": ["form.routing", "form.settlement"],
+      "preconditions": [
+        "Real FormPrompt or Mini runtime with RunFormBody",
+        "Client default Location differs from Form Location"
+      ],
+      "stimulus": ["Press Enter to reply", "Reconnect while another Form is pending", "Press Escape to cancel"],
+      "oracles": [
+        { "type": "render", "expected": "Form title appears while pending and is absent after settlement" },
+        { "type": "state", "expected": "Real Rust Form state agrees with the frame" }
+      ],
+      "negative": ["Reconnect does not duplicate the Form", "No provider execution"],
+      "determinism": ["Frame predicates", "Connection and hydration completion signals"],
+      "cleanup": ["Close Mini queue, renderer, client and runtime"],
+      "platforms": ["macOS in-memory OpenTUI at 80x24", "Kitty keyboard"]
+    },
+    {
+      "id": "FORM-003",
+      "title": "Unknown settlement never replays or clears a newer answer draft",
+      "family": "approval",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "failure",
+      "covers": ["form.uncertainty"],
+      "preconditions": ["Sent mutation result held behind a Promise gate", "Newer Form has an edited draft"],
+      "stimulus": ["Replace connection after transmission", "Settle the old response after editing a newer Form"],
+      "oracles": [
+        { "type": "side_effect", "expected": "Exactly one request per intentional mutation" },
+        { "type": "render", "expected": "Newer draft remains visible" }
+      ],
+      "negative": ["No automatic mutation replay", "No stale response clears or replaces a newer draft"],
+      "determinism": ["Explicit transmission and response gates", "Frame predicates"],
+      "cleanup": ["Release held response and destroy renderer and transport"],
+      "platforms": ["Scripted binary peer", "macOS in-memory OpenTUI"]
+    }
+  ]
+}

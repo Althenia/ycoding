@@ -1,4 +1,12 @@
-import type { FormField, FormValue } from "@ycoding-ai/client"
+import type { FormField, FormValue, FormInfo, LocationRef } from "@ycoding-ai/client"
+
+export function formKey(form: Pick<FormInfo, "id" | "sessionID"> & { location?: LocationRef }) {
+  return JSON.stringify([
+    form.sessionID,
+    form.id,
+    ...(form.sessionID === "global" ? [form.location?.directory, form.location?.workspaceID] : []),
+  ])
+}
 
 export type FormAnswerField = Exclude<FormField, { type: "external" }>
 

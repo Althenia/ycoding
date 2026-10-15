@@ -10,6 +10,7 @@ import { useEditorContext } from "../context/editor"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
 import { FormPrompt } from "./session/form"
+import { formKey } from "../util/form"
 import { PluginSlot } from "../plugin/context"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
@@ -72,7 +73,15 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const openUsage = () => route.navigate({ type: "provider-usage" })
   Keymap.createLayer(() => ({
     mode: "global",
-    commands: [{ id: "home.provider-usage.open", title: "Open provider usage", group: "Session", bind: "<leader>shift+u", run: openUsage }],
+    commands: [
+      {
+        id: "home.provider-usage.open",
+        title: "Open provider usage",
+        group: "Session",
+        bind: "<leader>shift+u",
+        run: openUsage,
+      },
+    ],
     bindings: ["home.provider-usage.open"],
   }))
 
@@ -99,7 +108,11 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
           <span style={{ fg: theme.text.subdued }}>usage</span>
         </text>
         <Show when={shortcut()}>
-          {(value) => <text fg={theme.text.default} wrapMode="none">{value().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span></text>}
+          {(value) => (
+            <text fg={theme.text.default} wrapMode="none">
+              {value().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span>
+            </text>
+          )}
         </Show>
       </box>
     </box>
@@ -125,22 +138,39 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
   const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
   Keymap.createLayer(() => ({
     mode: "global",
-    commands: [{
-      id: "home.browser.chrome",
-      title: "Connect Chrome",
-      group: "Session",
-      palette: true,
-      bind: false,
-      run: () => {
-        const existing = data.session.list().find((item) => item.location.directory === data.location.default().directory)
-        const session = existing ? Promise.resolve(existing) : client.api.session.create({ location: { directory: data.location.default().directory } })
-        void session
-          .then((item) => dialog.replace(() => <DialogChromeConnection sessionID={item.id} />))
-          .catch((error) => toast.show({ title: "Could not connect Chrome", message: errorMessage(error), variant: "error" }))
+    commands: [
+      {
+        id: "home.browser.chrome",
+        title: "Connect Chrome",
+        group: "Session",
+        palette: true,
+        bind: false,
+        run: () => {
+          const existing = data.session
+            .list()
+            .find((item) => item.location.directory === data.location.default().directory)
+          const session = existing
+            ? Promise.resolve(existing)
+            : client.api.session.create({ location: { directory: data.location.default().directory } })
+          void session
+            .then((item) => dialog.replace(() => <DialogChromeConnection sessionID={item.id} />))
+            .catch((error) =>
+              toast.show({ title: "Could not connect Chrome", message: errorMessage(error), variant: "error" }),
+            )
+        },
       },
-    }],
+    ],
   }))
-  const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
+  const landingAutonomy = createMemo(
+    () =>
+      ({
+        mode: "normal" as const,
+        yolo: landingYolo(),
+        goal: landingGoal()
+          ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 }
+          : undefined,
+      }) as SessionAutonomyState,
+  )
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
@@ -157,7 +187,11 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
   const landingModel = createMemo(() => {
     const current = local.model.current()
     if (!current) return undefined
-    return headerModelLabel({ providerID: current.providerID, modelID: current.modelID, name: landingModelInfo()?.name })
+    return headerModelLabel({
+      providerID: current.providerID,
+      modelID: current.modelID,
+      name: landingModelInfo()?.name,
+    })
   })
   const daybreakIndicator = createMemo(() => {
     const program = landingDaybreak()
@@ -256,7 +290,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
         <PluginSlot name="home.bottom" />
       </box>
       <LandingFooter autonomy={landingAutonomy()} />
-      <Show when={forms()[0]?.id} keyed>
+      <Show when={forms()[0] && formKey(forms()[0]!)} keyed>
         {(_) => {
           const form = forms()[0]
           return form ? (

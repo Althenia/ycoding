@@ -2397,7 +2397,7 @@ test("adds, dismisses, and refreshes form requests", async () => {
   }
 })
 
-test("tracks global forms by location", async () => {
+test("tracks global forms by location even when their IDs match", async () => {
   const events = createEventStream()
   const calls = createFetch(undefined, events)
   const other = { directory: "/tmp/ycoding-other", workspaceID: "wrk_other" }
@@ -2431,7 +2431,7 @@ test("tracks global forms by location", async () => {
       type: "form.created",
       data: {
         form: {
-          id: "frm_other",
+          id: "frm_shared",
           sessionID: "global",
           title: "Input requested",
           fields: formFields,
@@ -2449,7 +2449,7 @@ test("tracks global forms by location", async () => {
       type: "form.created",
       data: {
         form: {
-          id: "frm_default",
+          id: "frm_shared",
           sessionID: "global",
           title: "Input requested",
           fields: formFields,
@@ -2463,10 +2463,10 @@ test("tracks global forms by location", async () => {
       created: 2,
       location: other,
       type: "form.replied",
-      data: { id: "frm_other", sessionID: "global", answer: {} },
+      data: { id: "frm_shared", sessionID: "global", answer: {} },
     })
     await wait(() => data.session.form.list("global", other)?.length === 0)
-    expect(data.session.form.list("global", { directory })?.map((form) => form.id)).toEqual(["frm_default"])
+    expect(data.session.form.list("global", { directory })?.map((form) => form.id)).toEqual(["frm_shared"])
   } finally {
     app.renderer.destroy()
   }

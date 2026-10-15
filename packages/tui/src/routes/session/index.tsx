@@ -111,6 +111,7 @@ import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
 import { GuardrailPrompt, activeGuardrail } from "./guardrail"
 import { FormPrompt } from "./form"
+import { formKey } from "../../util/form"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
 import { sessionEpilogue } from "../../util/presentation"
@@ -2108,7 +2109,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   </Show>
                 </Match>
                 <Match when={forms().length > 0}>
-                  <Show when={forms()[0]?.id} keyed>
+                  <Show when={forms()[0] && formKey(forms()[0]!)} keyed>
                     {(_) => {
                       const form = forms()[0]
                       return form ? <FormPrompt form={form} /> : null
