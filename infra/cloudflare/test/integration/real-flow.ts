@@ -33,7 +33,9 @@ import {
   parsePushTestResponse,
   decodeStrict,
   FrameSchema,
+  LedgerClass,
 } from "../../../../packages/remote/src/index"
+import { operations } from "../../../../packages/protocol/src/v5"
 import { startRustRuntime, readRelayContent } from "./rust-runtime"
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
 import { createPushHttp } from "../../../../apps/web/src/remote/http"
@@ -69,6 +71,55 @@ const guardSessionID = "ses_real_flow_guard"
 const checks: string[] = []
 const failures: unknown[] = []
 const NativeSocket = WebSocket as typeof WebSocket & { new (url: string, options: WebSocketOptions): WebSocket }
+let heldReply: { socket: WebSocket; callbacks: (() => void)[]; observed: () => void } | undefined
+class ReplyGateSocket extends NativeSocket {
+  override addEventListener<K extends keyof WebSocketEventMap>(
+    type: K,
+    listener: (this: WebSocket, event: WebSocketEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ) {
+    if (type !== "message" || listener === null) {
+      super.addEventListener(type, listener, options)
+      return
+    }
+    super.addEventListener(
+      type,
+      (event) => {
+        const deliver = () =>
+          typeof listener === "function" ? listener.call(this, event) : listener.handleEvent(event)
+        const gate = heldReply
+        if (gate?.socket !== this) {
+          deliver()
+          return
+        }
+        const frame = decodeStrict(FrameSchema, new Uint8Array((event as MessageEvent<ArrayBuffer>).data))
+        if (frame.ledger === LedgerClass.TINY || frame.ledger === 0) {
+          deliver()
+          return
+        }
+        expect(gate.callbacks.length < 64, "Held native browser delivery exceeded its fixture bound")
+        gate.callbacks.push(deliver)
+        if (
+          frame.body.case === "result" &&
+          frame.body.value.operationId ===
+            operations.find((operation) => operation.diagnosticName === "session.prompt")!.operationId
+        )
+          gate.observed()
+      },
+      options,
+    )
+  }
+}
 const diagnostics: string[] = []
 let wrangler: { kill: (signal?: NodeJS.Signals) => unknown; exited: Promise<number> } | undefined
 let google: ReturnType<typeof Bun.serve> | undefined
@@ -520,6 +571,7 @@ try {
   const clientSockets: WebSocket[] = []
   const browserStatuses: RemoteTransportStatus[] = []
   const sessionStatuses: unknown[] = []
+  const settlements: { operation: string; status: string }[] = []
   const store = createRemoteStore({
     http,
     createTransport: (deviceID, handlers) => {
@@ -541,7 +593,7 @@ try {
           },
         },
         createSocket: (url) => {
-          const socket = new NativeSocket(url, { headers: { cookie, origin: workerOrigin } })
+          const socket = new ReplyGateSocket(url, { headers: { cookie, origin: workerOrigin } })
           socket.addEventListener("message", (event) => {
             const frame = decodeStrict(FrameSchema, new Uint8Array(event.data))
             if (frame.body.case === "control" && frame.body.value.kind.case === "resyncRequired")
@@ -555,6 +607,7 @@ try {
         ...remote,
         request: async (operation, request) => {
           const outcome = await remote.request(operation, request)
+          settlements.push({ operation, status: outcome.status })
           if (outcome.status !== "ok") diagnostics.push(JSON.stringify({ operation, request, outcome }))
           return outcome
         },
@@ -2471,7 +2524,127 @@ try {
     checks.push("logout closed the browser relay socket and blocked further commands")
   }
 
+  const verifyHeldCommit = async () => {
+    await store.selectSession(sessionID)
+    await store.setYolo(2)
+    const socket = clientSockets.at(-1)
+    expect(socket?.readyState === 1, "Held-commit test requires the selected native browser socket")
+    const text = "Hold the admission acknowledgement while preserving a newer draft"
+    const newer = "A newer draft must survive old acknowledgement callbacks"
+    const result = Promise.withResolvers<void>()
+    const gate = { socket, callbacks: [] as (() => void)[], observed: result.resolve }
+    const before = settlements.length
+    const requestsBefore = providerRequests.length
+    const toolsBefore = providerShellCalls.length
+    providerMode = "hold"
+    releaseStream = undefined
+    providerTurn = {
+      tool: {
+        id: "call_held_commit",
+        name: "shell",
+        input: { command: "printf held-effect >> held-commit-effect.txt" },
+      },
+      text: "",
+      prompt: text,
+    }
+    heldReply = gate
+    try {
+      store.setDraft(sessionID, text)
+      expect(await store.sendPrompt({ text, delivery: "steer" }), "Real browser send was not admitted locally")
+      const mutation = store.state().mutations.find((entry) => entry.kind === "prompt" && entry.sessionID === sessionID)
+      expect(mutation !== undefined, "Real browser send has no durable identity to reconcile")
+      const deadline = setTimeout(
+        () => result.reject(new Error("Committed prompt Result never reached the held native boundary")),
+        20_000,
+      )
+      try {
+        await result.promise
+      } finally {
+        clearTimeout(deadline)
+      }
+      const canonical = await local.message.list({ sessionID })
+      const pending = await local.session.pending.list({ sessionID })
+      expect(
+        canonical.filter((message) => message.id === mutation.id).length +
+          pending.filter((input) => input.id === mutation.id).length ===
+          1,
+        "Held reply did not follow one real durable admission",
+      )
+      await waitFor(
+        () => (releaseStream ? true : undefined),
+        20_000,
+        "Held admission did not reach its real provider request",
+      )
+      expect(
+        gate.callbacks.length > 0 && !settlements.slice(before).some((entry) => entry.operation === "session.prompt"),
+        "Committed prompt acknowledgement escaped the native delivery gate",
+      )
+      store.setDraft(sessionID, newer)
+      socket.close(1001, "held-commit-network-loss")
+      await waitFor(
+        () =>
+          settlements.slice(before).some((entry) => entry.operation === "session.prompt" && entry.status === "unknown")
+            ? true
+            : undefined,
+        20_000,
+        "Sent browser mutation was not uncertain after acknowledgement loss",
+      )
+      heldReply = undefined
+      for (const deliver of gate.callbacks.splice(0)) deliver()
+      expect(store.state().drafts[sessionID] === newer, "Late native callbacks overwrote the newer draft")
+      await waitFor(
+        () => (store.state().transport.kind === "open" && store.state().view?.id === sessionID ? true : undefined),
+        20_000,
+        "Held-commit browser did not reconnect to the original Session",
+      )
+      await store.selectSession(sessionID)
+      const recovered = await local.message.list({ sessionID })
+      const remaining = await local.session.pending.list({ sessionID })
+      expect(
+        recovered.filter((message) => message.id === mutation.id).length +
+          remaining.filter((input) => input.id === mutation.id).length ===
+          1,
+        "Reconnect replayed the committed prompt identity",
+      )
+      expect(
+        providerRequests.length === requestsBefore + 2,
+        "Acknowledgement loss or reconnect duplicated provider execution",
+      )
+      expect(
+        providerShellCalls.length === toolsBefore + 1 &&
+          (await Bun.file(join(workspace, "held-commit-effect.txt")).text()) === "held-effect",
+        "Acknowledgement loss or reconnect duplicated the real shell effect",
+      )
+      await waitFor(
+        () => (!store.state().mutations.some((entry) => entry.id === mutation.id) ? true : undefined),
+        20_000,
+        "Canonical reconciliation retained the already-admitted prompt mutation",
+      )
+      expect(store.state().drafts[sessionID] === newer, "Canonical reconciliation overwrote the newer draft")
+      checks.push(
+        "a real Rust prompt committed before its held browser acknowledgement; loss settled unknown, late callbacks preserved the newer draft, and reconnect did not replay admission, provider steps or the shell effect",
+      )
+    } finally {
+      heldReply = undefined
+      for (const deliver of gate.callbacks.splice(0)) deliver()
+      await local.session.interrupt({ sessionID })
+      releaseHeldStream()
+      await waitFor(
+        async () => {
+          const active = await local.session.active()
+          return sessionID in active ? undefined : true
+        },
+        20_000,
+        "Held-commit cleanup left the Session executing",
+      )
+      releaseStream = undefined
+      providerMode = "instant"
+      await store.setYolo(0)
+    }
+  }
+
   const scenarios = {
+    heldCommit: verifyHeldCommit,
     lifecycle: verifyLifecycle,
     permissions: verifyPermissions,
     guardrails: verifyGuardrails,

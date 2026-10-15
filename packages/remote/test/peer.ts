@@ -1,4 +1,5 @@
 import { Connection } from "@ycoding-ai/protocol/v5/connection"
+import type { WebSocketOptions } from "bun"
 import type { Decision, Options } from "@ycoding-ai/protocol/v5/connection"
 import {
   create,
@@ -20,6 +21,8 @@ import {
   remotePayloadCodecs,
   encodeRemoteRequest,
 } from "../src/index"
+
+const NativeSocket = WebSocket as typeof WebSocket & { new (url: string, options: WebSocketOptions): WebSocket }
 
 export class TestPeer {
   readonly connection: Connection
@@ -51,7 +54,7 @@ export class TestPeer {
             now: performance.now(),
             budgets,
           })
-    this.socket = new WebSocket(url, { headers })
+    this.socket = new NativeSocket(url, { headers })
     this.socket.binaryType = "arraybuffer"
     this.ready = new Promise((resolve, reject) => {
       this.socket.addEventListener(
