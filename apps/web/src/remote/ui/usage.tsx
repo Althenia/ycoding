@@ -4,7 +4,7 @@ import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
 import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
-import { dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { compactUsageTotal, dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = ["model", "session", "project", "agent"] as const
@@ -33,6 +33,7 @@ export function UsagePage() {
   const [tableOpen, setTableOpen] = createSignal(false)
   const [breakdownTableOpen, setBreakdownTableOpen] = createSignal(false)
   const [distributionMetric, setDistributionMetric] = createSignal<"spend" | "tokens">("spend")
+  const [compactTotal, setCompactTotal] = createSignal(true)
   const [shownBreakdown, setShownBreakdown] = createSignal<{ readonly deviceID: string; readonly report: UsageReport; readonly input: BreakdownInput }>()
   const [minimumRowsHeight, setMinimumRowsHeight] = createSignal(0)
   const [activeDay, setActiveDay] = createSignal<SpendDay>()
@@ -44,6 +45,10 @@ export function UsagePage() {
   let dayTooltip: HTMLDivElement | undefined
   let providerCard: HTMLDivElement | undefined
   let providerTooltip: HTMLDivElement | undefined
+  let distributionChart: HTMLDivElement | undefined
+  let distributionProbe: HTMLSpanElement | undefined
+  let distributionCaption: HTMLSpanElement | undefined
+  let distributionResizeObserver: ResizeObserver | undefined
   let deviceID = remote.state().activeDeviceID
   const connected = createMemo(() => remote.state().transport.kind === "open")
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
@@ -79,6 +84,8 @@ export function UsagePage() {
     return connection.kind === "connected" || connection.kind === "offline" ? connection.deviceName : undefined
   }
   const distribution = createMemo(() => providerDistribution(monthlyData(), providerData() ?? [], distributionMetric()))
+  const totalLabel = () => distributionMetric() === "spend" ? `Exact estimated USD total: ${money(distribution().total)}` : `Exact token total: ${count(distribution().total)}`
+  const shownTotal = () => compactTotal() ? compactUsageTotal(distribution().total, distributionMetric()) : distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)
   const arcs = createMemo(() => donutGeometry(distribution().segments, 72))
   const segmentIDs = createMemo(() => distribution().segments.map((segment) => segment.providerID))
   const providerCosts = createMemo(() => new Map(providerDistribution(monthlyData(), providerData() ?? [], "spend").segments.map((segment) => [segment.providerID, segment.value])))
@@ -90,6 +97,19 @@ export function UsagePage() {
   const placeProvider = (x: number, y: number) => {
     if (!providerCard || !providerTooltip) return
     setProviderPosition(tooltipPosition(providerCard.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, { x, y }, providerTooltip.getBoundingClientRect()))
+  }
+  const measureDistributionTotal = () => {
+    if (!distributionChart || !distributionProbe || !distributionCaption) return
+    const chart = distributionChart.getBoundingClientRect()
+    const radius = Math.min(chart.width, chart.height) * 59 / 200
+    const centerX = chart.left + chart.width / 2
+    const centerY = chart.top + chart.height / 2
+    const insideHole = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return [[rect.left, rect.top], [rect.right, rect.top], [rect.left, rect.bottom], [rect.right, rect.bottom]]
+        .every(([x, y]) => Math.hypot(x! - centerX, y! - centerY) <= radius)
+    }
+    setCompactTotal(!insideHole(distributionProbe) || !insideHole(distributionCaption))
   }
   const days = createMemo(() => dailySpend(dailyData(), now(), selectedZone()))
   const dayKeys = createMemo(() => days().map((entry) => entry.key))
@@ -131,6 +151,13 @@ export function UsagePage() {
   }
   createEffect(() => localStorage.setItem(usageZoneKey, zoneMode()))
   createEffect(() => {
+    distribution().total
+    distributionMetric()
+    setCompactTotal(true)
+    if (distributionChart) distributionResizeObserver?.observe(distributionChart)
+    queueMicrotask(measureDistributionTotal)
+  })
+  createEffect(() => {
     const current = remote.state().activeDeviceID
     if (current !== deviceID || current === undefined || remote.state().connection.kind === "signed-out") {
       deviceID = current
@@ -144,7 +171,16 @@ export function UsagePage() {
   })
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 60_000)
-    onCleanup(() => clearInterval(clock))
+    distributionResizeObserver = new ResizeObserver(measureDistributionTotal)
+    if (distributionChart) distributionResizeObserver.observe(distributionChart)
+    document.fonts.addEventListener("loadingdone", measureDistributionTotal)
+    void document.fonts.ready.then(measureDistributionTotal)
+    onCleanup(() => {
+      clearInterval(clock)
+      distributionResizeObserver?.disconnect()
+      distributionResizeObserver = undefined
+      document.fonts.removeEventListener("loadingdone", measureDistributionTotal)
+    })
   })
 
   return <div class="usage-page">
@@ -220,7 +256,7 @@ export function UsagePage() {
           <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
           <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.</p>}>
             <div class="usage-distribution__body">
-              <div class="usage-distribution__chart">
+              <div class="usage-distribution__chart" ref={distributionChart}>
               <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}>
                 <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
                 <For each={segmentIDs()}>{(id, index) => {
@@ -235,8 +271,11 @@ export function UsagePage() {
                     onBlur={() => setActiveProvider(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
                 }}</For>
               </svg>
-              <strong class="usage-donut__total">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</strong>
-              <span class="usage-donut__caption">{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</span>
+              <div class="usage-donut__center">
+                <strong class="usage-donut__total" role="img" tabindex="0" aria-label={totalLabel()} title={totalLabel()}>{shownTotal()}</strong>
+                <span class="usage-donut__caption" ref={distributionCaption}>{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</span>
+              </div>
+              <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</span>
               </div>
               <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
               <ul class="usage-distribution__legend" aria-label={distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"}><For each={segmentIDs()}>{(id, index) => {

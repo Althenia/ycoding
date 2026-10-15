@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { dailySpend, donutGeometry, modelIdentity, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
+import { compactUsageTotal, dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -69,6 +69,21 @@ test("donut geometry allocates one nonoverlapping circumference in report order"
   expect(geometry[0]?.offset).toBeCloseTo(0)
   expect(geometry[1]?.offset).toBeCloseTo(-30 * Math.PI)
   expect(geometry.reduce((sum, segment) => sum + segment.length, 0)).toBeCloseTo(120 * Math.PI)
+})
+
+test("donut total stays exact below the compact threshold and rounds compact values up through k, m, and b", () => {
+  expect(compactUsageTotal(999.99, "spend")).toBe(money(999.99))
+  expect(compactUsageTotal(999.99, "tokens")).toBe("999.99")
+  expect(compactUsageTotal(1_000, "spend")).toBe("$1.0k")
+  expect(compactUsageTotal(1_000, "tokens")).toBe("1.0k")
+  expect(compactUsageTotal(999_950, "tokens")).toBe("1.0m")
+  expect(compactUsageTotal(1_000_000, "spend")).toBe("$1.0m")
+  expect(compactUsageTotal(123_456_789, "tokens")).toBe("123.5m")
+  expect(compactUsageTotal(1_000_000_000, "tokens")).toBe("1.0b")
+  expect(compactUsageTotal(1_234_567_890, "spend")).toBe("$1.2b")
+  expect(compactUsageTotal(0.0001, "spend")).toBe(money(0.0001))
+  expect(compactUsageTotal(-1_234, "spend")).toBe("$-1.2k")
+  expect(compactUsageTotal(-1_234, "tokens")).toBe("-1.2k")
 })
 
 test("pace pills warn only when a window is consumed faster than its period elapses", async () => {

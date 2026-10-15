@@ -12,6 +12,18 @@ export const reportKey = (input: UsageReportInput) => JSON.stringify({ group: in
 
 const number = (value: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)
 export const money = (value: number) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)
+export function compactUsageTotal(value: number, metric: "spend" | "tokens") {
+  if (Math.abs(value) < 1_000) return metric === "spend" ? money(value) : new Intl.NumberFormat().format(value)
+  const suffixes = ["k", "m", "b"]
+  let magnitude = Math.min(Math.floor(Math.log10(Math.abs(value)) / 3), suffixes.length)
+  let scaled = value / 1_000 ** magnitude
+  if (Math.abs(Math.round(scaled * 10) / 10) >= 1_000 && magnitude < suffixes.length) {
+    magnitude += 1
+    scaled = value / 1_000 ** magnitude
+  }
+  const formatted = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(scaled)
+  return metric === "spend" ? `$${formatted}${suffixes[magnitude - 1]}` : `${formatted}${suffixes[magnitude - 1]}`
+}
 export const tokenCount = (value: UsageTokens) => value.input + value.output + value.reasoning + value.cache.read + value.cache.write
 
 export function tooltipPosition(

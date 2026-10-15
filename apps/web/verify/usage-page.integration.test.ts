@@ -34,35 +34,50 @@ test("summary sparklines never overlap the exact spend and token totals", async 
 }, 30_000)
 
 test("provider distribution keeps exact large values readable in one accessible legend", async () => {
-  for (const width of [320, 390, 1440]) {
+  for (const width of [320, 390, 820, 1440]) {
     for (const theme of ["light", "dark"]) {
       const page = await browser!.openPage()
       try {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?distribution-long-values`)
         await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
+        await page.evaluate(`document.fonts.ready`)
         await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
         for (const metric of ["Spend", "Tokens"]) {
           await page.evaluate(`[...document.querySelectorAll('[aria-label="Distribution metric"] button')].find(button => button.textContent === ${JSON.stringify(metric)}).click()`)
-          const expected = metric === "Spend" ? "$20,000,000.00" : "4,000,000,000"
+          const expected = metric === "Spend" ? "$20.0m" : "4.0b"
+          const exact = metric === "Spend" ? "$20,000,000.00" : "4,000,000,000"
           await wait(page, `document.querySelector('.usage-donut__total')?.textContent === ${JSON.stringify(expected)}`)
           await page.evaluate(`Promise.all(document.querySelector('.usage-distribution').getAnimations({subtree:true}).map(animation => animation.finished))`)
-          const result = await page.evaluate<{ total: string; unit: string; below: boolean; contained: boolean; overflow: boolean; rows: string[]; description: string }>(`(() => {
+          const result = await page.evaluate<{ total: string; exact: string; title: string; unit: string; insideHole: boolean; exactTooWide: boolean; contained: boolean; overflow: boolean; rows: string[]; description: string }>(`(() => {
             const card = document.querySelector('.usage-distribution');
             const total = card.querySelector('.usage-donut__total');
             const chart = card.querySelector('.usage-donut').getBoundingClientRect();
             const bounds = card.getBoundingClientRect();
+            const exact = ${JSON.stringify(exact)};
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            context.font = getComputedStyle(total).font;
+            const exactTooWide = context.measureText(exact).width > chart.width * 118 / 200;
+            const innerRadius = chart.width * 59 / 200;
+            const insideHole = [total, card.querySelector('.usage-donut__caption')].every(node => {
+              const rect = node.getBoundingClientRect();
+              return [[rect.left, rect.top], [rect.right, rect.top], [rect.left, rect.bottom], [rect.right, rect.bottom]].every(([x, y]) => Math.hypot(x - (chart.left + chart.width / 2), y - (chart.top + chart.height / 2)) <= innerRadius);
+            });
             const nodes = [...card.querySelectorAll('.usage-donut__total, .usage-donut__caption, .usage-distribution__legend li > span, .usage-distribution__legend li > strong')];
-            return {total:total.textContent, unit:card.querySelector('.usage-donut__caption').textContent,
-              below:total.getBoundingClientRect().top >= chart.bottom,
+            return {total:total.textContent, exact:total.getAttribute('aria-label'), title:total.getAttribute('title'), unit:card.querySelector('.usage-donut__caption').textContent,
+              insideHole, exactTooWide,
               contained:nodes.every(node => { const rect=node.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom && node.scrollWidth <= node.clientWidth; }),
               overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth,
               rows:[...card.querySelectorAll('.usage-distribution__legend li')].map(node=>node.textContent),
               description:card.querySelector('.usage-donut').getAttribute('aria-label')};
           })()`)
           expect(result.total).toBe(expected)
+          expect(result.exact).toBe(`${metric === "Spend" ? "Exact estimated USD total" : "Exact token total"}: ${exact}`)
+          expect(result.title).toBe(result.exact)
           expect(result.unit).toBe(metric === "Spend" ? "estimated USD" : "tokens")
-          expect(result.below).toBe(true)
+          expect(result.exactTooWide).toBe(true)
+          expect(result.insideHole).toBe(true)
           expect(result.contained).toBe(true)
           expect(result.overflow).toBe(false)
           expect(result.rows.length).toBe(metric === "Spend" ? 2 : 3)
@@ -96,6 +111,8 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider')?.innerText ?? ''`)).not.toContain("provider api")
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider time')?.getAttribute('aria-label') ?? ''`)).toContain("source: provider API, stability: stable")
         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
+        expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('aria-label') ?? ''`)).toBe("Exact estimated USD total: $15.00")
+        expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('title') ?? ''`)).toBe("Exact estimated USD total: $15.00")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$38.42 remaining")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$0.00")
         const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerBorder: string; headHeight: number; mobileRows: number; requests: number; controls: boolean; content: number }>(`(() => {
@@ -524,18 +541,20 @@ test("first Usage reads reserve visible placeholders without replacing settled c
       await page.setViewport(width, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?initial-loading&refresh-cycle`)
       await wait(page, `window.usageRequests().length === 5 && document.querySelectorAll('.usage-page .loading-placeholder').length === 4`)
-      const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; overflow: boolean }>(`(() => {
+      const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; monthlyReserve: number; overflow: boolean }>(`(() => {
         const placeholders = [...document.querySelectorAll('.usage-page .loading-placeholder')];
         return { kinds: placeholders.map(item => [...item.classList].find(name => name.startsWith('loading-placeholder--'))), labels: placeholders.map(item => item.textContent.trim()),
           statuses: document.querySelectorAll('.usage-page [role="status"]').length,
           heights: placeholders.map(item => item.getBoundingClientRect().height),
           cards: [...document.querySelectorAll('.usage-chart, .usage-distribution')].map(item => item.getBoundingClientRect().height),
+          monthlyReserve: document.querySelectorAll('.usage-distribution .loading-placeholder__shape')[0]?.getBoundingClientRect().height ?? 0,
           overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
       })()`)
       expect(pending.kinds).toEqual(["loading-placeholder--usage", "loading-placeholder--chart", "loading-placeholder--chart", "loading-placeholder--usage"])
       expect(pending.labels).toEqual(["Loading provider quotas…", "Loading daily spend…", "Loading monthly usage…", "Loading breakdown…"])
       expect(pending.statuses).toBe(4)
       expect(pending.heights.every((height) => height >= 64)).toBe(true)
+      expect(pending.monthlyReserve).toBeGreaterThanOrEqual(width === 390 ? 400 : 280)
       expect(pending.overflow).toBe(false)
       await page.evaluate(`window.usageCards = [...document.querySelectorAll('.usage-chart, .usage-distribution, .usage-breakdown')]; window.usageReleaseInitial()`)
       await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-donut__arc').length === 2 && document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
