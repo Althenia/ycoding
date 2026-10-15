@@ -23,7 +23,7 @@ export type ReleaseEntry = {
 export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.10.10",
-    date: "2026-10-14",
+    date: "2026-10-15",
     title: "Sleep mode, shell command queue, and faster web",
     tags: ["Added", "Changed", "Fixed"],
     changes: [

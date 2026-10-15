@@ -7,7 +7,7 @@ describe("release entries", () => {
   test("lists v0.10.10 shell command queue, self-contained commits, and waiting for another database writer first", () => {
     expect(RELEASES[0]).toEqual({
       version: "0.10.10",
-      date: "2026-10-14",
+      date: "2026-10-15",
       title: "Sleep mode, shell command queue, and faster web",
       tags: ["Added", "Changed", "Fixed"],
       changes: [
