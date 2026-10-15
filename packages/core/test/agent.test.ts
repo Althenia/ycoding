@@ -319,6 +319,8 @@ describe("Agent", () => {
       expect(god.system).toContain("never leave the variant blank")
       expect(god.system).toContain("Use the decision tool")
       expect(god.system).toContain("Default to parallel execution to maximize development speed.")
+      expect(god.system).toContain("start it now unless it consumes a running task's output or edits its files; name that dependency for each task you hold back.")
+      expect(god.system).toContain("A queued or running heavy check delays only other heavy checks, never code-writing or review work.")
       expect(god.system).toContain(
         "merge them through one dedicated integration lane that resolves conflicts and runs the full checks",
       )
@@ -327,6 +329,7 @@ describe("Agent", () => {
       expect(god.system).toContain("After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`")
       expect(god.system).not.toContain("Use durable subagents only for isolated work.")
       expect(zeus.system).not.toContain("Orchestrate; do not implement.")
+      expect(zeus.system).not.toContain("name that dependency for each task you hold back")
       expect(zeus.system).toContain("You are a durable child Session")
       expect(zeus.system).toContain("Do not spawn child agents")
       expect(title.system).toContain("Output exactly one natural thread title")
