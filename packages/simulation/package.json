@@ -15,7 +15,7 @@
   },
   "scripts": {
     "brand:generate": "bun script/generate-brand-assets.ts",
-    "typecheck": "tsgo --noEmit -p tsconfig.typecheck.json"
+    "typecheck": "bun check -p tsconfig.typecheck.json"
   },
   "dependencies": {
     "@fontsource/commit-mono": "5.2.5",
@@ -31,7 +31,6 @@
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
-    "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "@types/bun": "catalog:"
   }
 }

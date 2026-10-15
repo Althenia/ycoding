@@ -6,7 +6,7 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "test": "bun test --timeout 5000",
-    "typecheck": "tsgo --noEmit -p tsconfig.typecheck.json",
+    "typecheck": "bun check -p tsconfig.typecheck.json",
     "build": "tsc -p tsconfig.build.json"
   },
   "exports": {
@@ -50,7 +50,6 @@
     "@opentui/solid": "catalog:",
     "@tsconfig/bun": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "typescript": "catalog:"
   }
 }

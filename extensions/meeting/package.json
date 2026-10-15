@@ -13,7 +13,7 @@
   "scripts": {
     "test": "bun run test:unit && bun run test:integration",
     "test:unit": "bun test test/audio.unit.test.ts test/bridge.test.ts test/config.test.ts test/discovery.test.ts test/evaluate.test.ts test/intelligence.test.ts test/transcription.test.ts test/tui.test.tsx test/view.test.ts test/view-design.test.ts --timeout 30000",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "bun check",
     "build": "bun run typecheck",
     "model": "bun script/model.ts",
     "dev": "bun script/dev.ts",
@@ -32,7 +32,6 @@
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@types/node": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "@types/node": "catalog:"
   }
 }

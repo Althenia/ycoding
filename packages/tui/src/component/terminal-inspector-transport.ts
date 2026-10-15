@@ -208,7 +208,7 @@ function browserSocket(url: string): TerminalSocket {
     set onerror(value) {
       onerror = value
     },
-    send: (data) => socket.send(data),
+    send: (data) => socket.send(new Uint8Array(data).buffer),
     close: () => socket.close(),
   }
 }

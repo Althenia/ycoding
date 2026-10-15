@@ -5,7 +5,7 @@ import path from "node:path"
 
 const root = path.resolve(import.meta.dirname, "..")
 const turbo = path.join(root, "node_modules/.bin/turbo")
-const tsgo = path.join(root, "node_modules/.bin/tsgo")
+const bun = process.execPath
 const cli = "@ycoding-ai/cli#typecheck"
 const web = "@ycoding-ai/web#typecheck"
 
@@ -101,7 +101,7 @@ async function fixture() {
           type: "module",
           exports: "./src/index.ts",
           dependencies,
-          scripts: { typecheck: `${tsgo} --noEmit -p tsconfig.json` },
+          scripts: { typecheck: `${bun} check -p tsconfig.json` },
         }),
       )
       await write(
