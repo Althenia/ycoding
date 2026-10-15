@@ -128,7 +128,16 @@ print("Transitive Cargo license expressions:")
 for package in sorted(packages.values(), key=lambda item: item["name"]):
     print(f"  {package['name']} {package['version']}: {package.get('license') or 'MISSING'}")
 print("License identifiers: " + (", ".join(sorted(license_ids)) if license_ids else "none"))
-print("Bundled native notices: DuckDB/libduckdb-sys carries an MIT license and bundles C++/third_party source; Cargo metadata does not enumerate embedded component notices, so release packaging must retain the upstream notice set. rusqlite/libsqlite3-sys wrappers are MIT; bundled SQLite 3.53.2 C source is public domain.")
+duckdb_package = by_name.get("libduckdb-sys")
+if duckdb_package is None:
+    errors.append("missing locked libduckdb-sys package for the bundled DuckDB runtime")
+else:
+    duckdb_license = Path(duckdb_package["manifest_path"]).parent / "LICENSE"
+    if not duckdb_license.is_file():
+        errors.append(f"missing upstream DuckDB license file: {duckdb_license}")
+    elif duckdb_license.read_text(encoding="utf-8").strip() not in (root / "NOTICE").read_text(encoding="utf-8"):
+        errors.append("root NOTICE does not contain the locked libduckdb-sys LICENSE text")
+print("Bundled native notices: root NOTICE must retain the locked libduckdb-sys LICENSE verbatim. DuckDB also bundles C++/third_party source not enumerated by Cargo metadata. rusqlite/libsqlite3-sys wrappers are MIT; bundled SQLite 3.53.2 C source is public domain.")
 if license_failures:
     errors.extend(f"incompatible or unverified license: {failure}" for failure in license_failures)
 if errors:
