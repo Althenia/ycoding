@@ -1032,9 +1032,9 @@ function createFixtureStore(): Fixture {
   const team = () => {
     emitEvent(sessionID, {
       id: "evt_team_delegate",
-      type: "session.tool.progress",
+      type: "session.tool.success",
       durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
-      data: { sessionID, assistantMessageID: "msg_team", callID: "call_subagent", structured: { sessionID: "ses_child", status: "running" } },
+      data: { sessionID, assistantMessageID: "msg_team", callID: "call_subagent", structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false },
     })
     setTimeout(() => {
       teamReported = true
@@ -1106,7 +1106,7 @@ function createFixtureStore(): Fixture {
       if (kind === "progress") {
         emitEvent(sessionID, { type: "session.tool.input.started", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, name: "shell" } })
         emitEvent(sessionID, { type: "session.tool.called", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, input: { command: "bun test scoped" }, executed: false } })
-        emitEvent(sessionID, { type: "session.tool.progress", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { ...data, structured: {}, content: [{ type: "text", text: "Progress output ".repeat(100) }] } })
+        emitEvent(sessionID, { type: "session.tool.progress", data: { ...data, structured: {}, content: [{ type: "text", text: "Progress output ".repeat(100) }] } })
         messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "probe_tail" ? { ...message, content: [{ type: "text", text: probeText }, { type: "tool", id: "call_reading", name: "shell", state: { status: "running", input: { command: "bun test scoped" }, structured: {}, content: [{ type: "text", text: "Progress output ".repeat(100) }] } }] } : message)
       }
       if (kind === "decisions") {

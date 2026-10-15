@@ -112,9 +112,9 @@ test("keeps a large canonical inline tool image", () => {
 })
 
 test("extracts only durable live subagent delegation and terminal notification identities", () => {
-  expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", durable: { aggregateID: "ses_root", seq: 1 }, data: {
+  expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", data: {
     sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
-  } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })
+  } })).toBeUndefined()
   expect(readTeamCue({ id: "evt_success", type: "session.tool.success", durable: { aggregateID: "ses_root", seq: 2 }, data: {
     sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
   } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })

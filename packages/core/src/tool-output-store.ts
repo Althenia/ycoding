@@ -103,6 +103,18 @@ const boundedPreview = (text: string, marker: string, maxLines: number, maxBytes
   return bounded.tail ? `${bounded.head}\n\n${marker}\n\n${bounded.tail}` : `${bounded.head}\n\n${marker}`
 }
 
+const base64 = /^[A-Za-z0-9+/]+={0,2}$/
+
+export function omitBase64(value: unknown, maxBytes: number): unknown {
+  if (typeof value === "string")
+    return value.length > maxBytes && base64.test(value) ? `[${value.length} bytes of base64 data omitted]` : value
+  if (Array.isArray(value)) return value.map((item) => omitBase64(item, maxBytes))
+  if (value === null || typeof value !== "object") return value
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, omitBase64(item, maxBytes)]))
+}
+
 const lineCount = (text: string) => {
   let count = 1
   for (const char of text) if (char === "\n") count++
@@ -146,12 +158,13 @@ const layer = Layer.effect(
               catch: (cause) => new StorageError({ operation: "encode", cause }),
             })
           : text.map((item) => item.text).join("")
+      const structured = omitBase64(input.output.structured, outputLimits.maxBytes)
       if (
         lineCount(contextual) <= outputLimits.maxLines &&
         Buffer.byteLength(contextual, "utf-8") <= outputLimits.maxBytes
       )
         return {
-          output: input.output,
+          output: { structured, content: input.output.content },
           outputPaths: [],
         }
 
@@ -160,7 +173,7 @@ const layer = Layer.effect(
 
       return {
         output: {
-          structured: input.output.structured,
+          structured,
           content: [
             {
               type: "text" as const,

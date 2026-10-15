@@ -2500,7 +2500,6 @@ export type SessionToolProgress = {
   metadata?: { [x: string]: any }
   sourceEpoch?: string
   type: "session.tool.progress"
-  durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: {
     sessionID: string
@@ -3578,22 +3577,6 @@ export type SessionLogItem =
         input: { [x: string]: any }
         executed: boolean
         state?: SessionMessageProviderState5
-      }
-    }
-  | {
-      id: string
-      created: number
-      metadata?: { [x: string]: any }
-      sourceEpoch: string
-      type: "session.tool.progress"
-      durable: { aggregateID: string; seq: number; version: 1 }
-      location?: LocationRef
-      data: {
-        sessionID: string
-        assistantMessageID: string
-        callID: string
-        structured: { [x: string]: any }
-        content: Array<LLMToolContent>
       }
     }
   | {

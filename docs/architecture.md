@@ -220,7 +220,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 - One logical model step has one explicit provider stream call except documented compaction recovery.
 - Session execution ownership is process-local.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
-- Durable state remains replayable, except message rows and message-only events below a valid local compaction checkpoint, which the retention sweep prunes; caches and projections remain rebuildable.
+- Durable state remains replayable, except message rows and message-only events below a valid local compaction checkpoint and message-only events of settled executions, which history pruning deletes; projected messages are the record for pruned history, and caches remain rebuildable.
 - TUI Session eviction releases resident transcript windows; a newest-window snapshot read rebuilds them.
 - Project artifacts use their validated lifecycle instead of writing directly into source directories.
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.

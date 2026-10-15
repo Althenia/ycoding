@@ -63,7 +63,7 @@ const makeService = (file: string) =>
 export const reclaim = Effect.fn("Database.reclaim")(function* (db: DatabaseShape) {
   let free = yield* freelist(db)
   while (free > 0) {
-    yield* db.run("PRAGMA incremental_vacuum(2048)")
+    yield* db.run("PRAGMA incremental_vacuum(32)")
     yield* Effect.yieldNow
     const remaining = yield* freelist(db)
     if (remaining >= free) return

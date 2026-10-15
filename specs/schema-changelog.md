@@ -2,6 +2,15 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-15: Make Tool Progress Live-Only
+
+- `session.tool.progress` (`SessionEvent.Tool.Progress`) changes from durable version 1 to an ephemeral event with the same `{ sessionID, assistantMessageID, callID, structured, content }` data. It is published on the live stream only, carries no `durable` envelope, leaves the durable manifest and `Session.Event.PublicDurable` union, and no longer appears in `session.log`.
+- The projector no longer applies tool progress to running tool parts; a tool that fails after progress records empty `structured` and `content` in its error state.
+
+Compatibility:
+
+- Stored `session.tool.progress.1` rows are skipped by durable readers and deleted by history pruning. Promise and Effect clients are regenerated; consumers must not expect a durable sequence on tool progress.
+
 ## 2026-10-14: Add Queued Shell Commands
 
 - Add `queued` to `Shell.Status`, optional 1-based `Shell.Info.queuePosition`, and optional `Shell.Time.queued` (enqueue time of a queue-channel command once it starts).

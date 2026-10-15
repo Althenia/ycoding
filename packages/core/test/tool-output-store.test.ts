@@ -71,6 +71,44 @@ describe("ToolOutputStore", () => {
     ),
   )
 
+  it.live("omits oversized base64 leaves from stored structured metadata and keeps model content", () =>
+    withStore(({ store }) =>
+      Effect.gen(function* () {
+        const image = Buffer.alloc(60_000, 9).toString("base64")
+        const diff = `--- a/file\n+++ b/file\n${"+ changed line\n".repeat(5_000)}`
+        const content = [
+          { type: "text" as const, text: "captured" },
+          { type: "file" as const, uri: `data:image/png;base64,${image}`, mime: "image/png", name: "screen.png" },
+        ]
+        const result = yield* store.bound({
+          sessionID,
+          callID: "call-base64",
+          output: {
+            structured: {
+              type: "result",
+              image,
+              diff,
+              small: "aGVsbG8=",
+              captures: [{ capture: { mediaType: "image/png", data: image } }],
+              width: 4,
+            },
+            content,
+          },
+        })
+        expect(result.output.structured).toEqual({
+          type: "result",
+          image: "[80000 bytes of base64 data omitted]",
+          diff,
+          small: "aGVsbG8=",
+          captures: [{ capture: { mediaType: "image/png", data: "[80000 bytes of base64 data omitted]" } }],
+          width: 4,
+        })
+        expect(result.output.content).toEqual(content)
+        expect(result.outputPaths).toEqual([])
+      }),
+    ),
+  )
+
   it.live("uses bounded text for oversized structured-only output", () =>
     withStore(({ store, fs }) =>
       Effect.gen(function* () {

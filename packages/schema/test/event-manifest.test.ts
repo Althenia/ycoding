@@ -274,7 +274,6 @@ describe("public event manifest", () => {
         "session.tool.input.started.1",
         "session.tool.input.ended.1",
         "session.tool.called.1",
-        "session.tool.progress.1",
         "session.tool.success.1",
         "session.tool.failed.1",
         "session.reasoning.started.1",
@@ -325,6 +324,9 @@ describe("public event manifest", () => {
     expect(SessionEvent.DiagnosticsUpdated.durability).toBe("ephemeral")
     expect(SessionEvent.Compaction.Delta.durability).toBe("ephemeral")
     expect(EventManifest.Durable.has("session.compaction.delta.1")).toBe(false)
+    expect(SessionEvent.Tool.Progress.durability).toBe("ephemeral")
+    expect(EventManifest.Durable.has("session.tool.progress.1")).toBe(false)
+    expect(EventManifest.ServerDefinitions).toContain(SessionEvent.Tool.Progress)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.UsageUpdated)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.DiagnosticsUpdated)
     expect(EventManifest.Definitions.every((definition) => definition.durability !== undefined)).toBe(true)

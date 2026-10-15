@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
-import { asc, eq } from "drizzle-orm"
-import { DateTime, Effect, Schema } from "effect"
+import { eq } from "drizzle-orm"
+import { Effect, Fiber, Schema, Stream } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -19,17 +19,16 @@ import { SessionTable, SessionMessageTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
-const timestamp = DateTime.makeUnsafe(1)
 const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
 
 const content = (text: string) => [{ type: "text" as const, text }]
 
 describe("Tool.Progress", () => {
-  it.effect("projects durable progress and keeps final settlements durable", () =>
+  it.effect("delivers progress live without persisting or projecting it, and settlements stay durable", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       const service = yield* EventRuntime.Service
-      const sessionID = Session.ID.make("ses_tool_progress_projector")
+      const sessionID = Session.ID.make("ses_tool_progress_live")
       yield* db
         .insert(ProjectTable)
         .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -38,12 +37,7 @@ describe("Tool.Progress", () => {
         .pipe(Effect.orDie)
       yield* db
         .insert(SessionTable)
-        .values({
-          id: sessionID,
-          project_id: Project.ID.global,
-          directory: "/project",
-          title: "progress",
-        })
+        .values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "progress" })
         .run()
         .pipe(Effect.orDie)
       const assistantMessageID = SessionMessage.ID.create()
@@ -65,12 +59,7 @@ describe("Tool.Progress", () => {
       })
       const start = (callID: string) =>
         Effect.gen(function* () {
-          yield* service.publish(SessionEvent.Tool.Input.Started, {
-            sessionID,
-            assistantMessageID,
-            callID,
-            name: "bash",
-          })
+          yield* service.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID, name: "bash" })
           yield* service.publish(SessionEvent.Tool.Called, {
             sessionID,
             assistantMessageID,
@@ -79,23 +68,24 @@ describe("Tool.Progress", () => {
             executed: false,
           })
         })
+      const live = yield* service.subscribe(SessionEvent.Tool.Progress).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      )
 
       yield* start("call-success")
-      expect((yield* readAssistant).content[0]).toMatchObject({
-        state: { status: "running", structured: {}, content: [] },
-      })
-
-      yield* service.publish(SessionEvent.Tool.Progress, {
+      const published = yield* service.publish(SessionEvent.Tool.Progress, {
         sessionID,
         assistantMessageID,
         callID: "call-success",
         structured: { phase: "checkpoint" },
         content: content("saved"),
       })
+      expect(published.durable).toBeUndefined()
       expect((yield* readAssistant).content[0]).toMatchObject({
-        state: { status: "running", structured: { phase: "checkpoint" }, content: content("saved") },
+        state: { status: "running", structured: {}, content: [] },
       })
-
       const success = yield* service.publish(SessionEvent.Tool.Success, {
         sessionID,
         assistantMessageID,
@@ -124,26 +114,24 @@ describe("Tool.Progress", () => {
         executed: false,
       })
       expect((yield* readAssistant).content[1]).toMatchObject({
-        state: {
-          status: "error",
-          structured: { phase: "checkpoint" },
-          content: content("before failure"),
-          error: { type: "unknown", message: "boom" },
-        },
+        state: { status: "error", structured: {}, content: [], error: { type: "unknown", message: "boom" } },
       })
+      expect(Array.from(yield* Fiber.join(live)).map((event) => [event.data.callID, event.data.content])).toEqual([
+        ["call-success", content("saved")],
+        ["call-failed", content("before failure")],
+      ])
       expect(Schema.is(SessionEvent.Durable)(success)).toBe(true)
       expect(Schema.is(SessionEvent.Durable)(failed)).toBe(true)
 
-      const rows = yield* db
+      const types = (yield* db
         .select({ type: EventTable.type })
         .from(EventTable)
         .where(eq(EventTable.aggregate_id, sessionID))
-        .orderBy(asc(EventTable.seq))
         .all()
-        .pipe(Effect.orDie)
-      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Progress.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Success.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventRuntime.versionedType(SessionEvent.Tool.Failed.type, 1))
+        .pipe(Effect.orDie)).map((row) => row.type)
+      expect(types.some((type) => type.startsWith("session.tool.progress"))).toBe(false)
+      expect(types).toContain(EventRuntime.versionedType(SessionEvent.Tool.Success.type, 1))
+      expect(types).toContain(EventRuntime.versionedType(SessionEvent.Tool.Failed.type, 1))
     }),
   )
 })

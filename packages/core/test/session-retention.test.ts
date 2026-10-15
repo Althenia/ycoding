@@ -1,10 +1,11 @@
 import { afterAll, describe, expect } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { Database as SQLite } from "bun:sqlite"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { sql } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Fiber, Layer, Logger } from "effect"
 import { TestClock } from "effect/testing"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -16,7 +17,10 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionHistoryBackup } from "@ycoding-ai/core/session/history-backup"
+import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionRetention } from "@ycoding-ai/core/session/retention"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
@@ -39,18 +43,25 @@ const execution = Layer.succeed(
   }),
 )
 
-function services(input: { readonly days?: number; readonly database?: string } = {}) {
+function services(input: { readonly days?: number; readonly database?: string; readonly retention?: false } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "ycoding-session-retention-"))
   roots.push(root)
   if (input.days !== undefined)
     writeFileSync(path.join(root, "ycoding.json"), JSON.stringify({ session_retention: { days: input.days } }))
   return testEffect(
     AppNodeBuilder.build(
-      LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionRetention.node]),
+      LayerNode.group([
+        Database.node,
+        EventRuntime.node,
+        SessionProjector.node,
+        ...(input.retention === false ? [] : [SessionRetention.node]),
+      ]),
       [
         [SessionExecution.node, execution],
         [Global.node, Global.layerWith({ config: root, home: root, data: path.join(root, "data") })],
-        ...(input.database ? [[Database.node, Database.configured({ path: path.join(root, input.database) })] as const] : []),
+        ...(input.database
+          ? [[Database.node, Database.configured({ path: path.join(root, input.database) })] as const]
+          : []),
       ],
     ),
   )
@@ -59,6 +70,10 @@ function services(input: { readonly days?: number; readonly database?: string } 
 const it = services()
 const configured = services({ days: 3 })
 const reclaiming = services({ database: "retention.db" })
+const backingUp = services({ database: "backup.db" })
+const renameFailure = services({ database: "rename-failure.db", retention: false })
+const refusing = services({ database: "refusing.db", retention: false })
+const responsive = services({ database: "responsive.db", retention: false })
 
 const day = 24 * 60 * 60 * 1000
 const now = 100 * day
@@ -187,7 +202,9 @@ const blobs = (value: string) =>
     return {
       instruction: yield* count(sql`SELECT count(*) AS count FROM instruction_blob WHERE hash = ${hash}`),
       manifest: yield* count(sql`SELECT count(*) AS count FROM compaction_manifest_blob WHERE digest = ${hash}`),
-      providerState: yield* count(sql`SELECT count(*) AS count FROM session_provider_state_blob WHERE digest = ${hash}`),
+      providerState: yield* count(
+        sql`SELECT count(*) AS count FROM session_provider_state_blob WHERE digest = ${hash}`,
+      ),
     }
   })
 
@@ -199,6 +216,23 @@ const cleanup = (at = now) =>
     const retention = yield* SessionRetention.Service
     return yield* retention.cleanup(at)
   })
+
+const settledSession = (id: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* seed({ id, updated: now, pinned: true })
+    const insert = (seq: number, type: string) =>
+      db.run(
+        sql`INSERT INTO event (id, aggregate_id, seq, created, type, data)
+          VALUES (${`evt_${id}_${seq}`}, ${id}, ${seq}, 0, ${type}, ${JSON.stringify({ sessionID: id, inputIDs: [] })})`,
+      )
+    yield* insert(1, "session.execution.started.1")
+    yield* insert(2, "session.input.consumed.1")
+    yield* insert(3, "session.execution.succeeded.1")
+    yield* db.run(sql`UPDATE event_sequence SET seq = 3 WHERE aggregate_id = ${id}`)
+  }).pipe(Effect.orDie)
+
+const eventCount = (id: string) => rows(id).pipe(Effect.map((value) => value.events))
 
 const removed = (id: string) => rows(id).pipe(Effect.map((value) => expect(value).toEqual(gone)))
 const kept = (id: string) => rows(id).pipe(Effect.map((value) => expect(value.session).toBe(1)))
@@ -254,7 +288,7 @@ describe("SessionRetention", () => {
       expect(
         yield* db.all<{ seq: number }>(sql`SELECT seq FROM event WHERE aggregate_id = ${id} ORDER BY seq`),
       ).toEqual([{ seq: 0 }, { seq: 2 }, { seq: 3 }])
-      expect(yield* retention.pruneHistory()).toEqual({ messages: 0, events: 0 })
+      expect(yield* retention.pruneHistory()).toEqual({ messages: 0, events: 0, images: 0 })
       yield* kept(id)
     }),
   )
@@ -329,7 +363,11 @@ describe("SessionRetention", () => {
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       yield* seed({ id: "ses_touched", updated: old })
-      hooks.push(db.run(sql`UPDATE session SET time_updated = ${now} WHERE id = 'ses_touched'`).pipe(Effect.orDie, Effect.asVoid))
+      hooks.push(
+        db
+          .run(sql`UPDATE session SET time_updated = ${now} WHERE id = 'ses_touched'`)
+          .pipe(Effect.orDie, Effect.asVoid),
+      )
 
       expect(yield* cleanup()).toBe(0)
       hooks.length = 0
@@ -340,8 +378,20 @@ describe("SessionRetention", () => {
 
   it.effect("preserves blobs still referenced by a kept Session", () =>
     Effect.gen(function* () {
-      yield* seed({ id: "ses_shared_old", updated: old, instruction: "shared", manifest: "shared", providerState: "shared" })
-      yield* seed({ id: "ses_shared_kept", updated: recent, instruction: "shared", manifest: "shared", providerState: "shared" })
+      yield* seed({
+        id: "ses_shared_old",
+        updated: old,
+        instruction: "shared",
+        manifest: "shared",
+        providerState: "shared",
+      })
+      yield* seed({
+        id: "ses_shared_kept",
+        updated: recent,
+        instruction: "shared",
+        manifest: "shared",
+        providerState: "shared",
+      })
 
       expect(yield* cleanup()).toBe(1)
 
@@ -393,24 +443,210 @@ describe("SessionRetention", () => {
     }),
   )
 
-  reclaiming.effect("reclaims every free page after deleting a family", () =>
-    Effect.gen(function* () {
-      const { db } = yield* Database.Service
-      expect((yield* db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum").pipe(Effect.orDie))?.auto_vacuum).toBe(2)
-      yield* seed({ id: "ses_large", updated: old })
-      yield* db
-        .run(
-          sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+  reclaiming.effect(
+    "reclaims every free page after deleting a family",
+    () =>
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        expect((yield* db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum").pipe(Effect.orDie))?.auto_vacuum).toBe(2)
+        yield* seed({ id: "ses_large", updated: old })
+        yield* db
+          .run(
+            sql`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
             WITH RECURSIVE counter(value) AS (VALUES (1) UNION ALL SELECT value + 1 FROM counter WHERE value < 3000)
             SELECT 'msg_large_' || value, 'ses_large', 'user', value, 0, 0, json_object('text', hex(randomblob(4096))) FROM counter`,
-        )
-        .pipe(Effect.orDie)
+          )
+          .pipe(Effect.orDie)
 
-      const retention = yield* SessionRetention.Service
-      expect(yield* retention.cleanup(now)).toBe(1)
+        const retention = yield* SessionRetention.Service
+        expect(yield* retention.cleanup(now)).toBe(1)
 
-      yield* removed("ses_large")
-      expect((yield* db.get<{ freelist_count: number }>("PRAGMA freelist_count").pipe(Effect.orDie))?.freelist_count).toBe(0)
+        yield* removed("ses_large")
+        expect(
+          (yield* db.get<{ freelist_count: number }>("PRAGMA freelist_count").pipe(Effect.orDie))?.freelist_count,
+        ).toBe(0)
+      }),
+    30_000,
+  )
+
+  it.effect("prunes a settled Session after the execution settles and the grace passes", () =>
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      yield* seed({ id: "ses_settle_hook", updated: now, pinned: true })
+      const sessionID = Session.ID.make("ses_settle_hook")
+      yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+      yield* events.publish(SessionEvent.Synthetic, { sessionID, text: "Settled note" })
+      yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+      const before = yield* eventCount("ses_settle_hook")
+      yield* TestClock.adjust(Duration.millis(Duration.toMillis(SessionHistoryPruning.SETTLED_GRACE) - 1))
+      expect(yield* eventCount("ses_settle_hook")).toBe(before)
+      yield* TestClock.adjust(Duration.millis(1))
+      expect(yield* eventCount("ses_settle_hook")).toBe(before - 1)
     }),
+  )
+
+  backingUp.effect("backs up the database once before the first pruning deletion", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const retention = yield* SessionRetention.Service
+      const file = (yield* db.all<{ name: string; file: string }>(sql`PRAGMA database_list`).pipe(Effect.orDie)).find(
+        (row) => row.name === "main",
+      )!.file
+      const backup = `${file}${SessionHistoryBackup.SUFFIX}`
+      yield* settledSession("ses_backup_first")
+      yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+      expect(existsSync(backup)).toBe(false)
+
+      expect(yield* retention.pruneHistory()).toEqual({ messages: 0, events: 1, images: 0 })
+      expect(existsSync(backup)).toBe(true)
+      const copy = new SQLite(backup, { readonly: true })
+      expect(copy.query("SELECT type FROM event WHERE aggregate_id = 'ses_backup_first' ORDER BY seq").all()).toEqual([
+        { type: "session.created.2" },
+        { type: "session.execution.started.1" },
+        { type: "session.input.consumed.1" },
+        { type: "session.execution.succeeded.1" },
+      ])
+      copy.close()
+      expect(
+        yield* db
+          .all(sql`SELECT name FROM data_migration WHERE name = ${SessionHistoryBackup.MARKER}`)
+          .pipe(Effect.orDie),
+      ).toEqual([{ name: SessionHistoryBackup.MARKER }])
+
+      rmSync(backup)
+      yield* settledSession("ses_backup_second")
+      yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+      expect(yield* retention.pruneHistory()).toEqual({ messages: 0, events: 1, images: 0 })
+      expect(existsSync(backup)).toBe(false)
+    }),
+  )
+
+  renameFailure.effect("leaves history intact after a backup rename failure and succeeds on a later retry", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* settledSession("ses_backup_rename")
+      yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+      const file = (yield* db.all<{ name: string; file: string }>(sql`PRAGMA database_list`).pipe(Effect.orDie)).find(
+        (row) => row.name === "main",
+      )!.file
+      const target = `${file}${SessionHistoryBackup.SUFFIX}`
+      const history = Effect.gen(function* () {
+        return {
+          events: yield* db.all(sql`SELECT * FROM event ORDER BY aggregate_id, seq`).pipe(Effect.orDie),
+          messages: yield* db.all(sql`SELECT * FROM session_message ORDER BY session_id, seq`).pipe(Effect.orDie),
+        }
+      })
+      const marker = () =>
+        db.all(sql`SELECT * FROM data_migration WHERE name = ${SessionHistoryBackup.MARKER}`).pipe(Effect.orDie)
+      const before = yield* history
+      mkdirSync(target)
+      const logs: string[] = []
+      const backup = SessionHistoryBackup.make({
+        db,
+        freeBytes: () => Effect.succeed(Number.MAX_SAFE_INTEGER),
+        notify: () => Effect.void,
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make((entry) => logs.push(Bun.inspect(entry.message)))], { mergeWithExisting: false }),
+        ),
+      )
+      const pruning = SessionHistoryPruning.make(db, Effect.succeed(new Set()), backup)
+      expect(yield* pruning.sweep()).toEqual({ messages: 0, events: 0, images: 0 })
+      expect(yield* history).toEqual(before)
+      expect(yield* marker()).toEqual([])
+      expect(existsSync(`${target}.tmp`)).toBe(false)
+      expect(logs).toHaveLength(1)
+      expect(logs[0]).toMatch(/EISDIR|ENOTDIR|EPERM|EACCES/)
+      rmSync(target, { recursive: true })
+
+      const retried = yield* pruning.sweep()
+      expect(retried, JSON.stringify(logs)).toEqual({ messages: 0, events: 1, images: 0 })
+      expect(yield* eventCount("ses_backup_rename")).toBe(3)
+      expect(yield* marker()).toHaveLength(1)
+      expect(existsSync(`${target}.tmp`)).toBe(false)
+      const copy = new SQLite(target, { readonly: true })
+      expect(copy.query("PRAGMA quick_check").all()).toEqual([{ quick_check: "ok" }])
+      expect(copy.query("SELECT count(*) AS count FROM event WHERE aggregate_id = 'ses_backup_rename'").get()).toEqual({
+        count: 4,
+      })
+      copy.close()
+      expect((yield* history).messages).toEqual(before.messages)
+    }),
+  )
+
+  refusing.effect("skips pruning without a backup when free space is insufficient", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const notices: SessionHistoryBackup.Unavailable[] = []
+      const backup = SessionHistoryBackup.make({
+        db,
+        freeBytes: () => Effect.succeed(1024),
+        notify: (input) => Effect.sync(() => notices.push(input)),
+      })
+      yield* settledSession("ses_backup_refused")
+      yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+      const pruning = SessionHistoryPruning.make(db, Effect.succeed(new Set()), backup)
+      const before = {
+        events: yield* db.all(sql`SELECT * FROM event ORDER BY aggregate_id, seq`).pipe(Effect.orDie),
+        messages: yield* db.all(sql`SELECT * FROM session_message ORDER BY session_id, seq`).pipe(Effect.orDie),
+      }
+
+      expect(yield* pruning.sweep()).toEqual({ messages: 0, events: 0, images: 0 })
+      expect(yield* pruning.sweep()).toEqual({ messages: 0, events: 0, images: 0 })
+      expect(yield* eventCount("ses_backup_refused")).toBe(4)
+      expect(notices).toHaveLength(1)
+      expect(notices[0].available).toBe(1024)
+      expect(notices[0].required).toBeGreaterThan(SessionHistoryBackup.HEADROOM_BYTES)
+      expect(notices[0].path.endsWith(`refusing.db${SessionHistoryBackup.SUFFIX}`)).toBe(true)
+      expect(existsSync(notices[0].path)).toBe(false)
+      expect(existsSync(`${notices[0].path}.tmp`)).toBe(false)
+      expect({
+        events: yield* db.all(sql`SELECT * FROM event ORDER BY aggregate_id, seq`).pipe(Effect.orDie),
+        messages: yield* db.all(sql`SELECT * FROM session_message ORDER BY session_id, seq`).pipe(Effect.orDie),
+      }).toEqual(before)
+      expect(
+        yield* db
+          .all(sql`SELECT name FROM data_migration WHERE name = ${SessionHistoryBackup.MARKER}`)
+          .pipe(Effect.orDie),
+      ).toEqual([])
+
+      yield* TestClock.adjust(Duration.hours(1))
+      expect(yield* pruning.sweep()).toEqual({ messages: 0, events: 0, images: 0 })
+      expect(notices).toHaveLength(2)
+    }),
+  )
+
+  responsive.effect(
+    "keeps serving cheap queries while the backup copies the database",
+    () =>
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`CREATE TABLE ballast (value BLOB)`).pipe(Effect.orDie)
+        yield* db
+          .run(
+            sql`INSERT INTO ballast (value) WITH RECURSIVE counter(value) AS (VALUES (1) UNION ALL SELECT value + 1 FROM counter WHERE value < 150000)
+            SELECT randomblob(1000) FROM counter`,
+          )
+          .pipe(Effect.orDie)
+        const file = (yield* db.all<{ name: string; file: string }>(sql`PRAGMA database_list`).pipe(Effect.orDie)).find(
+          (row) => row.name === "main",
+        )!.file
+        const backup = { copying: true }
+        let queries = 0
+        const copy = yield* SessionHistoryBackup.make({ db, notify: () => Effect.void }).pipe(
+          Effect.ensuring(Effect.sync(() => (backup.copying = false))),
+          Effect.forkChild({ startImmediately: true }),
+        )
+        while (backup.copying) {
+          const row = yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM session`).pipe(Effect.orDie)
+          expect(row?.count).toBe(0)
+          if (backup.copying) queries += 1
+          yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)))
+        }
+        expect(yield* Fiber.join(copy)).toBe(true)
+        expect(existsSync(`${file}${SessionHistoryBackup.SUFFIX}`)).toBe(true)
+        expect(queries).toBeGreaterThan(0)
+      }),
+    30_000,
   )
 })

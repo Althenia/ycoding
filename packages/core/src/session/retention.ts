@@ -1,7 +1,8 @@
 export * as SessionRetention from "./retention"
 
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm"
-import { Cause, Clock, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
+import { TuiEvent } from "@ycoding-ai/schema/tui-event"
+import { Cause, Clock, Context, Duration, Effect, Layer, Schedule, Scope, Stream } from "effect"
 import { Config } from "../config"
 import { Database } from "../database/database"
 import { makeGlobalNode, Node } from "../effect/app-node"
@@ -13,6 +14,7 @@ import { Location } from "../location"
 import { AbsolutePath } from "../schema"
 import { SessionEvent } from "./event"
 import { SessionExecution } from "./execution"
+import { SessionHistoryBackup } from "./history-backup"
 import { SessionHistoryPruning } from "./history-pruning"
 import { SessionProjector } from "./projector"
 import type { SessionSchema } from "./schema"
@@ -198,8 +200,52 @@ const layer = (options?: Config.Options) =>
           { behavior: "immediate" },
         )
 
+      const history = SessionHistoryPruning.make(
+        db,
+        execution.active,
+        SessionHistoryBackup.make({
+          db,
+          notify: (input) =>
+            events.publish(TuiEvent.ToastShow, {
+              title: "Session history pruning paused",
+              message: `Pruning needs ${formatGiB(input.required)} free for a one-time backup at ${input.path}; ${formatGiB(input.available)} is free.`,
+              variant: "warning",
+              duration: 15_000,
+            }).pipe(Effect.asVoid),
+        }),
+      )
+      yield* events
+        .subscribe([
+          SessionEvent.Execution.Succeeded,
+          SessionEvent.Execution.Failed,
+          SessionEvent.Execution.Interrupted,
+        ])
+        .pipe(
+          Stream.runForEach((event) =>
+            Effect.sleep(SessionHistoryPruning.SETTLED_GRACE).pipe(
+              Effect.andThen(history.prune(event.data.sessionID)),
+              Effect.flatMap((pruned) =>
+                pruned.events > 0 || pruned.messages > 0 || pruned.images > 0
+                  ? Database.reclaim(db).pipe(Effect.orDie)
+                  : Effect.void,
+              ),
+              Effect.catchTag("SessionHistoryPruning.BackupUnavailableError", () => Effect.void),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterrupts(cause),
+                (cause) =>
+                  Effect.logError("session history pruning could not prune a settled session", {
+                    sessionID: event.data.sessionID,
+                    cause,
+                  }),
+              ),
+              Effect.forkIn(lifetime, { startImmediately: true }),
+            ),
+          ),
+          Effect.forkIn(lifetime, { startImmediately: true }),
+        )
+
       return Service.of({
-        pruneHistory: SessionHistoryPruning.make(db, execution.active).sweep,
+        pruneHistory: history.sweep,
         cleanup: Effect.fn("SessionRetention.cleanup")(function* (now?: number) {
           const settings = yield* config
           const days = Config.latest(yield* settings.entries(), "session_retention")?.days ?? defaultDays
@@ -279,6 +325,10 @@ const sweepLayer = Layer.effectDiscard(
       )
   }),
 )
+
+function formatGiB(bytes: number) {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+}
 
 function configGraph(options: Config.Options | undefined, directory: AbsolutePath) {
   return LayerNode.hoist(Config.configured(options), Node.tags.values.global, [

@@ -644,13 +644,9 @@ export namespace Tool {
   })
   export type Called = typeof Called.Type
 
-  /**
-   * Replayable bounded running-tool state. Tools should checkpoint semantic
-   * transitions or at a bounded cadence, not persist every stdout/stderr chunk.
-   */
-  export const Progress = Event.durable({
+  // Running-tool state is live-only; Success and Failed are the replayable settlement boundary.
+  export const Progress = Event.ephemeral({
     type: "session.tool.progress",
-    ...options,
     schema: {
       ...ToolBase,
       structured: Schema.Record(Schema.String, Schema.Unknown),

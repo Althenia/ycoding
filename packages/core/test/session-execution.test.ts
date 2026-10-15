@@ -17,6 +17,7 @@ import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { Job } from "@ycoding-ai/core/job"
 import { SessionCompletion } from "@ycoding-ai/core/session/completion"
+import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
@@ -38,6 +39,7 @@ import { Shell } from "@ycoding-ai/core/shell"
 import { ID, Info } from "@ycoding-ai/schema/shell"
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
+import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, Job.node])))
@@ -208,6 +210,38 @@ completionIt.effect("records verified work once after an explicit declaration an
     expect(page).toEqual({ data: [{ id: completed[0].id, seq: EventRuntime.Seq.make(completed[0].seq), created: completed[0].created,
       sessionID, inputID, assistantMessageID: SessionMessage.ID.make("msg_work_final") }] })
     expect(yield* SessionCompletion.latest(database.db, { after: sessionID, limit: 1 })).toEqual({ data: [] })
+    yield* Scope.close(scope, Exit.void)
+  }),
+)
+
+completionIt.effect("keeps recorded work and its completion read after the settled execution is pruned", () =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventRuntime.Service
+    const sessionID = Session.ID.make("ses_verified_pruned")
+    yield* seedSessions(database, [sessionID])
+    const inputID = SessionMessage.ID.make("msg_verified_pruned_input")
+    yield* SessionPending.admit(database.db, events, { id: inputID, sessionID, input: SessionPending.Message.make({
+      type: "user", delivery: "steer", data: { text: "Implement and verify the change" },
+    }) })
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID))
+    const execution = Context.get(context, SessionExecution.Service)
+    yield* execution.resume(sessionID)
+    const types = () => database.db.select({ type: EventTable.type }).from(EventTable)
+      .where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie, Effect.map((rows) => rows.map((row) => row.type)))
+    expect((yield* types()).filter((type) => type === "session.work.completed.1")).toHaveLength(1)
+    const completed = yield* SessionCompletion.latest(database.db, { limit: 200 })
+
+    yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+    const pruned = yield* SessionHistoryPruning.make(database.db, execution.active).prune(sessionID)
+    expect(pruned.events).toBeGreaterThan(0)
+    expect(yield* types()).not.toContain("session.tool.success.1")
+    expect((yield* types()).filter((type) => type === "session.work.completed.1")).toHaveLength(1)
+    expect(yield* SessionCompletion.latest(database.db, { limit: 200 })).toEqual(completed)
+    const jobs = yield* Job.Service
+    yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(new Set([sessionID])))
+    expect((yield* types()).filter((type) => type === "session.work.completed.1")).toHaveLength(1)
     yield* Scope.close(scope, Exit.void)
   }),
 )

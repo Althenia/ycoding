@@ -117,8 +117,8 @@ describe("remote team facts", () => {
       await test.store.loadTeamControls()
       await waitFor(() => test.store.state().team?.tasks[0]?.tokens === 20)
       test.store.subscribe(() => loading.push(test.store.state().team?.pageLoading === true))
-      test.relay.pushEvent("ses_a", { id: "evt_team_refresh", type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
-        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+      test.relay.pushEvent("ses_a", { id: "evt_team_refresh", type: "session.tool.success", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false } })
       await waitFor(() => reads === 2)
       expect(test.store.state().team?.refreshing).toBe(true)
       held.resolve({ ok: true, value: { data: [{ ...task("ses_child"), time: { created: 1, updated: 11 } }], summary: { total: 1, active: 1 }, cursor: {} } })
@@ -367,8 +367,8 @@ describe("remote team facts", () => {
       test.store.watchTeam(true)
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().team?.status === "ready")
-      test.relay.pushEvent("ses_a", { id: "evt_team_refresh", type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
-        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+      test.relay.pushEvent("ses_a", { id: "evt_team_refresh", type: "session.tool.success", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false } })
       await waitFor(() => reads === 2)
       expect(test.store.state().team).toMatchObject({ status: "ready", tasks: [{ sessionID: "ses_child" }] })
       held.resolve({ ok: false, code: "internal_error", message: "Unavailable" })
@@ -387,8 +387,8 @@ describe("remote team facts", () => {
       if (reads === 1) return ready
       return reads === 2 ? second.promise : third.promise
     })
-    const cue = (seq: number) => test.relay.pushEvent("ses_a", { id: `evt_team_refresh_${seq}`, type: "session.tool.progress", durable: { aggregateID: "ses_a", seq, version: 1 },
-      data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: `call_${seq}`, structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+    const cue = (seq: number) => test.relay.pushEvent("ses_a", { id: `evt_team_refresh_${seq}`, type: "session.tool.success", durable: { aggregateID: "ses_a", seq, version: 1 },
+      data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: `call_${seq}`, structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false } })
     try {
       test.store.watchTeam(true)
       await test.store.selectSession("ses_a")
@@ -493,8 +493,8 @@ describe("remote team facts", () => {
       test.store.watchTeam(true)
       const selecting = test.store.selectSession("ses_a")
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
-      test.relay.pushEvent("ses_a", { id: "evt_during", type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
-        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [] } })
+      test.relay.pushEvent("ses_a", { id: "evt_during", type: "session.tool.success", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false } })
       await Bun.sleep(20)
       expect(test.store.state().teamCues).toEqual([])
       held.resolve({ ok: true, value: { sourceEpoch: "epoch_1", session: { id: "ses_a", title: "Root", time: { created: 1, updated: 1 } },
@@ -567,8 +567,8 @@ describe("remote team facts", () => {
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().team?.status === "ready")
       expect(test.store.state().teamCues).toEqual([])
-      const delegated = { id: "evt_delegate", type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
-        data: { sessionID: "ses_a", assistantMessageID: "msg_assistant", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [] } }
+      const delegated = { id: "evt_delegate", type: "session.tool.success", durable: { aggregateID: "ses_a", seq: 1, version: 1 },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_assistant", callID: "call_1", structured: { sessionID: "ses_child", status: "running" }, content: [], executed: false } }
       test.relay.pushEvent("ses_a", delegated)
       test.relay.pushEvent("ses_a", { id: "evt_report", type: "session.synthetic", durable: { aggregateID: "ses_a", seq: 2, version: 1 },
         data: { sessionID: "ses_a", text: "Report", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 2 } } })
@@ -582,9 +582,9 @@ describe("remote team facts", () => {
       await Bun.sleep(20)
       expect(test.store.state().teamCues).toHaveLength(2)
       for (let index = 3; index <= 12; index += 1) test.relay.pushEvent("ses_a", {
-        id: `evt_${index}`, type: "session.tool.progress", durable: { aggregateID: "ses_a", seq: index, version: 1 },
+        id: `evt_${index}`, type: "session.tool.success", durable: { aggregateID: "ses_a", seq: index, version: 1 },
         data: { sessionID: "ses_a", assistantMessageID: "msg_assistant", callID: `call_${index}`,
-          structured: { sessionID: `ses_child_${index}`, status: "running" }, content: [] },
+          structured: { sessionID: `ses_child_${index}`, status: "running" }, content: [], executed: false },
       })
       await waitFor(() => test.store.state().teamCues.at(-1)?.childID === "ses_child_12")
       expect(test.store.state().teamCues).toHaveLength(8)

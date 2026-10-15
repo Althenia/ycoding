@@ -344,7 +344,7 @@ export function readTeamCue(payload: unknown): TeamCue | undefined {
   const parentID = stringField(payload.data.sessionID)
   if (id === undefined || !id.startsWith("evt_") || parentID === undefined || payload.durable.aggregateID !== parentID ||
     typeof payload.durable.seq !== "number" || !Number.isInteger(payload.durable.seq) || payload.durable.seq < 0) return undefined
-  if (payload.type === "session.tool.progress" || payload.type === "session.tool.success") {
+  if (payload.type === "session.tool.success") {
     const structured = recordField(payload.data.structured)
     const childID = structured && stringField(structured.sessionID)
     const callID = stringField(payload.data.callID)

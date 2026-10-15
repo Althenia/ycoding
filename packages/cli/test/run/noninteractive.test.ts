@@ -207,7 +207,6 @@ function failedTool(inputID: string): ServerEvent[] {
       id: "evt_failed_tool_progress",
       created: 3,
       type: "session.tool.progress",
-      durable: { aggregateID: "ses_1", seq: 3, version: 1 },
       data: {
         sessionID: "ses_1",
         assistantMessageID: "msg_failed_tool",

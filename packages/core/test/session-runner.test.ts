@@ -1034,7 +1034,8 @@ const realExecution = Effect.gen(function* () {
       Layer.provide(Layer.succeed(Job.Service, jobs)),
       Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compaction)),
       Layer.provide(Layer.succeed(LocationServiceMap.Service, locations)),
-    ), scope,
+    ),
+    scope,
   )
   return Context.get(context, SessionExecution.Service)
 })
@@ -1533,7 +1534,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  const compactedConversation = (session: Session.Interface) =>
+  const compactedConversation = (session: Session.Interface, image = false) =>
     Effect.gen(function* () {
       responses = [
         reply.text("First answer", "text-first"),
@@ -1544,6 +1545,33 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       yield* admit(session, "Second user request")
       yield* session.resume(sessionID)
+      if (image) {
+        const events = yield* EventRuntime.Service
+        const boundary = (yield* session.messages({ sessionID, order: "desc", limit: 1 }))[0]
+        yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+        yield* events.publish(SessionEvent.Tool.Input.Started, {
+          sessionID,
+          assistantMessageID: boundary.id,
+          callID: "boundary-image",
+          name: "snapshot",
+        })
+        yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID,
+          assistantMessageID: boundary.id,
+          callID: "boundary-image",
+          input: {},
+          executed: true,
+        })
+        yield* events.publish(SessionEvent.Tool.Success, {
+          sessionID,
+          assistantMessageID: boundary.id,
+          callID: "boundary-image",
+          structured: {},
+          executed: true,
+          content: [{ type: "file", mime: "image/png", uri: `data:image/png;base64,${onePixelPng}` }],
+        })
+        yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
+      }
       compactionSummary = true
       yield* session.compact({ sessionID })
     })
@@ -1577,6 +1605,154 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("preserves an image checkpoint boundary and rebuilds the next request byte-identically after pruning", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      yield* compactedConversation(session, true)
+      const checkpoint = yield* SessionContextState.checkpoint(db, sessionID)
+      expect(checkpoint).toBeDefined()
+      const boundary = () =>
+        db
+          .select()
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, checkpoint!.coveredThrough.messageID))
+          .get()
+          .pipe(Effect.orDie)
+      const originalBoundary = yield* boundary()
+      expect(JSON.stringify(originalBoundary)).toContain(onePixelPng)
+      const context = yield* SessionContext.Service
+      const modelRequests = yield* SessionModelRequest.Service
+      const nextRequest = Effect.gen(function* () {
+        const loaded = yield* context.load(yield* context.select(sessionID))
+        return JSON.stringify((yield* modelRequests.prepare({ context: loaded, step: 1 })).request)
+      })
+      const before = yield* nextRequest
+      expect(before).toContain("conversation-checkpoint")
+      yield* TestClock.adjust(SessionHistoryPruning.IMAGE_IDLE)
+      const pruned = yield* SessionHistoryPruning.make(db, Effect.succeed(new Set())).prune(sessionID)
+      expect(pruned.messages).toBeGreaterThan(0)
+      expect(pruned.events).toBeGreaterThan(0)
+      expect(pruned.images).toBe(0)
+      expect(yield* SessionContextState.checkpoint(db, sessionID)).toEqual(checkpoint)
+      expect(yield* boundary()).toEqual(originalBoundary)
+      expect(yield* nextRequest).toBe(before)
+      yield* admit(session, "Third user request")
+      yield* session.resume(sessionID)
+      expect(JSON.stringify(requests.at(-1)!.messages)).toContain("conversation-checkpoint")
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.execution.failed.1")
+    }),
+  )
+
+  it.effect("prunes a settled execution without changing the continuation request or its provider state", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      const execution = yield* realExecution
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_state: "stateless" })
+      yield* admit(session, "Use private provider state")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({
+          id: "settled-reasoning",
+          providerMetadata: { openai: { signature: "sig_settled" } },
+        }),
+        LLMEvent.reasoningDelta({
+          id: "settled-reasoning",
+          text: "Private thought",
+          providerMetadata: {
+            openai: {
+              signature: "sig_settled",
+              opaqueCompactionItem: { type: "compaction", id: "cmp_reasoning", encrypted_content: "reasoning-secret" },
+            },
+          },
+        }),
+        LLMEvent.reasoningEnd({ id: "settled-reasoning", providerMetadata: { openai: { signature: "sig_settled" } } }),
+        LLMEvent.toolCall({
+          id: "settled-tool",
+          name: "web_search",
+          input: { query: "Effect" },
+          providerExecuted: true,
+          providerMetadata: {
+            openai: {
+              itemId: "settled-tool",
+              opaqueCompactionItem: { type: "compaction", id: "cmp_tool_call", encrypted_content: "tool-call-secret" },
+            },
+          },
+        }),
+        LLMEvent.toolResult({
+          id: "settled-tool",
+          name: "web_search",
+          result: { type: "json", value: [{ title: "Effect" }] },
+          providerExecuted: true,
+          providerMetadata: {
+            openai: {
+              blockType: "web_search_tool_result",
+              opaqueCompactionItem: {
+                type: "compaction",
+                id: "cmp_tool_result",
+                encrypted_content: "tool-result-secret",
+              },
+            },
+          },
+        }),
+        LLMEvent.textStart({ id: "settled-answer" }),
+        LLMEvent.textDelta({ id: "settled-answer", text: "Done" }),
+        LLMEvent.textEnd({ id: "settled-answer" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* execution.resume(sessionID)
+      const context = yield* SessionContext.Service
+      const modelRequests = yield* SessionModelRequest.Service
+      const nextRequest = Effect.gen(function* () {
+        const loaded = yield* context.load(yield* context.select(sessionID))
+        return JSON.stringify((yield* modelRequests.prepare({ context: loaded, step: 1 })).request)
+      })
+      const unpruned = yield* nextRequest
+      for (const secret of ["reasoning-secret", "tool-call-secret", "tool-result-secret", "sig_settled"])
+        expect(unpruned).toContain(secret)
+      const before = yield* recordedEventTypes(sessionID)
+      expect(before).toEqual(
+        expect.arrayContaining([
+          "session.reasoning.ended.1",
+          "session.tool.called.1",
+          "session.tool.success.1",
+          "session.provider.request.recorded.1",
+        ]),
+      )
+
+      yield* TestClock.adjust(SessionHistoryPruning.SETTLED_GRACE)
+      const pruned = yield* SessionHistoryPruning.make(db, execution.active).prune(sessionID)
+      expect(pruned.events).toBeGreaterThan(0)
+      const after = yield* recordedEventTypes(sessionID)
+      for (const type of [
+        "session.reasoning.started.1",
+        "session.reasoning.ended.1",
+        "session.text.ended.1",
+        "session.tool.called.1",
+        "session.tool.success.1",
+        "session.provider.request.recorded.1",
+      ])
+        expect(after).not.toContain(type)
+      expect(after).toContain("session.execution.succeeded.1")
+      expect(yield* nextRequest).toBe(unpruned)
+
+      yield* admit(session, "Continue with private state")
+      response = reply.text("Continued", "settled-continued")
+      yield* execution.resume(sessionID)
+      const sent = JSON.stringify(requests.at(-1)!.messages)
+      for (const secret of [
+        "reasoning-secret",
+        "tool-call-secret",
+        "tool-result-secret",
+        "Continue with private state",
+      ])
+        expect(sent).toContain(secret)
+    }),
+  )
+
   it.effect("skips a running session and prunes it after the run settles without failing execution", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -1589,7 +1765,7 @@ describe("SessionRunnerLLM", () => {
       streamStarted = yield* Deferred.make<void>()
       const running = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
-      expect(yield* pruning.prune(sessionID)).toEqual({ messages: 0, events: 0 })
+      expect(yield* pruning.prune(sessionID)).toEqual({ messages: 0, events: 0, images: 0 })
       yield* Deferred.succeed(streamGate, undefined)
       yield* Fiber.join(running)
       expect((yield* pruning.prune(sessionID)).messages).toBeGreaterThan(0)
@@ -1864,9 +2040,7 @@ describe("SessionRunnerLLM", () => {
       expect(
         (yield* session.context(sessionID)).filter((message) => message.metadata?.contextSource !== undefined),
       ).toHaveLength(rows.length)
-      yield* db.run(
-        sql`UPDATE session_message SET data = json_set(data, '$.text', 1) WHERE id = ${rows[0].id}`,
-      )
+      yield* db.run(sql`UPDATE session_message SET data = json_set(data, '$.text', 1) WHERE id = ${rows[0].id}`)
       yield* admit(session, "Reject corrupt historical context before contacting the model")
       expect(Exit.isFailure(yield* runner.drain({ sessionID, force: true }).pipe(Effect.exit))).toBe(true)
       expect(requests).toHaveLength(1)
@@ -2332,7 +2506,14 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+        "defect",
+        "echo",
+        "memory",
+        "project_artifact",
+        "snapshot",
+        "storefail",
+      ])
       expect(requests[1]?.tools.map((tool) => tool.name)).toEqual(requests[0]?.tools.map((tool) => tool.name))
     }),
   )
@@ -2356,7 +2537,13 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "memory", "project_artifact", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+        "defect",
+        "memory",
+        "project_artifact",
+        "snapshot",
+        "storefail",
+      ])
     }),
   )
 
@@ -2407,6 +2594,7 @@ describe("SessionRunnerLLM", () => {
         },
       ])
       expect(Array.from(yield* Fiber.join(progressFiber))[0]?.data.structured).toEqual({ phase: "reading" })
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.tool.progress.1")
       expect((yield* session.context(sessionID)).slice(0, 3)).toMatchObject([
         { type: "user", text: "Use application context" },
         sessionStateNotice,
@@ -3219,12 +3407,12 @@ describe("SessionRunnerLLM", () => {
                 LLMEvent.reasoningDelta({ id: "summary", text: "Plan the edit" }),
                 LLMEvent.reasoningEnd({ id: "summary" }),
                 LLMEvent.toolInputStart({ id: "call-1", name: "unknown_tool" }),
-                LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: "{\"path\":" }),
+                LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: '{"path":' }),
               ]),
               Stream.fromEffect(TestClock.adjust("4 seconds")).pipe(
                 Stream.flatMap(() =>
                   Stream.fromIterable([
-                    LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: "\"a.ts\"}" }),
+                    LLMEvent.toolInputDelta({ id: "call-1", name: "unknown_tool", text: '"a.ts"}' }),
                     LLMEvent.toolInputEnd({ id: "call-1", name: "unknown_tool" }),
                     LLMEvent.stepFinish({
                       index: 0,
@@ -3430,7 +3618,14 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+        "defect",
+        "echo",
+        "memory",
+        "project_artifact",
+        "snapshot",
+        "storefail",
+      ])
       expect(
         nonVolatileMessages(requests[0]).map((message) => ({ role: message.role, content: message.content })),
       ).toEqual([
@@ -4534,7 +4729,14 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "memory", "project_artifact", "snapshot", "storefail"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+        "defect",
+        "echo",
+        "memory",
+        "project_artifact",
+        "snapshot",
+        "storefail",
+      ])
       expect((yield* session.context(sessionID)).slice(0, 3)).toMatchObject([
         { type: "user", text: "Use tools" },
         sessionStateNotice,
@@ -5205,10 +5407,13 @@ describe("SessionRunnerLLM", () => {
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(toolExecutionsStarted)
       expect(yield* Fiber.join(success).pipe(Effect.timeout("2 seconds"))).toMatchObject({
-        _tag: "Some", value: { data: { callID: "call-fast" } },
+        _tag: "Some",
+        value: { data: { callID: "call-fast" } },
       })
       const messages = yield* session.messages({ sessionID })
-      const tools = messages.flatMap((message) => message.type === "assistant" ? message.content.filter((part) => part.type === "tool") : [])
+      const tools = messages.flatMap((message) =>
+        message.type === "assistant" ? message.content.filter((part) => part.type === "tool") : [],
+      )
       expect(tools.find((part) => part.id === "call-fast")?.state.status).toBe("completed")
       expect(tools.find((part) => part.id === "call-slow")?.state.status).toBe("running")
       expect(requests).toHaveLength(1)
@@ -9729,13 +9934,16 @@ describe("SessionRunnerLLM", () => {
       const autonomy = yield* SessionAutonomy.Service
       const execution = yield* realExecution
       const scope = yield* Scope.Scope
-      const context = yield* Layer.buildWithScope(AppNodeBuilder.build(SessionOrchestration.node, [
-        [Database.node, Layer.succeed(Database.Service, database)],
-        [EventRuntime.node, Layer.succeed(EventRuntime.Service, events)],
-        [SessionAutonomy.node, Layer.succeed(SessionAutonomy.Service, autonomy)],
-        [SessionExecution.node, Layer.succeed(SessionExecution.Service, execution)],
-        [Session.node, Layer.succeed(Session.Service, session)],
-      ]), scope)
+      const context = yield* Layer.buildWithScope(
+        AppNodeBuilder.build(SessionOrchestration.node, [
+          [Database.node, Layer.succeed(Database.Service, database)],
+          [EventRuntime.node, Layer.succeed(EventRuntime.Service, events)],
+          [SessionAutonomy.node, Layer.succeed(SessionAutonomy.Service, autonomy)],
+          [SessionExecution.node, Layer.succeed(SessionExecution.Service, execution)],
+          [Session.node, Layer.succeed(Session.Service, session)],
+        ]),
+        scope,
+      )
       const orchestration = Context.get(context, SessionOrchestration.Service)
       const child = yield* session.create({ parentID: sessionID, title: "Waiting boundary check" })
       yield* events.publish(SessionEvent.Task.Updated, {
@@ -9761,7 +9969,12 @@ describe("SessionRunnerLLM", () => {
       response = reply.text("Selected boundary checked and verified.", "text-question-resumed")
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
-      yield* orchestration.answer({ parentID: sessionID, childID: child.id, questionID: question.question.id, text: "/goal stays literal in this answer" })
+      yield* orchestration.answer({
+        parentID: sessionID,
+        childID: child.id,
+        questionID: question.question.id,
+        text: "/goal stays literal in this answer",
+      })
       yield* Deferred.await(streamStarted)
       expect(requests).toHaveLength(1)
       expect(JSON.stringify(requests[0]!.messages)).toContain("/goal stays literal in this answer")
