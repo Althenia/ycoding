@@ -6,19 +6,19 @@ Ownership: everything under `apps/web/**`. Root manifests, lockfile, CI workflow
 
 ## Scripts
 
-| Script | Purpose |
-| --- | --- |
-| `bun run dev` | Vite development server on port 3002. |
-| `bun run build` | Production build into `dist/`, including `sw.js` at the site root. |
-| `bun run preview` | Serve the built output for inspection. |
-| `bun run test` | `bun test ./src`. |
+| Script                     | Purpose                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `bun run dev`              | Vite development server on port 3002.                                             |
+| `bun run build`            | Production build into `dist/`, including `sw.js` at the site root.                |
+| `bun run preview`          | Serve the built output for inspection.                                            |
+| `bun run test`             | `bun test ./src`.                                                                 |
 | `bun run test:integration` | `bun test ./test`. Requires a production build and fails when `dist/` is missing. |
-| `bun run typecheck` | `tsgo --noEmit`. |
+| `bun run typecheck`        | `bun check`.                                                                      |
 
 ## Dependencies
 
 Runtime: `solid-js` (catalog) and `@ycoding-ai/remote` (workspace) for the relay envelope, operation list, and HTTP response types.
-Development: `vite`, `vite-plugin-solid`, `typescript`, `@typescript/native-preview`, `@types/bun`, `@tsconfig/bun`.
+Development: `vite`, `vite-plugin-solid`, `typescript`, `@types/bun`, `@tsconfig/bun`.
 Routing, theming, icons, dialogs, and the service worker are implemented here without additional packages.
 
 ## Surfaces

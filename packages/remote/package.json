@@ -10,12 +10,11 @@
   },
   "scripts": {
     "test": "bun test test/*.test.ts",
-    "typecheck": "tsgo --noEmit -p tsconfig.json"
+    "typecheck": "bun check -p tsconfig.json"
   },
   "devDependencies": {
     "@ycoding-ai/protocol": "workspace:*",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

@@ -129,7 +129,7 @@ export class TestPeer {
 
   flush() {
     if (this.socket.readyState !== 1 || this.connection.state === "closed") return
-    this.collect(handoffBinary(this.connection, (bytes) => this.socket.send(bytes), performance.now()))
+    this.collect(handoffBinary(this.connection, (bytes) => this.socket.send(new Uint8Array(bytes)), performance.now()))
   }
   request(name: string, scope: Scope, payload: Uint8Array) {
     const operation = operations.find((item) => item.diagnosticName === name)!

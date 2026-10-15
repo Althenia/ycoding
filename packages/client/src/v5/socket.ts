@@ -62,7 +62,7 @@ type Owner = {
   resolve: () => void
   reject: (error: unknown) => void
   connection?: Connection
-  socket?: Socket
+  socket?: Socket | WebSocket
   timer?: ReturnType<typeof setInterval>
   detach?: () => void
   pending: Map<string, Pending>
@@ -613,7 +613,7 @@ export class LocalTransport {
         const decisions = owner.connection.handoff(prepared, bytes.length, performance.now())
         this.process(owner, decisions)
         if (!owner.active) break
-        owner.socket.send(bytes)
+        owner.socket.send(new Uint8Array(bytes))
       }
     } catch {
       this.shutdown(owner, new V5ClientError("unknown", undefined, "Socket handoff failed"))

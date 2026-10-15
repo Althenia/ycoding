@@ -18,7 +18,7 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "generate:v5": "bun run src/v5/generate.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@ycoding-ai/schema": "workspace:*",
@@ -28,7 +28,6 @@
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:",
     "@bufbuild/protoc-gen-es": "2.16.0"
   }

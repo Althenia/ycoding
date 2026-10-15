@@ -25,7 +25,7 @@
     "refresh:models": "bun run script/refresh-models.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test --timeout 30000 --only-failures",
-    "typecheck": "tsgo --noEmit -p tsconfig.typecheck.json"
+    "typecheck": "bun check -p tsconfig.typecheck.json"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
@@ -51,7 +51,6 @@
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@types/semver": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "@lydell/node-pty-darwin-arm64": "1.2.0-beta.12",
     "@lydell/node-pty-darwin-x64": "1.2.0-beta.12",
     "@lydell/node-pty-linux-arm64": "1.2.0-beta.12",

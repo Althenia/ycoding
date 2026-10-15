@@ -30,7 +30,7 @@
     "test": "bun test --timeout 5000 ./test",
     "test:integration": "bun test --timeout 5000 ./test-integration/v5-native.integration.test.ts",
     "test:integration:rust": "bun test --timeout 5000 ./test-integration/v5-rust.integration.test.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@ycoding-ai/schema": "workspace:*",
@@ -49,7 +49,6 @@
     "@ycoding-ai/httpapi-codegen": "workspace:*",
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "effect": "catalog:"
   }
 }

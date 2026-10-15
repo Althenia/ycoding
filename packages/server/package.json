@@ -13,7 +13,7 @@
     "test:integration:extension": "bun test --timeout 170000 test-integration/browser-owned-chrome.test.ts",
     "test:integration:keep-awake": "bun test --timeout 90000 test-integration/keep-awake.test.ts",
     "test:integration:browser": "bun test --timeout 120000 test-integration/browser-connect.test.ts test-integration/isolated-browser.test.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
@@ -25,7 +25,6 @@
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
-    "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "@types/bun": "catalog:"
   }
 }

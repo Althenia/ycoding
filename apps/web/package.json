@@ -15,7 +15,7 @@
     "test": "bun test ./src",
     "test:integration": "bun test ./test",
     "test:design": "bun test verify/design-contract.integration.test.ts src/styles/tokens.test.ts src/styles/composition.test.ts src/styles/contrast.test.ts src/styles/docs-overflow.test.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "@tanstack/solid-pacer": "0.22.0",
@@ -31,7 +31,6 @@
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plugin-solid": "catalog:"

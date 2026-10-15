@@ -4,6 +4,7 @@
     "rootDir": "..",
     "noEmit": true,
     "declaration": false,
+    "types": ["bun", "node"],
     "module": "preserve",
     "moduleResolution": "bundler"
   },
