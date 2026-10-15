@@ -1,15 +1,20 @@
 use std::{
+    future::Future,
     ops::Bound,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicI64, Ordering},
+        mpsc,
     },
+    task::{Context, Waker},
+    time::Duration,
 };
 use ycoding_core::{
     telemetry::{Error, MAX_ROWS, RETENTION_MS, Service},
     ycoding_schema::{DomainDecode, DomainEncode, parse_json, telemetry},
     ycoding_store::{
-        Catalog, Metadata, Options, Store, TableDeclaration, analytics, resources,
+        Catalog, Metadata, Options, Receipt, Store, TableDeclaration, analytics, resources,
         session::Document,
     },
 };
@@ -74,6 +79,154 @@ async fn consent(service: &Service, enabled: bool) {
         })
         .await
         .unwrap();
+}
+
+async fn hold_writer(store: &Store) -> (Receipt<()>, mpsc::Sender<()>) {
+    let (held, started) = tokio::sync::oneshot::channel();
+    let (release, barrier) = mpsc::channel();
+    let writer = store
+        .client()
+        .submit(move |_| {
+            held.send(()).unwrap();
+            barrier.recv_timeout(Duration::from_secs(10)).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .unwrap()
+        .unwrap();
+    (writer, release)
+}
+
+fn assert_pending(future: Pin<&mut impl Future>) {
+    assert!(
+        future
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+}
+
+#[tokio::test]
+async fn held_writer_append_settles_with_unchanged_consent_and_exact_samples() {
+    let (store, service, time) = world();
+    time.store(17, Ordering::SeqCst);
+    consent(&service, true).await;
+    let chosen = service.consent().unwrap();
+    let client = telemetry::Sample::decode(&parse_json(r#"{"kind":"client","at":"2026-10-04T12:00:00.000Z","surface":"tui","metric":"stream.delay","durationMs":75}"#).unwrap()).unwrap();
+    let samples = vec![sample(), client];
+    time.store(123, Ordering::SeqCst);
+    let (writer, release) = hold_writer(&store).await;
+    let mut append = std::pin::pin!(service.append(samples.clone()));
+    assert_pending(append.as_mut());
+    assert_eq!(service.consent().unwrap(), chosen);
+    assert!(
+        store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 10)
+            .unwrap()
+            .is_empty()
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), writer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), append)
+            .await
+            .unwrap(),
+        Ok(2)
+    );
+    assert_eq!(service.consent().unwrap(), chosen);
+    let page = service.list(None, None).await.unwrap();
+    assert_eq!(
+        page.data,
+        samples
+            .into_iter()
+            .rev()
+            .map(|sample| telemetry::PageEntry {
+                received_at: ycoding_core::ycoding_schema::schema::Int::new(123).unwrap(),
+                sample,
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(page.cursor.next.is_none());
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn held_writer_preserves_append_and_revocation_order() {
+    for revoke_first in [false, true] {
+        let (store, service, time) = world();
+        consent(&service, true).await;
+        service.append(vec![sample()]).await.unwrap();
+        let chosen = service.consent().unwrap();
+        time.store(42, Ordering::SeqCst);
+        let (writer, release) = hold_writer(&store).await;
+        let mut append = std::pin::pin!(service.append(vec![sample()]));
+        let mut revoke = std::pin::pin!(service.set_consent(telemetry::ConsentInput {
+            enabled: false,
+            notice_version: telemetry::NoticeVersion,
+        }));
+        if revoke_first {
+            assert_pending(revoke.as_mut());
+            assert_pending(append.as_mut());
+        } else {
+            assert_pending(append.as_mut());
+            assert_pending(revoke.as_mut());
+        }
+        assert_eq!(service.consent().unwrap(), chosen);
+        assert_eq!(
+            store
+                .client()
+                .snapshot()
+                .unwrap()
+                .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .unwrap()
+            .unwrap();
+        let (appended, revoked) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(append, revoke)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            appended,
+            if revoke_first {
+                Err(Error::Disabled)
+            } else {
+                Ok(1)
+            },
+            "revoke_first={revoke_first}"
+        );
+        let revoked = revoked.unwrap();
+        assert!(!revoked.enabled);
+        assert_eq!(revoked.decided_at.get(), 42);
+        assert_eq!(service.consent().unwrap().consent, Some(revoked));
+        assert!(
+            store
+                .client()
+                .snapshot()
+                .unwrap()
+                .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(service.append(vec![sample()]).await, Err(Error::Disabled));
+        assert!(service.list(None, None).await.unwrap().data.is_empty());
+        consent(&service, true).await;
+        assert!(service.list(None, None).await.unwrap().data.is_empty());
+        store.shutdown().unwrap();
+    }
 }
 
 #[tokio::test]
