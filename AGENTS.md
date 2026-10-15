@@ -300,4 +300,5 @@ const table = sqliteTable("session", {
 - Gate model-family-specific wire fields. GPT-5.6+ uses its explicit prompt-cache options and breakpoints; pre-5.6 requests use compatible retention fields.
 - Preserve Anthropic cache-control placement across direct and compatible provider routes.
 - Missing provider cache telemetry means unreported, not zero.
+- Usage summaries and reports read one snapshot on `Database.Interface.reader` (the main connection when absent), scan the provider-request ledger in statements of at most 10,000 requests, and yield between statements; keep any new usage read bounded the same way so it never holds the main connection or the event loop for a whole history.
 - Cache optimization must not swallow provider errors, change tool semantics, or trade correctness for hit rate.

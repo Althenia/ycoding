@@ -127,6 +127,13 @@ export const SessionProviderRequestTable = sqliteTable(
     uniqueIndex("session_provider_request_session_request_idx").on(table.session_id, table.request),
     index("session_provider_request_session_source_idx").on(table.session_id, table.source),
     index("session_provider_request_time_created_idx").on(table.time_created),
+    index("session_provider_request_time_created_id_idx").on(table.time_created, table.id),
+    index("session_provider_request_unpriced_idx")
+      .on(table.id)
+      .where(sql`${table.cost} is null and ${table.source} <> 'decision'`),
+    index("session_provider_request_session_unpriced_idx")
+      .on(table.session_id, table.id)
+      .where(sql`${table.cost} is null and ${table.source} <> 'decision'`),
   ],
 )
 

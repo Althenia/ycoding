@@ -14,6 +14,8 @@ type DatabaseShape = Effect.Success<typeof makeDatabase>
 
 export interface Interface {
   db: DatabaseShape
+  /** Read-only connection for long reads; absent for in-memory databases, which cannot be opened twice. */
+  reader?: DatabaseShape
 }
 
 export const Options = Schema.Struct({
@@ -23,8 +25,7 @@ export type Options = typeof Options.Type
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/storage/Database") {}
 
-const databaseLayer = Layer.effect(
-  Service,
+const makeService = (file: string) =>
   Effect.gen(function* () {
     const db = yield* makeDatabase
 
@@ -43,9 +44,21 @@ const databaseLayer = Layer.effect(
     if (autoVacuum?.auto_vacuum === 2) yield* db.run("PRAGMA incremental_vacuum(256)")
     yield* db.run("PRAGMA optimize=0x10002")
 
-    return { db }
-  }).pipe(Effect.orDie),
-)
+    if (file === ":memory:") return { db }
+    const reader = yield* Layer.build(
+      sqliteLayer({ filename: file, readonly: true, readwrite: false, create: false, disableWAL: true }),
+    ).pipe(
+      Effect.flatMap((context) => makeDatabase.pipe(Effect.provide(context))),
+      Effect.tap((reader) =>
+        Effect.all([
+          reader.run("PRAGMA busy_timeout = 5000"),
+          reader.run("PRAGMA cache_size = -64000"),
+          reader.run("PRAGMA temp_store = MEMORY"),
+        ]),
+      ),
+    )
+    return { db, reader }
+  }).pipe(Effect.orDie)
 
 export const reclaim = Effect.fn("Database.reclaim")(function* (db: DatabaseShape) {
   let free = yield* freelist(db)
@@ -74,7 +87,10 @@ export function filename(options?: Options) {
 }
 
 export function layer(options?: Options) {
-  return Layer.suspend(() => databaseLayer.pipe(Layer.provide(sqliteLayer({ filename: filename(options) }))))
+  return Layer.suspend(() => {
+    const file = filename(options)
+    return Layer.effect(Service, makeService(file)).pipe(Layer.provide(sqliteLayer({ filename: file })))
+  })
 }
 
 export const layerFromPath = (path: string) => layer({ path })

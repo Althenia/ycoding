@@ -4,6 +4,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "../src/database/database"
 import { DatabaseMigration } from "../src/database/migration"
 import { sqliteLayer } from "../src/database/sqlite.bun"
+import { Sqlite } from "../src/database/sqlite"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
 import { Project } from "../src/project"
@@ -17,8 +18,11 @@ import { CatalogModel } from "../src/model"
 import { Provider } from "../src/provider"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Agent } from "../src/agent"
-import { SessionUsageRead } from "../src/session/usage-read"
+import { SessionUsageRead, timeZoneOffsets } from "../src/session/usage-read"
 import { sql } from "drizzle-orm"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 test("global usage pages high-cardinality Session groups in SQL with exact totals and bounded results", () => {
   const queries: { sql: string; params: unknown[] }[] = []
@@ -124,7 +128,10 @@ test("global usage pages high-cardinality Session groups in SQL with exact total
         outputTokensPerSecond: 1,
       })
       const reads = queries.filter(
-        (query) => /^\s*select/i.test(query.sql) && /session_provider_request|\bfrom ["`]?session\b/i.test(query.sql),
+        (query) =>
+          /^\s*select/i.test(query.sql) &&
+          /session_provider_request|\bfrom ["`]?session\b/i.test(query.sql) &&
+          !/temp\./i.test(query.sql),
       )
       expect(reads.length).toBeGreaterThan(0)
       for (const query of reads) {
@@ -156,21 +163,11 @@ test("global usage pages high-cardinality Session groups in SQL with exact total
         const wide = yield* session.usageReportAll({ group, offset: 100, limit: 100 })
         expect(wide.rows).toHaveLength(100)
         expect(wide.total.logical).toBe(405)
-        const timingReads = queries.filter((query) => query.sql.includes("firstOutputMs"))
-        expect(timingReads.length).toBeLessThanOrEqual(1)
-        expect(timingReads.length).toBeGreaterThan(0)
-        const plan = yield* db.$client.unsafe<{ detail: string }>(
-          `EXPLAIN QUERY PLAN ${timingReads[0]!.sql}`,
-          timingReads[0]!.params,
-        )
-        expect(plan.filter((row) => /\bSCAN r\b/.test(row.detail)).length).toBeLessThanOrEqual(
-          group === "session" ? 0 : 1,
-        )
-        if (group === "session")
-          expect(plan.some((row) => /SEARCH r USING INDEX session_provider_request_session_/.test(row.detail))).toBe(
-            true,
-          )
-        expect(plan.some((row) => /encoded/.test(row.detail))).toBe(false)
+        expect(wide.rows.filter((row) => row.speed !== undefined)).toHaveLength(100)
+        const scans = queries.filter((query) => /from\s+["`]?session_provider_request/i.test(query.sql))
+        expect(scans.length).toBeGreaterThan(0)
+        expect(scans.some((query) => /recursive/i.test(query.sql))).toBe(false)
+        expect(queries.some((query) => /drop table if exists temp\.usage_partial/i.test(query.sql))).toBe(true)
       }
     }).pipe(
       Effect.provide(
@@ -228,9 +225,17 @@ test("SQL model grouping preserves encodeURIComponent keys and ordering", () =>
           })),
         )
         .run()
-      const key = yield* SessionUsageRead.key(db, sql`1`, "model")
-      const rows = yield* SessionUsageRead.page(db, sql`1`, key, sql`key ASC`, 0, 100, sql`NULL`)
-      expect(rows.map((row) => row.key)).toEqual(
+      const keys = (group: "model" | "day", timeZone?: string) =>
+        SessionUsageRead.report(db, {
+          where: sql`1`,
+          group,
+          ...(timeZone === undefined ? {} : { timeZone }),
+          order: sql`key ASC`,
+          offset: 0,
+          limit: 100,
+          corrections: {},
+        }).pipe(Effect.map((page) => page.rows.map((row) => row.key)))
+      expect(yield* keys("model")).toEqual(
         models
           .map((model) =>
             [model.providerID, model.id, model.variant, model.profile]
@@ -239,13 +244,336 @@ test("SQL model grouping preserves encodeURIComponent keys and ordering", () =>
           )
           .sort(),
       )
-      const utc = yield* SessionUsageRead.key(db, sql`1`, "day")
-      expect(
-        (yield* SessionUsageRead.page(db, sql`1`, utc, sql`key ASC`, 0, 100, sql`NULL`)).map((row) => row.key),
-      ).toEqual(["1969-12-31", "1970-01-01"])
-      const local = yield* SessionUsageRead.key(db, sql`1`, "day", "Asia/Kolkata")
-      expect(
-        (yield* SessionUsageRead.page(db, sql`1`, local, sql`key ASC`, 0, 100, sql`NULL`)).map((row) => row.key),
-      ).toEqual(["1970-01-01"])
+      expect(yield* keys("day")).toEqual(["1969-12-31", "1970-01-01"])
+      expect(yield* keys("day", "Asia/Kolkata")).toEqual(["1970-01-01"])
     }).pipe(Effect.provide(Database.layer({ path: ":memory:" })), Effect.scoped),
   ))
+
+test("time-zone offsets reproduce every hourly offset across daylight-saving and calendar changes", () => {
+  const first = Date.UTC(2011, 0, 1)
+  const last = Date.UTC(2013, 0, 1)
+  for (const timeZone of [
+    "America/New_York",
+    "Europe/London",
+    "Australia/Lord_Howe",
+    "Asia/Kolkata",
+    "Pacific/Apia",
+    "America/Sao_Paulo",
+    "UTC",
+  ]) {
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" })
+    const label = (time: number) =>
+      formatter
+        .formatToParts(time)
+        .find((part) => part.type === "timeZoneName")!
+        .value.replace("GMT", "") || "+00:00"
+    const offsets = timeZoneOffsets(timeZone, first, last)
+    for (let time = first; time <= last; time += 3_600_000)
+      expect({ timeZone, time, label: offsets.findLast((offset) => offset.start <= time)!.label }).toEqual({
+        timeZone,
+        time,
+        label: label(time),
+      })
+    offsets.slice(1).forEach((offset) => expect(label(offset.start - 1)).not.toBe(label(offset.start)))
+  }
+  expect(timeZoneOffsets("Asia/Kolkata", first, last)).toEqual([{ start: first, label: "+05:30", seconds: 19_800 }])
+})
+
+test("unpriced provider requests are read through the partial index", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const plan = yield* db.all<{ detail: string }>(
+        sql`EXPLAIN QUERY PLAN SELECT r.id FROM session_provider_request AS r JOIN session AS s ON s.id = r.session_id
+          WHERE 1 AND r.cost IS NULL AND r.source <> 'decision' AND r.id > ${"prq_a"} ORDER BY r.id ASC LIMIT 200`,
+      )
+      expect(plan.some((row) => row.detail.includes("session_provider_request_unpriced_idx"))).toBe(true)
+    }).pipe(Effect.provide(Database.layer({ path: ":memory:" })), Effect.scoped),
+  ))
+
+for (const fixture of [
+  { requests: 100_000, ties: true },
+  { requests: 1_000_000, ties: false },
+])
+  test(
+    `bounded usage statements: ${fixture.requests} requests, timestamp ties=${fixture.ties}`,
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          let db: Database.Interface["db"]
+          const populations: number[] = []
+          const measured = { pricing: 0, first: 0, total: 0 }
+          const native = (yield* Sqlite.Native) as import("bun:sqlite").Database
+          const read = (query: string, params: unknown[] = []) =>
+            Effect.acquireUseRelease(
+              Effect.sync(() =>
+                native.prepare<Record<string, unknown>, import("bun:sqlite").SQLQueryBindings[]>(query),
+              ),
+              (statement) => Effect.sync(() => statement.all(...(params as import("bun:sqlite").SQLQueryBindings[]))),
+              (statement) => Effect.sync(() => statement.finalize()),
+            )
+          db = yield* EffectDrizzleSqlite.make().pipe(
+            Effect.provideService(EffectDrizzleSqlite.EffectLogger, {
+              logQuery: (query, params) =>
+                Effect.gen(function* () {
+                  if (/INSERT INTO temp\.usage_(partial|sample)\b/i.test(query)) {
+                    const source = query
+                      .slice(query.indexOf("FROM session_provider_request"))
+                      .replace(/GROUP BY 1\s*$/, "")
+                    const count = yield* read(`SELECT count(*) AS population ${source}`, params)
+                    populations.push(Number(count[0]!.population))
+                  }
+                  if (query.includes("WITH chunk AS MATERIALIZED")) {
+                    const count = yield* read(
+                      "SELECT count(*) AS population FROM temp.usage_sample WHERE id > ?",
+                      params,
+                    )
+                    populations.push(Number(count[0]!.population))
+                  }
+                  const metric = /SELECT requestID AS id, (first|total) AS value/.test(query)
+                    ? query.includes("first AS value")
+                      ? "first"
+                      : "total"
+                    : /SELECT DISTINCT.*AS key/s.test(query) && query.includes("r.cost IS NULL")
+                      ? "pricing"
+                      : undefined
+                  if (!metric) return
+                  const start = performance.now()
+                  yield* read(query, params)
+                  measured[metric] = Math.max(measured[metric], performance.now() - start)
+                  if (metric === "pricing") {
+                    const count = yield* read(
+                      `SELECT count(*) AS population ${query.slice(query.indexOf("FROM session_provider_request"))}`,
+                      params,
+                    )
+                    populations.push(Number(count[0]!.population))
+                    return
+                  }
+                  const plan = yield* read(`EXPLAIN QUERY PLAN ${query}`, params)
+                  expect(plan.some((row) => String(row.detail).includes(`usage_sample_${metric}`))).toBe(true)
+                  expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false)
+                  if (params.length === 4) {
+                    const instructions = yield* read(`EXPLAIN ${query}`, params)
+                    expect(
+                      instructions.some((row) => String(row.opcode).startsWith("Seek") && Number(row.p4) === 3),
+                    ).toBe(true)
+                  }
+                  const scanned = query
+                    .replace(/SELECT requestID AS id, (first|total) AS value/, "SELECT requestID")
+                    .replace(/LIMIT 1 OFFSET \?/, "LIMIT ?")
+                  const count = yield* read(`SELECT count(*) AS population FROM (${scanned})`, [
+                    ...params.slice(0, -1),
+                    Number(params.at(-1)) + 1,
+                  ])
+                  populations.push(Number(count[0]!.population))
+                }),
+            }),
+            Effect.provide(EffectDrizzleSqlite.DefaultServices),
+          )
+          yield* DatabaseMigration.apply(db)
+          yield* db.run(
+            `INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES ('global', '/bounded', '[]', 0, 0)`,
+          )
+          yield* db.run(
+            `INSERT INTO session (id, project_id, directory, title, time_created, time_updated) VALUES ('ses_bounded', 'global', '/bounded', 'Bounded', 0, 0)`,
+          )
+          for (let start = 0; start < fixture.requests; start += 10_000)
+            yield* db.run(sql`
+            WITH RECURSIVE n(value) AS (SELECT ${start} UNION ALL SELECT value + 1 FROM n WHERE value < ${start + 9999})
+            INSERT INTO session_provider_request
+              (id, session_id, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest,
+                request, attempts, invalidation, continuation, tokens, timing, time_created)
+            SELECT printf('prq_%09d', value), 'ses_bounded', 'step', 'build', '{"providerID":"p","id":"m"}',
+              'test', 'cache', 'system', 'tools', value + 1, 1, 'first-request', 'full',
+              '{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}',
+              json_object('firstOutputMs', ${fixture.ties ? sql`7` : sql`value % 1000`}, 'totalMs', ${fixture.ties ? sql`13` : sql`1000 + value % 2000`},
+                'generatedTokens', 3, 'generationDurationNs', 1000000000), ${fixture.ties ? sql`0` : sql`value`}
+            FROM n
+          `)
+          let after: string | undefined
+          const refs = new Set<string>()
+          while (true) {
+            const page = yield* SessionUsageRead.pricingRefs(db, sql`1`, after)
+            page.refs.forEach((ref) => refs.add(ref.key))
+            if (page.after === undefined) break
+            after = page.after
+          }
+          expect(refs.size).toBe(1)
+          const result = yield* SessionUsageRead.report(db, {
+            where: sql`1`,
+            group: "model",
+            order: sql`key ASC`,
+            offset: 0,
+            limit: 100,
+            corrections: {},
+          })
+          expect(result.total.logical).toBe(fixture.requests)
+          expect(result.rows[0]!.speed).toEqual({
+            samples: fixture.requests,
+            firstOutputP50Ms: fixture.ties ? 7 : 499,
+            firstOutputP95Ms: fixture.ties ? 7 : 949,
+            totalP50Ms: fixture.ties ? 13 : 1999,
+            totalP95Ms: fixture.ties ? 13 : 2899,
+            outputTokensPerSecond: 3,
+          })
+          if (fixture.ties) {
+            const scoped = yield* SessionUsageRead.report(db, {
+              where: sql`r.session_id = ${"ses_bounded"}`,
+              sessions: [SessionSchema.ID.make("ses_bounded")],
+              group: "model",
+              order: sql`key ASC`,
+              offset: 0,
+              limit: 100,
+              corrections: {},
+            })
+            expect(scoped.rows).toEqual(result.rows)
+            expect(scoped.total).toEqual(result.total)
+          }
+          console.log("usage statement fixture", { ...fixture, maxPopulation: Math.max(...populations), ...measured })
+          expect(populations.length).toBeGreaterThan(0)
+          expect(Math.max(...populations)).toBeLessThanOrEqual(10_000)
+        }).pipe(Effect.provide(sqliteLayer({ filename: ":memory:" })), Effect.scoped),
+      ),
+    120_000,
+  )
+
+test("a sparse Session reads only its own indexed population in a million-request file ledger", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-usage-sparse-"))
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const queries: { sql: string; params: unknown[] }[] = []
+      const database = Layer.effect(
+        Database.Service,
+        Effect.gen(function* () {
+          const db = yield* EffectDrizzleSqlite.make().pipe(
+            Effect.provideService(EffectDrizzleSqlite.EffectLogger, {
+              logQuery: (sql, params) =>
+                Effect.sync(() => {
+                  queries.push({ sql, params })
+                }),
+            }),
+            Effect.provide(EffectDrizzleSqlite.DefaultServices),
+          )
+          yield* DatabaseMigration.apply(db)
+          yield* db.run("PRAGMA cache_size = -64000")
+          yield* db.run("PRAGMA temp_store = MEMORY")
+          yield* db.run(
+            `INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES ('global', '/sparse', '[]', 0, 0)`,
+          )
+          yield* db
+            .insert(SessionTable)
+            .values([
+              {
+                id: SessionSchema.ID.make("ses_background"),
+                project_id: Project.ID.global,
+                directory: "/sparse",
+                title: "Background",
+              },
+              {
+                id: SessionSchema.ID.make("ses_sparse"),
+                project_id: Project.ID.global,
+                directory: "/sparse",
+                title: "Sparse",
+              },
+            ])
+            .run()
+          for (let start = 0; start < 1_000_000; start += 10_000)
+            yield* db.run(sql`
+          WITH RECURSIVE n(value) AS (SELECT ${start} UNION ALL SELECT value + 1 FROM n WHERE value < ${start + 9999})
+          INSERT INTO session_provider_request
+            (id, session_id, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest,
+              request, attempts, invalidation, continuation, tokens, timing, cost, time_created)
+          SELECT printf('prq_sparse_%09d', value), CASE WHEN value = 500000 THEN 'ses_sparse' ELSE 'ses_background' END,
+            'step', 'build', '{"providerID":"p","id":"m"}', 'test', 'cache', 'system', 'tools', value + 1, 2,
+            'first-request', 'full', '{"input":7,"output":3,"reasoning":1,"cache":{"read":2,"write":1}}',
+            '{"firstOutputMs":7,"totalMs":13}', CASE WHEN value = 500000 THEN 0.5 END, value
+          FROM n
+        `)
+          return { db }
+        }),
+      ).pipe(Layer.provide(sqliteLayer({ filename: join(directory, "usage.db") })))
+      yield* Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const session = yield* Session.Service
+        const sessions = [SessionSchema.ID.make("ses_sparse")]
+        const where = sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))`
+        queries.length = 0
+        const durations: number[] = []
+        for (let sample = 0; sample < 2; sample++) {
+          const start = performance.now()
+          const models = yield* SessionUsageRead.models(db, where, sessions)
+          durations.push(performance.now() - start)
+          expect(models).toMatchObject([
+            {
+              logical: 1,
+              physical: 2,
+              input: 7,
+              output: 3,
+              reasoning: 1,
+              cacheRead: 2,
+              cacheWrite: 1,
+              cost: 0.5,
+              priced: 1,
+            },
+          ])
+        }
+        console.log("sparse Session models milliseconds", durations)
+        const summary = yield* session.usage(sessions[0]!)
+        expect(summary).toMatchObject({
+          logical: 1,
+          physical: 2,
+          cost: 0.5,
+          tokens: { input: 7, output: 3, reasoning: 1, cache: { read: 2, write: 1 } },
+          latestInvalidation: "first-request",
+          latestNamespace: "cache",
+          latestTiming: { firstOutputMs: 7, totalMs: 13 },
+        })
+        expect(summary.models).toHaveLength(1)
+        const report = yield* session.usageReport({ sessionID: sessions[0]!, group: "model" })
+        expect(report).toMatchObject({
+          rowCount: 1,
+          total: { logical: 1, cost: 0.5 },
+          rows: [
+            {
+              key: "p/m",
+              label: "p/m",
+              logical: 1,
+              physical: 2,
+              cost: 0.5,
+              speed: { samples: 1, firstOutputP50Ms: 7, firstOutputP95Ms: 7, totalP50Ms: 13, totalP95Ms: 13 },
+            },
+          ],
+        })
+        const reads = queries.filter((query) => query.sql.includes("FROM session_provider_request AS r"))
+        expect(reads.length).toBeGreaterThan(0)
+        expect(reads.length).toBeLessThan(30)
+        for (const query of reads) {
+          const source = query.sql
+            .slice(query.sql.indexOf("FROM session_provider_request"))
+            .replace(/GROUP BY 1\s*$/, "")
+            .replace(/JOIN temp\.usage_slot ON[^\n]+\n/, "")
+          const selected = query.sql.includes("INSERT INTO temp.usage_")
+            ? `SELECT count(*) AS population ${source}`
+            : query.sql
+          const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${selected}`, query.params)
+          expect(
+            plan.some((row) => /SEARCH r USING (?:COVERING )?INDEX session_provider_request_session_/.test(row.detail)),
+          ).toBe(true)
+          if (!query.sql.includes("INSERT INTO temp.usage_")) continue
+          const population = yield* db.$client.unsafe<{ population: number }>(
+            `SELECT count(*) AS population ${source}`,
+            query.params,
+          )
+          expect(population[0]!.population).toBe(1)
+        }
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Database.node, Session.node]), [
+            [Database.node, database],
+            [SessionExecution.node, SessionExecution.noopLayer],
+          ]),
+        ),
+      )
+    }).pipe(Effect.scoped, Effect.ensuring(Effect.promise(() => rm(directory, { recursive: true, force: true })))),
+  )
+}, 120_000)

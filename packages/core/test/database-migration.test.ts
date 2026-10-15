@@ -62,6 +62,9 @@ const currentMigrations = [
   { id: "20261011135037_session-usage-indexes" },
   { id: "20261012111530_session-active-goal" },
   { id: "20261014011041_task-owner" },
+  { id: "20261015063225_usage-unpriced-index" },
+  { id: "20261015080221_usage-time-cursor" },
+  { id: "20261015084712_usage-session-pricing" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

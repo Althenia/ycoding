@@ -984,6 +984,15 @@ export default {
         `CREATE INDEX \`session_provider_request_time_created_idx\` ON \`session_provider_request\` (\`time_created\`);`,
       )
       yield* tx.run(
+        `CREATE INDEX \`session_provider_request_time_created_id_idx\` ON \`session_provider_request\` (\`time_created\`,\`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_provider_request_unpriced_idx\` ON \`session_provider_request\` (\`id\`) WHERE "session_provider_request"."cost" is null and "session_provider_request"."source" <> 'decision';`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_provider_request_session_unpriced_idx\` ON \`session_provider_request\` (\`session_id\`,\`id\`) WHERE "session_provider_request"."cost" is null and "session_provider_request"."source" <> 'decision';`,
+      )
+      yield* tx.run(
         `CREATE INDEX \`session_provider_state_link_blob_idx\` ON \`session_provider_state_link\` (\`blob_digest\`);`,
       )
       yield* tx.run(

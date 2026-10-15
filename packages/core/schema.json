@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "86355c0d-1d15-4f05-8f58-3db81780dec5",
+  "id": "e79849ed-0ee4-4048-90d6-a818c4f0205d",
   "prevIds": [
-    "83e2f476-3cef-4caf-8ef7-6e9f883324a1"
+    "9ae0e8a4-51c4-47ec-bc90-ef6dc1e5a0ab"
   ],
   "ddl": [
     {
@@ -7038,6 +7038,56 @@
       "where": null,
       "origin": "manual",
       "name": "session_provider_request_time_created_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_request_time_created_id_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session_provider_request\".\"cost\" is null and \"session_provider_request\".\"source\" <> 'decision'",
+      "origin": "manual",
+      "name": "session_provider_request_unpriced_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session_provider_request\".\"cost\" is null and \"session_provider_request\".\"source\" <> 'decision'",
+      "origin": "manual",
+      "name": "session_provider_request_session_unpriced_idx",
       "entityType": "indexes",
       "table": "session_provider_request"
     },

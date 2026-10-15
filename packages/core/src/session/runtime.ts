@@ -18,6 +18,7 @@ import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionUsage } from "./usage"
 import { SessionUsageRead, type Aggregate, type PricingRef } from "./usage-read"
+import { SessionUsagePricing } from "./usage-pricing"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionAutonomy } from "./autonomy"
 import { SessionCompactionJob } from "./compaction-job"
@@ -592,12 +593,12 @@ function usageMetrics(item: Aggregate): ProviderRequest.ReportMetrics {
   }
 }
 
-type UsagePricing = ReadonlyMap<
-  string,
-  { provider: CatalogModel.Info["cost"]; router: CatalogModel.Info["cost"] } | undefined
->
+type UsagePricing = SessionUsagePricing.Snapshot
 
-function usagePrice(pricing: UsagePricing, item: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>[number]) {
+function usagePrice(
+  pricing: UsagePricing,
+  item: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>["rows"][number],
+) {
   const record = SessionProviderRequest.rowRecord(item.record)
   const options = pricing.get(
     JSON.stringify([
@@ -616,6 +617,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const db = database.db
+    const usageDb = database.reader ?? db
     const events = yield* EventRuntime.Service
     const projects = yield* Project.Service
     const global = yield* Global.Service
@@ -807,7 +809,7 @@ const layer = Layer.effect(
         )
     })
     const usageRoot = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const session = yield* db
+      const session = yield* usageDb
         .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
         .from(SessionTable)
         .where(eq(SessionTable.id, sessionID))
@@ -823,7 +825,7 @@ const layer = Layer.effect(
       for (const current of sessions) {
         let cursor: { id: SessionSchema.ID; updated: number } | undefined
         while (true) {
-          const children = yield* db
+          const children = yield* usageDb
             .select({ id: SessionTable.id, updated: SessionTable.time_updated })
             .from(SessionTable)
             .where(
@@ -860,37 +862,45 @@ const layer = Layer.effect(
       const sessions = session ? yield* usageFamily(session) : undefined
       return {
         sessions,
-        where: sql`${sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+        where: sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
         ${range.from === undefined ? sql`` : sql`AND r.time_created >= ${range.from}`}
         ${range.to === undefined ? sql`` : sql`AND r.time_created < ${range.to}`}`,
       }
     })
+    const pricingCache = SessionUsagePricing.make()
+    yield* Effect.acquireRelease(
+      events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type !== Catalog.Event.Updated.type) return
+          pricingCache.invalidate(
+            event.location ? JSON.stringify([event.location.directory, event.location.workspaceID ?? null]) : undefined,
+          )
+        }),
+      ),
+      (unsubscribe) => unsubscribe,
+    )
     const pricingSnapshot = <A>(
       scope: ReturnType<typeof usageScope>,
       read: (pricing: UsagePricing, selection: Effect.Success<ReturnType<typeof usageScope>>) => Effect.Effect<A>,
     ) =>
       Effect.gen(function* () {
-        const pricing = new Map<
-          string,
-          { provider: CatalogModel.Info["cost"]; router: CatalogModel.Info["cost"] } | undefined
-        >()
+        const resolved = new Map<string, SessionUsagePricing.Entry | undefined>()
         const catalogs = new Map<string, Catalog.Interface | undefined>()
         while (true) {
-          const settled = yield* db
+          const pricing = new Map(resolved)
+          const settled = yield* usageDb
             .transaction(() =>
               Effect.gen(function* () {
                 const selection = yield* scope
                 const missing = new Map<string, PricingRef>()
-                let after: string | undefined
-                while (true) {
-                  const refs: ReadonlyArray<PricingRef> = yield* SessionUsageRead.pricingRefs(
-                    db,
-                    selection.where,
-                    after,
-                  )
-                  refs.filter((ref) => !pricing.has(ref.key)).forEach((ref) => missing.set(ref.key, ref))
-                  if (refs.length < 200) break
-                  after = refs.at(-1)!.key
+                for (const sessionID of selection.sessions ?? [undefined]) {
+                  let after: string | undefined
+                  while (true) {
+                    const page = yield* SessionUsageRead.pricingRefs(usageDb, selection.where, after, sessionID)
+                    page.refs.filter((ref) => !pricing.has(ref.key)).forEach((ref) => missing.set(ref.key, ref))
+                    if (page.after === undefined) break
+                    after = page.after
+                  }
                 }
                 if (missing.size > 0) return { type: "prepare" as const, refs: missing }
                 return { type: "complete" as const, value: yield* read(pricing, selection) }
@@ -916,7 +926,13 @@ const layer = Layer.effect(
             }
             const catalog = catalogs.get(identity)
             if (!catalog) {
-              pricing.set(ref.key, undefined)
+              resolved.set(ref.key, undefined)
+              continue
+            }
+            const cache = pricingCache.location(identity, catalog)
+            const cached = cache.get(ref.key)
+            if (cached) {
+              resolved.set(ref.key, cached)
               continue
             }
             const provider = yield* catalog.model.get(
@@ -930,7 +946,9 @@ const layer = Layer.effect(
                 ref.provider === Provider.ID.openrouter ? ref.model : `${ref.provider}/${ref.model}`,
               ),
             )
-            pricing.set(ref.key, { provider: provider?.cost ?? [], router: router?.cost ?? [] })
+            const entry = { provider: provider?.cost ?? [], router: router?.cost ?? [] }
+            resolved.set(ref.key, entry)
+            cache.store(ref.key, entry)
           }
         }
       }).pipe(Effect.scoped)
@@ -940,10 +958,9 @@ const layer = Layer.effect(
       pricing: UsagePricing,
       sessions?: ReadonlyArray<SessionSchema.ID>,
     ) => Effect.Effect<ProviderRequest.Report> = Effect.fnUntraced(function* (input, projectInfos, pricing, sessions) {
-      const where = sql`${sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+      const where = sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
         ${input.from === undefined ? sql`` : sql`AND r.time_created >= ${input.from}`}
         ${input.to === undefined ? sql`` : sql`AND r.time_created < ${input.to}`}`
-      const key = yield* SessionUsageRead.key(db, where, input.group, input.timeZone)
       const formatter =
         input.timeZone && ["hour", "day", "month"].includes(input.group)
           ? new Intl.DateTimeFormat("en-US", {
@@ -957,47 +974,32 @@ const layer = Layer.effect(
             })
           : undefined
       const corrections = new Map<string, number>()
-      let after: ProviderRequest.ID | undefined
-      while (true) {
-        const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
-          db,
-          where,
-          after,
-        )
-        for (const item of page) {
-          const record = SessionProviderRequest.rowRecord(item.record)
-          const session = {
-            id: item.sessionID,
-            title: item.title,
-            projectID: item.projectID,
+      for (const sessionID of sessions ?? [undefined]) {
+        let after: string | undefined
+        while (true) {
+          const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
+            usageDb,
+            where,
+            after,
+            sessionID,
+          )
+          for (const item of page.rows) {
+            const record = SessionProviderRequest.rowRecord(item.record)
+            const session = {
+              id: item.sessionID,
+              title: item.title,
+              projectID: item.projectID,
+            }
+            const cost = usagePrice(pricing, item)
+            if (cost === undefined) continue
+            const group = usageReportGroup(input.group, { record, session }, projectInfos, formatter)
+            corrections.set(group.key, (corrections.get(group.key) ?? 0) + cost)
           }
-          const cost = usagePrice(pricing, item)
-          if (cost === undefined) continue
-          const group = usageReportGroup(input.group, { record, session }, projectInfos, formatter)
-          corrections.set(group.key, (corrections.get(group.key) ?? 0) + cost)
+          if (page.after === undefined) break
+          after = page.after
+          yield* Effect.yieldNow
         }
-        if (page.length < 200) break
-        after = page.at(-1)!.record.id
       }
-      const correction =
-        corrections.size === 0
-          ? sql`NULL`
-          : sql`CASE CAST(${key} AS TEXT) ${sql.join(
-              [...corrections].map(
-                ([group, cost]) =>
-                  sql`WHEN ${sql.raw(`'${group.replaceAll("'", "''")}'`)} THEN ${sql.raw(String(cost))}`,
-              ),
-              sql` `,
-            )} END`
-      const totals = usageMetrics((yield* SessionUsageRead.totals(db, where))!)
-      const total =
-        corrections.size === 0
-          ? totals
-          : combineUsage(totals, {
-              ...SessionProviderRequest.reportMetrics([]),
-              cost: Money.USD.make([...corrections.values()].reduce((sum, cost) => sum + cost, 0)),
-              costProvenance: "current_catalog",
-            })
       const metric =
         input.sort === "cost"
           ? sql`cost`
@@ -1020,16 +1022,33 @@ const layer = Layer.effect(
                           : sql`key`
       const order = sql`${metric} ${input.order === "desc" ? sql`DESC` : sql`ASC`} ${input.sort && input.sort !== "key" ? sql`, key ASC` : sql``}`
       const offset = input.offset ?? 0
-      const limit = input.limit ?? 100
-      const page = yield* SessionUsageRead.page(db, where, key, order, offset, limit, correction)
-      const observations = yield* SessionUsageRead.observations(db, where, input.group, key, page, sessions)
-      const rows = page.map((item) => {
-        const observation = observations.get(item.key)!
+      const page = yield* SessionUsageRead.report(usageDb, {
+        where,
+        group: input.group,
+        ...(input.from === undefined ? {} : { from: input.from }),
+        ...(input.to === undefined ? {} : { to: input.to }),
+        ...(input.timeZone === undefined ? {} : { timeZone: input.timeZone }),
+        order,
+        offset,
+        limit: input.limit ?? 100,
+        corrections: Object.fromEntries(corrections),
+        sessions,
+      })
+      const totals = usageMetrics(page.total)
+      const total =
+        corrections.size === 0
+          ? totals
+          : combineUsage(totals, {
+              ...SessionProviderRequest.reportMetrics([]),
+              cost: Money.USD.make([...corrections.values()].reduce((sum, cost) => sum + cost, 0)),
+              costProvenance: "current_catalog",
+            })
+      const rows = page.rows.map((item) => {
         const group = usageReportGroup(
           input.group,
           {
             record: {
-              model: Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(observation.model),
+              model: Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(item.model),
               agent: Agent.ID.make(item.agent),
               time: DateTime.makeUnsafe(item.time),
             },
@@ -1042,75 +1061,70 @@ const layer = Layer.effect(
           projectInfos,
           formatter,
         )
-        const speed = observation.speed
         return {
           key: item.key,
           label: group.label,
           ...usageMetrics(item),
-          ...(speed === undefined ? {} : { speed }),
+          ...(item.speed === undefined ? {} : { speed: item.speed }),
         }
       })
-      const rowCount = yield* SessionUsageRead.count(db, where, key)
       return {
         group: input.group,
         rows,
         total,
-        rowCount,
-        ...(offset + rows.length < rowCount ? { nextOffset: offset + rows.length } : {}),
+        rowCount: page.rowCount,
+        ...(offset + rows.length < page.rowCount ? { nextOffset: offset + rows.length } : {}),
       }
     })
     const readUsageSummary: (
       pricing: UsagePricing,
       sessions?: ReadonlyArray<SessionSchema.ID>,
     ) => Effect.Effect<ProviderRequest.Summary> = Effect.fnUntraced(function* (pricing, sessions) {
-      const where = sessions ? sql`s.id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`
-      const key = sql`json_array(json_extract(r.model, '$.providerID'), json_extract(r.model, '$.id'), json_extract(r.model, '$.variant'), json_extract(r.model, '$.profile'))`
+      const where = sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`
       const groups = new Map<
         string,
         { metrics: ProviderRequest.ReportMetrics; model: ProviderRequest.Record["model"] }
       >()
       const decodeModel = Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))
       let total = SessionProviderRequest.reportMetrics([])
-      let after: string | undefined
-      while (true) {
-        const page: ReadonlyArray<Aggregate> = yield* SessionUsageRead.grouped(db, where, key, after)
-        for (const item of page) {
-          const model = decodeModel(item.model)
-          const metrics = usageMetrics(item)
-          total = combineUsage(total, metrics)
-          groups.set(item.key, { metrics, model })
-        }
-        if (page.length < 200) break
-        after = page.at(-1)!.key
+      for (const item of yield* SessionUsageRead.models(usageDb, where, sessions)) {
+        const model = decodeModel(item.model)
+        const metrics = usageMetrics(item)
+        total = combineUsage(total, metrics)
+        groups.set(item.key, { metrics, model })
       }
-      let unpricedAfter: ProviderRequest.ID | undefined
-      while (true) {
-        const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
-          db,
-          where,
-          unpricedAfter,
-        )
-        for (const item of page) {
-          const record = SessionProviderRequest.rowRecord(item.record)
-          const cost = usagePrice(pricing, item)
-          if (cost === undefined) continue
-          const identity = JSON.stringify([
-            record.model.providerID,
-            record.model.id,
-            record.model.variant ?? null,
-            record.model.profile ?? null,
-          ])
-          const current = groups.get(identity)!
-          const correction = {
-            ...SessionProviderRequest.reportMetrics([]),
-            cost,
-            costProvenance: "current_catalog" as const,
+      for (const sessionID of sessions ?? [undefined]) {
+        let unpricedAfter: string | undefined
+        while (true) {
+          const page: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>> = yield* SessionUsageRead.unpriced(
+            usageDb,
+            where,
+            unpricedAfter,
+            sessionID,
+          )
+          for (const item of page.rows) {
+            const record = SessionProviderRequest.rowRecord(item.record)
+            const cost = usagePrice(pricing, item)
+            if (cost === undefined) continue
+            const identity = JSON.stringify([
+              record.model.providerID,
+              record.model.id,
+              record.model.variant ?? null,
+              record.model.profile ?? null,
+            ])
+            const current = groups.get(identity)!
+            const correction = {
+              ...SessionProviderRequest.reportMetrics([]),
+              cost,
+              costProvenance: "current_catalog" as const,
+            }
+            total = combineUsage(total, correction)
+            groups.set(identity, { ...current, metrics: combineUsage(current.metrics, correction) })
           }
-          total = combineUsage(total, correction)
-          groups.set(identity, { ...current, metrics: combineUsage(current.metrics, correction) })
+          if (page.after === undefined) break
+          unpricedAfter = page.after
+          yield* Effect.yieldNow
         }
-        if (page.length < 200) break
-        unpricedAfter = page.at(-1)!.record.id
       }
       const models = [...groups.values()]
         .map((group) => ({
@@ -1136,7 +1150,7 @@ const layer = Layer.effect(
             (left.model.variant ?? "").localeCompare(right.model.variant ?? "") ||
             (left.model.profile ?? "").localeCompare(right.model.profile ?? ""),
         )
-      const latest = yield* SessionUsageRead.latest(db, where, sessions)
+      const latest = yield* SessionUsageRead.latest(usageDb, where, sessions)
       return {
         logical: total.logical,
         physical: total.physical,
