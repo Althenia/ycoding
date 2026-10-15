@@ -170,7 +170,7 @@ test("agent headings appear only for actual text replies while every assistant k
   }
 })
 
-test("New session is a named compact plus action in the sidebar and list and keeps a resident draft", async () => {
+test("generic New session is labeled, workspace creation stays compact, and both keep a resident draft", async () => {
   for (const [width, route] of [
     [1440, "chat"],
     [1440, "sessions"],
@@ -200,8 +200,18 @@ test("New session is a named compact plus action in the sidebar and list and kee
         expect(before.name).toBe("New session")
         expect(before.title).toBe("New session")
         expect(before.icon).toBe(true)
-        expect(before.width).toBeLessThanOrEqual(44)
-        expect(before.height).toBeGreaterThanOrEqual(width === 390 ? 44 : 36)
+        expect(before.width).toBeGreaterThanOrEqual(44)
+        expect(before.height).toBeGreaterThanOrEqual(44)
+        expect(await page.evaluate<string>(`${button}.innerText.trim()`)).toBe("New session")
+        if (width >= 768) {
+          const workspace = await page.evaluate<{ width: number; height: number; name: string; text: string }>(
+            `(() => { const node=[...document.querySelectorAll('.new-session__trigger')].find(button=>button.getAttribute('aria-label')?.startsWith('New session in ') && button.getBoundingClientRect().width>0); const rect=node.getBoundingClientRect(); return {width:rect.width,height:rect.height,name:node.getAttribute('aria-label'),text:node.innerText.trim()}; })()`,
+          )
+          expect(workspace.width).toBeLessThanOrEqual(44)
+          expect(workspace.height).toBeGreaterThanOrEqual(36)
+          expect(workspace.name).toStartWith("New session in ")
+          expect(workspace.text).toBe("")
+        }
         await page.evaluate(`${button}.focus()`)
         await page.pressKey(" ", "Space", 32)
         await wait(page, `document.querySelector('.new-session-composer') !== null`)
