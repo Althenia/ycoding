@@ -9,7 +9,10 @@ const output = join(import.meta.dir, "../../../.cache/tmp/public-motion/docs-lay
 const routes = ["/", "/docs", "/docs/quickstart", "/docs/configuration", "/changelog", "/not-a-route"] as const
 const widths = [320, 390, 768, 820, 1024, 1280, 1440, 1920, 2560] as const
 
-if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running this integration test.")
+if (!browserPath)
+  throw new Error(
+    "Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running this integration test.",
+  )
 
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
@@ -36,16 +39,39 @@ describe("public docs and site layout", () => {
   test("renders decision setup and remote recovery guidance on phones and desktops", async () => {
     const page = await requireBrowser().openPage()
     const guides = [
-      { route: "/docs/configuration/tools", anchor: "structured-decisions", text: ["agents.decision.model", "efficiency.helper_models.decision", "min_confidence"] },
-      { route: "/docs/usage/remote", anchor: "connection-recovery", text: ["pending enable", "off and then on", "ycoding remote status"] },
-      { route: "/docs/troubleshooting", anchor: "remote-connection-needs-attention", text: ["rejected credentials", "off and then on", "ycoding remote disconnect"] },
+      {
+        route: "/docs/configuration/tools",
+        anchor: "structured-decisions",
+        text: [
+          "agents.decision.model",
+          "efficiency.helper_models.decision",
+          "self-reported, uncalibrated confidence",
+          "type refusal",
+        ],
+      },
+      {
+        route: "/docs/usage/remote",
+        anchor: "connection-recovery",
+        text: ["pending enable", "off and then on", "ycoding remote status"],
+      },
+      {
+        route: "/docs/troubleshooting",
+        anchor: "remote-connection-needs-attention",
+        text: ["rejected credentials", "off and then on", "ycoding remote disconnect"],
+      },
     ]
     await page.setColorScheme("light")
     for (const width of [320, 1440]) {
       await page.setViewport(width, 1000)
       for (const guide of guides) {
         await page.navigate(url(guide.route))
-        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.getElementById(${JSON.stringify(guide.anchor)}) !== null`)); attempt += 1) await Bun.sleep(100)
+        for (
+          let attempt = 0;
+          attempt < 50 &&
+          !(await page.evaluate<boolean>(`document.getElementById(${JSON.stringify(guide.anchor)}) !== null`));
+          attempt += 1
+        )
+          await Bun.sleep(100)
         await page.evaluate<void>(`(async () => {
           document.documentElement.dataset.theme = 'light'
           await document.fonts.ready
@@ -67,7 +93,12 @@ describe("public docs and site layout", () => {
             .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
             .map(animation => animation.finished))
         })()`)
-        const result = await page.evaluate<{ text: string; anchor: boolean; overflow: boolean; settled: boolean }>(`(() => {
+        const result = await page.evaluate<{
+          text: string
+          anchor: boolean
+          overflow: boolean
+          settled: boolean
+        }>(`(() => {
           const article = document.querySelector('.docs-article')
           const section = document.getElementById(${JSON.stringify(guide.anchor)})?.closest('.doc-section')
           const style = section instanceof HTMLElement ? getComputedStyle(section) : undefined
@@ -78,8 +109,15 @@ describe("public docs and site layout", () => {
             settled: style?.opacity === '1' && (style.filter === 'none' || style.filter === 'blur(0px)'),
           }
         })()`)
-        expect({ route: guide.route, width, anchor: result.anchor, overflow: result.overflow, settled: result.settled }).toEqual({ route: guide.route, width, anchor: true, overflow: false, settled: true })
+        expect({
+          route: guide.route,
+          width,
+          anchor: result.anchor,
+          overflow: result.overflow,
+          settled: result.settled,
+        }).toEqual({ route: guide.route, width, anchor: true, overflow: false, settled: true })
         for (const text of guide.text) expect(result.text).toContain(text)
+        if (guide.route === "/docs/configuration/tools") expect(result.text).not.toContain("min_confidence")
         await saveScreenshot(page, "after", guide.route, width, "light")
       }
     }
@@ -92,7 +130,13 @@ describe("public docs and site layout", () => {
       await page.setViewport(width, 1000)
       for (const route of routes) {
         await page.navigate(url(route))
-        for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.app-header__inner') instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
+        for (
+          let attempt = 0;
+          attempt < 50 &&
+          !(await page.evaluate<boolean>(`document.querySelector('.app-header__inner') instanceof HTMLElement`));
+          attempt += 1
+        )
+          await Bun.sleep(100)
         const layout = await page.evaluate<{
           readonly width: number
           readonly scrollWidth: number
@@ -140,7 +184,8 @@ describe("public docs and site layout", () => {
           expect(layout.rail[1]!).toBeLessThanOrEqual(layout.header[1]! + 1)
         }
         for (const aligned of [layout.docsBar, layout.footer]) {
-          if (aligned) expect(aligned).toEqual([expect.closeTo(layout.header[0]!, 1), expect.closeTo(layout.header[1]!, 1)])
+          if (aligned)
+            expect(aligned).toEqual([expect.closeTo(layout.header[0]!, 1), expect.closeTo(layout.header[1]!, 1)])
         }
         if (layout.mainSurface) {
           expect(layout.mainSurface[0]!).toBeGreaterThanOrEqual(layout.header[0]! - 1)
@@ -151,7 +196,11 @@ describe("public docs and site layout", () => {
           expect(layout.toc[1]!).toBeLessThanOrEqual(layout.header[1]! + 1)
         }
         if (route === "/docs/quickstart" && width >= 1280) expect(layout.tocVisible).toBe(true)
-        if (route === "/docs") expect(layout.cardWidths.filter(cardWidth => cardWidth > 420), `index cards wider than 420px at ${width}px`).toEqual([])
+        if (route === "/docs")
+          expect(
+            layout.cardWidths.filter((cardWidth) => cardWidth > 420),
+            `index cards wider than 420px at ${width}px`,
+          ).toEqual([])
       }
     }
     await page.close()
@@ -173,7 +222,8 @@ describe("public docs and site layout", () => {
         for (const route of routes) {
           await page.navigate(url(route))
           await page.evaluate<void>(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-          if (["/", "/docs/quickstart", "/changelog"].includes(route)) await saveScreenshot(page, "mid", route, width, theme)
+          if (["/", "/docs/quickstart", "/changelog"].includes(route))
+            await saveScreenshot(page, "mid", route, width, theme)
           await Bun.sleep(650)
           await saveScreenshot(page, "after", route, width, theme)
         }
@@ -183,18 +233,33 @@ describe("public docs and site layout", () => {
   }, 120_000)
 })
 
-async function saveScreenshot(page: { screenshot(): Promise<string> }, phase: "before" | "mid" | "after", route: string, width: number, theme: "light" | "dark"): Promise<void> {
-  const path = join(output, phase, `${route === "/" ? "home" : route.slice(1).replaceAll("/", "-")}-${width}-${theme}.png`)
+async function saveScreenshot(
+  page: { screenshot(): Promise<string> },
+  phase: "before" | "mid" | "after",
+  route: string,
+  width: number,
+  theme: "light" | "dark",
+): Promise<void> {
+  const path = join(
+    output,
+    phase,
+    `${route === "/" ? "home" : route.slice(1).replaceAll("/", "-")}-${width}-${theme}.png`,
+  )
   await mkdir(join(output, phase), { recursive: true })
   await Bun.write(path, Buffer.from(await page.screenshot(), "base64"))
 }
 
 function viewportHeight(width: (typeof widths)[number]): number {
-  return ({ 320: 568, 390: 844, 768: 1024, 820: 1180, 1024: 1366, 1280: 800, 1440: 900, 1920: 1080, 2560: 1600 } as const)[width]
+  return (
+    { 320: 568, 390: 844, 768: 1024, 820: 1180, 1024: 1366, 1280: 800, 1440: 900, 1920: 1080, 2560: 1600 } as const
+  )[width]
 }
 
 async function ready(): Promise<boolean> {
-  return fetch(`http://127.0.0.1:${port}/`).then((response) => response.ok, () => false)
+  return fetch(`http://127.0.0.1:${port}/`).then(
+    (response) => response.ok,
+    () => false,
+  )
 }
 
 function url(path: string): string {
