@@ -384,7 +384,7 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
       expect(typeNames.has(type), `${operation.diagnosticName} references missing schema ${type}`).toBe(true)
     expect(operation.roles.length).toBeGreaterThan(0)
   }
-  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(201)
+  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(204)
   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
   expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
   expect(operations.filter((operation) => operation.diagnosticName.startsWith("notice."))).toHaveLength(4)
