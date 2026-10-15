@@ -46,30 +46,53 @@ pub struct Configuration {
     pub diagnostics: Vec<Diagnostic>,
     pub capabilities: capabilities::ConfigCapabilities,
     options: LoadOptions,
+    sources: Vec<Source>,
     mutation_policy: Option<MutationPolicy>,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct Source {
+    pub origin: String,
+    pub info: JsonValue,
+}
+impl fmt::Debug for Source {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Configuration.Source([redacted])")
+    }
+}
+
 impl Configuration {
-    pub fn load(mut options: LoadOptions) -> Result<Self, Error> {
+    pub fn load(options: LoadOptions) -> Result<Self, Error> {
+        Self::load_with_sources(options, Vec::new())
+    }
+    pub fn load_with_sources(
+        mut options: LoadOptions,
+        sources: Vec<Source>,
+    ) -> Result<Self, Error> {
         options.directory = roots::absolute(&options.directory)?;
         if let Some(file) = &options.file {
             options.file = Some(roots::absolute(file)?);
         }
-        let (entries, diagnostics, capabilities) = discover(&options)?;
+        let (entries, diagnostics, capabilities) = discover(&options, &sources)?;
         Ok(Self {
             entries,
             event_source: Default::default(),
             diagnostics,
             capabilities,
             options,
+            sources,
             mutation_policy: None,
         })
     }
     pub fn reload(&mut self) -> Result<(), Error> {
-        let (entries, diagnostics, capabilities) = discover(&self.options)?;
+        self.reload_with_sources(self.sources.clone())
+    }
+    pub fn reload_with_sources(&mut self, sources: Vec<Source>) -> Result<(), Error> {
+        let (entries, diagnostics, capabilities) = discover(&self.options, &sources)?;
         self.entries = entries;
         self.diagnostics = diagnostics;
         self.capabilities = capabilities;
+        self.sources = sources;
         if self
             .event_source
             .emit(crate::event_feed::Data::ConfigUpdated(Box::new(
@@ -82,7 +105,7 @@ impl Configuration {
         Ok(())
     }
     pub fn snapshot(&self) -> Result<Self, Error> {
-        Self::load(self.options.clone())
+        Self::load_with_sources(self.options.clone(), self.sources.clone())
     }
     pub fn values<'a>(&'a self, key: &'a str) -> impl DoubleEndedIterator<Item = &'a JsonValue> {
         self.entries.iter().filter_map(move |entry| match entry {
@@ -179,6 +202,7 @@ pub fn decode_document(text: &str, target: &str) -> DecodedDocument {
 
 fn discover(
     options: &LoadOptions,
+    sources: &[Source],
 ) -> Result<
     (
         Vec<Entry>,
@@ -275,6 +299,24 @@ fn discover(
         .filter(|path| path.file_name().is_some_and(|name| name == ".ycoding"))
     {
         load_directory(directory, options, &mut entries, &mut diagnostics)?;
+    }
+    for source in sources {
+        let text = variable::substitute(
+            &ycoding_schema::stringify_json(&source.info),
+            ParseSource::Virtual {
+                source: &source.origin,
+                directory: &options.directory,
+            },
+            &options.roots.os_home,
+            &options.env,
+            MissingFile::Error,
+            Some(&options.roots),
+        )?;
+        let decoded = decode_document(&text, &source.origin);
+        diagnostics.extend(decoded.diagnostics);
+        if let Some(info) = decoded.info {
+            entries.push(Entry::Document { path: None, info });
+        }
     }
     if let Some(content) = options
         .content

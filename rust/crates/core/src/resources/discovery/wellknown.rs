@@ -38,6 +38,7 @@ pub enum Error {
     InvalidManifest,
     MissingAuth,
     UnsupportedExecutable(String),
+    Credential,
     Store(ycoding_store::Error),
 }
 impl fmt::Display for Error {
@@ -47,6 +48,7 @@ impl fmt::Display for Error {
             Self::InvalidManifest => f.write_str("Invalid wellknown manifest or configuration"),
             Self::MissingAuth => f.write_str("No authentication method found"),
             Self::UnsupportedExecutable(message) => f.write_str(message),
+            Self::Credential => f.write_str("Wellknown configuration credential is unavailable"),
             Self::Store(_) => f.write_str("Wellknown source storage operation failed"),
         }
     }
@@ -232,6 +234,70 @@ impl Service {
         }
         Ok(configs)
     }
+    pub async fn configuration(
+        &mut self,
+        credentials: &crate::resources::credential::Service,
+    ) -> Result<Vec<crate::resources::config::Source>, Error> {
+        let mut sources = Vec::new();
+        for entry in self.entries().await? {
+            let Some(auth) = &entry.manifest.auth else {
+                continue;
+            };
+            let selected = credentials
+                .list(&entry.integration_id.as_str().into())
+                .map_err(|_| Error::Credential)?
+                .into_iter()
+                .rev()
+                .find(|selected| {
+                    matches!(
+                        selected.secret().domain(),
+                        Ok(ycoding_schema::credential::Value::Key(_))
+                    )
+                });
+            let Some(selected) = selected else {
+                continue;
+            };
+            let ycoding_schema::credential::Value::Key(key) =
+                selected.secret().domain().map_err(|_| Error::Credential)?
+            else {
+                return Err(Error::Credential);
+            };
+            let variables = BTreeMap::from([(text(&auth.env)?, text(&key.key)?)]);
+            let configs = self.resolve(&entry, &variables).await?;
+            let escape = |values: &BTreeMap<String, String>| {
+                values
+                    .iter()
+                    .map(|(key, value)| {
+                        let encoded = stringify_json(&JsonValue::String(value.as_str().into()));
+                        (key.clone(), encoded[1..encoded.len() - 1].to_owned())
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let variables = escape(&variables);
+            let environment = escape(&self.env);
+            for config in configs {
+                sources.push(crate::resources::config::Source {
+                    origin: entry.origin.clone(),
+                    info: parse_json(&substitute(
+                        &stringify_json(&config),
+                        &variables,
+                        &environment,
+                    ))
+                    .map_err(|_| Error::InvalidManifest)?,
+                });
+            }
+            let current = credentials
+                .get(selected.id())
+                .map_err(|_| Error::Credential)?;
+            if current.as_ref().is_none_or(|current| {
+                current.generation() != selected.generation()
+                    || current.account_generation() != selected.account_generation()
+            }) {
+                return Err(Error::Credential);
+            }
+        }
+        Ok(sources)
+    }
     pub async fn entries(&mut self) -> Result<Vec<Entry>, Error> {
         let mut entries = Vec::new();
         for origin in self.origins()? {
@@ -249,9 +315,6 @@ impl Service {
     }
     pub async fn refresh(&mut self) -> Result<bool, Error> {
         let origins = self.origins()?;
-        if origins.is_empty() {
-            return Ok(false);
-        }
         let mut entries = Vec::new();
         for origin in origins {
             entries.push(self.inspect(&origin).await?);

@@ -13,7 +13,49 @@ pub struct Service {
     references: Vec<Info>,
 }
 pub mod instructions;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    Cached,
+    Fetch,
+}
+
 impl Service {
+    pub fn materialize(
+        &self,
+        repositories: &crate::platform::repository_cache::Service,
+        refresh: Refresh,
+    ) -> Result<
+        Vec<crate::platform::repository_cache::Ensured>,
+        crate::platform::repository_cache::Error,
+    > {
+        let mut ensured = Vec::new();
+        for reference in &self.references {
+            let Source::Git(source) = &reference.source else {
+                continue;
+            };
+            let repository = crate::platform::repository_cache::parse_remote(
+                source.repository.as_str().unwrap_or(""),
+                None,
+            )?;
+            if ensured
+                .iter()
+                .any(|current: &crate::platform::repository_cache::Ensured| {
+                    current.repository == repository.label
+                })
+            {
+                continue;
+            }
+            ensured.push(
+                repositories.ensure(crate::platform::repository_cache::EnsureInput {
+                    reference: &repository,
+                    refresh: refresh == Refresh::Fetch,
+                    branch: source.branch.as_ref().and_then(|branch| branch.as_str()),
+                })?,
+            );
+        }
+        Ok(ensured)
+    }
     pub fn from_infos(references: Vec<Info>) -> Self {
         Self {
             references,

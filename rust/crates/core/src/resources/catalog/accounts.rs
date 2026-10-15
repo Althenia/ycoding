@@ -193,7 +193,8 @@ impl AccountCatalog {
         let baseline = catalog.clone();
         let mut next = Vec::new();
         let mut diagnostics = Vec::new();
-        if let Some(claude) = &self.claude
+        if catalog.provider_permitted(&provider::Id("anthropic".into()))
+            && let Some(claude) = &self.claude
             && claude.accounts(now).await.is_err()
         {
             diagnostics.push(DiscoveryDiagnostic {
@@ -203,6 +204,9 @@ impl AccountCatalog {
         for selected in &saved {
             let integration = selected.integration_id().as_str().unwrap_or("");
             if !matches!(integration, "openai" | "cursor" | "anthropic") {
+                continue;
+            }
+            if !catalog.provider_permitted(&provider::Id(integration.into())) {
                 continue;
             }
             let prepared = self
@@ -297,14 +301,15 @@ impl AccountCatalog {
             .map_err(|_| models_dev::Error::Request)?
             .retain_accounts(&identities)
             .map_err(|_| models_dev::Error::Request)?;
-        if saved
-            .iter()
-            .any(|selected| selected.integration_id().as_str() == Some("muse"))
-            || self.environment.contains_key("META_API_KEY")
-            || catalog
-                .providers
+        if catalog.provider_permitted(&provider::Id("muse".into()))
+            && (saved
                 .iter()
-                .any(|record| record.provider.id.0 == "muse".into())
+                .any(|selected| selected.integration_id().as_str() == Some("muse"))
+                || self.environment.contains_key("META_API_KEY")
+                || catalog
+                    .providers
+                    .iter()
+                    .any(|record| record.provider.id.0 == "muse".into()))
         {
             if let Some(base) = self.endpoints.get("muse") {
                 self.muse.base_url = base.clone();
@@ -319,9 +324,10 @@ impl AccountCatalog {
                     .await?;
             }
         }
-        if !saved
-            .iter()
-            .any(|selected| selected.integration_id().as_str() == Some("cursor"))
+        if catalog.provider_permitted(&provider::Id("cursor".into()))
+            && !saved
+                .iter()
+                .any(|selected| selected.integration_id().as_str() == Some("cursor"))
             && let Some(key) = self.environment.get("CURSOR_API_KEY")
         {
             let discovered = async {
@@ -439,6 +445,9 @@ impl AccountCatalog {
             now,
         )
         .await?;
+        if !composition.diagnostics.is_empty() {
+            return Ok(composition);
+        }
         self.configured = Some((
             source,
             Catalog {

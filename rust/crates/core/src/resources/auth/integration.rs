@@ -94,6 +94,9 @@ pub struct Draft {
 impl Draft {
     pub fn register_endpoints(&mut self, catalog: &crate::resources::catalog::Catalog) {
         for record in &catalog.providers {
+            if !catalog.provider_permitted(&record.provider.id) {
+                continue;
+            }
             if crate::resources::model::family(&record.provider.package).is_err()
                 && !record.models.iter().any(|model| {
                     model
@@ -290,6 +293,7 @@ impl Inner {
 pub struct WellKnown {
     discovery: tokio::sync::Mutex<crate::resources::discovery::wellknown::Service>,
     registries: Mutex<Vec<Weak<Inner>>>,
+    updated: tokio::sync::watch::Sender<u64>,
 }
 
 impl WellKnown {
@@ -297,6 +301,7 @@ impl WellKnown {
         Self {
             discovery: tokio::sync::Mutex::new(discovery),
             registries: Mutex::new(Vec::new()),
+            updated: tokio::sync::watch::channel(0).0,
         }
     }
     pub async fn attach(
@@ -328,6 +333,44 @@ impl WellKnown {
     ) -> Result<(), crate::resources::discovery::wellknown::Error> {
         let mut discovery = self.discovery.lock().await;
         discovery.add(origin, time).await?;
+        self.publish(discovery.snapshot())?;
+        self.updated.send_replace(discovery.revision());
+        Ok(())
+    }
+    pub async fn remove(
+        &self,
+        origin: &str,
+        time: i64,
+    ) -> Result<(), crate::resources::discovery::wellknown::Error> {
+        let mut discovery = self.discovery.lock().await;
+        discovery.remove(origin, time).await?;
+        self.publish(discovery.snapshot())?;
+        self.updated.send_replace(discovery.revision());
+        Ok(())
+    }
+    pub async fn refresh(&self) -> Result<bool, crate::resources::discovery::wellknown::Error> {
+        let mut discovery = self.discovery.lock().await;
+        if !discovery.refresh().await? {
+            return Ok(false);
+        }
+        self.publish(discovery.snapshot())?;
+        self.updated.send_replace(discovery.revision());
+        Ok(true)
+    }
+    pub async fn configuration(
+        &self,
+        credentials: &Service,
+    ) -> Result<Vec<crate::resources::config::Source>, crate::resources::discovery::wellknown::Error>
+    {
+        self.discovery.lock().await.configuration(credentials).await
+    }
+    pub fn updated(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.updated.subscribe()
+    }
+    fn publish(
+        &self,
+        entries: &[crate::resources::discovery::wellknown::Entry],
+    ) -> Result<(), crate::resources::discovery::wellknown::Error> {
         let registries = {
             let mut registries = self
                 .registries
@@ -340,7 +383,7 @@ impl WellKnown {
                 .collect::<Vec<_>>()
         };
         for registry in registries {
-            match Registry(registry).wellknown(discovery.snapshot()) {
+            match Registry(registry).wellknown(entries) {
                 Ok(()) | Err(Error::Closed) => (),
                 Err(_) => {
                     return Err(crate::resources::discovery::wellknown::Error::InvalidManifest);

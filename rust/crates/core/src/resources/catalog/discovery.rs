@@ -14,6 +14,36 @@ pub struct DiscoveryDiagnostic {
     pub provider_id: provider::Id,
 }
 impl Catalog {
+    pub async fn compose_current(
+        discovery: &models_dev::Service,
+        configuration: &crate::resources::config::Configuration,
+        credentials: &credential::Service,
+        accounts: &mut super::AccountCatalog,
+        now: i64,
+        force: bool,
+    ) -> Result<Composition, models_dev::Error> {
+        let documents = configuration
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::resources::config::Entry::Document { info, .. } => Some(info.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let composition = Self::compose_with_accounts(
+            discovery.get().await?,
+            &documents,
+            credentials,
+            accounts,
+            now,
+            force,
+        )
+        .await?;
+        if !composition.diagnostics.is_empty() {
+            return Err(models_dev::Error::Request);
+        }
+        Ok(composition)
+    }
     pub async fn compose_with_accounts(
         snapshots: Vec<models_dev::Snapshot>,
         documents: &[JsonValue],
@@ -58,6 +88,7 @@ impl Catalog {
     ) -> Result<Composition, models_dev::Error> {
         let mut catalog = Catalog::new(snapshots);
         let base = catalog.clone();
+        catalog.configure(documents)?;
         let mut configured: Vec<(LosslessString, JsonValue)> = Vec::new();
         for document in documents {
             let Some(JsonValue::Object(providers)) = field(document, "providers") else {
@@ -111,6 +142,9 @@ impl Catalog {
                 continue;
             }
             let provider_id = provider::Id(id.clone());
+            if !catalog.provider_permitted(&provider_id) {
+                continue;
+            }
             let integration = catalog
                 .provider(&provider_id)
                 .and_then(|p| p.integration_id.as_ref())

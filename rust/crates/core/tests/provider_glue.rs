@@ -803,3 +803,207 @@ fn h2_frame(kind: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
     bytes.extend(payload);
     bytes
 }
+
+#[tokio::test]
+async fn generic_generate_cursor_uses_location_context_and_selected_account_without_rotation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use ycoding_ai::cursor::{
+        framing,
+        headers::Identity,
+        provider::{RequestContext, Runtime},
+        transport::Endpoint,
+    };
+    use ycoding_core::resources::{
+        auth::{self, integration},
+        credential,
+        cursor::route::{Extensions, Host},
+        generate,
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut preface = [0; 24];
+        socket.read_exact(&mut preface).await.unwrap();
+        assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+        socket.write_all(&h2_frame(4, 0, 0, &[])).await.unwrap();
+        let mut decoder = framing::Decoder::default();
+        let mut seen = Vec::new();
+        loop {
+            let mut header = [0; 9];
+            if socket.read_exact(&mut header).await.is_err() {
+                break;
+            }
+            let length =
+                ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+            let stream = u32::from_be_bytes(header[5..9].try_into().unwrap()) & 0x7fffffff;
+            let mut payload = vec![0; length];
+            socket.read_exact(&mut payload).await.unwrap();
+            match header[3] {
+                4 if header[4] == 0 => socket.write_all(&h2_frame(4, 1, 0, &[])).await.unwrap(),
+                6 if header[4] == 0 => socket
+                    .write_all(&h2_frame(6, 1, 0, &payload))
+                    .await
+                    .unwrap(),
+                0 => {
+                    let frames = decoder.push(&payload);
+                    if frames.is_empty() {
+                        continue;
+                    }
+                    for frame in frames {
+                        seen.extend(frame.decode().unwrap());
+                    }
+                    socket
+                        .write_all(&h2_frame(1, 4, stream, &[0x88]))
+                        .await
+                        .unwrap();
+                    socket
+                        .write_all(&h2_frame(
+                            0,
+                            0,
+                            stream,
+                            &framing::encode(
+                                0,
+                                &[
+                                    10, 11, 10, 9, 10, 7, b'a', b'n', b's', b'w', b'e', b'r', b'!',
+                                ],
+                            )
+                            .unwrap(),
+                        ))
+                        .await
+                        .unwrap();
+                    socket
+                        .write_all(&h2_frame(
+                            0,
+                            0,
+                            stream,
+                            &framing::encode(0, &[10, 2, 114, 0]).unwrap(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+                3 | 7 => break,
+                _ => {}
+            }
+        }
+        seen
+    });
+    let fixture = Fixture::new(CHAT).await;
+    let store = support::store();
+    let credentials = credential::Service::new(store.client());
+    let first = credentials
+        .create(
+            "first".into(),
+            "cursor".into(),
+            Some("Work".into()),
+            ycoding_store::resources::Secret::new(
+                parse_json(r#"{"type":"key","key":"crsr_first"}"#).unwrap(),
+            )
+            .unwrap(),
+            1,
+        )
+        .await
+        .unwrap();
+    credentials
+        .create(
+            "second".into(),
+            "cursor".into(),
+            Some("Personal".into()),
+            ycoding_store::resources::Secret::new(
+                parse_json(r#"{"type":"key","key":"crsr_second"}"#).unwrap(),
+            )
+            .unwrap(),
+            2,
+        )
+        .await
+        .unwrap();
+    let mut catalog = Catalog::new(Vec::new());
+    catalog.configure(&[parse_json(r#"{"providers":{"cursor":{"package":"aisdk:cursor-opencode-provider","models":{"code":{"modelID":"composer-fixture","capabilities":{"tools":false,"input":["text"],"output":["text"]},"limit":{"context":10000,"output":1000}}}}}}"#).unwrap()]).unwrap();
+    let models = Arc::new(model::Resolver::new(catalog));
+    let context = ProviderContext::new(BTreeMap::new(), "fixture").unwrap();
+    let keys = auth::cursor::Store::new(auth::Client::new(&fixture.base, "fixture").unwrap());
+    let registry = integration::Registry::prepared(
+        credentials.clone(),
+        BTreeMap::new(),
+        auth::Preparation {
+            providers: Some(context.clone()),
+            cursor: Some(keys.clone()),
+            ..Default::default()
+        },
+        None,
+    );
+    let host = Arc::new(Host {
+        identity: Identity {
+            machine_id: "machine".into(),
+            mac_machine_id: None,
+            client_version: "fixture".into(),
+        },
+        context: RequestContext::new(vec![0x22, 0]).unwrap(),
+        runtime: Arc::new(Runtime::new(Default::default()).unwrap()),
+        known_mcp_servers: Vec::new(),
+        extensions: Extensions {
+            agent: Some(Endpoint::loopback(address).unwrap()),
+            ..Default::default()
+        },
+    });
+    let generate = generate::Service {
+        models: models.clone(),
+        credentials: credentials.clone(),
+        integrations: registry.clone(),
+        executor: Arc::new(Executor::new(Executor::http_client().unwrap())),
+        cursor: Some(host.clone()),
+    };
+    let input = || generate::Input {
+        prompt: "generic cursor prompt".into(),
+        model: Some(
+            ycoding_schema::model::Ref::decode(
+                &parse_json(r#"{"providerID":"cursor","id":"code","profile":"Work"}"#).unwrap(),
+            )
+            .unwrap(),
+        ),
+    };
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), generate.text(input()))
+            .await
+            .unwrap()
+            .unwrap(),
+        "answer!".into()
+    );
+    credentials.remove(first.id().clone(), 3).await.unwrap();
+    assert_eq!(
+        generate.text(input()).await,
+        Err(generate::Error::Selection(
+            "Profile unavailable for cursor: Work".into()
+        ))
+    );
+    assert_eq!(
+        credentials
+            .active(&"cursor".into())
+            .unwrap()
+            .unwrap()
+            .label(),
+        &"Personal".into()
+    );
+    registry.shutdown().await.unwrap();
+    keys.shutdown().await.unwrap();
+    context.shutdown().await;
+    host.runtime.shutdown().await;
+    let seen = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        seen.windows(b"composer-fixture".len())
+            .any(|w| w == b"composer-fixture")
+    );
+    assert!(
+        seen.windows(b"generic cursor prompt".len())
+            .any(|w| w == b"generic cursor prompt")
+    );
+    let requests = fixture.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "/auth/exchange_user_api_key");
+    assert_eq!(requests[0].1["authorization"], "Bearer crsr_first");
+    credentials.shutdown().await.unwrap();
+    store.shutdown().unwrap();
+}

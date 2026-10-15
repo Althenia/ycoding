@@ -72,6 +72,47 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn resolved_sources_validate_and_failed_reload_preserves_prior_sources_and_entries() {
+    use ycoding_core::resources::config::Source;
+    let fixture = Fixture::new();
+    fixture.write("project/ycoding.json", r#"{"username":"project"}"#);
+    let source = Source {
+        origin: "https://config.example.test".into(),
+        info: parse_json(
+            r#"{"username":"resolved","capabilities":{"tools":{"enabled":false}},"unknown":true}"#,
+        )
+        .unwrap(),
+    };
+    let mut config =
+        Configuration::load_with_sources(fixture.options("project"), vec![source]).unwrap();
+    assert_eq!(
+        config.latest("username"),
+        Some(&parse_json(r#""resolved""#).unwrap())
+    );
+    assert_eq!(config.diagnostics.len(), 1);
+    assert_eq!(
+        config.diagnostics[0].path,
+        "https://config.example.test".into()
+    );
+    assert!(!config.capabilities.allows_tool(&"read".into()));
+    let entries = config.entries.clone();
+    let failed = config.reload_with_sources(vec![Source {
+        origin: "https://config.example.test".into(),
+        info: parse_json(r#"{"username":"{file:missing}"}"#).unwrap(),
+    }]);
+    assert!(failed.is_err());
+    assert_eq!(config.entries, entries);
+    assert_eq!(config.snapshot().unwrap().entries, entries);
+    config.reload_with_sources(Vec::new()).unwrap();
+    assert_eq!(
+        config.latest("username"),
+        Some(&parse_json(r#""project""#).unwrap())
+    );
+    assert!(config.capabilities.allows_tool(&"read".into()));
+    assert!(config.diagnostics.is_empty());
+}
+
 fn strings(config: &Configuration, key: &str) -> Vec<String> {
     config
         .entries

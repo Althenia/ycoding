@@ -1,4 +1,5 @@
 use super::{config::Configuration, credential};
+use crate::tools::policy::{Policy, PolicyEffect, Statement};
 use std::collections::BTreeSet;
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonObject, JsonValue, LosslessString, model, provider,
@@ -36,15 +37,14 @@ pub struct Catalog {
     contextual: BTreeSet<provider::Id>,
     connected: BTreeSet<LosslessString>,
     denied: BTreeSet<provider::Id>,
+    policy: Policy,
 }
 
 impl Catalog {
     pub fn integrations(&self) -> Vec<provider::IntegrationRef> {
         self.providers
             .iter()
-            .filter(|record| {
-                record.provider.disabled != Some(true) && !self.denied.contains(&record.provider.id)
-            })
+            .filter(|record| self.provider_permitted(&record.provider.id))
             .map(|record| provider::IntegrationRef {
                 provider_id: record.provider.id.clone(),
                 integration_id: record.provider.integration_id.clone().unwrap_or_else(|| {
@@ -226,7 +226,7 @@ impl Catalog {
         provider: &provider::Info,
         saved: &[credential::Info],
     ) -> bool {
-        if provider.disabled == Some(true) || self.denied.contains(&provider.id) {
+        if !self.provider_permitted(&provider.id) {
             return false;
         }
         if provider
@@ -249,6 +249,16 @@ impl Catalog {
             return true;
         }
         provider.integration_id.is_none()
+    }
+    pub fn provider_permitted(&self, id: &provider::Id) -> bool {
+        !self
+            .provider(id)
+            .is_some_and(|provider| provider.disabled == Some(true))
+            && !self.denied.contains(id)
+            && self
+                .policy
+                .evaluate(&"provider.use".into(), &id.0, PolicyEffect::Allow)
+                == PolicyEffect::Allow
     }
     pub fn get(
         &self,
@@ -374,9 +384,7 @@ impl Catalog {
         credential: Option<&credential::Info>,
     ) -> Option<model::Info> {
         let provider = self.provider(&model.provider_id);
-        if provider.is_some_and(|p| p.disabled == Some(true))
-            || self.denied.contains(&model.provider_id)
-        {
+        if !self.provider_permitted(&model.provider_id) {
             return None;
         }
         let account_models = credential.and_then(|c| self.account(c, &model.provider_id));
@@ -480,6 +488,9 @@ impl Catalog {
         })
     }
     pub fn small(&self, provider: &provider::Id, now: f64) -> Option<model::Info> {
+        if !self.provider_permitted(provider) {
+            return None;
+        }
         if provider.0 == "azure".into() || provider.0 == "azure-cognitive-services".into() {
             return None;
         }
@@ -549,6 +560,27 @@ impl Catalog {
     }
     pub fn configure(&mut self, documents: &[JsonValue]) -> Result<(), models_dev::Error> {
         let mut configured = self.clone();
+        let mut statements = Vec::new();
+        for document in documents.iter().rev() {
+            let Some(policies) = field(document, "experimental").and_then(|v| field(v, "policies"))
+            else {
+                continue;
+            };
+            for rule in Vec::<ycoding_schema::permission::Rule>::decode(policies)? {
+                statements.push(Statement {
+                    action: rule.action,
+                    resource: rule.resource,
+                    effect: match rule.effect.0.as_str() {
+                        Some("allow") => PolicyEffect::Allow,
+                        Some("deny") => PolicyEffect::Deny,
+                        _ => {
+                            return Err(models_dev::Error::InvalidSource);
+                        }
+                    },
+                });
+            }
+        }
+        configured.policy.load(statements);
         for document in documents {
             if let Some(selection) = field(document, "model") {
                 configured.default = Some(selection_ref(selection)?);

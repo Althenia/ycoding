@@ -60,6 +60,13 @@ impl Service {
                 },
             ))
         })?;
+        if !catalog.provider_permitted(&selected.provider_id) {
+            return Err(Error::Selection(format!(
+                "Model unavailable: {}/{}",
+                display(&selected.provider_id.0),
+                display(&selected.id)
+            )));
+        }
         let integration = catalog
             .provider(&selected.provider_id)
             .and_then(|provider| provider.integration_id.as_ref())
