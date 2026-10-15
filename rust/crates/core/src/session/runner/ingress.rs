@@ -81,6 +81,37 @@ pub struct ShellInput<'a> {
 }
 
 impl Local {
+    pub async fn create(
+        &self,
+        event: NewEvent,
+        inherited_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
+    ) -> Result<session::Info, Error> {
+        let store = &self.0.services.store;
+        let id = session::Id::new(event.aggregate_id.clone())
+            .map_err(|_| error("session.create", "Session ID is invalid"))?;
+        if let Some(recorded) = store.get(&id)? {
+            return Ok(recorded);
+        }
+        let selection: Option<model_schema::Ref> =
+            ycoding_schema::ObjectDecoder::new(&event.data, &ycoding_schema::JsonPath::default())
+                .and_then(|object| object.optional("model"))
+                .map_err(|_| error("session.create", "Session model is invalid"))?;
+        let binding =
+            match selection.filter(|selection| selection.profile.is_some()) {
+                Some(selection) => {
+                    let saved =
+                        self.0.services.credentials.all().map_err(|_| {
+                            error("provider.auth", "Provider account is unavailable")
+                        })?;
+                    self.resolve_model(&selection, &saved, inherited_binding)
+                        .await?
+                        .binding
+                }
+                None => None,
+            };
+        Ok(store.create_with_binding(event, binding).await?)
+    }
+
     pub fn location(&self) -> &location::Ref {
         &self.0.services.location
     }

@@ -269,6 +269,228 @@ async fn open(fixture: &Fixture) -> (ycoding_runtime::Server, Client) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_create_binds_profiles_inherits_accounts_and_rejects_unavailable_profiles() {
+    let (fixture, _) = fixture("http://127.0.0.1:1").await;
+    let credentials = &world().core.credentials;
+    let key = || {
+        ycoding_core::ycoding_store::resources::Secret::new(
+            parse_json(r#"{"type":"key","key":"synthetic-create-key"}"#).unwrap(),
+        )
+        .unwrap()
+    };
+    let selected = credentials
+        .create(
+            "cred_create_work".into(),
+            "fixture".into(),
+            Some("create-work".into()),
+            key(),
+            1,
+        )
+        .await
+        .unwrap();
+    let default = credentials
+        .create(
+            "cred_create_default".into(),
+            "fixture".into(),
+            Some("create-default".into()),
+            key(),
+            2,
+        )
+        .await
+        .unwrap();
+    credentials
+        .create(
+            "cred_create_foreign".into(),
+            "another-integration".into(),
+            Some("create-foreign".into()),
+            key(),
+            3,
+        )
+        .await
+        .unwrap();
+    let (server, mut client) = open(&fixture).await;
+    let create = |id: &str, parent: Option<&str>, profile: Option<&str>| v5::SessionCreateRequest {
+        payload: v5::SessionCreateRequestPayload {
+            id: Some(text(id)),
+            parent_id: parent.map(text),
+            agent: None,
+            model: parent.is_none().then(|| v5::ModelRef {
+                provider_id: text("fixture"),
+                id: text("code"),
+                variant: None,
+                profile: profile.map(text),
+            }),
+            location: None,
+        },
+    };
+    let scope = support::wire::location_scope(&fixture.directory);
+    let created: v5::SessionCreateResult = ask(
+        &mut client,
+        "session.create",
+        scope.clone(),
+        create("ses_profile_create", None, Some("create-work")),
+    )
+    .await;
+    assert_eq!(
+        created
+            .data
+            .model
+            .as_ref()
+            .unwrap()
+            .profile
+            .as_ref()
+            .map(units),
+        Some("create-work".into())
+    );
+    let binding = world()
+        .core
+        .sessions
+        .profile_binding(&sid("ses_profile_create"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(binding.credential_id.0, *selected.id());
+    assert_eq!(
+        binding.account_generation.get(),
+        selected.account_generation()
+    );
+    assert_eq!(
+        credentials.active(&"fixture".into()).unwrap().unwrap().id(),
+        default.id()
+    );
+    assert!(
+        world()
+            .core
+            .sessions
+            .pending_list(&sid("ses_profile_create"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        world()
+            .core
+            .sessions
+            .context(&sid("ses_profile_create"))
+            .unwrap()
+            .is_empty()
+    );
+
+    let inherited: v5::SessionCreateResult = ask(
+        &mut client,
+        "session.create",
+        support::wire::location_scope("/unused"),
+        create("ses_profile_inherited", Some("ses_profile_create"), None),
+    )
+    .await;
+    assert_eq!(inherited.data.model, created.data.model);
+    assert_eq!(inherited.data.location, created.data.location);
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .profile_binding(&sid("ses_profile_inherited"))
+            .unwrap(),
+        Some(binding.clone())
+    );
+    for (id, profile) in [
+        ("ses_profile_unknown", "create-missing"),
+        ("ses_profile_foreign", "create-foreign"),
+    ] {
+        let error: v5::InvalidRequestError = refuse(
+            &mut client,
+            "session.create",
+            scope.clone(),
+            create(id, None, Some(profile)),
+        )
+        .await;
+        assert_eq!(
+            error.field.as_ref().map(units).as_deref(),
+            Some("model.profile")
+        );
+        assert_eq!(
+            units(&error.message),
+            "Selected model profile is unavailable. Reconnect or select the profile again."
+        );
+        assert!(world().core.sessions.get(&sid(id)).unwrap().is_none());
+        assert_eq!(
+            ycoding_core::ycoding_store::session::latest_sequence(
+                &world().store.snapshot().unwrap(),
+                sid(id).as_lossless()
+            )
+            .unwrap(),
+            -1
+        );
+    }
+    let unprofiled: v5::SessionCreateResult = ask(
+        &mut client,
+        "session.create",
+        scope.clone(),
+        create("ses_profile_absent", None, None),
+    )
+    .await;
+    assert!(unprofiled.data.model.unwrap().profile.is_none());
+    assert!(
+        world()
+            .core
+            .sessions
+            .profile_binding(&sid("ses_profile_absent"))
+            .unwrap()
+            .is_none()
+    );
+
+    credentials
+        .create(
+            "cred_create_replacement".into(),
+            "fixture".into(),
+            Some("create-work".into()),
+            key(),
+            4,
+        )
+        .await
+        .unwrap();
+    let adopted: v5::SessionCreateResult = ask(
+        &mut client,
+        "session.create",
+        scope.clone(),
+        create("ses_profile_create", None, Some("create-missing")),
+    )
+    .await;
+    assert_eq!(adopted, created);
+    assert_eq!(
+        world()
+            .core
+            .sessions
+            .profile_binding(&sid("ses_profile_create"))
+            .unwrap(),
+        Some(binding)
+    );
+    let error: v5::InvalidRequestError = refuse(
+        &mut client,
+        "session.create",
+        scope,
+        create(
+            "ses_profile_replaced_child",
+            Some("ses_profile_create"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        error.field.as_ref().map(units).as_deref(),
+        Some("model.profile")
+    );
+    assert!(
+        world()
+            .core
+            .sessions
+            .get(&sid("ses_profile_replaced_child"))
+            .unwrap()
+            .is_none()
+    );
+    server.shutdown().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn command_shell_skills_conflict_and_agent_switch_are_typed_and_durable_over_socket() {
     let (fixture, _) = fixture("http://127.0.0.1:1").await;
     let (server, mut client) = open(&fixture).await;

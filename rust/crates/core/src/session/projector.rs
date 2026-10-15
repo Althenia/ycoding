@@ -45,6 +45,14 @@ impl Service {
     }
 
     pub async fn create(&self, event: NewEvent) -> Result<ycoding_schema::session::Info, Error> {
+        self.create_with_binding(event, None).await
+    }
+
+    pub(crate) async fn create_with_binding(
+        &self,
+        event: NewEvent,
+        binding: Option<session_event::ProfileBinding>,
+    ) -> Result<ycoding_schema::session::Info, Error> {
         if event.type_.as_str() != Some("session.created.2") {
             return Err(Error::Rejected("create requires session.created.2"));
         }
@@ -55,6 +63,21 @@ impl Service {
                     return Ok(row);
                 }
                 append(tx, &event)?;
+                if let Some(binding) = binding {
+                    append(
+                        tx,
+                        &NewEvent {
+                            id: random_event_id()?.as_lossless().clone(),
+                            aggregate_id: event.aggregate_id.clone(),
+                            created: event.created,
+                            type_: "session.profile.bound.1".into(),
+                            data: ObjectEncoder::new()
+                                .field("sessionID", &event.aggregate_id)
+                                .field("binding", &binding)
+                                .finish(),
+                        },
+                    )?;
+                }
                 tx.get::<SessionTable>(&key(&event.aggregate_id))?
                     .ok_or(Error::Rejected("created Session missing"))
             })?

@@ -1241,6 +1241,116 @@ async fn session_instruction_entries_are_admitted_before_promotion_and_rendered_
 }
 
 #[tokio::test]
+async fn profile_creation_commits_binding_with_creation_and_dispatches_the_selected_account() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    let credentials = credential::Service::new(store.client());
+    let key = |value: &str| {
+        ycoding_store::resources::Secret::new(
+            ycoding_schema::ObjectEncoder::new()
+                .field("type", "key")
+                .field("key", value)
+                .finish(),
+        )
+        .unwrap()
+    };
+    let selected = credentials
+        .create(
+            "cred_create_work".into(),
+            "openai".into(),
+            Some("Work".into()),
+            key("fixture-work-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    credentials
+        .create(
+            "cred_create_default".into(),
+            "openai".into(),
+            Some("Default".into()),
+            key("fixture-default-key"),
+            2,
+        )
+        .await
+        .unwrap();
+    let batches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = batches.clone();
+    store.client().observe_events(move |events| {
+        let created = events
+            .iter()
+            .filter(|event| event.aggregate_id.as_str() == Some("ses_created"))
+            .map(|event| event.type_.clone())
+            .collect::<Vec<_>>();
+        if !created.is_empty() {
+            observed.lock().unwrap().push(created);
+        }
+        true
+    });
+    let (endpoint, mut requests, server) = server(vec![TEXT]).await;
+    let local = local(&store, &endpoint, registry());
+    let created = local.create(ycoding_store::session::NewEvent {
+        id: "evt_profile_create".into(),
+        aggregate_id: "ses_created".into(),
+        created: 3,
+        type_: "session.created.2".into(),
+        data: parse_json(r#"{"sessionID":"ses_created","projectID":"prj_one","location":{"directory":"/project"},"model":{"providerID":"openai","id":"gpt-reasoning","profile":"Work"},"title":"Profile creation","created":3}"#).unwrap(),
+    }, None).await.unwrap();
+    assert_eq!(
+        *batches.lock().unwrap(),
+        vec![vec![
+            "session.created.2".into(),
+            "session.profile.bound.1".into()
+        ]]
+    );
+    let binding = service.profile_binding(&created.id).unwrap().unwrap();
+    assert_eq!(binding.credential_id.0, *selected.id());
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new("msg_created_input").unwrap(),
+            session_id: created.id.clone(),
+            input: session_pending::Message::decode(
+                &parse_json(
+                    r#"{"type":"user","data":{"text":"Answer the prompt"},"delivery":"steer"}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new("evt_created_input").unwrap(),
+            created: 4,
+        })
+        .await
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(local));
+    coordinator.run(&created.id).await.unwrap();
+    let ycoding_schema::JsonValue::Object(request) = requests.recv().await.unwrap() else {
+        panic!("expected a provider request")
+    };
+    assert_eq!(
+        request.get(&"_testAuthorization".into()),
+        Some(&ycoding_schema::JsonValue::String(
+            "Bearer fixture-work-key".into()
+        ))
+    );
+    assert_eq!(service.profile_binding(&created.id).unwrap(), Some(binding));
+    assert_eq!(
+        ycoding_store::resources::requests(
+            &store.snapshot().unwrap(),
+            created.id.as_lossless(),
+            ycoding_store::IndexOrder::Ascending,
+            None,
+            50
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    credentials.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn named_profile_pins_the_selected_account_and_rejects_replacement_before_another_request() {
     let store = support::store();
     let service = Service::new(store.client());

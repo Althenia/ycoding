@@ -267,8 +267,8 @@ must exist there; otherwise project, Location and subpath derive from the
 calling Session's stored state. Creation inherits deny ceilings from the caller,
 the selected parent and the requested ceiling using Core's inheritance rule;
 requested allows cannot weaken them. Model selection inherits from an explicit
-parent when omitted. The internal `decision` agent and profile-bound creation
-are rejected, matching the Rust local creation boundary's validation.
+parent when omitted. The extension host rejects the internal `decision` agent
+and profile-bound creation.
 
 `SessionGenerate` calls Core `session::generate::Service::generate` and returns
 `{ text }`. It generates an ephemeral, tool-free answer from the stored Session

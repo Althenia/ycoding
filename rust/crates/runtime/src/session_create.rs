@@ -92,37 +92,70 @@ pub async fn create(
         .map(model_domain)
         .transpose()?
         .or_else(|| parent.as_ref().and_then(|parent| parent.model.clone()));
-    if model.as_ref().is_some_and(|model| model.profile.is_some()) {
-        return Err(Failure::Unavailable(
-            "profile-bound model selection is not served by the local bridge".into(),
-        ));
-    }
     let now = ids::now_millis();
-    let created = core
-        .sessions
-        .create(NewEvent {
-            id: ids::event_id()
-                .map_err(|_| Failure::Unavailable("event ID generation failed".into()))?
-                .as_lossless()
-                .clone(),
-            aggregate_id: id.as_lossless().clone(),
-            created: now,
-            type_: "session.created.2".into(),
-            data: ObjectEncoder::new()
-                .field("sessionID", &id)
-                .field("projectID", &project)
-                .field("location", &location)
-                .optional("parentID", &parent.as_ref().map(|parent| parent.id.clone()))
-                .optional("agent", &agent)
-                .optional("model", &model)
-                .field("title", format!("New session - {}", iso(now)).as_str())
-                .optional("subpath", &subpath)
-                .field("created", &(now as f64))
-                .finish(),
-        })
-        .await
-        .map_err(store)?;
+    let event = NewEvent {
+        id: ids::event_id()
+            .map_err(|_| Failure::Unavailable("event ID generation failed".into()))?
+            .as_lossless()
+            .clone(),
+        aggregate_id: id.as_lossless().clone(),
+        created: now,
+        type_: "session.created.2".into(),
+        data: ObjectEncoder::new()
+            .field("sessionID", &id)
+            .field("projectID", &project)
+            .field("location", &location)
+            .optional("parentID", &parent.as_ref().map(|parent| parent.id.clone()))
+            .optional("agent", &agent)
+            .optional("model", &model)
+            .field("title", format!("New session - {}", iso(now)).as_str())
+            .optional("subpath", &subpath)
+            .field("created", &(now as f64))
+            .finish(),
+    };
+    let created = if model.as_ref().is_some_and(|model| model.profile.is_some()) {
+        let services = core.locations.location(
+            location.directory.as_lossless(),
+            location.workspace_id.as_ref().map(|id| id.as_lossless()),
+        )?;
+        let (_, services) = core.session_services(&services)?;
+        let inherited_binding = parent
+            .as_ref()
+            .filter(|_| payload.model.is_none())
+            .map(|parent| core.sessions.profile_binding(&parent.id))
+            .transpose()
+            .map_err(store)?
+            .flatten();
+        services
+            .runner
+            .create(event, inherited_binding.as_ref())
+            .await
+            .map_err(create_failure)?
+    } else {
+        core.sessions.create(event).await.map_err(store)?
+    };
     result(&created)
+}
+
+fn create_failure(error: ycoding_core::session::run_coordinator::Error) -> Failure {
+    let field = match error {
+        ycoding_core::session::run_coordinator::Error::Runner(error) => match error.r#type.as_str()
+        {
+            Some("model.profile") => {
+                return Failure::InvalidField {
+                    field: "model.profile",
+                    message: "Selected model profile is unavailable. Reconnect or select the profile again.".into(),
+                };
+            }
+            Some("model.variant") => "model.variant",
+            _ => "model",
+        },
+        error => return store(error),
+    };
+    Failure::InvalidField {
+        field,
+        message: "Selected model credentials or configuration are unavailable. Reconnect the provider or select an available model.".into(),
+    }
 }
 
 fn result(info: &session::Info) -> Result<v5::SessionCreateResult, Failure> {

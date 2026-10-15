@@ -145,18 +145,6 @@ async fn sessions_are_created_in_a_recorded_location_with_agent_model_and_a_stab
         )
         .await;
         assert_eq!(units(decision.field.as_ref().unwrap()), "agent");
-        let profiled: v5::InvalidRequestError = refuse(
-            &mut client,
-            "session.create",
-            scope.clone(),
-            request(Create {
-                model: Some(model(Some("work"))),
-                directory: Some("/project/sub/dir"),
-                ..Create::default()
-            }),
-        )
-        .await;
-        assert_eq!(units(profiled.kind.as_ref().unwrap()), "unavailable");
         let unrecorded: v5::SessionCreateResult = ask(
             &mut client,
             "session.create",
