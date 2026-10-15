@@ -85,7 +85,6 @@ export type RelayDeps = {
 type Peer = {
   identity: RelayConnection
   connection: Connection
-  checkedAt: number
   seenAt: number
   notices: boolean
   requests: Map<string, Admission>
@@ -383,13 +382,12 @@ export function createRelay(deps: RelayDeps) {
     }
     notifyBulk()
   }
-  async function authorize(peer: Peer, fresh = true) {
+  async function authorize(peer: Peer) {
     if (!alive(peer)) return false
     if (deps.now() >= peer.identity.credentialExpiresAt) {
       drop(peer, 4401, "DIRECTION")
       return false
     }
-    if (!fresh && deps.monotonic() - peer.checkedAt < 5_000) return true
     const authority =
       peer.identity.role === "agent"
         ? await deps.authorizeAgentCommand(peer.identity.deviceID)
@@ -407,7 +405,6 @@ export function createRelay(deps: RelayDeps) {
       )
       return false
     }
-    peer.checkedAt = deps.monotonic()
     return true
   }
   function queued(peer: Peer, body: Frame["body"]) {
@@ -790,7 +787,7 @@ export function createRelay(deps: RelayDeps) {
           [...peers.values()]
             .filter((client) => client.identity.role === "client" && client.connection.state === "established")
             .map(async (client) => {
-              if (await authorize(client, false)) forward(peer, frame, client, frame.body)
+              if (await authorize(client)) forward(peer, frame, client, frame.body)
             }),
         )
         flushAll()
@@ -882,7 +879,7 @@ export function createRelay(deps: RelayDeps) {
           [...peers.values()]
             .filter((client) => client.identity.role === "client" && client.connection.state === "established")
             .map(async (client) => {
-              if (await authorize(client, false)) forward(peer, frame, client, frame.body)
+              if (await authorize(client)) forward(peer, frame, client, frame.body)
             }),
         )
     } catch {
@@ -1124,7 +1121,7 @@ export function createRelay(deps: RelayDeps) {
     heldInputs.add(key)
     for (const client of peers.values()) {
       const accepted = client.subscriptions.get(entry.subscriptionID)
-      if (!accepted || accepted.epoch !== entry.batch.sourceEpoch || !(await authorize(client, false))) continue
+      if (!accepted || accepted.epoch !== entry.batch.sourceEpoch || !(await authorize(client))) continue
       if (!budget.reserve(RelayLimits.forwardingMetadataBytes)) {
         drop(client, 1009, "LIMIT")
         continue
@@ -1162,8 +1159,8 @@ export function createRelay(deps: RelayDeps) {
       !established &&
       peer.identity.role === "client" &&
       peer.connection.state === "established" &&
-      (await authorize(peer, false)) &&
-      statusBytes
+      statusBytes &&
+      (await authorize(peer))
     ) {
       queued(peer, { case: "control", value: decodeStrict(ControlSchema, statusBytes) })
     }
@@ -1284,7 +1281,7 @@ export function createRelay(deps: RelayDeps) {
                   client.identity.role !== "client" ||
                   client.connection.state !== "established" ||
                   !subscriptions.some((id) => client.subscriptions.has(id)) ||
-                  !(await authorize(client, false))
+                  !(await authorize(client))
                 )
                   continue
                 queued(client, received.frame!.body)
@@ -1310,7 +1307,7 @@ export function createRelay(deps: RelayDeps) {
               const key = inputKey(peer, LedgerClass.EVENT, frame.deliveryOrdinal)
               heldInputs.add(key)
               for (const client of peers.values()) {
-                if (!client.subscriptions.has(entry.subscriptionID) || !(await authorize(client, false))) continue
+                if (!client.subscriptions.has(entry.subscriptionID) || !(await authorize(client))) continue
                 forward(peer, frame, client, frame.body)
                 client.subscriptions.delete(entry.subscriptionID)
                 budget.release(RelayLimits.forwardingMetadataBytes)
@@ -1495,7 +1492,6 @@ export function createRelay(deps: RelayDeps) {
           deps.monotonic(),
           budget,
         ),
-        checkedAt: -Infinity,
         seenAt: deps.monotonic(),
         notices: false,
         requests: new Map(),
