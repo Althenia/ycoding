@@ -35,7 +35,7 @@ const catastrophic: ReadonlyArray<{ readonly id: string; readonly pattern: RegEx
   },
 ]
 
-const reviews: ReadonlyArray<{ readonly id: string; readonly pattern: RegExp; readonly reason: string }> = [
+const segmentReviews: ReadonlyArray<{ readonly id: string; readonly pattern: RegExp; readonly reason: string }> = [
   {
     id: "standard.review.git-destructive",
     pattern: /(?:^|\s)git\s+(?:reset\s+--hard|clean\s+-[^\s]*f|checkout\s+--\s+\.|restore\s+[^\n]*--worktree|branch\s+-[^\s]*D)/,
@@ -46,12 +46,13 @@ const reviews: ReadonlyArray<{ readonly id: string; readonly pattern: RegExp; re
     pattern: /(?:^|\s)git\s+push\s+[^\n]*(?:--force(?:-with-lease)?|-f)(?:\s|$)/i,
     reason: "Force push",
   },
-  {
-    id: "standard.review.database-destructive",
-    pattern: /\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)/i,
-    reason: "Destructive database operation",
-  },
 ]
+
+const databaseReview = {
+  id: "standard.review.database-destructive",
+  pattern: /\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)/i,
+  reason: "Destructive database operation",
+}
 
 export function match(action: string, resource: string, paths?: Paths): Match | undefined {
   const outside = paths && outsidePaths(action, resource, paths).length > 0
@@ -64,7 +65,10 @@ export function match(action: string, resource: string, paths?: Paths): Match | 
   if (denied) return { ...denied, decision: "deny", hardReview: false }
   if (deletion?.decision === "deny") return deletion
   if (deletion) return deletion
-  const review = reviews.find((rule) => rule.pattern.test(command))
+  const segments = shellSegments(resource).map((segment) => segment.rawTokens.join(" "))
+  const review =
+    segmentReviews.find((rule) => segments.some((segment) => rule.pattern.test(segment))) ??
+    (databaseReview.pattern.test(command) ? databaseReview : undefined)
   return review ? { ...review, decision: "ask", hardReview: true } : outside
 }
 

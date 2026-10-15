@@ -463,6 +463,25 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each([
+    "git push -u origin fix/branch 2>&1 | tail -3; rm -f \"$TMPDIR/body.md\"",
+    "git push origin main && grep -f patterns.txt log",
+    "git push origin main\nrm -f notes.txt",
+    "git restore src/a.ts; echo --worktree",
+    "cat > \"$TMPDIR/body.md\" <<'EOF'\n## Summary\nUse git push for the branch, then rm -f the draft.\nEOF\ngit push -u origin fix/branch && glab mr create --yes; rm -f \"$TMPDIR/body.md\"",
+  ])("does not attribute a later command's flags to git: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+  })
+
+  test.each([
+    ["rm -f notes.txt; git push --force-with-lease origin main", "force-push"],
+    ["cd repo && git push -f origin main", "force-push"],
+    ["bash <<'EOF'\ngit push origin main --force\nEOF", "force-push"],
+    ["echo start | git branch -D feature", "git-destructive"],
+  ])("still reviews a Git operation inside a compound command: %s", (command, id) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toMatchObject({ id: `standard.review.${id}`, hardReview: true })
+  })
+
+  test.each([
     ["shell", "npm publish"], ["shell", "terraform apply"], ["shell", "kubectl apply production"],
     ["shell", "chmod 777 file"], ["shell", "ufw disable"], ["mcp_execute", "server command"],
   ])("does not review non-destructive in-repo work: %s %s", (action, resource) => {
