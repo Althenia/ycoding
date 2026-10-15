@@ -1,7 +1,7 @@
 import { mock } from "bun:test"
 import { createComponent } from "solid-js"
 import type { useData } from "../../src/context/data"
-import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
+import { ScrollBoxRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { FrontendPaths } from "../../src/frontend-paths"
@@ -131,7 +131,10 @@ export async function renderScreen(input: {
   )
 
   const settled = () =>
-    typeof input.settle === "string" ? setup.captureCharFrame().includes(input.settle) : input.settle(setup)
+    typeof input.settle === "string"
+      ? setup.captureCharFrame().includes(input.settle) &&
+        (!input.settle.startsWith("Message ") || setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
+      : input.settle(setup)
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     await Bun.sleep(50)

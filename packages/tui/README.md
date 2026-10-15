@@ -12,6 +12,8 @@ Specialized PTY connections and authorized editor connections retain their separ
 
 ## Frontend ownership
 
+Session loading reserves the composer area without an editable placeholder until Session and Location information is available. The mounted editor accepts and retains drafts during history synchronization and reconnect, with submission blocked until synchronized and connected.
+
 The TUI production graph contains no Core or Server module. Schema, Protocol, Client, the pure TUI Plugin API, and the Core-free Simulation TUI entry own its workspace imports. `bun packages/tui/script/check-boundary.ts` resolves every production entry's static and literal dynamic workspace import transitively and rejects Core or Server reachability.
 
 Frontend version and channel come from the executable's build constants. Status reports the backend version separately from `health.get`. Frontend preference, theme, and UI-history paths use the frontend's XDG roots without initializing backend directories. Backend path labels, project-copy worktree destinations, and Skill scopes use backend projections. The installed Chrome extension directory is derived from the same executable used to launch the frontend.

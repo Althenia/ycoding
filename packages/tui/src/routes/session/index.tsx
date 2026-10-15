@@ -1844,9 +1844,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             fallback={
               <>
                 <box flexGrow={1} minHeight={0} />
-                <box paddingLeft={3} paddingBottom={2} flexShrink={0}>
-                  <text fg={theme.text.subdued}>Message YCoding…</text>
-                </box>
+                <box height={3} flexShrink={0} />
               </>
             }
           >

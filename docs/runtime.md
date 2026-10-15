@@ -52,6 +52,8 @@ The opt-in Rust Meeting service separates capture, local transcript storage and 
 
 ## Sessions
 
+The terminal reserves its composer area while Session and Location information loads, without presenting a message placeholder before an editor exists. Once mounted, the editor retains drafts through history synchronization and reconnect; submission requires a synchronized, connected Session.
+
 ### Automatic titles
 
 The first promoted user prompt of a root Session automatically applies

@@ -26,11 +26,11 @@ test("keeps Session chrome and composer mounted before sync and across disconnec
     await wait(() => fixture.requests.includes(`GET /api/session/${fixture.sessionID}/snapshot`))
     await screen.renderOnce()
     expect(screen.frame()).toContain("commands")
-    expect(screen.frame()).toContain("Message YCoding")
     expect(screen.frame()).toContain("Loading session")
     expect(screen.frame()).not.toContain("Waiting for server")
     expect(screen.frame()).not.toContain("Synthetic response")
-    await wait(() => screen.renderer.currentFocusedEditor !== null)
+    await wait(() => screen.renderer.currentFocusedEditor !== null && screen.frame().includes("Message YCoding"))
+    expect(screen.frame()).toContain("Message YCoding")
     const editor = screen.renderer.currentFocusedEditor
     await screen.input.typeText("retained draft")
     screen.input.pressKey("RETURN")
