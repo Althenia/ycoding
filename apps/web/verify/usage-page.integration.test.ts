@@ -47,19 +47,21 @@ test("summary sparklines never overlap the exact spend and token totals", async 
 }, 30_000)
 
 test("provider distribution keeps exact large values readable in one accessible legend", async () => {
-  for (const width of [320, 390, 1440]) {
+  for (const width of [320, 390, 820, 1440]) {
     for (const theme of ["light", "dark"]) {
       const page = await browser!.openPage()
       try {
         await page.setViewport(width, 900)
         await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?distribution-long-values`)
         await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
+        await page.evaluate(`document.fonts.ready`)
         await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
         for (const metric of ["Spend", "Tokens"]) {
           await page.evaluate(
             `[...document.querySelectorAll('[aria-label="Distribution metric"] button')].find(button => button.textContent === ${JSON.stringify(metric)}).click()`,
           )
-          const expected = metric === "Spend" ? "$20,000,000.00" : "4,000,000,000"
+          const expected = metric === "Spend" ? "$20.0m" : "4.0b"
+          const exact = metric === "Spend" ? "$20,000,000.00" : "4,000,000,000"
           await wait(page, `document.querySelector('.usage-donut__total')?.textContent === ${JSON.stringify(expected)}`)
           await page.evaluate(
             `Promise.all(document.querySelector('.usage-distribution').getAnimations({subtree:true}).map(animation => animation.finished))`,
@@ -67,7 +69,9 @@ test("provider distribution keeps exact large values readable in one accessible 
           const result = await page.evaluate<{
             total: string
             unit: string
-            below: boolean
+            exact: string
+            title: string
+            insideHole: boolean
             contained: boolean
             overflow: boolean
             rows: string[]
@@ -79,7 +83,11 @@ test("provider distribution keeps exact large values readable in one accessible 
             const bounds = card.getBoundingClientRect();
             const nodes = [...card.querySelectorAll('.usage-donut__total, .usage-donut__caption, .usage-distribution__legend li > span, .usage-distribution__legend li > strong')];
             return {total:total.textContent, unit:card.querySelector('.usage-donut__caption').textContent,
-              below:total.getBoundingClientRect().top >= chart.bottom,
+              exact:total.getAttribute('aria-label'), title:total.getAttribute('title'),
+              insideHole:[total, card.querySelector('.usage-donut__caption')].every(node => {
+                const rect=node.getBoundingClientRect();
+                return [[rect.left,rect.top],[rect.right,rect.top],[rect.left,rect.bottom],[rect.right,rect.bottom]].every(([x,y])=>Math.hypot(x-chart.left-chart.width/2,y-chart.top-chart.height/2)<=chart.width*59/200);
+              }),
               contained:nodes.every(node => { const rect=node.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom && node.scrollWidth <= node.clientWidth; }),
               overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth,
               rows:[...card.querySelectorAll('.usage-distribution__legend li')].map(node=>node.textContent),
@@ -87,7 +95,11 @@ test("provider distribution keeps exact large values readable in one accessible 
           })()`)
           expect(result.total).toBe(expected)
           expect(result.unit).toBe(metric === "Spend" ? "estimated USD" : "tokens")
-          expect(result.below).toBe(true)
+          expect(result.exact).toBe(
+            `${metric === "Spend" ? "Exact estimated USD total" : "Exact token total"}: ${exact}`,
+          )
+          expect(result.title).toBe(result.exact)
+          expect(result.insideHole).toBe(true)
           expect(result.contained).toBe(true)
           expect(result.overflow).toBe(false)
           expect(result.rows.length).toBe(metric === "Spend" ? 2 : 3)
@@ -111,6 +123,50 @@ test("provider distribution keeps exact large values readable in one accessible 
     }
   }
 }, 180000)
+
+test("donut total remeasures chart and font geometry without abbreviating values that fit", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?distribution-long-values`)
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$20.0m'`)
+    await page.evaluate(`document.fonts.ready`)
+    await page.evaluate(
+      `window.donutSize=document.createElement('style');window.donutSize.textContent='.usage-distribution__chart { inline-size: 500px; } .usage-donut { width: 500px; }';document.head.append(window.donutSize)`,
+    )
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$20,000,000.00'`)
+    await page.evaluate(`window.donutSize.remove()`)
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$20.0m'`)
+    await page.evaluate(
+      `window.donutFont=document.createElement('style');window.donutFont.textContent='.usage-donut__total,.usage-donut__probe { font-size: 10px; }';document.head.append(window.donutFont)`,
+    )
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$20,000,000.00'`)
+    await page.evaluate(`window.donutFont.remove()`)
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$20.0m'`)
+    await page.evaluate(`document.querySelector('.usage-donut__total').focus()`)
+    expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label') ?? ''`)).toBe(
+      "Exact estimated USD total: $20,000,000.00",
+    )
+  } finally {
+    await page.close()
+  }
+}, 30_000)
+
+test("donut exact total follows refreshed values", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?refresh-cycle`)
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$15.00'`)
+    await page.evaluate(`window.usageReconnect()`)
+    await wait(page, `window.usageRequests().filter(item => item.operation === 'providerUsage.list').length === 2`)
+    await page.evaluate(`window.usageReleaseReload()`)
+    await wait(page, `document.querySelector('.usage-donut__total')?.textContent === '$18.00'`)
+    expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total').getAttribute('title')`)).toBe(
+      "Exact estimated USD total: $18.00",
+    )
+  } finally {
+    await page.close()
+  }
+}, 30_000)
 
 test("provider allowances, spend, chart and breakdown reflow without overflow across themes", async () => {
   for (const [width, height] of [

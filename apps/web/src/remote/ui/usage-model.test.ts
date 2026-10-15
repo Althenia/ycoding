@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import {
+  compactUsageTotal,
   dailySpend,
   donutGeometry,
   modelIdentity,
+  money,
   providerDistribution,
   providerHeading,
   quotaWindow,
@@ -17,6 +19,20 @@ import {
 } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
+test("donut compact formatting preserves exact small values and carries rounding through k, m and b", () => {
+  expect(compactUsageTotal(999.99, "spend")).toBe(money(999.99))
+  expect(compactUsageTotal(999.99, "tokens")).toBe("999.99")
+  expect(compactUsageTotal(1_000, "spend")).toBe("$1.0k")
+  expect(compactUsageTotal(1_000, "tokens")).toBe("1.0k")
+  expect(compactUsageTotal(999_950, "tokens")).toBe("1.0m")
+  expect(compactUsageTotal(1_000_000, "spend")).toBe("$1.0m")
+  expect(compactUsageTotal(123_456_789, "tokens")).toBe("123.5m")
+  expect(compactUsageTotal(1_000_000_000, "tokens")).toBe("1.0b")
+  expect(compactUsageTotal(1_234_567_890, "spend")).toBe("$1.2b")
+  expect(compactUsageTotal(0.0001, "spend")).toBe(money(0.0001))
+  expect(compactUsageTotal(-1_234, "spend")).toBe("$-1.2k")
+  expect(compactUsageTotal(-1_234, "tokens")).toBe("-1.2k")
+})
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
   key: label,
   label,
@@ -201,7 +217,7 @@ test("pace pills warn only when a window is consumed faster than its period elap
 })
 
 test("usage surface uses rounded tokens and disables entrance motion when reduced motion is preferred", async () => {
-  const css = await Bun.file(new URL("./usage.css", import.meta.url)).text()
+  const css = (await Bun.file(new URL("./usage.css", import.meta.url)).text()).replace(/\s+/g, " ")
   expect(css).toContain("border-radius: calc(var(--yc-radius-xl) - var(--yc-space-1))")
   expect(css).toContain("border-radius: calc(var(--yc-radius-xl) - var(--yc-space-2))")
   expect(css).toContain("border-radius: var(--yc-radius-pill)")

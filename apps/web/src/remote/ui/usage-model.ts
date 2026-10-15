@@ -37,6 +37,21 @@ export const money = (value: number) =>
 export const tokenCount = (value: UsageTokens) =>
   value.input + value.output + value.reasoning + value.cache.read + value.cache.write
 
+export function compactUsageTotal(value: number, metric: "spend" | "tokens") {
+  if (Math.abs(value) < 1_000) return metric === "spend" ? money(value) : new Intl.NumberFormat().format(value)
+  const suffixes = ["k", "m", "b"]
+  let magnitude = Math.min(Math.floor(Math.log10(Math.abs(value)) / 3), suffixes.length)
+  let scaled = value / 1_000 ** magnitude
+  if (Math.abs(Math.round(scaled * 10) / 10) >= 1_000 && magnitude < suffixes.length) {
+    magnitude += 1
+    scaled = value / 1_000 ** magnitude
+  }
+  const formatted = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(
+    scaled,
+  )
+  return metric === "spend" ? `$${formatted}${suffixes[magnitude - 1]}` : `${formatted}${suffixes[magnitude - 1]}`
+}
+
 export function tooltipPosition(
   card: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
   viewport: { readonly width: number; readonly height: number },
