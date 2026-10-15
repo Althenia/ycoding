@@ -4379,3 +4379,124 @@ fn coalescing_subscription_identity_change_flushes_prior_session_interest() {
         matches!(send(server.poll(755)).body, Some(v5::frame::Body::EventBatch(batch)) if batch.subscription_id == "new-sub")
     );
 }
+
+#[test]
+fn every_handed_ledger_class_stays_charged_until_terminal_disposal_without_refunding_other_owners()
+{
+    for class in 0..4 {
+        for disposal in [
+            "deadline",
+            "disconnect",
+            "restart",
+            "revoke",
+            "epoch",
+            "drop",
+        ] {
+            let (mut owner, peer, now) = match class {
+                0 => {
+                    let (mut client, server) = pair();
+                    stop(&mut client, 4);
+                    send(client.poll(4));
+                    (client, server, 4)
+                }
+                1 => {
+                    let (client, mut server) = subscribed_pair(Budgets::default());
+                    server
+                        .queue_events(batch("held"), v5::PriorityMode::Interactive, 4)
+                        .unwrap();
+                    send(server.poll(44));
+                    (server, client, 44)
+                }
+                2 => {
+                    let (mut client, mut server) = pair();
+                    let request = stop(&mut client, 4);
+                    let frame = send(client.poll(4));
+                    server.receive(frame.clone(), frame.encoded_len() as u64, 4);
+                    let data = v5::BrowserStopResult { data: v5::Empty {} }.encode_to_vec();
+                    server
+                        .queue_frame(
+                            v5::frame::Body::BulkStart(v5::BulkStart {
+                                request_id: request,
+                                transfer_id: "held".into(),
+                                operation_id: 3009,
+                                type_name: "ycoding.v5.browser_stop_Result".into(),
+                                content_kind: v5::ContentKind::TypedMessage as i32,
+                                byte_count: data.len() as u64,
+                                chunk_count: 1,
+                            }),
+                            5,
+                        )
+                        .unwrap();
+                    send(server.poll(5));
+                    server
+                        .queue_frame(
+                            v5::frame::Body::BulkPiece(v5::BulkPiece {
+                                transfer_id: "held".into(),
+                                index: 0,
+                                offset: 0,
+                                data,
+                            }),
+                            5,
+                        )
+                        .unwrap();
+                    send(server.poll(5));
+                    (server, client, 5)
+                }
+                _ => {
+                    let (mut client, server) = pair();
+                    send(client.poll(20003));
+                    (client, server, 20003)
+                }
+            };
+            let handed = owner.stats().handed_bytes[class];
+            assert!(handed > 0, "class {class}, {disposal}");
+            owner.machine.advance(now + 1);
+            assert_eq!(owner.stats().handed_bytes[class], handed);
+            let budget = owner.reservation();
+            assert!(budget.borrow_mut().reserve(37));
+            if disposal == "drop" {
+                drop(owner);
+                assert_eq!(budget.borrow().used(), 37, "class {class}, drop");
+                budget.borrow_mut().release(37).unwrap();
+                drop(peer);
+                continue;
+            }
+            let decisions = match disposal {
+                "deadline" => owner.machine.advance(now + 30000),
+                "disconnect" => owner.disconnect(false),
+                "restart" => owner.disconnect(true),
+                "revoke" => owner.revoke(4403).unwrap(),
+                _ => {
+                    let mut frame = established_frame(
+                        v5::frame::Body::Control(v5::Control {
+                            kind: Some(v5::control::Kind::Ping(v5::Ping { id: 99 })),
+                        }),
+                        v5::LedgerClass::Tiny,
+                        99,
+                    );
+                    frame.connection_epoch = Some("stale".into());
+                    owner.receive(frame.clone(), frame.encoded_len() as u64, now + 2)
+                }
+            };
+            assert!(
+                decisions
+                    .iter()
+                    .any(|decision| matches!(decision, Decision::Closed(_))),
+                "class {class}, {disposal}"
+            );
+            let stats = owner.stats();
+            assert_eq!(stats.handed_bytes, [0; 4]);
+            assert_eq!(stats.queued_bytes, [0; 4]);
+            assert_eq!(stats.received_bytes, [0; 4]);
+            assert_eq!(stats.retained_bytes, 0);
+            assert_eq!(stats.prepared_bytes, 0);
+            assert_eq!(stats.reassembly_reserved_bytes, 0);
+            assert_eq!(budget.borrow().used(), 37, "class {class}, {disposal}");
+            drop(owner);
+            assert_eq!(budget.borrow().used(), 37);
+            budget.borrow_mut().release(37).unwrap();
+            assert_eq!(budget.borrow().used(), 0);
+            drop(peer);
+        }
+    }
+}

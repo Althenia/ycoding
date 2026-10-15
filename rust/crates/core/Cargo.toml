@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bench]]
+name = "history_concurrency"
+harness = false
+
 [dependencies]
 jsonschema.workspace = true
 flate2.workspace = true

@@ -12,6 +12,12 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 pub struct Directory(pub PathBuf);
 
+impl Default for Directory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Directory {
     pub fn new() -> Self {
         let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
