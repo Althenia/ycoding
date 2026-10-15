@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { YCoding, type EventSubscribeOutput, type SessionMessageAssistantTool } from "@ycoding-ai/client/promise"
+import {
+  YCoding,
+  type EventSubscribeOutput,
+  type SessionMessageAssistantTool,
+  type YCodingClient,
+} from "@ycoding-ai/client/promise"
 import { runNonInteractivePrompt } from "../../src/run/noninteractive"
 
 type ServerEvent = EventSubscribeOutput
@@ -115,6 +120,33 @@ function stepStarted(): ServerEvent {
   }
 }
 
+const zeroTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+const zeroMetrics = { logical: 0, physical: 0, helpers: 0, tokens: zeroTokens }
+
+function stepEnded(seq: number, extra: Record<string, unknown> = {}): ServerEvent {
+  return {
+    id: `evt_step_ended_${seq}`,
+    created: seq,
+    type: "session.step.ended",
+    durable: { aggregateID: "ses_1", seq, version: 1 },
+    data: {
+      sessionID: "ses_1",
+      assistantMessageID: "msg_assistant",
+      finish: "stop",
+      cost: 0,
+      tokens: zeroTokens,
+      ...extra,
+    },
+  } as ServerEvent
+}
+
+function childDrain(sessionID: string, types: string[]): ServerEvent[] {
+  return ["session.execution.started", ...types, "session.execution.succeeded"].map(
+    (type, index) =>
+      ({ id: `evt_${sessionID}_${index}`, created: index, type, data: { sessionID } }) as unknown as ServerEvent,
+  )
+}
+
 function stepFailed(message: string): ServerEvent {
   return {
     id: "evt_step_failed",
@@ -216,6 +248,12 @@ async function run(input: {
   cancel?: (input: { sessionID: string; formID: string }) => Promise<void>
   renderTool?: (part: SessionMessageAssistantTool) => Promise<void>
   renderToolError?: (part: SessionMessageAssistantTool) => Promise<void>
+  report?: Awaited<ReturnType<YCodingClient["session"]["usageReport"]>>
+  usageFailure?: Error
+  tasks?: Record<string, Array<{ sessionID: string; agent: string; state: string }>>
+  agents?: Record<string, string>
+  promptFailure?: Error
+  selectionFailure?: Error
 }) {
   const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
   const values: ServerEvent[] = [{ id: "evt_connected", type: "server.connected", data: {}, sourceEpoch: "1" }]
@@ -242,7 +280,9 @@ async function run(input: {
   spyOn(sdk.guardrail.request, "list").mockImplementation(() => ok(input.pendingGuardrails ?? []) as never)
   spyOn(sdk.guardrail.request, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
-  spyOn(sdk.session, "switchModel").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.session, "switchModel").mockImplementation(
+    () => (input.selectionFailure ? Promise.reject(input.selectionFailure) : ok(undefined)) as never,
+  )
   spyOn(sdk.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
@@ -254,12 +294,25 @@ async function run(input: {
       }) as never,
   )
   spyOn(sdk.form, "cancel").mockImplementation((request) => (input.cancel?.(request) ?? ok(undefined)) as never)
+  spyOn(sdk.session, "usageReport").mockImplementation((() =>
+    input.usageFailure
+      ? Promise.reject(input.usageFailure)
+      : ok(input.report ?? { group: "session", rows: [], total: { ...zeroMetrics }, rowCount: 0 })) as never)
+  spyOn(sdk.session.subagent, "list").mockImplementation(((request: { parentID: string }) =>
+    ok({
+      data: input.tasks?.[request.parentID] ?? [],
+      summary: { total: 0, active: 0, running: 0, waiting: 0 },
+      cursor: {},
+    })) as never)
+  spyOn(sdk.session, "get").mockImplementation(((request: { sessionID: string }) =>
+    ok({ id: request.sessionID, agent: input.agents?.[request.sessionID] })) as never)
   spyOn(sdk.session, "prompt").mockImplementation((request) => {
     submitted = true
     const messageID = request.id ?? "msg_prompt"
     values.push(...input.turn(messageID))
     wake?.()
     wake = undefined
+    if (input.promptFailure) return Promise.reject(input.promptFailure)
     return ok({ admittedSeq: 1, id: messageID, sessionID: "ses_1", timeCreated: 1 }) as never
   })
   await runNonInteractivePrompt({
@@ -349,6 +402,7 @@ describe("runNonInteractivePrompt", () => {
         type: "error",
         error: { type: "skill.unavailable", message: "Skill unavailable: explicit-audit" },
       }),
+      expect.objectContaining({ type: "run_finish", status: "failed", steps: 0 }),
     ])
     expect(output.stderr).toBe("")
   })
@@ -493,6 +547,7 @@ describe("runNonInteractivePrompt", () => {
         type: "error",
         error: { type: "provider.transport", message: "Provider request failed" },
       }),
+      expect.objectContaining({ type: "run_finish", status: "failed", steps: 1 }),
     ])
     expect(output.stderr).toBe("")
   })
@@ -533,6 +588,7 @@ describe("runNonInteractivePrompt", () => {
           message: "Provider stream ended without a terminal finish event",
         },
       }),
+      expect.objectContaining({ type: "run_finish", status: "failed" }),
     ])
     expect(output.stderr).toBe("")
   })
@@ -582,7 +638,8 @@ describe("runNonInteractivePrompt", () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line))
 
-    expect(events).toHaveLength(1)
+    expect(events.map((event) => event.type)).toEqual(["tool_use", "run_finish"])
+    expect(events[1]).toMatchObject({ status: "succeeded" })
     expect(events[0]).toMatchObject({
       type: "tool_use",
       part: {
@@ -600,5 +657,279 @@ describe("runNonInteractivePrompt", () => {
     expect(events[0].part.state.metadata.structured).toBeUndefined()
     expect(events[0].part.state.metadata.content).toBeUndefined()
     expect(output.stderr).toBe("")
+  })
+
+  describe("JSON run metrics", () => {
+    const lines = (stdout: string) =>
+      stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    const sessionRow = (key: string, tokens: typeof zeroTokens, extra: Record<string, unknown> = {}) => ({
+      key,
+      label: key,
+      logical: 2,
+      physical: 3,
+      helpers: 0,
+      tokens,
+      ...extra,
+    })
+
+    test("reports step identity, context, cache, and exactly one run summary", async () => {
+      const providerCache = { mechanism: "provider-reported", readReported: true, writeReported: false }
+      const contextBreakdown = { system: 10, tools: 5, user: 3, assistant: 2, reasoning: 0, toolCalls: 1, other: 0 }
+      const total = {
+        logical: 3,
+        physical: 4,
+        helpers: 1,
+        tokens: { input: 300, output: 40, reasoning: 5, cache: { read: 200, write: 10 } },
+        cost: 0.9,
+        costProvenance: "recorded",
+      }
+      const output = await capture({
+        format: "json",
+        report: { group: "session", rows: [], rowCount: 0, total } as never,
+        turn: (id) => [
+          prompted(id),
+          stepStarted(),
+          stepEnded(2, {
+            cost: 0.5,
+            tokens: { input: 100, output: 10, reasoning: 2, cache: { read: 50, write: 5 } },
+            contextLimit: 1000,
+            contextBreakdown,
+            providerCache,
+          }),
+          stepStarted(),
+          stepEnded(3, {
+            cost: 0.25,
+            tokens: { input: 20, output: 5, reasoning: 0, cache: { read: 300, write: 0 } },
+          }),
+          settled(),
+        ],
+      })
+      const events = lines(output.stdout)
+      expect(events.map((event) => event.type)).toEqual([
+        "step_start",
+        "step_finish",
+        "step_start",
+        "step_finish",
+        "run_finish",
+      ])
+      expect(events[0].part).toMatchObject({ agent: "build", model: { providerID: "test", id: "test-model" } })
+      expect(events[1].part).toMatchObject({ contextLimit: 1000, contextBreakdown, providerCache })
+      for (const key of ["contextLimit", "contextBreakdown", "providerCache"])
+        expect(events[3].part).not.toHaveProperty(key)
+      expect(events[4]).toEqual({
+        type: "run_finish",
+        timestamp: expect.any(Number),
+        sessionID: "ses_1",
+        status: "succeeded",
+        durationMs: expect.any(Number),
+        steps: 2,
+        turns: 1,
+        tokens: { input: 120, output: 15, reasoning: 2, cache: { read: 350, write: 5 } },
+        cost: 0.75,
+        context: { limit: 1000, peakInput: 320 },
+        models: [{ providerID: "test", id: "test-model" }],
+        total: {
+          tokens: total.tokens,
+          cost: 0.9,
+          costProvenance: "recorded",
+          requests: { logical: 3, physical: 4, helpers: 1 },
+          steps: 2,
+          turns: 1,
+        },
+        children: [],
+      })
+      expect(events[4].durationMs).toBeGreaterThanOrEqual(0)
+      expect(output.sdk.session.usageReport).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionID: "ses_1", group: "session", from: 1 }),
+      )
+      expect(output.exitCode).toBe(0)
+    })
+
+    test("lists subagents without usage and hidden helper Sessions beside the family total", async () => {
+      const tokens = { input: 10, output: 2, reasoning: 0, cache: { read: 4, write: 1 } }
+      const output = await capture({
+        format: "json",
+        report: {
+          group: "session",
+          rowCount: 3,
+          total: { logical: 6, physical: 7, helpers: 2, tokens, cost: 0.3, costProvenance: "current_catalog" },
+          rows: [
+            sessionRow("ses_1", tokens),
+            sessionRow("ses_sub", tokens, { cost: 0.1, costProvenance: "recorded" }),
+            sessionRow("ses_compaction_1", tokens, { helpers: 2 }),
+          ],
+        } as never,
+        tasks: {
+          ses_1: [
+            { sessionID: "ses_sub", agent: "reviewer", state: "running" },
+            { sessionID: "ses_idle", agent: "reviewer", state: "starting" },
+          ],
+          ses_sub: [{ sessionID: "ses_nested", agent: "reviewer", state: "completed" }],
+        },
+        agents: { ses_compaction_1: "compaction" },
+        turn: (id) => [
+          prompted(id),
+          stepEnded(2),
+          ...childDrain("ses_sub", [
+            "session.input.promoted",
+            "session.step.ended",
+            "session.input.promoted",
+            "session.step.failed",
+          ]),
+          ...childDrain("ses_sub", ["session.input.promoted", "session.step.ended"]),
+          ...childDrain("ses_nested", ["session.input.promoted", "session.step.ended"]),
+          ...childDrain("ses_compaction_1", ["session.step.ended"]),
+          ...childDrain("ses_unrelated", ["session.input.promoted", "session.step.ended"]),
+          settled(),
+        ],
+      })
+      const summary = lines(output.stdout).at(-1)
+      expect(summary.turns).toBe(1)
+      expect(summary.total).toMatchObject({ cost: 0.3, costProvenance: "current_catalog", steps: 5, turns: 4 })
+      expect(summary.children).toEqual([
+        {
+          sessionID: "ses_sub",
+          kind: "subagent",
+          agent: "reviewer",
+          status: "running",
+          tokens,
+          cost: 0.1,
+          costProvenance: "recorded",
+          requests: { logical: 2, physical: 3, helpers: 0 },
+          steps: 3,
+          turns: 2,
+        },
+        {
+          sessionID: "ses_idle",
+          kind: "subagent",
+          agent: "reviewer",
+          status: "starting",
+          tokens: zeroTokens,
+          requests: { logical: 0, physical: 0, helpers: 0 },
+          steps: 0,
+          turns: 0,
+        },
+        {
+          sessionID: "ses_nested",
+          kind: "subagent",
+          agent: "reviewer",
+          status: "completed",
+          tokens: zeroTokens,
+          requests: { logical: 0, physical: 0, helpers: 0 },
+          steps: 1,
+          turns: 1,
+        },
+        {
+          sessionID: "ses_compaction_1",
+          kind: "helper",
+          agent: "compaction",
+          tokens,
+          requests: { logical: 2, physical: 3, helpers: 2 },
+          steps: 1,
+        },
+      ])
+      expect(summary.children[1]).not.toHaveProperty("cost")
+      expect(summary.children[3]).not.toHaveProperty("cost")
+    })
+
+    test("reports an interrupted run and a blocker-stopped run without a second summary", async () => {
+      const interrupted = await capture({
+        format: "json",
+        turn: (id) => [prompted(id), stepStarted(), stepEnded(2), settled("interrupted")],
+      })
+      expect(lines(interrupted.stdout).map((event) => event.type)).toEqual(["step_start", "step_finish", "run_finish"])
+      expect(lines(interrupted.stdout).at(-1)).toMatchObject({ status: "interrupted", steps: 1 })
+      const blocked = await capture({
+        format: "json",
+        turn: (id) => [permissionAsked(), prompted(id), settled("interrupted")],
+      })
+      expect(lines(blocked.stdout).filter((event) => event.type === "run_finish")).toEqual([
+        expect.objectContaining({ status: "failed" }),
+      ])
+      expect(blocked.exitCode).toBe(1)
+    })
+
+    test("counts a failed step with usage and keeps the summary when the usage read fails", async () => {
+      const output = await capture({
+        format: "json",
+        usageFailure: new Error("usage unavailable"),
+        turn: (id) => [
+          prompted(id),
+          stepStarted(),
+          {
+            ...stepFailed("Provider request failed"),
+            data: {
+              sessionID: "ses_1",
+              assistantMessageID: "msg_assistant",
+              error: { type: "provider.transport", message: "Provider request failed" },
+              cost: 0.5,
+              tokens: { input: 7, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+          } as ServerEvent,
+          executionFailed("Provider request failed"),
+        ],
+      })
+      const events = lines(output.stdout)
+      expect(events.map((event) => event.type)).toEqual(["step_start", "error", "run_finish"])
+      expect(events[2]).toMatchObject({
+        status: "failed",
+        steps: 1,
+        cost: 0.5,
+        tokens: { input: 7 },
+        usageError: "usage unavailable",
+      })
+      expect(events[2]).not.toHaveProperty("total")
+      expect(events[2]).not.toHaveProperty("children")
+      expect(output.exitCode).toBe(1)
+    })
+
+    test("default output prints no metrics and reads no usage", async () => {
+      const output = await capture({ turn: (id) => [prompted(id), stepStarted(), stepEnded(2), settled()] })
+      expect(output.stdout).toBe("")
+      expect(output.sdk.session.usageReport).not.toHaveBeenCalled()
+      expect(output.sdk.session.subagent.list).not.toHaveBeenCalled()
+      expect(output.sdk.session.get).not.toHaveBeenCalled()
+    })
+
+    test("writes no summary before submission or when prompt admission fails", async () => {
+      const stdout: string[] = []
+      const write = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        stdout.push(String(chunk))
+        return true
+      })
+      try {
+        await expect(
+          run({
+            format: "json",
+            model: { providerID: "p", modelID: "m" },
+            selectionFailure: new Error("selection failed"),
+            turn: () => [],
+          }),
+        ).rejects.toThrow("selection failed")
+        await expect(
+          run({ format: "json", close: true, promptFailure: new Error("admission failed"), turn: () => [] }),
+        ).rejects.toThrow("admission failed")
+        expect(stdout).toEqual([])
+      } finally {
+        write.mockRestore()
+      }
+    })
+
+    test("SIGINT produces one interruption summary and preserves exit 130", async () => {
+      const output = await capture({
+        format: "json",
+        turn: (id) => {
+          process.emit("SIGINT")
+          return [prompted(id), stepStarted(), settled("interrupted")]
+        },
+      })
+      expect(lines(output.stdout).filter((event) => event.type === "run_finish")).toEqual([
+        expect.objectContaining({ status: "interrupted" }),
+      ])
+      expect(output.exitCode).toBe(130)
+    })
   })
 })

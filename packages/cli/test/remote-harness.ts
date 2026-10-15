@@ -18,7 +18,7 @@ export type ProviderFixture = {
    */
   readonly holdAfter?: number
   readonly settleDelayMs?: number
-  readonly reply?: (request: unknown) => readonly ReturnType<typeof deltaChunk>[]
+  readonly reply?: (request: unknown) => readonly object[] | Promise<readonly object[]>
 }
 
 type ProviderStandIn = {
@@ -31,7 +31,7 @@ type ProviderStandIn = {
   readonly releaseAll: () => void
 }
 
-export type IsolatedServerOptions = { readonly provider?: ProviderFixture }
+export type IsolatedServerOptions = { readonly provider?: ProviderFixture; readonly config?: Record<string, unknown> }
 
 export async function startServer(directory: string, options: IsolatedServerOptions = {}) {
   const standIn = options.provider === undefined ? undefined : await startProviderStandIn(options.provider)
@@ -83,9 +83,15 @@ export async function startServer(directory: string, options: IsolatedServerOpti
       YCODING_DISABLE_MODELS_FETCH: "1",
       YCODING_VERSION: "local",
       YCODING_PASSWORD: password,
-      ...(standIn
-        ? { YCODING_CONFIG_CONTENT: providerConfig(standIn), YCODING_MODELS_PATH: path.join(root, "models.json") }
+      ...(standIn || options.config
+        ? {
+            YCODING_CONFIG_CONTENT: JSON.stringify({
+              ...(standIn ? JSON.parse(providerConfig(standIn)) : {}),
+              ...options.config,
+            }),
+          }
         : {}),
+      ...(standIn ? { YCODING_MODELS_PATH: path.join(root, "models.json") } : {}),
     },
     stdin: "pipe",
     stdout: "pipe",
@@ -192,7 +198,7 @@ export async function startProviderStandIn(fixture: ProviderFixture) {
       authorizations.push(request.headers.get("authorization"))
       const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
-      const frames = fixture.reply?.(body) ?? [
+      const frames = (await fixture.reply?.(body)) ?? [
         deltaChunk({ role: "assistant" }),
         deltaChunk({ content: fixture.text }),
         finishChunk("stop"),
