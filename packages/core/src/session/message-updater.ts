@@ -274,6 +274,9 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.profile.bound": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
       "session.guardrail.decided": () => Effect.void,
+      "session.guardrail.escalated": (event) => adapter.appendMessage(SessionMessage.System.make({
+        id: SessionMessage.ID.fromEvent(event.id), type: "system", text: `Decision model escalated this guardrail review · choice ${event.data.choice ?? "unreported"} · confidence ${event.data.confidence?.toString() ?? "unreported"}`, time: { created: event.created },
+      })),
       "session.work.completed": () => Effect.void,
       "session.usage.updated": () => Effect.void,
       "session.diagnostics.updated": () => Effect.void,

@@ -502,6 +502,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <strong>{guardrailAction(props.request())}</strong>
           <span> — {guardrailReason(props.request())}</span>
         </p>
+        <Show when={review()?.escalation}><p class="request__note" role="status">Decision model escalated this review to you. Your decision is required.</p></Show>
         <p class="request__note">Owning Session: <code>{review()?.sessionID}</code></p>
         <Show when={review()?.resources.length}><p class="request__body">Targets / command: <For each={review()?.resources}>{(resource) => <code>{resource}</code>}</For></p></Show>
         <Show when={review()?.metadata}><details class="request__body"><summary>Review details</summary><pre class="output">{JSON.stringify(review()?.metadata, null, 2)}</pre></details></Show>

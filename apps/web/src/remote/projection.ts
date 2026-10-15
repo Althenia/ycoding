@@ -9,6 +9,7 @@
 import type { Form } from "../../../../packages/schema/src/form"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
+import type { Guardrail } from "../../../../packages/schema/src/guardrail"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -296,6 +297,7 @@ export type PendingRequestView =
       readonly resources: readonly string[]
       readonly reason: string
       readonly hardReview: boolean
+      readonly escalation?: Guardrail.Escalation
       readonly metadata?: Readonly<Record<string, unknown>>
       readonly askedAt: number
     }
@@ -999,6 +1001,11 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       }
     case "session.compaction.failed":
       return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
+    case "session.guardrail.escalated": {
+      if (stringField(data.sessionID) !== view.id) return view
+      const escalation = readEscalation(data) ?? {}
+      return replaceMessage(view, { kind: "system", id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"), text: `Decision model escalated this guardrail review · choice ${escalation.choice ?? "unreported"} · confidence ${escalation.confidence?.toString() ?? "unreported"}`, created: event.created ?? now })
+    }
     case "session.synthetic":
       return pushMessage(view, {
         kind: "synthetic",
@@ -1044,6 +1051,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         resources: stringList(data.resources),
         reason: stringField(data.reason) ?? "Guardrail review required",
         hardReview: data.hardReview === true,
+        ...(readEscalation(data.escalation) === undefined ? {} : { escalation: readEscalation(data.escalation) }),
         ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
         askedAt: now,
       })
@@ -1851,6 +1859,13 @@ export function readPermissionRequests(payload: unknown, now: number): readonly 
   })
 }
 
+function readEscalation(value: unknown): Guardrail.Escalation | undefined {
+  if (!isRecord(value)) return
+  if (value.choice !== undefined && value.choice !== "approve" && value.choice !== "reject" && value.choice !== "escalate") return
+  if (value.confidence !== undefined && (typeof value.confidence !== "number" || !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1)) return
+  return { ...(value.choice === undefined ? {} : { choice: value.choice }), ...(value.confidence === undefined ? {} : { confidence: value.confidence }) }
+}
+
 export function readGuardrailRequests(payload: unknown, now: number): readonly PendingRequestView[] {
   return readDataList(payload).flatMap((item) => {
     if (!isRecord(item)) return []
@@ -1867,6 +1882,7 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
         resources: stringList(item.resources),
         reason: stringField(item.reason) ?? "Guardrail review required",
         hardReview: item.hardReview === true,
+        ...(readEscalation(item.escalation) === undefined ? {} : { escalation: readEscalation(item.escalation) }),
         ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
         askedAt: now,
       },

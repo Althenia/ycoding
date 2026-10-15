@@ -2,6 +2,11 @@ import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Guardrail } from "../src/guardrail.js"
 
+test("decision choices add escalation without changing human reply choices", () => {
+  for (const choice of ["approve", "reject", "escalate"] as const) expect(Schema.decodeUnknownSync(Guardrail.DecisionChoice)(choice)).toBe(choice)
+  expect(() => Schema.decodeUnknownSync(Guardrail.Reply)("escalate")).toThrow()
+})
+
 test("Guardrail.Reply accepts reusable approvals", () => {
   expect(Schema.decodeUnknownSync(Guardrail.Reply)("always")).toBe("always")
 })

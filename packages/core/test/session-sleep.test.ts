@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, Deferred, Effect, Exit, Layer, Schema, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import path from "path"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -23,6 +23,8 @@ import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -66,7 +68,7 @@ const keepAwake = Layer.effect(
   }),
 ).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))
 
-const build = (database?: Layer.Layer<never>) =>
+const build = (database?: Layer.Layer<never>, projectLayer = projects) =>
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
@@ -78,7 +80,7 @@ const build = (database?: Layer.Layer<never>) =>
       LocationServiceMap.node,
     ]),
     [
-      [Project.node, projects],
+      [Project.node, projectLayer],
       [SessionExecution.node, SessionExecution.noopLayer],
       [KeepAwake.node, keepAwake],
       [
@@ -86,7 +88,7 @@ const build = (database?: Layer.Layer<never>) =>
         Layer.succeed(
           Decision.Service,
           Decision.Service.of({
-            evaluate: () =>
+            evaluate: (input) =>
               Effect.succeed(
                 Schema.decodeUnknownSync(Decision.Output)({
                   provider: "agent",
@@ -96,10 +98,10 @@ const build = (database?: Layer.Layer<never>) =>
                     version: 1,
                     answers: [
                       {
-                        name: "subagent_question",
-                        type: "choice",
-                        answer: null,
-                        choice: "Careful",
+                        name: input.request.questions[0]!.name,
+                        type: input.request.questions[0]!.type,
+                        answer: input.request.questions[0]!.type === "predicate" ? true : null,
+                        choice: input.request.questions[0]!.type === "predicate" ? null : input.request.questions[0]!.name === "guardrail" ? "escalate" : "Careful",
                         score: null,
                         confidence: decisionConfidence,
                       },
@@ -115,6 +117,11 @@ const build = (database?: Layer.Layer<never>) =>
   )
 
 const it = testEffect(build())
+const unavailableLocation = testEffect(build(undefined, Layer.effect(Project.Service, Effect.gen(function* () {
+  const service = yield* Project.Service
+  return Project.Service.of({ ...service, resolve: (directory) => directory.endsWith("/unavailable")
+    ? Effect.die(new Error("Fixture Location unavailable")) : service.resolve(directory) })
+})).pipe(Layer.provide(projects))))
 const locationFor = (directory: string) => Location.Ref.make({ directory: AbsolutePath.make(directory) })
 const tmpLocation = Effect.gen(function* () {
   const directory = yield* Effect.promise(() => tmpdir("ycoding-sleep-"))
@@ -134,7 +141,79 @@ const pendingTexts = (sessionID: Session.ID) =>
     return rows.map((row) => JSON.stringify(row))
   })
 
+const requestReview = Effect.fnUntraced(function* (guardrail: SessionGuardrail.Interface, sessionID: Session.ID) {
+  const events = yield* EventRuntime.Service
+  const asked = yield* Deferred.make<Guardrail.Request>()
+  const stop = yield* events.listen((event) => {
+    if (event.type !== Guardrail.Event.Asked.type) return Effect.void
+    const request = Schema.decodeUnknownSync(Guardrail.Request)(event.data)
+    return request.sessionID === sessionID ? Deferred.succeed(asked, request).pipe(Effect.asVoid) : Effect.void
+  })
+  const fiber = yield* guardrail.assert({ sessionID, action: "shell", resources: ["git reset --hard"] }).pipe(Effect.forkScoped)
+  const request = yield* Deferred.await(asked).pipe(Effect.ensuring(stop))
+  return { fiber, request }
+})
+
 describe("Session sleep", () => {
+  it.effect("sleep rejects escalated reviews across family Locations and preserves plain human reviews", () => Effect.gen(function* () {
+    const session = yield* Session.Service
+    const root = yield* session.create({ location: yield* tmpLocation })
+    const child = yield* session.create({ parentID: root.id })
+    const other = yield* session.create({ location: root.location })
+    const events = yield* EventRuntime.Service
+    const childLocation = yield* tmpLocation
+    yield* events.publish(SessionEvent.Moved, { sessionID: child.id, location: childLocation })
+    const locations = yield* LocationServiceMap.Service
+    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
+    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
+    const plain = yield* requestReview(rootGuardrail, root.id)
+    const unrelated = yield* requestReview(rootGuardrail, other.id)
+    yield* session.autonomy.set({ sessionID: root.id, guardrailDecision: true })
+    const escalatedRoot = yield* requestReview(rootGuardrail, root.id)
+    const escalatedChild = yield* requestReview(childGuardrail, child.id)
+    expect(escalatedRoot.request.escalation).toBeDefined()
+    expect(escalatedChild.request.escalation).toBeDefined()
+    yield* session.autonomy.set({ sessionID: child.id, sleep: true })
+    expect((yield* rootGuardrail.forSession(root.id)).map((request) => request.id)).toEqual([plain.request.id])
+    expect(yield* childGuardrail.forSession(child.id)).toEqual([])
+    expect(Exit.isFailure(yield* Fiber.await(escalatedRoot.fiber))).toBe(true)
+    expect(Exit.isFailure(yield* Fiber.await(escalatedChild.fiber))).toBe(true)
+    expect((yield* rootGuardrail.forSession(other.id)).map((request) => request.id)).toEqual([unrelated.request.id])
+    expect(plain.fiber.pollUnsafe()).toBeUndefined()
+    expect(unrelated.fiber.pollUnsafe()).toBeUndefined()
+    const decisions = (yield* rootGuardrail.status(root.id)).decisions ?? []
+    expect(decisions.map((item) => ({ sessionID: item.sessionID, requestID: item.requestID, reply: item.reply, choice: item.choice, confidence: item.confidence }))).toEqual([
+      { sessionID: root.id, requestID: escalatedRoot.request.id, reply: "reject", choice: escalatedRoot.request.escalation?.choice, confidence: escalatedRoot.request.escalation?.confidence },
+      { sessionID: child.id, requestID: escalatedChild.request.id, reply: "reject", choice: escalatedChild.request.escalation?.choice, confidence: escalatedChild.request.escalation?.confidence },
+    ])
+  }))
+  unavailableLocation.effect("a failed family Location does not skip later rejections or sleep notices", () => Effect.gen(function* () {
+    const session = yield* Session.Service
+    const root = yield* session.create({ location: yield* tmpLocation })
+    const unavailable = yield* session.create({ parentID: root.id })
+    const child = yield* session.create({ parentID: unavailable.id })
+    const childLocation = yield* tmpLocation
+    const events = yield* EventRuntime.Service
+    yield* events.publish(SessionEvent.Moved, { sessionID: unavailable.id, location: locationFor(path.join(root.location.directory, "unavailable")) })
+    yield* events.publish(SessionEvent.Moved, { sessionID: child.id, location: childLocation })
+    const locations = yield* LocationServiceMap.Service
+    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
+    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
+    yield* session.autonomy.set({ sessionID: root.id, guardrailDecision: true })
+    const waitingRoot = yield* requestReview(rootGuardrail, root.id)
+    const waitingChild = yield* requestReview(childGuardrail, child.id)
+    expect((yield* session.autonomy.set({ sessionID: root.id, sleep: true })).sleep).toBeDefined()
+    expect(Exit.isFailure(yield* Fiber.await(waitingRoot.fiber))).toBe(true)
+    expect(Exit.isFailure(yield* Fiber.await(waitingChild.fiber))).toBe(true)
+    expect(yield* rootGuardrail.forSession(root.id)).toEqual([])
+    expect(yield* childGuardrail.forSession(child.id)).toEqual([])
+    const store = yield* SessionStore.Service
+    for (const member of [root, unavailable, child]) {
+      const notice = (yield* store.context(member.id)).at(-1)
+      expect(notice?.type === "system" && notice.text).toContain("user is asleep")
+    }
+    expect((yield* rootGuardrail.status(root.id)).decisions).toHaveLength(2)
+  }))
   it.live("archiving a sleeping root wakes it and releases its hold without rearming on unarchive", () => Effect.gen(function* () {
     const session = yield* Session.Service
     const root = yield* session.create({ location: yield* tmpLocation })
@@ -333,7 +412,7 @@ describe("Session sleep", () => {
     }),
   )
 
-  it.live(
+  testEffect(Layer.empty).live(
     "restart rehydrates sleep keep-awake holds from durable autonomy",
     () =>
       Effect.gen(function* () {

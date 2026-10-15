@@ -257,6 +257,7 @@ describe("public event manifest", () => {
         "session.execution.interrupted.1",
         "session.work.completed.1",
         "session.guardrail.dismissed.1",
+        "session.guardrail.escalated.1",
         "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.context.observed.1",

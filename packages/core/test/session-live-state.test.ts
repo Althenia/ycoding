@@ -38,6 +38,7 @@ const guardrails = Layer.succeed(
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
+    rejectEscalated: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     status: () => Effect.die("unused"),
     snapshot: () => Effect.succeed({ sequence: 4, digest: guardrailDigest }),

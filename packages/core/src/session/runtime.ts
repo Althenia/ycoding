@@ -1214,10 +1214,15 @@ const layer = Layer.effect(
       return state
     })
 
-    const admitSleepNotice = Effect.fnUntraced(function* (
+    const applyFamilySleep = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       asleep: boolean,
     ): Effect.fn.Return<void> {
+      if (asleep) yield* Effect.gen(function* () {
+        const session = yield* result.get(sessionID)
+        const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
+        yield* guardrail.rejectEscalated(sessionID)
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Unable to reject escalated reviews for sleeping Session", { sessionID })))
       const awake = yield* keepAwake.get
       yield* events.publish(SessionEvent.ContextObserved, {
         sessionID,
@@ -1225,9 +1230,10 @@ const layer = Layer.effect(
         text: asleep
           ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Questions, forms, and guardrail reviews are decided by the decision model while sleep is on. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
           : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply.",
-      })
+      }).pipe(Effect.catchCause((cause) => asleep
+        ? Effect.logWarning("Unable to record family sleep notice", { sessionID }) : Effect.failCause(cause)))
       const children = yield* result.list({ parentID: sessionID })
-      yield* Effect.forEach(children.data, (child) => admitSleepNotice(child.id, asleep), { discard: true })
+      yield* Effect.forEach(children.data, (child) => applyFamilySleep(child.id, asleep), { discard: true })
     })
 
     const applySleepTransition = Effect.fnUntraced(function* (
@@ -1237,11 +1243,11 @@ const layer = Layer.effect(
     ) {
       if (!before.sleep && after.sleep) {
         yield* keepAwake.hold(sessionID)
-        yield* admitSleepNotice(sessionID, true)
+        yield* applyFamilySleep(sessionID, true)
       }
       if (before.sleep && !after.sleep) {
         yield* keepAwake.release(sessionID)
-        yield* admitSleepNotice(sessionID, false)
+        yield* applyFamilySleep(sessionID, false)
       }
     })
 

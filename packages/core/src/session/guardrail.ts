@@ -92,6 +92,7 @@ export interface Interface {
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
+  readonly rejectEscalated: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
   readonly forSession: (
     sessionID: Session.ID,
   ) => Effect.Effect<ReadonlyArray<Guardrail.Request>, SessionErrors.NotFoundError>
@@ -512,7 +513,7 @@ export const layer = Layer.effect(
               name: "guardrail",
               minimumConfidence: 0,
               instructions:
-                "Decide whether to approve this guardrail review once or reject it. Approve only when the evidence shows the action is scoped to its stated target, clearly intended, and reversible or low-impact if wrong. Reject when evidence is insufficient, the target is broad or ambiguous, or the action destroys data beyond the stated need. Hard reviews cover destructive operations and need stronger evidence than ordinary reviews.",
+                "Choose approve, reject, or escalate for this guardrail review. Approve once only when the action is scoped to its intended target and reversible or low-impact if wrong. Reject when the evidence establishes that the action should not proceed. Escalate when evidence is insufficient, scope or intent is ambiguous, or a human must decide. Hard reviews need stronger evidence. Approve and reject require confidence at least 0.8; lower confidence escalates. Never choose Always.",
               state: {
                 action: input.action,
                 resources: [...input.resources],
@@ -535,20 +536,32 @@ export const layer = Layer.effect(
               choices: [
                 { value: "approve", description: "Approve this single guardrail review (once, never always)" },
                 { value: "reject", description: "Reject this guardrail review" },
+                { value: "escalate", description: "Ask the user to decide this guardrail review" },
               ],
             })
-            const approved = judgment?.value === "approve" && judgment.confidence >= DecisionChoice.ConfidenceThreshold
-            yield* reply(
+            const provenance = judgment ? { choice: judgment.value as Guardrail.DecisionChoice, confidence: judgment.confidence } : {}
+            const escalated = !judgment || judgment.value === "escalate" || judgment.confidence < DecisionChoice.ConfidenceThreshold
+            const handedOff = escalated && (yield* withRootLock(result.rootSessionID, Effect.gen(function* () {
+              const asleep = yield* autonomy.isAsleep(result.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true)))
+              if (asleep) return false
+              const item = pending.get(admission.request.id)
+              if (!item) return yield* new DeclinedError({ requestID: admission.request.id })
+              yield* events.publish(SessionEvent.GuardrailEscalated, {
+                sessionID: input.sessionID, requestID: admission.request.id, ...provenance,
+              })
+              const request = new Guardrail.Request({ ...item.request, escalation: provenance })
+              pending.set(request.id, { ...item, request, decisionModel: false })
+              advanceUnlocked(result.rootSessionID)
+              yield* events.publish(Guardrail.Event.Asked, request)
+              return true
+            })).pipe(Effect.onError(() => Deferred.fail(admission.deferred, new DeclinedError({ requestID: admission.request.id })))))
+            if (!handedOff) yield* reply(
               {
                 sessionID: result.rootSessionID,
                 requestID: admission.request.id,
-                reply: approved ? "once" : "reject",
+                reply: !escalated && judgment?.value === "approve" ? "once" : "reject",
               },
-              {
-                ...(judgment
-                  ? { choice: judgment.value as Guardrail.DecisionChoice, confidence: judgment.confidence }
-                  : {}),
-              },
+              provenance,
             ).pipe(
               Effect.onError(() => Deferred.fail(admission.deferred, new DeclinedError({ requestID: admission.request.id }))),
               Effect.mapError(() => new DeclinedError({ requestID: admission.request.id })),
@@ -638,6 +651,14 @@ export const layer = Layer.effect(
           ),
         ),
       )
+    })
+
+    const rejectEscalated = Effect.fn("SessionGuardrail.rejectEscalated")(function* (sessionID: Session.ID) {
+      const requests = yield* forSession(sessionID)
+      yield* Effect.forEach(requests.filter((request) => request.escalation !== undefined), (request) =>
+        reply({ sessionID, requestID: request.id, reply: "reject" }, request.escalation).pipe(
+          Effect.catchTag("Guardrail.RequestNotFoundError", () => Effect.void),
+        ), { discard: true })
     })
 
     const statusUnlocked = Effect.fnUntraced(function* (rootSessionID: Session.ID) {
@@ -753,7 +774,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ evaluate, assert, reply, forSession, status, snapshot, withSnapshot })
+    return Service.of({ evaluate, assert, reply: (input) => reply(input), rejectEscalated, forSession, status, snapshot, withSnapshot })
   }),
 )
 

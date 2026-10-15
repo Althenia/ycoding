@@ -76,7 +76,7 @@ Permissions decide whether an agent may attempt an action. Guardrails apply inde
 
 Because a pending review blocks the family, the terminal surfaces the review prompt and transcript row in every Session view that the review can block, including a subagent chat and an autonomous Session. An autonomous Session cannot silently absorb its own review.
 
-Ordinary reviews auto-approve at effective YOLO 1–3 when guardrail-decision and sleep are off. `/guardrail-decision` durably delegates every family review to the decision helper; `/sleep` enables this delegation plus option answers and keep-awake. Approve once only at confidence ≥0.8; reject refusal, low confidence, errors, timeout, or reject. Denies never reach the helper. The TUI shows model provenance and reported confidence. Tool permissions remain independent. Human **Session guardrail review** offers:
+Ordinary reviews auto-approve at effective YOLO 1–3 when guardrail-decision and sleep are off. `/guardrail-decision` durably delegates family reviews; `/sleep` adds option answers and keep-awake. The helper chooses approve, reject, or escalate. Direct approval-once and rejection require confidence ≥0.8. Explicit escalation, either lower-confidence choice, refusal, errors, or timeout hands an awake family the normal human review and rejects while asleep. Prompts identify the handoff; terminal and web history retain its reported choice/confidence after restart without restoring an interrupted action or prompt. Denies and tool permissions remain independent. Human **Session guardrail review** offers:
 
 - `Allow once`
 - `Allow for this session`

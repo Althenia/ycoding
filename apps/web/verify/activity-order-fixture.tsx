@@ -24,6 +24,6 @@ const store = createRemoteStore({ http, createTransport: (_id, handlers) => crea
 Object.assign(window, { activityStore: store })
 window.history.replaceState(null, "", "/remote/sessions")
 const router = createAppRouter({ createRemoteStore: () => store })
-Object.assign(window, { activityOpen: (id: string) => router.navigate({ to: "/remote", hash: `session=${id}` }) })
+Object.assign(window, { activityOpen: (id: string) => router.navigate({ to: "/remote/session", search: { session_id: id } }) })
 render(() => <ThemeProvider><RouterProvider router={router} /></ThemeProvider>, document.getElementById("root")!)
 await store.load()

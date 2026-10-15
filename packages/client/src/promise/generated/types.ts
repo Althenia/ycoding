@@ -299,6 +299,8 @@ export type SessionEventArtifactProvenance = {
   sourceScope: "project" | "global"
 }
 
+export type GuardrailDecisionChoice = "approve" | "reject" | "escalate"
+
 export type SessionPendingSyntheticData1 = { text: string; description?: string; metadata?: { [x: string]: any } }
 
 export type SessionOrchestrationQuestion1 = { id: string; text: string; data?: JsonValue; time: number }
@@ -519,8 +521,6 @@ export type FileSystemEntry = { path: string; type: "file" | "directory" }
 export type PermissionReply = "once" | "always" | "reject"
 
 export type GuardrailReply = "once" | "always" | "reject"
-
-export type GuardrailDecisionChoice = "approve" | "reject"
 
 export type GuardrailConfidence = number
 
@@ -1721,6 +1721,19 @@ export type SessionSkillActivated = {
   }
 }
 
+export type GuardrailEscalation = { choice?: GuardrailDecisionChoice; confidence?: number }
+
+export type SessionGuardrailEscalated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.guardrail.escalated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; requestID: string; choice?: GuardrailDecisionChoice; confidence?: number }
+}
+
 export type SessionPendingSyntheticMessage = {
   type: "synthetic"
   data: SessionPendingSyntheticData1
@@ -1835,28 +1848,6 @@ export type SessionToolFailed = {
     result?: any
     executed: boolean
     resultState?: SessionMessageProviderState7
-  }
-}
-
-export type GuardrailAsked = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "guardrail.asked"
-  location?: LocationRef
-  data: {
-    id: string
-    rootSessionID: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    ruleIDs: Array<string>
-    reason: string
-    standard: boolean
-    hardReview?: boolean
-    risk?: GuardrailRisk
-    metadata?: { [x: string]: JsonValue }
   }
 }
 
@@ -2608,6 +2599,29 @@ export type SessionAutonomyState = {
   sleep?: SessionAutonomySleep | null
 }
 
+export type GuardrailAsked = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "guardrail.asked"
+  location?: LocationRef
+  data: {
+    id: string
+    rootSessionID: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    ruleIDs: Array<string>
+    reason: string
+    standard: boolean
+    hardReview?: boolean
+    risk?: GuardrailRisk
+    escalation?: GuardrailEscalation
+    metadata?: { [x: string]: JsonValue }
+  }
+}
+
 export type ModelInfo = {
   id: string
   modelID: string
@@ -3173,6 +3187,16 @@ export type SessionLogItem =
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
       data: { sessionID: string; reviewSessionID: string; ruleID: string; confidence: number }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.guardrail.escalated"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; requestID: string; choice?: GuardrailDecisionChoice; confidence?: number }
     }
   | {
       id: string
@@ -3780,6 +3804,7 @@ export type ServerEvent =
   | SessionDaybreakSet
   | SessionProjectArtifactsEnded
   | SessionGuardrailDismissed
+  | SessionGuardrailEscalated
   | SessionMoved
   | SessionRenamed
   | SessionUsageUpdated
@@ -5582,7 +5607,7 @@ export type GuardrailStatusOutput = {
       created: number
       requestID: string
       reply: "once" | "reject"
-      choice?: "approve" | "reject"
+      choice?: GuardrailDecisionChoice
       confidence?: number
     }>
   }
@@ -5602,6 +5627,7 @@ export type GuardrailRequestListOutput = {
     standard: boolean
     hardReview?: boolean
     risk?: GuardrailRisk
+    escalation?: GuardrailEscalation
     metadata?: { [x: string]: JsonValue }
   }>
 }["data"]

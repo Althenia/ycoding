@@ -64,7 +64,7 @@ test("attributes child reviews to their root family", () => {
   })
 })
 
-test("renders a warning-framed guardrail approval", async () => {
+test("renders a model-escalated human review with ordinary choices", async () => {
   const replyReceived = Promise.withResolvers<unknown>()
   const transport = createFetch(async (url, request) => {
     if (/^\/api\/session\/[^/]+\/guardrail\/request\/[^/]+\/reply$/.test(url.pathname)) {
@@ -82,6 +82,7 @@ test("renders a warning-framed guardrail approval", async () => {
     ruleIDs: ["standard.review.git-destructive"],
     reason: "Destructive Git operation",
     standard: true,
+    escalation: { choice: "escalate" as const, confidence: 0.2 },
   }
   const app = await testRender(
     () => (
@@ -108,6 +109,8 @@ test("renders a warning-framed guardrail approval", async () => {
     const frame = app.captureCharFrame()
     expect(frame).not.toContain("!!")
     expect(frame).toContain("Destructive Git operation")
+    expect(frame).toContain("Decision model escalated")
+    expect(frame).toContain("0.2")
     expect(frame).toContain("ordinary reviews auto-approve from YOLO 1")
     expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")

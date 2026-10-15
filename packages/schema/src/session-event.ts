@@ -30,6 +30,7 @@ import { SessionCompaction } from "./session-compaction.js"
 import { Credential } from "./credential.js"
 import { Integration } from "./integration.js"
 import { Provider } from "./provider.js"
+import { Guardrail } from "./guardrail.js"
 
 export { FileAttachment }
 
@@ -136,11 +137,18 @@ export const GuardrailDecided = Event.durable({
     reviewSessionID: SessionID,
     requestID: Schema.String,
     reply: Schema.Literals(["once", "reject"]),
-    choice: Schema.Literals(["approve", "reject"]).pipe(optional),
+    choice: Guardrail.DecisionChoice.pipe(optional),
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
   },
 })
 export type GuardrailDecided = typeof GuardrailDecided.Type
+
+export const GuardrailEscalated = Event.durable({
+  type: "session.guardrail.escalated",
+  ...options,
+  schema: { ...Base, requestID: Schema.String, ...Guardrail.Escalation.fields },
+})
+export type GuardrailEscalated = typeof GuardrailEscalated.Type
 
 export const GuardrailDismissed = Event.durable({
   type: "session.guardrail.dismissed",
@@ -871,6 +879,7 @@ export const Definitions = Event.inventory(
   DaybreakSet,
   ProjectArtifactsEnded,
   GuardrailDismissed,
+  GuardrailEscalated,
   Moved,
   Renamed,
   UsageUpdated,

@@ -818,6 +818,26 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
   }
 })
 
+test("restart retains the escalation notice without restoring a pending review, and live escalation appends once", async () => {
+  const screen = await renderScreen({
+    width: 160, height: 42, args: { sessionID }, settle: "Decision model escalated",
+    route: routeFor([{ id: "msg_escalation_saved", type: "system", text: "Decision model escalated this guardrail review · choice approve · confidence 0.7", time: { created: 1 } }]),
+  })
+  try {
+    expect(screen.frame()).toContain("0.7")
+    expect(screen.frame()).not.toContain("Guardrail blocked")
+    await screen.waitForEventStream()
+    const event = { id: "evt_escalation_live", type: "session.guardrail.escalated", created: 100,
+      durable: { aggregateID: sessionID, seq: 100, version: 1 },
+      data: { sessionID, requestID: "grq_escalation_live", choice: "escalate", confidence: 0.4 },
+    } satisfies YCodingEvent
+    screen.events.emit(event)
+    await waitForFrame(screen.frame, "confidence 0.4")
+    screen.events.emit(event)
+    expect(screen.frame().match(/confidence 0.4/g)).toHaveLength(1)
+  } finally { await screen.dispose() }
+})
+
 test("family slash commands update autonomy, rehydrate indicators, and render durable decision provenance", async () => {
   let autonomy: SessionAutonomyState = { mode: "normal", yolo: 0 }
   const writes: unknown[] = []

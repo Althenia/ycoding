@@ -2,6 +2,7 @@
 // Transcript request identities prevent an evicted session load from becoming reachable after
 // navigation. Reconnect invalidates cached reads; active UI owners decide what to sync again.
 
+import { GuardrailEscalation } from "../guardrail-escalation"
 import type {
   AgentInfo,
   CommandInfo,
@@ -186,7 +187,7 @@ export type GuardrailDecisionMade = {
   requestID: string
   reply: "once" | "reject"
   action?: string
-  choice?: "approve" | "reject"
+  choice?: "approve" | "reject" | "escalate"
   confidence?: number
 }
 
@@ -1500,6 +1501,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               metadata: { contextSource: event.data.source },
               time: { created: event.created },
             })
+          })
+          break
+        case "session.guardrail.escalated":
+          message.update(event.data.sessionID, (draft, index) => {
+            message.append(draft, index, { id: messageIDFromEvent(event.id), type: "system", text: GuardrailEscalation.text(event.data), time: { created: event.created } })
           })
           break
         case "session.synthetic":

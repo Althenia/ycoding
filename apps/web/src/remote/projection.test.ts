@@ -548,6 +548,24 @@ describe("requests", () => {
     ])
   })
 
+  test("retains escalation in the human review and projects its durable chronological notice", () => {
+    let view = createSessionView("ses_a")
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_other", requestID: "grq_other" })
+    expect(view.messages).toHaveLength(0)
+    view = apply(view, "guardrail.asked", { id: "grq_escalated", sessionID: "ses_a", action: "shell", resources: ["command"], reason: "Review", escalation: { choice: "reject", confidence: 0.7 } })
+    expect(view.requests[0]).toMatchObject({ kind: "guardrail", escalation: { choice: "reject", confidence: 0.7 } })
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_a", requestID: "grq_escalated", choice: "reject", confidence: 0.7 })
+    const notice = view.messages.at(-1)
+    if (notice?.kind !== "system") throw new Error("Missing escalation notice")
+    expect(notice.text).toContain("Decision model escalated")
+    expect(notice.text).toContain("0.7")
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_a", requestID: "grq_escalated", choice: "reject", confidence: 0.7 })
+    expect(view.messages).toHaveLength(1)
+    view = apply(view, "guardrail.replied", { requestID: "grq_escalated", reply: "once" })
+    expect(view.requests).toHaveLength(0)
+    expect(view.messages.at(-1)).toEqual(notice)
+  })
+
   test("tracks permission, guardrail, and native form asks and their replies", () => {
     let view = createSessionView("ses_a")
     view = apply(view, "permission.asked", { id: "per_1", action: "edit", resources: ["src/**"] })

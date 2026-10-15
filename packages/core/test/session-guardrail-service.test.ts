@@ -25,7 +25,10 @@ import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionMessageUpdater } from "@ycoding-ai/core/session/message-updater"
 import { TestClock } from "effect/testing"
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
@@ -68,6 +71,7 @@ function harness(input?: {
   readonly documents?: ReadonlyMap<string, string>
   readonly autoGuardrail?: boolean
   readonly guardrailDecision?: boolean
+  readonly asleep?: boolean
   readonly failReply?: boolean
   readonly decision?: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>
   readonly verify?: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>
@@ -86,6 +90,8 @@ function harness(input?: {
   const dismissals: unknown[] = []
   const replies: unknown[] = []
   const decisions: unknown[] = []
+  const escalations: unknown[] = []
+  const asked: Guardrail.Request[] = []
   let replyGated = false
   const agent = input?.rules === undefined ? undefined : buildAgent
   const permissionRules = input?.rules
@@ -116,6 +122,8 @@ function harness(input?: {
           if (definition.type === Guardrail.Event.Replied.type) replies.push(data)
           if (definition.type === "session.guardrail.decided") decisions.push(data)
           if (definition.type === "session.guardrail.dismissed") dismissals.push(data)
+          if (definition.type === "session.guardrail.escalated") escalations.push(data)
+          if (definition.type === "guardrail.asked") asked.push(Schema.decodeUnknownSync(Guardrail.Request)(data))
           const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
           if (gated) replyGated = true
           return (
@@ -142,7 +150,7 @@ function harness(input?: {
   const autonomy = Layer.mock(SessionAutonomy.Service, {
     canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
     guardrailDecisionEnabled: () => Effect.succeed(input?.guardrailDecision ?? false),
-    isAsleep: () => Effect.succeed(false),
+    isAsleep: () => Effect.succeed(input?.asleep ?? false),
   } as unknown as SessionAutonomy.Interface)
   const locationLayer = Layer.succeed(
     Location.Service,
@@ -212,7 +220,9 @@ function harness(input?: {
     dismissals,
     replies,
     decisions,
-    it: testEffect(Layer.mergeAll(SessionGuardrail.layer, seed).pipe(Layer.provide(dependencies))),
+    escalations,
+    asked,
+    it: testEffect(Layer.mergeAll(SessionGuardrail.layer, seed).pipe(Layer.provideMerge(dependencies))),
   }
 }
 
@@ -1291,7 +1301,7 @@ discovery.it.effect("discovers nearest repository layers before broader and glob
   }),
 )
 
-const decisionOutput = (choice: "approve" | "reject" | "refusal", confidence: number) =>
+const decisionOutput = (choice: "approve" | "reject" | "escalate" | "refusal", confidence: number) =>
   Schema.decodeUnknownSync(Decision.Output)({
     provider: "agent",
     response: {
@@ -1533,11 +1543,7 @@ decisionYolo.it.effect("decision mode overrides ordinary YOLO auto-approval", ()
 )
 
 for (const [name, decide] of [
-  ["reject choice", () => Effect.succeed(decisionOutput("reject", 0.9))],
-  ["low confidence", () => Effect.succeed(decisionOutput("approve", 0.79))],
-  ["refusal", () => Effect.succeed(decisionOutput("refusal", 0))],
-  ["timeout error", () => Effect.fail(new Decision.Error({ reason: "timeout" as const }))],
-  ["provider error", () => Effect.fail(new Decision.Error({ reason: "provider-failed" as const }))],
+  ["reject choice", () => Effect.succeed(decisionOutput("reject", 0.8))],
 ] as const) {
   const rejected = decisionHarness(decide)
   rejected.it.effect(`guardrail-decision rejects an ordinary review on ${name}`, () =>
@@ -1593,15 +1599,112 @@ interruptedDecision.it.effect("interrupting decision evaluation releases its rev
   expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
   expect((yield* service.snapshot(parentID)).digest).toBe(before.digest)
 }))
-timedDecision.it.effect("a nonsettling decision times out and rejects without leaking a pending review", () =>
+timedDecision.it.effect("a nonsettling decision times out into a human review", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const running = yield* service.assert(hardReview).pipe(Effect.forkScoped)
     yield* TestClock.adjust("60 seconds")
+    const requests = yield* service.forSession(parentID)
+    expect(requests).toHaveLength(1)
+    yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
     expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
     expect(yield* service.forSession(parentID)).toEqual([])
   }),
 )
+
+for (const [name, decide, provenance] of [
+  ["explicit escalation", () => Effect.succeed(decisionOutput("escalate", 0)), { choice: "escalate", confidence: 0 }],
+  ["low-confidence approve", () => Effect.succeed(decisionOutput("approve", 0.799999)), { choice: "approve", confidence: 0.799999 }],
+  ["low-confidence reject", () => Effect.succeed(decisionOutput("reject", 0.799999)), { choice: "reject", confidence: 0.799999 }],
+  ["refusal", () => Effect.succeed(decisionOutput("refusal", 1)), {}],
+  ["provider failure", () => Effect.fail(new Decision.Error({ reason: "provider-failed" })), {}],
+  ["timeout", () => Effect.never, {}],
+] as const) for (const asleep of [false, true]) {
+  const escalated = harness({ guardrailDecision: true, asleep, decision: decide })
+  escalated.it.effect(`${name} ${asleep ? "rejects while asleep" : "hands off to the user"}`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(hardReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    expect(escalated.escalations).toHaveLength(asleep ? 0 : 1)
+    if (asleep) {
+      expect(yield* service.forSession(parentID)).toEqual([])
+      expect(escalated.asked).toEqual([])
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      expect(escalated.decisions).toMatchObject([{ reply: "reject", ...provenance }])
+      return
+    }
+    const requests = yield* service.forSession(parentID)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.escalation).toBeDefined()
+    expect(escalated.asked).toHaveLength(1)
+    expect(escalated.replies).toEqual([])
+    yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+    expect(escalated.replies).toEqual([expect.not.objectContaining({ decidedBy: "decision-model" })])
+  }))
+}
+
+for (const review of [ordinaryReview, hardReview]) for (const reply of ["once", "always", "reject"] as const) {
+  const human = decisionHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+  human.it.effect(`an escalated ${review === hardReview ? "hard" : "ordinary"} review accepts human ${reply}`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const waiting = yield* waitForRequest(service, review)
+    expect(waiting.request.escalation).toEqual({ choice: "escalate", confidence: 1 })
+    yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply })
+    const result = yield* Fiber.await(waiting.fiber)
+    expect(Exit.isSuccess(result)).toBe(reply !== "reject" && !(review === hardReview && reply === "always"))
+    if (Exit.isSuccess(result)) yield* result.value.release
+    expect(human.decisions).toEqual([])
+    expect(human.escalations).toHaveLength(1)
+  }))
+}
+
+const restartedEscalation = decisionHarness(() => Effect.succeed(decisionOutput("approve", 0.7)))
+const forgedHumanReply = decisionHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+forgedHumanReply.it.effect("public replies ignore supplied model provenance and retain human attribution", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const waiting = yield* waitForRequest(service, hardReview)
+  const publicReply: (input: SessionGuardrail.ReplyInput, provenance: Guardrail.Escalation) => ReturnType<SessionGuardrail.Interface["reply"]> = service.reply
+  yield* publicReply({ sessionID: parentID, requestID: waiting.request.id, reply: "once" }, { choice: "approve", confidence: 1 })
+  const reservation = yield* Fiber.join(waiting.fiber)
+  yield* reservation.release
+  expect(forgedHumanReply.decisions).toEqual([])
+  expect(forgedHumanReply.replies).toEqual([expect.not.objectContaining({ decidedBy: "decision-model" })])
+}))
+const cancelledEscalation = decisionHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+cancelledEscalation.it.effect("interrupting the human handoff cancels its prompt and releases its review without erasing the escalation fact", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const waiting = yield* waitForRequest(service, hardReview)
+  yield* Fiber.interrupt(waiting.fiber)
+  expect(yield* service.forSession(parentID)).toEqual([])
+  expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
+  expect(cancelledEscalation.escalations).toHaveLength(1)
+  expect(Exit.isFailure(yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply: "once" }).pipe(Effect.exit))).toBe(true)
+}))
+restartedEscalation.it.effect("shutdown ends an escalated review while its durable fact replays into transcript history", () => Effect.gen(function* () {
+  const firstScope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+  const firstContext = yield* Layer.buildWithScope(Layer.fresh(SessionGuardrail.layer), firstScope)
+  const first = Context.get(firstContext, SessionGuardrail.Service)
+  const waiting = yield* waitForRequest(first, hardReview)
+  yield* Scope.close(firstScope, Exit.void)
+  expect(Exit.isFailure(yield* Fiber.await(waiting.fiber))).toBe(true)
+  const nextScope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+  const nextContext = yield* Layer.buildWithScope(Layer.fresh(SessionGuardrail.layer), nextScope)
+  const next = Context.get(nextContext, SessionGuardrail.Service)
+  expect(yield* next.forSession(parentID)).toEqual([])
+  const events = yield* EventRuntime.Service
+  const records = yield* events.log({ aggregateID: parentID, follow: false }).pipe(Stream.runCollect)
+  const state: { messages: SessionMessage.Info[] } = { messages: [] }
+  for (const event of records) {
+    if (event.type !== "session.guardrail.escalated" || !event.durable) continue
+    yield* SessionMessageUpdater.update(SessionMessageUpdater.memory(state), SessionEvent.GuardrailEscalated.make({
+      ...event, durable: event.durable, type: "session.guardrail.escalated", data: Schema.decodeUnknownSync(SessionEvent.GuardrailEscalated.data)(event.data),
+    }))
+  }
+  expect(state.messages).toEqual([expect.objectContaining({ type: "system", text: expect.stringContaining("Decision model escalated") })])
+  expect(state.messages[0]?.type === "system" && state.messages[0].text).toContain("0.7")
+  expect(restartedEscalation.choices).toHaveLength(1)
+}))
 
 const customDecision = harness({
   guardrailDecision: true,

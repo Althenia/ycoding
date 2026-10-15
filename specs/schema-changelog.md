@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-15: Add Guardrail Decision Escalation
+
+- Add `escalate` to `Guardrail.DecisionChoice`; keep human `Guardrail.Reply` unchanged.
+- Add optional `Guardrail.Request.escalation` with optional helper choice and confidence for a review handed to a human.
+- Add public durable `session.guardrail.escalated.1` with reviewed Session ID, request ID, and available helper choice/confidence. Its System-message projection supplies chronological transcript history; pending human requests remain process-local.
+
+Compatibility:
+
+- These fields, literal, and event are additive, preserve existing payloads, and require no stored-data migration. Clients are regenerated from the owning command.
+
 ## 2026-10-15: Make Tool Progress Live-Only
 
 - `session.tool.progress` (`SessionEvent.Tool.Progress`) changes from durable version 1 to an ephemeral event with the same `{ sessionID, assistantMessageID, callID, structured, content }` data. It is published on the live stream only, carries no `durable` envelope, leaves the durable manifest and `Session.Event.PublicDurable` union, and no longer appears in `session.log`.

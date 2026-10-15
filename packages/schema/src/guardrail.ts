@@ -18,6 +18,15 @@ export const RequestID = Schema.String.check(Schema.isStartsWith("grq_")).pipe(
 )
 export type RequestID = typeof RequestID.Type
 
+export const DecisionChoice = Schema.Literals(["approve", "reject", "escalate"]).annotate({ identifier: "Guardrail.DecisionChoice" })
+export type DecisionChoice = typeof DecisionChoice.Type
+
+export interface Escalation extends Schema.Schema.Type<typeof Escalation> {}
+export const Escalation = Schema.Struct({
+  choice: DecisionChoice.pipe(optional),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+}).annotate({ identifier: "Guardrail.Escalation" })
+
 export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({
   identifier: "Guardrail.RuleSource",
 })
@@ -66,6 +75,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   standard: Schema.Boolean,
   hardReview: Schema.Boolean.pipe(optional),
   risk: Risk.pipe(optional),
+  escalation: Escalation.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 
@@ -100,18 +110,13 @@ export class Status extends Schema.Class<Status>("Guardrail.Status")({
       created: NonNegativeInt,
       requestID: Schema.String,
       reply: Schema.Literals(["once", "reject"]),
-      choice: Schema.Literals(["approve", "reject"]).pipe(optional),
+      choice: DecisionChoice.pipe(optional),
       confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
     }),
   ).pipe(optional),
 }) {}
 
 const Asked = ephemeral({ type: "guardrail.asked", schema: Request.fields })
-export const DecisionChoice = Schema.Literals(["approve", "reject"]).annotate({
-  identifier: "Guardrail.DecisionChoice",
-})
-export type DecisionChoice = typeof DecisionChoice.Type
-
 export const Confidence = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).annotate({
   identifier: "Guardrail.Confidence",
 })

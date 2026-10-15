@@ -61,6 +61,19 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("persists the escalation notice as canonical transcript history from its minimal event", () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
+    yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test" }).run()
+    const events = yield* EventRuntime.Service
+    const event = yield* events.publish(SessionEvent.GuardrailEscalated, { sessionID, requestID: "grq_canonical", choice: "reject", confidence: 0.7 })
+    const rows = yield* database.db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.id).toBe(SessionMessage.ID.fromEvent(event.id))
+    expect(rows[0]?.type).toBe("system")
+    expect(JSON.stringify(rows[0]?.data)).toContain("Decision model escalated")
+    expect(JSON.stringify(rows[0]?.data)).toContain("0.7")
+  }))
   it.effect("records each terminal step and run event time without changing list update time", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
