@@ -50,10 +50,30 @@ pub struct Service {
     pub executor: Arc<Executor>,
     pub attachments: Arc<attachment_store::Store>,
     pub instructions: Vec<Source>,
+    pub instruction_context: Option<super::instruction_assembly::Context>,
+    pub refresh: Option<super::runner::Refresh>,
     pub extensions: Vec<Arc<Extension>>,
 }
 impl Service {
     pub async fn generate(
+        &self,
+        id: &session::Id,
+        prompt: LosslessString,
+        cancellation: &Cancellation,
+    ) -> Result<LosslessString, Error> {
+        let current = match &self.refresh {
+            Some(refresh) => Some(
+                tokio::select! { biased; _ = cancellation.cancelled() => return Err(Error::Cancelled), current = refresh() => current.map_err(|_| Error::Model("Location configuration could not be prepared".into()))? },
+            ),
+            None => None,
+        };
+        let service = current
+            .as_ref()
+            .map_or(self, |current| current.generate.as_ref());
+        service.generate_prepared(id, prompt, cancellation).await
+    }
+
+    async fn generate_prepared(
         &self,
         id: &session::Id,
         prompt: LosslessString,
@@ -94,6 +114,17 @@ impl Service {
                 .map_err(Error::Store)?,
         ])
         .map_err(Error::Instructions)?;
+        let sources = match &self.instruction_context {
+            Some(context) => context
+                .sources(
+                    sources,
+                    agent,
+                    session.permission_ceiling.as_deref().unwrap_or_default(),
+                )
+                .await
+                .map_err(Error::Instructions)?,
+            None => sources,
+        };
         let preview = tokio::select! {biased; _ = cancellation.cancelled() => return Err(Error::Cancelled), preview = self.store.preview_instructions(id, &sources) => preview.map_err(Error::Instructions)?};
         let mut history = self.store.model_history(id).map_err(Error::Store)?;
         history.extend(preview.updates);
@@ -136,14 +167,9 @@ impl Service {
             messages.push(llm::Message::system(preview.update));
         }
         messages.push(llm::Message::user(prompt));
-        let mut permissions = agent.permissions.clone();
-        permissions.extend(
-            session
-                .permission_ceiling
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .cloned(),
+        let permissions = super::instruction_assembly::tool_permissions(
+            agent,
+            session.permission_ceiling.as_deref().unwrap_or_default(),
         );
         let system = [
             agent.system.clone().unwrap_or_else(default_system),

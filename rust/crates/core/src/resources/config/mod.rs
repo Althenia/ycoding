@@ -81,6 +81,9 @@ impl Configuration {
         }
         Ok(())
     }
+    pub fn snapshot(&self) -> Result<Self, Error> {
+        Self::load(self.options.clone())
+    }
     pub fn values<'a>(&'a self, key: &'a str) -> impl DoubleEndedIterator<Item = &'a JsonValue> {
         self.entries.iter().filter_map(move |entry| match entry {
             Entry::Document {

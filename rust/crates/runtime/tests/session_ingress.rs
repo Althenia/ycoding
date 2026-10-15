@@ -209,6 +209,8 @@ async fn fixture(endpoint: &str) -> (Fixture, Artifacts) {
         )),
         attachments,
         instructions: vec![],
+        instruction_context: None,
+        refresh: None,
         extensions: vec![],
     });
     let locations = world().core.locations.clone();

@@ -27,6 +27,8 @@ for line in sys.stdin:
         continue
     if method == "initialize":
         result = {"protocolVersion": params["protocolVersion"], "capabilities": table["capabilities"], "serverInfo": {"name": "table", "version": "1.0.0"}}
+        if "instructions" in table:
+            result["instructions"] = table["instructions"]
         send({"jsonrpc": "2.0", "id": identity, "result": result})
         continue
     if method == "tools/call":

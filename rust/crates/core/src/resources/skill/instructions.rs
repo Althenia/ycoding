@@ -9,6 +9,7 @@ pub struct Summary {
     pub id: LosslessString,
     pub name: LosslessString,
     pub description: LosslessString,
+    pub server: Option<LosslessString>,
 }
 pub fn summaries_by(
     skills: &[&Info],
@@ -22,6 +23,7 @@ pub fn summaries_by(
                 id: s.id.clone(),
                 name: s.name.clone(),
                 description: d.clone(),
+                server: None,
             })
         })
         .collect::<Vec<_>>();
@@ -83,13 +85,15 @@ fn entries(skills: &[Summary]) -> Vec<LosslessString> {
     skills
         .iter()
         .flat_map(|s| {
-            [
+            vec![
                 "  <skill>".into(),
                 tag("id", &s.id),
                 tag("name", &s.name),
                 tag("description", &s.description),
-                "  </skill>".into(),
             ]
+            .into_iter()
+            .chain(s.server.as_ref().map(|server| tag("origin", server)))
+            .chain(["  </skill>".into()])
         })
         .collect()
 }

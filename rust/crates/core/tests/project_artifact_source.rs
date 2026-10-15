@@ -10,6 +10,91 @@ use ycoding_schema::{DomainDecode, JsonValue, project, project_artifact};
 include!("tool_fixture.rs");
 
 #[tokio::test]
+async fn global_and_unrecorded_locations_expose_standard_catalogs_without_project_scopes() {
+    use std::sync::{Arc, Mutex};
+    use ycoding_core::resources::{
+        agent, command,
+        project_artifact::{accounting, store},
+        skill,
+    };
+    for project_name in ["global", "unrecorded"] {
+        let fixture = ToolFixture::new();
+        let client = fixture.authority.store.client();
+        let registry = Arc::new(Mutex::new(Registry::default()));
+        let data = fixture.root.join("managed-data");
+        if project_name == "global" {
+            std::fs::write(&data, "not a managed directory").unwrap();
+        }
+        let service = source::Service::new(
+            source::Options {
+                client: client.clone(),
+                store: store::Service::new(
+                    client.clone(),
+                    store::Paths {
+                        data: data.clone(),
+                        home: fixture.root.join("home"),
+                        config: fixture.root.join("config"),
+                    },
+                    registry.clone(),
+                ),
+                accounting: accounting::Service::new(client.clone(), "synthetic".into()),
+                registry,
+                location: ycoding_schema::location::Ref {
+                    directory: ycoding_schema::schema::AbsolutePath::new(
+                        fixture.root.to_string_lossy().as_ref(),
+                    )
+                    .unwrap(),
+                    workspace_id: None,
+                },
+                project_id: project_id(project_name),
+                project_directory: fixture.root.clone(),
+                data_root: data,
+            },
+            source::Catalogs {
+                agents: agent::Service::new(vec![agent::empty("standard".into())]),
+                commands: command::Service::default(),
+                skills: skill::Service::new(&fixture.root.join("cache")),
+            },
+        );
+        service.set_capabilities(&Default::default()).await.unwrap();
+        assert!(
+            service
+                .catalogs()
+                .await
+                .agents
+                .get(&"standard".into())
+                .is_some()
+        );
+        assert!(
+            client
+                .snapshot()
+                .unwrap()
+                .scan::<ycoding_store::artifacts::ProjectScopeTable>(
+                    std::ops::Bound::Unbounded,
+                    std::ops::Bound::Unbounded,
+                    10
+                )
+                .unwrap()
+                .is_empty()
+        );
+        if project_name == "global" {
+            assert!(
+                client
+                    .snapshot()
+                    .unwrap()
+                    .scan::<ycoding_store::artifacts::ScopeTable>(
+                        std::ops::Bound::Unbounded,
+                        std::ops::Bound::Unbounded,
+                        10
+                    )
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn disabled_artifacts_restore_standard_catalogs_without_store_mutation() {
     use std::sync::{Arc, Mutex};
     use ycoding_core::resources::{

@@ -1,5 +1,7 @@
 use super::{history::Entry, instruction_state, key, projector, store::Service};
+mod context;
 use crate::instructions::{self, Error, Observed, Source};
+pub use context::Context;
 use std::collections::BTreeMap;
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonObject, JsonPath, JsonValue, LosslessString, ObjectDecoder,

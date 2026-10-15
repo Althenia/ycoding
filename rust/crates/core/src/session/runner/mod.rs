@@ -139,12 +139,22 @@ struct ContinuationPlan {
 }
 struct Inner {
     services: Services,
+    refresh: Option<Refresh>,
+    instructions: Option<super::instruction_assembly::Context>,
     providers: Result<model::ProviderContext, model::Error>,
     active: Mutex<BTreeMap<session::Id, Arc<Work>>>,
     ingress: Mutex<BTreeMap<ycoding_schema::LosslessString, Arc<tokio::sync::Mutex<()>>>>,
 }
 #[derive(Clone)]
 pub struct Local(Arc<Inner>);
+
+pub struct Refreshed {
+    pub runner: Local,
+    pub generate: Arc<super::generate::Service>,
+    pub owner: Arc<dyn Send + Sync>,
+}
+pub type Refresh =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Refreshed, Error>> + Send>> + Send + Sync>;
 
 enum AttemptError {
     Provider(ycoding_ai::Error),
@@ -187,10 +197,24 @@ impl Local {
             });
         Self(Arc::new(Inner {
             services,
+            refresh: None,
+            instructions: None,
             providers,
             active: Mutex::new(BTreeMap::new()),
             ingress: Mutex::new(BTreeMap::new()),
         }))
+    }
+
+    pub fn with_refresh(mut self, refresh: Refresh) -> Self {
+        Arc::get_mut(&mut self.0).expect("unshared runner").refresh = Some(refresh);
+        self
+    }
+
+    pub fn with_instructions(mut self, context: super::instruction_assembly::Context) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("unshared runner")
+            .instructions = Some(context);
+        self
     }
 
     fn select_model(
@@ -478,7 +502,6 @@ impl Local {
     }
 
     async fn run(&self, request: DrainRequest) -> Outcome {
-        let services = &self.0.services;
         let mut step = 1u64;
         let mut force = request.force;
         let mut recovery = false;
@@ -491,6 +514,21 @@ impl Local {
         let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
             Vec::new();
         loop {
+            if !force
+                && !self
+                    .0
+                    .services
+                    .store
+                    .has_eligible_pending(&request.session_id)?
+            {
+                return Ok(());
+            }
+            let refreshed = match &self.0.refresh {
+                Some(refresh) => Some(refresh().await?),
+                None => None,
+            };
+            let local = refreshed.as_ref().map_or(self, |current| &current.runner);
+            let services = &local.0.services;
             let pending = services.store.pending_list(&request.session_id)?;
             let eligible = services.store.has_eligible_pending(&request.session_id)?;
             if !force && !eligible {
@@ -525,7 +563,7 @@ impl Local {
                 account_identity,
                 connection,
                 binding,
-            } = self
+            } = local
                 .resolve_model(&selection, &saved, saved_binding.as_ref())
                 .await?;
             if let Some(daybreak) = &session.daybreak
@@ -660,6 +698,33 @@ impl Local {
                 services.store.instruction_entry_sources(&session.id)?,
             ])
             .map_err(|_| error("instructions", "Instruction source keys are duplicated"))?;
+            let sources = match &local.0.instructions {
+                Some(context) => context
+                    .sources(
+                        sources,
+                        agent,
+                        session.permission_ceiling.as_deref().unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        error(
+                            "instructions",
+                            "Session instruction catalogs could not be prepared",
+                        )
+                    })?,
+                None => services.configuration.as_ref().map_or_else(
+                    || sources.clone(),
+                    |configuration| {
+                        super::instruction_assembly::select_sources(
+                            &sources,
+                            agent,
+                            session.permission_ceiling.as_deref().unwrap_or_default(),
+                            configuration,
+                            &services.tools,
+                        )
+                    },
+                ),
+            };
             services
                 .store
                 .prepare_instructions(&session.id, &sources, services.clock.now())
@@ -706,7 +771,7 @@ impl Local {
             let mut promoted_skills = Vec::new();
             if !to_promote.is_empty() && !services.store.has_pending_compaction(&session.id)? {
                 for input in to_promote {
-                    let prepared = self
+                    let prepared = local
                         .resolve_requested_skills(&session, agent, std::slice::from_ref(&input))
                         .await?;
                     match services
@@ -719,7 +784,7 @@ impl Local {
                         super::pending::Promotion::Missing => break,
                     }
                     promoted_skills.extend(prepared.clone());
-                    self.activate_skills(&session, &assembly, prepared).await?;
+                    local.activate_skills(&session, &assembly, prepared).await?;
                 }
             }
             if promoted > 0 {
@@ -728,15 +793,17 @@ impl Local {
                 recovery = false;
                 recovery_used = false;
             }
-            self.activate_skills(&session, &assembly, request_skills.clone())
+            local
+                .activate_skills(&session, &assembly, request_skills.clone())
                 .await?;
-            self.observe_context(
-                &session.id,
-                agent.steps.as_ref().map(|maximum| maximum.get() as u64),
-                step,
-                recovery,
-            )
-            .await?;
+            local
+                .observe_context(
+                    &session.id,
+                    agent.steps.as_ref().map(|maximum| maximum.get() as u64),
+                    step,
+                    recovery,
+                )
+                .await?;
             let mut entries = services.store.model_history(&session.id)?;
             entries.extend(assembly.updates);
             entries.sort_by_key(|entry| entry.seq);
@@ -754,14 +821,9 @@ impl Local {
                     }
                 })
                 .collect::<Vec<_>>();
-            let mut permissions = agent.permissions.clone();
-            permissions.extend(
-                session
-                    .permission_ceiling
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .cloned(),
+            let permissions = super::instruction_assembly::tool_permissions(
+                agent,
+                session.permission_ceiling.as_deref().unwrap_or_default(),
             );
             let materialized = Arc::new(services.tools.materialize(&permissions));
             prepared.http.headers.extend(
@@ -946,7 +1008,7 @@ impl Local {
                 .max_tokens
                 .or(prepared.model.defaults.output_limit);
             let context_window = resolved.info.limit.context.get();
-            let gate = self
+            let gate = local
                 .ensure_within_limit(compaction::GateInput {
                     agent: &agent.id,
                     session: &session,
@@ -1181,7 +1243,7 @@ impl Local {
                 assistant.clone(),
                 metadata_key.clone(),
             );
-            let result = self
+            let result = local
                 .attempt(
                     &prepared,
                     &mut publisher,
@@ -1254,9 +1316,9 @@ impl Local {
                     } else {
                         failure
                     };
-                    self.fail(&session.id, &work, &failure).await?;
+                    local.fail(&session.id, &work, &failure).await?;
                     // Recording is best effort after a failed Step; the Step failure stays the cause.
-                    let _ = self
+                    let _ = local
                         .record_request(
                             &tracked,
                             &agent.id,
@@ -1275,8 +1337,8 @@ impl Local {
                             "provider.invalid-output",
                             "Provider did not settle the step",
                         );
-                        self.fail(&session.id, &work, &failure).await?;
-                        let _ = self
+                        local.fail(&session.id, &work, &failure).await?;
+                        let _ = local
                             .record_request(
                                 &tracked,
                                 &agent.id,
@@ -1294,8 +1356,8 @@ impl Local {
                             "provider.invalid-output",
                             "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
                         );
-                        self.fail(&session.id, &work, &failure).await?;
-                        let _ = self
+                        local.fail(&session.id, &work, &failure).await?;
+                        let _ = local
                             .record_request(
                                 &tracked,
                                 &agent.id,
@@ -1308,21 +1370,22 @@ impl Local {
                         self.remove(&session.id);
                         return Err(failure);
                     }
-                    self.fail_unsettled(
-                        &session.id,
-                        &work,
-                        &ycoding_schema::session_error::Error {
-                            r#type: "tool.execution".into(),
-                            message: "Tool did not return a result".into(),
-                        },
-                    )
-                    .await?;
+                    local
+                        .fail_unsettled(
+                            &session.id,
+                            &work,
+                            &ycoding_schema::session_error::Error {
+                                r#type: "tool.execution".into(),
+                                message: "Tool did not return a result".into(),
+                            },
+                        )
+                        .await?;
                     let terminal = event(
                         &session.id,
                         Some(&assistant),
                         "session.step.ended",
                         with_usage(
-                            self.snapshot_end(
+                            local.snapshot_end(
                                 &work,
                                 ObjectEncoder::new().field("finish", finish(settlement.reason)),
                             ),
@@ -1355,19 +1418,20 @@ impl Local {
                         .await
                     {
                         let failure = Error::from(failure);
-                        self.fail(&session.id, &work, &failure).await?;
+                        local.fail(&session.id, &work, &failure).await?;
                         self.remove(&session.id);
                         return Err(failure);
                     }
-                    self.record_request(
-                        &tracked,
-                        &agent.id,
-                        &work,
-                        Some(settlement),
-                        &resolved.info.cost,
-                        &prepared.model.route.id,
-                    )
-                    .await?;
+                    local
+                        .record_request(
+                            &tracked,
+                            &agent.id,
+                            &work,
+                            Some(settlement),
+                            &resolved.info.cost,
+                            &prepared.model.route.id,
+                        )
+                        .await?;
                 }
             }
             self.remove(&session.id);

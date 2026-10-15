@@ -80,13 +80,25 @@ pub fn constant(key: &str, content: &'static str) -> Source {
 }
 
 pub fn when(enabled: bool, sources: Vec<Source>) -> Vec<Source> {
-    if enabled {
-        return sources;
-    }
     sources
         .into_iter()
         .map(|mut source| {
-            source.read = Arc::new(|| Box::pin(async { Ok(Observation::Removed) }));
+            if !enabled {
+                source.read = Arc::new(|| Box::pin(async { Ok(Observation::Removed) }));
+            }
+            if source.removed.is_none() {
+                let key = key(&source.key);
+                source.removed = Some(Arc::new(move |_| {
+                    Some(join(
+                        &[
+                            "Instructions from ".into(),
+                            key.clone(),
+                            " no longer apply.".into(),
+                        ],
+                        "",
+                    ))
+                }));
+            }
             source
         })
         .collect()

@@ -84,6 +84,12 @@ The root session list offers **pin/unpin** for the selected Session (`ctrl+f` by
 
 ### Automatic Session retention
 
+The production retention worker runs whole-family cleanup and then compacted-history
+pruning at startup and hourly after each sweep settles. Cleanup or retention-config
+failures do not suppress pruning. Per-Session pruning failures are logged without
+stopping other Sessions. Shutdown stops scheduling and joins an active sweep before
+the Store closes, together with the other cleanup owners.
+
 The compacted-history retention service prunes rows strictly below a valid local
 summary checkpoint with a matching ended job. Each bounded transaction rechecks
 Session existence, execution activity, staged revert, unchanged checkpoint

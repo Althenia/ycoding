@@ -1,7 +1,9 @@
 mod composition;
 mod controls;
 mod globals;
+mod mcp_owner;
 mod meeting;
+mod refresh;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -88,7 +90,8 @@ pub struct Composed {
         tokio::sync::Mutex<Option<ycoding_core::resources::project_artifact::source::Governor>>,
     mcp_tools: tokio::sync::Mutex<Option<ycoding_core::tools::builtin::mcp::McpTools>>,
     controls: tokio::sync::Mutex<Option<controls::Owner>>,
-    _auth_registration: auth::integration::Registration,
+    mcp_owner: Arc<mcp_owner::Owner>,
+    closed: std::sync::atomic::AtomicBool,
     _registration: Registration,
     _meeting: Option<Registration>,
     _session_tools: Option<Registration>,
@@ -747,7 +750,10 @@ impl Factory {
             },
         );
         let catalogs = self.globals.composition.run(async {
-            source.refresh().await;
+            source
+                .set_capabilities(&disk.capabilities)
+                .await
+                .map_err(|_| unavailable("project artifact capability policy"))?;
             Ok(source.catalogs().await)
         })?;
         configuration.agents = Arc::new(catalogs.agents);
@@ -829,10 +835,11 @@ impl Factory {
         services: &crate::locations::ServiceSet,
         prepared: Prepared,
         boot: bool,
+        previous: Option<&Composed>,
     ) -> Result<Composed, Failure> {
         self.globals
             .composition
-            .run(self.compose_started(services, prepared, boot))
+            .run(self.compose_started(services, prepared, boot, previous))
     }
 
     async fn compose_started(
@@ -840,6 +847,7 @@ impl Factory {
         services: &crate::locations::ServiceSet,
         prepared: Prepared,
         boot: bool,
+        previous: Option<&Composed>,
     ) -> Result<Composed, Failure> {
         let generation = self
             .generations
@@ -892,53 +900,19 @@ impl Factory {
             })
             .map_err(|_| unavailable("workspace memory"))?,
         );
-        let integrations = auth::integration::Registry::prepared(
-            self.credentials.clone(),
-            self.options.env.clone(),
-            self.globals.preparation.clone(),
-            Some(self.globals.claude.clone()),
-        );
-        integrations
-            .bind_events(
-                self.events.clone(),
-                Some(location::Ref {
-                    directory: services.info.directory.clone(),
-                    workspace_id: services.info.workspace_id.clone(),
-                }),
-            )
-            .map_err(|_| unavailable("integration events"))?;
-        let mut auth = self.globals.auth.clone();
-        auth.register_endpoints(&prepared.models.catalog());
-        let auth_registration = integrations
-            .transform(move |draft| draft.extend(&auth))
-            .map_err(|_| unavailable("native integrations"))?;
-        self.globals
-            .wellknown
-            .attach(&integrations)
-            .await
-            .map_err(|_| unavailable("wellknown integrations"))?;
-        let mcp = Arc::new(
-            mcp::Service::new(
-                &prepared.disk.entries,
-                directory.clone(),
-                env!("CARGO_PKG_VERSION").into(),
-                self.options.env.clone(),
-                mcp::client::Hooks {
-                    credentials: Some(self.credentials.clone()),
-                    integrations: Some(integrations.clone()),
-                    ..Default::default()
-                },
-            )
-            .map_err(|_| unavailable("MCP service"))?,
-        );
-        mcp.bind_events(
-            self.events.clone(),
-            Some(location::Ref {
-                directory: services.info.directory.clone(),
-                workspace_id: services.info.workspace_id.clone(),
-            }),
-        )
-        .map_err(|_| unavailable("MCP events"))?;
+        let mcp_owner = match previous {
+            Some(previous) => {
+                previous.mcp_owner.configure(self, &prepared)?;
+                previous
+                    .mcp_owner
+                    .reload(&previous.configuration, &prepared.disk)
+                    .await?;
+                previous.mcp_owner.clone()
+            }
+            None => self.start_mcp(services, &prepared, &directory).await?,
+        };
+        let integrations = mcp_owner.integrations.clone();
+        let mcp = mcp_owner.mcp.clone();
         let shell = Arc::new(
             ycoding_core::platform::shell::Shell::new(
                 roots,
@@ -1117,7 +1091,7 @@ impl Factory {
             },
             Arc::new(move || instruction_clock.now()),
         );
-        instructions.push(instruction_sources::ambient(
+        instructions.push(instruction_sources::ambient_with_capabilities(
             ycoding_core::resources::instruction_discovery::Options {
                 directory: directory.clone(),
                 project_root: project.clone(),
@@ -1125,7 +1099,10 @@ impl Factory {
                 project: self.options.project,
                 max_bytes: None,
             },
+            prepared.disk.capabilities.clone(),
         ));
+        instructions.push(memory::instructions::source());
+        instructions.push(ycoding_core::resources::project_artifact::instructions::source());
         let cursor_host = || {
             self.cursor
                 .as_ref()
@@ -1352,6 +1329,13 @@ impl Factory {
                 }
             }));
         }
+        let instruction_context = ycoding_core::session::instruction_assembly::Context {
+            configuration: prepared.disk.clone(),
+            registry: registry.clone(),
+            skills: skills.clone(),
+            mcp: Arc::downgrade(&mcp),
+        };
+        let refresh = self.refresh(services.info.clone());
         let session_generate = Arc::new(ycoding_core::session::generate::Service {
             store: Service::new(self.client.clone()).with_artifact_source(prepared.source.clone()),
             location: reference.clone(),
@@ -1360,6 +1344,8 @@ impl Factory {
             executor: self.executor.clone(),
             attachments: attachments.clone(),
             instructions: instructions.clone(),
+            instruction_context: Some(instruction_context.clone()),
+            refresh: refresh.clone(),
             extensions: extensions.clone(),
         });
         let runner = runner::Local::new(runner::Services {
@@ -1390,7 +1376,12 @@ impl Factory {
             claude: Some(self.globals.claude.clone()),
             auth: Some(self.globals.preparation.clone()),
             skill_resolver: Some(Arc::new(SkillResolver(skills.clone()))),
-        });
+        })
+        .with_instructions(instruction_context);
+        let runner = match refresh {
+            Some(refresh) => runner.with_refresh(refresh),
+            None => runner,
+        };
         let generate = Arc::new(generate::Service {
             models: prepared.models.clone(),
             credentials: self.credentials.clone(),
@@ -1398,6 +1389,9 @@ impl Factory {
             executor: self.executor.clone(),
             cursor: None,
         });
+        mcp_owner
+            .generations
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         Ok(Composed {
             configuration: prepared.disk,
             models: prepared.models,
@@ -1426,7 +1420,8 @@ impl Factory {
             governor: tokio::sync::Mutex::new(Some(governor)),
             mcp_tools: tokio::sync::Mutex::new(Some(mcp_tools)),
             controls: tokio::sync::Mutex::new(Some(controls)),
-            _auth_registration: auth_registration,
+            mcp_owner,
+            closed: std::sync::atomic::AtomicBool::new(false),
             _registration: registration,
             _meeting: meeting_history,
             _session_tools: session_registration,
@@ -1766,18 +1761,22 @@ impl Maintenance {
         active: Arc<dyn Fn() -> Vec<ycoding_core::ycoding_schema::session::Id> + Send + Sync>,
     ) {
         let mut stopped = self.stop.subscribe();
+        let mut eviction_stopped = self.stop.subscribe();
         let task = tokio::spawn(async move {
             let retention = async {
                 loop {
+                    if *stopped.borrow() {
+                        break;
+                    }
                     let mut options = factory.options.clone();
                     options.directory = options.roots.config.clone();
                     options.project = false;
                     match config::Configuration::load(options) {
                         Ok(configuration) => {
-                            let active = active.clone();
+                            let retaining = active.clone();
                             match sessions
                                 .retain(clock.now(), retention::days(&configuration), move || {
-                                    active()
+                                    retaining()
                                 })
                                 .await
                             {
@@ -1803,21 +1802,41 @@ impl Maintenance {
                         }
                         Err(_) => tracing::error!("session retention configuration unavailable"),
                     }
-                    clock.sleep(60 * 60 * 1000).await;
+                    let pruning = active.clone();
+                    match sessions.prune_history(clock.now(), move || pruning()).await {
+                        Ok(sweep) if sweep.failures.is_empty() => {}
+                        Ok(sweep) => tracing::error!(
+                            failures = sweep.failures.len(),
+                            "compacted Session history pruning failed"
+                        ),
+                        Err(error) => {
+                            tracing::error!(%error, "compacted Session history sweep failed")
+                        }
+                    }
+                    if *stopped.borrow() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = stopped.changed() => break,
+                        _ = clock.sleep(60 * 60 * 1000) => {},
+                    }
                 }
             };
             let eviction = async {
                 loop {
+                    if *eviction_stopped.borrow() {
+                        break;
+                    }
                     if locations.evict_idle(Instant::now()).is_err() {
                         tracing::error!("Location eviction failed");
                     }
-                    clock.sleep(60 * 1000).await;
+                    tokio::select! {
+                        _ = eviction_stopped.changed() => break,
+                        _ = clock.sleep(60 * 1000) => {},
+                    }
                 }
             };
-            tokio::select! {
-                _ = stopped.changed() => {},
-                _ = async { tokio::join!(retention, eviction); } => {},
-            }
+            tokio::join!(retention, eviction);
         });
         *self.task.lock().unwrap_or_else(PoisonError::into_inner) = Some(task);
     }
@@ -1906,10 +1925,18 @@ impl Composed {
     pub(crate) fn in_use(&self) -> bool {
         // The browser tool of this generation holds one isolated-browser reference.
         Arc::strong_count(&self.platform) > 1
-            || Arc::strong_count(&self.mcp) > 1
+            || (self
+                .mcp_owner
+                .generations
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 1
+                && Arc::strong_count(&self.mcp) > Arc::strong_count(&self.mcp_owner) + 1)
             || Arc::strong_count(&self.isolated) > 2
     }
     pub(crate) async fn close(&self) -> Result<(), Failure> {
+        if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return Ok(());
+        }
         let controls = match self.controls.lock().await.take() {
             Some(controls) => controls.close().await,
             None => Ok(()),
@@ -1947,11 +1974,7 @@ impl Composed {
             .release_location()
             .await
             .map_err(|_| unavailable("computer Location release"));
-        let mcp = self
-            .mcp
-            .shutdown()
-            .await
-            .map_err(|_| unavailable("MCP shutdown"));
+        let mcp = self.mcp_owner.retire().await;
         let shell = self
             .platform
             .shell
@@ -1964,11 +1987,6 @@ impl Composed {
             .shutdown()
             .await
             .map_err(|_| unavailable("PTY shutdown"));
-        let integrations = self
-            .integrations
-            .shutdown()
-            .await
-            .map_err(|_| unavailable("integration shutdown"));
         controls
             .and(governor)
             .and(isolated)
@@ -1976,7 +1994,6 @@ impl Composed {
             .and(mcp)
             .and(shell)
             .and(pty)
-            .and(integrations)
     }
 }
 

@@ -9,6 +9,112 @@ use ycoding_core::tools::{
 };
 use ycoding_schema::{JsonValue, parse_json};
 
+#[tokio::test]
+async fn provider_pin_overrides_environment_for_all_sessions() {
+    use ycoding_core::{
+        resources::config::{Configuration, LoadOptions, Roots},
+        tools::registry::Tool,
+    };
+    let fixture = ToolFixture::new();
+    fixture.authority.session("ses_other", None, 1, false, None);
+    let roots = Roots::development(&fixture.root).unwrap();
+    roots.initialize().unwrap();
+    let path = roots.config.join("ycoding.json");
+    std::fs::write(
+        &path,
+        r#"{"capabilities":{"websearch_provider":"parallel"}}"#,
+    )
+    .unwrap();
+    let configuration = Arc::new(
+        Configuration::load(LoadOptions {
+            directory: fixture.root.clone(),
+            roots,
+            project: false,
+            file: None,
+            content: None,
+            env: Default::default(),
+        })
+        .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint =
+        url::Url::parse(&format!("http://{}/mcp", listener.local_addr().unwrap())).unwrap();
+    let (send, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let router = axum::Router::new().route(
+        "/mcp",
+        axum::routing::post(move |body: axum::body::Bytes| {
+            send.send(parse_json(std::str::from_utf8(&body).unwrap()).unwrap())
+                .unwrap();
+            async { r#"{"result":{"content":[{"type":"text","text":"Pinned search result"}]}}"# }
+        }),
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+    let mut tool = WebSearch::new(
+        Config::from_environment(&std::collections::BTreeMap::from([(
+            "YCODING_WEBSEARCH_PROVIDER".into(),
+            "exa".into(),
+        )])),
+        fixture.policy.clone(),
+        "test".into(),
+    )
+    .unwrap();
+    tool.configuration = Some(configuration);
+    tool.exa_url = endpoint.clone();
+    tool.parallel_url = endpoint;
+    for (pin, expected) in [
+        (Some("parallel"), "parallel"),
+        (Some("exa"), "exa"),
+        (None, "parallel"),
+    ] {
+        std::fs::write(
+            &path,
+            pin.map_or_else(
+                || "{}".into(),
+                |pin| format!(r#"{{"capabilities":{{"websearch_provider":"{pin}"}}}}"#),
+            ),
+        )
+        .unwrap();
+        for id in ["ses_tool", "ses_other"] {
+            let mut context = fixture.context();
+            context.session_id = ycoding_schema::session::Id::new(id).unwrap();
+            let output = tool
+                .settle(
+                    parse_json(r#"{"query":"current runtime"}"#).unwrap(),
+                    context,
+                )
+                .await
+                .unwrap();
+            let JsonValue::Object(output) = output.structured else {
+                panic!()
+            };
+            assert_eq!(
+                output.get(&"provider".into()),
+                Some(&JsonValue::String(expected.into()))
+            );
+            assert!(
+                ycoding_schema::stringify_json(&requests.recv().await.unwrap()).contains(
+                    if expected == "exa" {
+                        "web_search_exa"
+                    } else {
+                        "session_id"
+                    }
+                )
+            );
+        }
+        tool.config.provider = Some(Provider::Parallel);
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
 #[test]
 fn provider_selection_flags_and_response_parser_match_ts() {
     let session = "ses_websearch_test".into();
@@ -121,6 +227,7 @@ async fn real_exa_and_parallel_requests_preserve_wire_shape_and_redact_credentia
                 vec![(
                     "websearch".into(),
                     Arc::new(WebSearch {
+                        configuration: None,
                         client: reqwest::Client::new(),
                         config: Config {
                             provider: Some(provider),

@@ -218,14 +218,15 @@ pub(super) fn compose(
         ),
         (
             "websearch".into(),
-            Arc::new(
-                websearch::WebSearch::new(
+            Arc::new(websearch::WebSearch {
+                configuration: Some(configuration.clone()),
+                ..websearch::WebSearch::new(
                     websearch::Config::from_environment(&factory.options.env),
                     policy.clone(),
                     env!("CARGO_PKG_VERSION").into(),
                 )
-                .map_err(|_| unavailable("web search"))?,
-            ),
+                .map_err(|_| unavailable("web search"))?
+            }),
         ),
         (
             "project_artifact".into(),

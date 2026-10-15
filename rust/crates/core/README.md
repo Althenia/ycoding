@@ -79,6 +79,10 @@ replacement preserve this selection; re-enabling can apply the same stored
 versions. Suppression changes neither artifact rows/lifecycle nor managed files.
 The source keeps its generation-owned registry registration and clears active
 managed provenance rather than deleting or disabling stored artifacts.
+The global Project exposes standard catalogs without reading or creating managed
+artifact scopes, independently of the capability toggle.
+An unrecorded filesystem Project has no project-scoped artifacts to resolve;
+catalog reads keep standard sources available without creating its Project row.
 
 `instruction_assembly::select_sources` selects per-Session instruction sources
 from the selected agent, Session permission ceiling, current configuration and
@@ -88,7 +92,18 @@ CodeMode reachability; environment, date and Git blocks have no tool dependency.
 Memory guidance additionally requires `memory.enabled`. Domain memory and
 project-artifact guidance share their builtin gates. `instructions::when` keeps
 source keys and observes disabled values as Removed, allowing durable removal
-and later re-enable without an unavailable or omitted source.
+and later re-enable without an unavailable or omitted source. Sources without
+a specialized removal renderer receive an explicit key-named removal notice;
+the model keeps its stable initial prefix and reads the chronological update.
+
+Production runners acquire the current Location generation at each safe step
+boundary. `instruction_assembly::Context` composes filtered local/MCP skill
+metadata and accessible MCP server guidance before `select_sources`; transient
+Session generation uses the same instruction boundary. Runner materialization
+uses `tool_permissions`, including subagent nesting denies. Web search reads a
+fresh configuration snapshot at each call: a resolved `websearch_provider` pin
+overrides environment/settings selection for every Session, including after a
+reload. Snapshot reads do not publish configuration-update events.
 
 ## Session movement
 

@@ -304,6 +304,7 @@ impl Locations {
                         .clone(),
                 },
                 false,
+                current.services.production.as_ref(),
             )?,
         );
         let old = std::mem::replace(&mut current.services, built);
@@ -445,7 +446,7 @@ impl Locations {
             }));
         }
         let project = project(&directory)?;
-        let built = Arc::new(self.build(&directory, workspace, project, true)?);
+        let built = Arc::new(self.build(&directory, workspace, project, true, None)?);
         let released = Arc::new(Mutex::new(Instant::now()));
         cache.insert(
             key,
@@ -466,6 +467,7 @@ impl Locations {
         workspace: Option<&LosslessString>,
         project: Project,
         boot: bool,
+        previous: Option<&crate::production::Composed>,
     ) -> Result<ServiceSet, Failure> {
         let prepared = self
             .0
@@ -566,7 +568,7 @@ impl Locations {
                 .factory
                 .as_ref()
                 .expect("prepared by factory")
-                .compose(&services, prepared, boot)?;
+                .compose(&services, prepared, boot, previous)?;
             let helpers = HelperEnvironment {
                 generate: Arc::new(composed.runner.clone()),
                 memory: composed.memory.clone(),

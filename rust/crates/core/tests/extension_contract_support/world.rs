@@ -195,6 +195,8 @@ impl World {
                     attachment_store::Store::new(scratch.join("attachments")).unwrap(),
                 ),
                 instructions: vec![],
+                instruction_context: None,
+                refresh: None,
                 extensions: vec![],
             }),
             commands: Arc::new(commands),

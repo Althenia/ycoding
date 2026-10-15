@@ -225,7 +225,7 @@ impl Service {
                 ));
             }
         }
-        if !catalogs.enabled {
+        if !catalogs.enabled || options.project_id.as_lossless().as_str() == Some("global") {
             let mut state = lock(&self.0.state);
             let mut registry = lock(&options.registry);
             match state.registration {
@@ -238,7 +238,14 @@ impl Service {
             return Ok(());
         }
         let mut details = Vec::new();
-        if options.project_id.as_lossless().as_str() != Some("global") {
+        if options
+            .client
+            .snapshot()?
+            .get::<ycoding_store::project::ProjectTable>(&tuple_key(&[KeyPart::String(
+                options.project_id.as_lossless(),
+            )]))?
+            .is_some()
+        {
             let scope = options
                 .store
                 .resolve_project_scope(&options.project_id)

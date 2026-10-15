@@ -1389,6 +1389,22 @@ Temporary headless browsing is started explicitly from the current Session's **I
 
 The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chrome bridge before starting isolated mode, or stop isolated mode before creating extension pairing. Browser permissions and Session guardrails still govern model actions. See the [isolated-browser contract](../specs/isolated-browser.md) for temporary-state semantics, restrictions, and environment-specific validation evidence and limits.
 
+## Runtime capability selection
+
+The resolved Location `capabilities` policy controls tool visibility, builtin and
+ambient instructions, skill IDs, MCP server admission and managed artifact catalogs.
+Each runner step acquires the current configuration generation before selecting
+instructions and materializing tools. Agent permissions and inherited Session
+ceilings still restrict that selection; subagents cannot regain nesting tools.
+Disabled instruction keys publish durable removals and can re-enable under the same
+keys. MCP server admission remains fixed at Location boot: unrelated configuration
+reloads change accessible-tool guidance without restarting the manager.
+
+`capabilities.websearch_provider` accepts `"exa"` or `"parallel"`. Every web-search
+call reads the resolved Location pin before `YCODING_WEBSEARCH_PROVIDER`, provider
+enable flags or stable Session-based selection. Removing the pin restores normal
+selection; transport authentication, limits and credential redaction are unchanged.
+
 ## Session retention
 
 ```json

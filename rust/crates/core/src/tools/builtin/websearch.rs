@@ -132,6 +132,7 @@ fn payload(payload: &str) -> Result<Option<LosslessString>, Failure> {
 pub struct WebSearch {
     pub client: reqwest::Client,
     pub config: Config,
+    pub configuration: Option<Arc<crate::resources::config::Configuration>>,
     pub policy: Arc<LeafPolicy>,
     pub exa_url: url::Url,
     pub parallel_url: url::Url,
@@ -146,6 +147,7 @@ impl WebSearch {
                 .build()
                 .map_err(|_| Failure::message("Web search client unavailable"))?,
             config,
+            configuration: None,
             policy,
             version,
             exa_url: EXA_URL
@@ -174,7 +176,27 @@ impl Tool for WebSearch {
             let mode = optional_enum(input, "type", &["auto", "fast", "deep"], "auto")?;
             let livecrawl =
                 optional_enum(input, "livecrawl", &["fallback", "preferred"], "fallback")?;
-            let provider = select_provider(context.session_id.as_lossless(), &self.config);
+            let provider = self
+                .configuration
+                .as_ref()
+                .map(|configuration| {
+                    let configuration = configuration
+                        .snapshot()
+                        .map_err(|_| Failure::message("Web search configuration unavailable"))?;
+                    Ok::<_, Failure>(configuration.capabilities.websearch_provider.map(
+                        |provider| match provider {
+                            crate::resources::config::capabilities::WebsearchProvider::Exa => {
+                                Provider::Exa
+                            }
+                            crate::resources::config::capabilities::WebsearchProvider::Parallel => {
+                                Provider::Parallel
+                            }
+                        },
+                    ))
+                })
+                .transpose()?
+                .flatten()
+                .unwrap_or_else(|| select_provider(context.session_id.as_lossless(), &self.config));
             let request = async {
                 let mut metadata = ycoding_schema::JsonObject::new();
                 for key in [

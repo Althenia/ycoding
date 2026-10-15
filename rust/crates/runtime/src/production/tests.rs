@@ -1,4 +1,6 @@
 use super::*;
+mod sweep;
+mod wiring;
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -213,14 +215,16 @@ impl Fixture {
         global.directory = self.roots.config.clone();
         global.project = false;
         let configuration = config::Configuration::load(global).unwrap();
-        Locations::new(
+        let locations = Locations::new(
             self.store.client(),
             self.sessions(),
             self.factory.configuration(&configuration).unwrap(),
             self.feed.clone(),
             autonomy::Service::new(self.store.client()),
         )
-        .with_factory(self.factory.clone())
+        .with_factory(self.factory.clone());
+        let _ = self.factory.locations.set(locations.downgrade());
+        locations
     }
     fn services(&self, locations: &Locations) -> Arc<LocationServices> {
         locations
@@ -1922,13 +1926,14 @@ fn idle_skill_tool_generation_is_not_in_use_and_is_released_after_replacement() 
     drop(services);
     locations.reload(&info).unwrap();
     locations.evict_idle(Instant::now()).unwrap();
-    assert!(mcp.upgrade().is_none());
+    assert!(mcp.upgrade().is_some());
     assert!(!f.services(&locations).production.as_ref().unwrap().in_use());
     locations.close().unwrap();
+    assert!(mcp.upgrade().is_none());
 }
 
 #[test]
-fn external_mcp_holder_keeps_skill_tool_generation_in_use_until_released() {
+fn external_mcp_holder_keeps_one_location_generation_until_released() {
     let f = fixture("{}", "{}");
     let locations = f.locations();
     let services = f.services(&locations);
@@ -1944,10 +1949,12 @@ fn external_mcp_holder_keeps_skill_tool_generation_in_use_until_released() {
     locations.reload(&info).unwrap();
     locations.evict_idle(Instant::now()).unwrap();
     assert!(mcp.upgrade().is_some());
+    assert_eq!(f.factory.globals.sources.lock().unwrap().size(), 1);
     drop(holder);
     locations.evict_idle(Instant::now()).unwrap();
-    assert!(mcp.upgrade().is_none());
+    assert!(mcp.upgrade().is_some());
     locations.close().unwrap();
+    assert!(mcp.upgrade().is_none());
 }
 
 #[test]
@@ -2190,7 +2197,8 @@ fn managed_project_artifacts_overlay_the_location_catalogs() {
             .unwrap(),
     )
     .unwrap();
-    f.factory
+    let written = f
+        .factory
         .globals
         .artifacts
         .write_manual(
@@ -2206,6 +2214,13 @@ fn managed_project_artifacts_overlay_the_location_catalogs() {
             },
         )
         .unwrap();
+    let stored = f
+        .factory
+        .globals
+        .artifacts
+        .get(&written.scope_id, &written.kind, &written.id)
+        .unwrap()
+        .encode();
     let locations = f.locations();
     let services = f.services(&locations);
     assert_eq!(
@@ -2216,6 +2231,44 @@ fn managed_project_artifacts_overlay_the_location_catalogs() {
             .and_then(|description| description.as_str()),
         Some("Reviews changes"),
         "the managed overlay must reach the Location agent catalog"
+    );
+    let info = services.info.clone();
+    std::fs::write(
+        f.directory().join("ycoding.json"),
+        r#"{"capabilities":{"project_artifacts":false}}"#,
+    )
+    .unwrap();
+    locations.reload(&info).unwrap();
+    assert!(
+        f.services(&locations)
+            .agents
+            .get(&"review".into())
+            .is_none()
+    );
+    locations.evict(info.directory.as_lossless(), None).unwrap();
+    assert!(
+        f.services(&locations)
+            .agents
+            .get(&"review".into())
+            .is_none(),
+        "a fresh boot must not expose managed artifacts under the disabled policy"
+    );
+    assert_eq!(
+        f.factory
+            .globals
+            .artifacts
+            .get(&written.scope_id, &written.kind, &written.id)
+            .unwrap()
+            .encode(),
+        stored
+    );
+    std::fs::write(f.directory().join("ycoding.json"), "{}").unwrap();
+    locations.reload(&info).unwrap();
+    assert!(
+        f.services(&locations)
+            .agents
+            .get(&"review".into())
+            .is_some()
     );
     drop(services);
     locations.close().unwrap();

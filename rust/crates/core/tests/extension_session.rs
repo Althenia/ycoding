@@ -135,6 +135,8 @@ async fn services(
         executor: executor.clone(),
         attachments: attachments.clone(),
         instructions: vec![],
+        instruction_context: None,
+        refresh: None,
         extensions: vec![],
     });
     let runner = runner::Local::new(runner::Services {

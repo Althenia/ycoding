@@ -467,6 +467,8 @@ impl Harness {
             executor: self.executor.clone(),
             attachments: self.attachments.clone(),
             instructions: vec![],
+            instruction_context: None,
+            refresh: None,
             extensions: vec![],
         }
     }
