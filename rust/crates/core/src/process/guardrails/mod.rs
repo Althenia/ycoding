@@ -286,6 +286,19 @@ fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Ev
     {
         return Some(result.clone());
     }
+    let segments = shell::segments(resource)
+        .into_iter()
+        .map(|segment| {
+            let mut command = vec![];
+            for (index, token) in segment.raw.iter().enumerate() {
+                if index != 0 {
+                    command.push(32);
+                }
+                command.extend(token.code_units());
+            }
+            LosslessString::from_utf16(command)
+        })
+        .collect::<Vec<_>>();
     for (id, pattern, flags, reason) in [
         (
             "standard.review.git-destructive",
@@ -299,16 +312,25 @@ fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Ev
             "i",
             "Force push",
         ),
-        (
-            "standard.review.database-destructive",
-            r"\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)",
-            "i",
-            "Destructive database operation",
-        ),
     ] {
-        if regex(&command, pattern, flags) {
+        if segments
+            .iter()
+            .any(|segment| regex(segment, pattern, flags))
+        {
             return Some(Evaluation::standard(id, reason, Effect::Ask, true));
         }
+    }
+    if regex(
+        &command,
+        r"\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)",
+        "i",
+    ) {
+        return Some(Evaluation::standard(
+            "standard.review.database-destructive",
+            "Destructive database operation",
+            Effect::Ask,
+            true,
+        ));
     }
     outside()
 }

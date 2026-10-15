@@ -47,6 +47,79 @@ fn hard_reviews_and_catastrophic_denies_are_distinct() {
 }
 
 #[test]
+fn git_rules_do_not_borrow_flags_from_other_commands_or_heredoc_text() {
+    let reviewed = [
+        "git push -u origin feature 2>&1 | tail -3; rm -f \"$TMPDIR/body.md\"",
+        "git push origin main && grep -f patterns.txt log",
+        "git push origin main\nrm -f notes.txt",
+        "git restore src/a.rs; echo --worktree",
+        "cat > \"$TMPDIR/body.md\" <<'EOF'\n## Summary\nUse git push for the branch, then rm -f the draft.\nEOF\ngit push -u origin feature && gh pr create --fill; rm -f \"$TMPDIR/body.md\"",
+        "cat <<'EOF' > notes.md\ngit push --force origin main\ngit branch -D feature\nEOF",
+    ]
+    .into_iter()
+    .filter_map(|command| {
+        let result = classify("shell", &[command.into()], &paths(), &[]);
+        (result.effect != Effect::Allow || result.hard_review || !result.rule_ids.is_empty())
+            .then_some((command, result))
+    })
+    .collect::<Vec<_>>();
+    assert!(reviewed.is_empty(), "{reviewed:#?}");
+}
+
+#[test]
+fn git_operations_in_compounds_and_shell_heredocs_require_hard_review() {
+    for (command, id) in [
+        (
+            "rm -f notes.txt; git push --force-with-lease origin main",
+            "standard.review.force-push",
+        ),
+        (
+            "cd src && git push -f origin main",
+            "standard.review.force-push",
+        ),
+        (
+            "bash <<'EOF'\ngit push origin main --force\nEOF",
+            "standard.review.force-push",
+        ),
+        (
+            "echo start | git branch -D feature",
+            "standard.review.git-destructive",
+        ),
+        (
+            "cat <<'EOF' | sh\ngit branch -D feature\nEOF",
+            "standard.review.git-destructive",
+        ),
+        (
+            "echo start; git restore src/a.rs --worktree",
+            "standard.review.git-destructive",
+        ),
+    ] {
+        let result = classify("shell", &[command.into()], &paths(), &[]);
+        assert_eq!(result.effect, Effect::Ask, "{command}");
+        assert!(result.hard_review, "{command}");
+        assert_eq!(result.rule_ids, vec![LosslessString::from(id)], "{command}");
+    }
+}
+
+#[test]
+fn destructive_sql_in_heredocs_requires_hard_review() {
+    for command in [
+        "psql <<'SQL'\nDROP TABLE users;\nSQL",
+        "sqlite3 local.db <<'SQL'\nTRUNCATE TABLE users;\nSQL",
+        "cat <<'SQL' > query.sql\nDROP DATABASE production;\nSQL",
+    ] {
+        let result = classify("shell", &[command.into()], &paths(), &[]);
+        assert_eq!(result.effect, Effect::Ask, "{command}");
+        assert!(result.hard_review, "{command}");
+        assert_eq!(
+            result.rule_ids,
+            vec![LosslessString::from("standard.review.database-destructive")],
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn shell_workdir_branches_and_temporary_operands_preserve_hard_reviews() {
     for command in [
         "cd /workspace; rm -rf project",
