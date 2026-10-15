@@ -6,7 +6,10 @@ import { launchBrowser } from "./cdp"
 
 const port = 4197
 const browserPath = process.env.YCODING_WEB_CHROME
-if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running the design contract suite.")
+if (!browserPath)
+  throw new Error(
+    "Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable before running the design contract suite.",
+  )
 
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
@@ -40,8 +43,18 @@ describe("web design contract inventory", () => {
     const page = await requireBrowser().openPage()
     for (const path of SITEMAP_PATHS) {
       await page.navigate(url(path))
-      for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector("#main") instanceof HTMLElement`)); attempt += 1) await Bun.sleep(100)
-      const rendered = await page.evaluate<{ readonly title: string; readonly notFound: boolean; readonly overflow: boolean; readonly activeNav: string }>(`(() => {
+      for (
+        let attempt = 0;
+        attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector("#main") instanceof HTMLElement`));
+        attempt += 1
+      )
+        await Bun.sleep(100)
+      const rendered = await page.evaluate<{
+        readonly title: string
+        readonly notFound: boolean
+        readonly overflow: boolean
+        readonly activeNav: string
+      }>(`(() => {
         const main = document.querySelector("#main")
         if (!(main instanceof HTMLElement)) throw new Error("public route has no main landmark")
         return {
@@ -76,8 +89,26 @@ describe("web design contract inventory", () => {
     for (const scenario of REMOTE_SCENARIOS) {
       await page.setViewport(scenario.viewport, 900)
       await page.navigate(`${url("/verify/remote.html")}?scenario=${scenario.name}-${scenario.viewport}`)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`); attempt += 1) await Bun.sleep(50)
-      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly pathname: string; readonly sessionID: string | null; readonly deviceID: string | null; readonly signIn: boolean }>(`(() => ({
+      for (
+        let attempt = 0;
+        attempt < 50 &&
+        !(await page.evaluate<boolean>(
+          `document.documentElement.dataset.theme === ${JSON.stringify(scenario.theme)} && (document.querySelector('.app') !== null || document.querySelector('main.sign-in') !== null)`,
+        ));
+        attempt += 1
+      )
+        await Bun.sleep(50)
+      const state = await page.evaluate<{
+        readonly theme: string
+        readonly background: string
+        readonly ink: string
+        readonly overflow: boolean
+        readonly path: string
+        readonly pathname: string
+        readonly sessionID: string | null
+        readonly deviceID: string | null
+        readonly signIn: boolean
+      }>(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
         background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
         ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
@@ -93,20 +124,35 @@ describe("web design contract inventory", () => {
       expect(state.ink).not.toBe("")
       expect({ id: scenario.id, overflow: state.overflow }).toEqual({ id: scenario.id, overflow: false })
       // A signed-out browser sees only the sign-in screen, on every remote route.
-      expect({ id: scenario.id, signIn: state.signIn }).toEqual({ id: scenario.id, signIn: scenario.account === "signedout" })
+      expect({ id: scenario.id, signIn: state.signIn }).toEqual({
+        id: scenario.id,
+        signIn: scenario.account === "signedout",
+      })
       if (!state.signIn) expect(state.pathname).toBe(fixturePath(scenario))
-      if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? scenario.noSelection ? "conversation" : "selected" : scenario.view}`)
-      if (!state.signIn && scenario.view === "chat" && !scenario.noSelection) expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({ sessionID: "ses_fixture", deviceID: "dev_studio" })
+      if (!state.signIn)
+        expect(state.path).toContain(
+          `app--${scenario.view === "chat" ? (scenario.noSelection ? "conversation" : "selected") : scenario.view}`,
+        )
+      if (!state.signIn && scenario.view === "chat" && !scenario.noSelection)
+        expect({ sessionID: state.sessionID, deviceID: state.deviceID }).toEqual({
+          sessionID: "ses_fixture",
+          deviceID: "dev_studio",
+        })
       if (!state.signIn) {
-        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`)).toEqual([
-          scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : "Sessions",
-        ])
+        expect(
+          await page.evaluate<readonly string[]>(
+            `[...document.querySelectorAll('.remote-nav a[aria-current="page"], .bottom-nav a[aria-current="page"]')].filter(link => getComputedStyle(link).display !== "none" && link.getBoundingClientRect().width > 0).map(link => link.textContent?.trim() ?? "")`,
+          ),
+        ).toEqual([scenario.view === "usage" ? "Usage" : scenario.view === "settings" ? "Settings" : "Sessions"])
       }
       const settled = `${JSON.stringify(scenario.expectedText)}.every((text) => document.body.innerText.includes(text))`
       for (let attempt = 0; attempt < 50 && !(await page.evaluate<boolean>(settled)); attempt += 1) await Bun.sleep(100)
       const visibleText = await page.evaluate<string>("document.body.innerText")
       for (const expected of scenario.expectedText) {
-        expect({ id: scenario.id, missing: visibleText.includes(expected) ? undefined : expected }).toEqual({ id: scenario.id, missing: undefined })
+        expect({ id: scenario.id, missing: visibleText.includes(expected) ? undefined : expected }).toEqual({
+          id: scenario.id,
+          missing: undefined,
+        })
       }
     }
     await page.close()
@@ -122,7 +168,20 @@ describe("web design contract inventory", () => {
       for (const theme of ["light", "dark"] as const) {
         await page.setViewport(width, height)
         await page.navigate(url(path))
-        const geometry = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly content: { readonly left: number; readonly right: number }; readonly footer: { readonly left: number; readonly right: number }; readonly controls: readonly { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number }[] }>(`(() => {
+        const geometry = await page.evaluate<{
+          readonly theme: string
+          readonly background: string
+          readonly ink: string
+          readonly overflow: boolean
+          readonly content: { readonly left: number; readonly right: number }
+          readonly footer: { readonly left: number; readonly right: number }
+          readonly controls: readonly {
+            readonly left: number
+            readonly right: number
+            readonly top: number
+            readonly bottom: number
+          }[]
+        }>(`(() => {
           document.documentElement.dataset.theme = ${JSON.stringify(theme)}
           const main = document.querySelector("#main")
           const footer = document.querySelector(".site-footer")
@@ -151,13 +210,27 @@ describe("web design contract inventory", () => {
         expect(geometry.footer.right).toBeLessThanOrEqual(width)
         expect(Math.abs(geometry.content.left - geometry.footer.left)).toBeLessThanOrEqual(1)
         expect(Math.abs(geometry.content.right - geometry.footer.right)).toBeLessThanOrEqual(1)
-        expect(geometry.controls.every((control) => control.left >= 0 && control.right <= width && control.bottom > control.top)).toBe(true)
+        expect(
+          geometry.controls.every(
+            (control) => control.left >= 0 && control.right <= width && control.bottom > control.top,
+          ),
+        ).toBe(true)
       }
     }
-    for (const [path, width, height, short] of [["/not-a-route", 1440, 900, true], ["/docs/quickstart", 390, 844, false]] as const) {
+    for (const [path, width, height, short] of [
+      ["/not-a-route", 1440, 900, true],
+      ["/docs/quickstart", 390, 844, false],
+    ] as const) {
       await page.setViewport(width, height)
       await page.navigate(url(path))
-      const footer = await page.evaluate<{ readonly top: number; readonly bottom: number; readonly position: string; readonly short: boolean; readonly mainBottom: number; readonly scrollHeight: number }>(`(() => {
+      const footer = await page.evaluate<{
+        readonly top: number
+        readonly bottom: number
+        readonly position: string
+        readonly short: boolean
+        readonly mainBottom: number
+        readonly scrollHeight: number
+      }>(`(() => {
         const element = document.querySelector(".site-footer")
         const main = document.querySelector("#main")
         if (!(element instanceof HTMLElement) || !(main instanceof HTMLElement)) throw new Error("public page landmarks missing")
@@ -177,7 +250,11 @@ describe("web design contract inventory", () => {
 
     await page.setViewport(390, 700)
     await page.navigate(`${url("/verify/remote.html")}?view=settings`)
-    const ownership = await page.evaluate<{ readonly owners: number; readonly documentScrollable: boolean; readonly edges: readonly { readonly left: number; readonly right: number }[] }>(`(() => {
+    const ownership = await page.evaluate<{
+      readonly owners: number
+      readonly documentScrollable: boolean
+      readonly edges: readonly { readonly left: number; readonly right: number }[]
+    }>(`(() => {
       document.querySelector(".fixture__banner")?.remove()
       document.querySelector(".fixture__controls")?.remove()
       const fixture = document.querySelector(".fixture")
@@ -190,13 +267,33 @@ describe("web design contract inventory", () => {
     expect(ownership.owners).toBe(1)
     expect(ownership.documentScrollable).toBe(false)
     expect(ownership.edges.length).toBeGreaterThan(1)
-    expect(ownership.edges.every((edge) => Math.abs(edge.left - ownership.edges[0]!.left) <= 1 && Math.abs(edge.right - ownership.edges[0]!.right) <= 1)).toBe(true)
+    expect(
+      ownership.edges.every(
+        (edge) =>
+          Math.abs(edge.left - ownership.edges[0]!.left) <= 1 && Math.abs(edge.right - ownership.edges[0]!.right) <= 1,
+      ),
+    ).toBe(true)
 
     await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-390`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
+    for (
+      let attempt = 0;
+      attempt < 40 && !(await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`));
+      attempt += 1
+    )
+      await Bun.sleep(50)
     await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
-    await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+    for (
+      let attempt = 0;
+      attempt < 40 &&
+      !(await page.evaluate<boolean>(
+        `document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`,
+      ));
+      attempt += 1
+    )
+      await Bun.sleep(50)
+    await page.evaluate(
+      `document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`,
+    )
     const dropdown = await page.evaluate<{ readonly expanded: boolean; readonly withinViewport: boolean }>(`(() => {
       const trigger = document.querySelector('[aria-label="Machine"]')
       const list = document.querySelector('[role="listbox"]')
@@ -207,7 +304,11 @@ describe("web design contract inventory", () => {
     expect(dropdown).toEqual({ expanded: true, withinViewport: true })
     await page.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
     await page.pressEscape()
-    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Machine"`)).toBe(true)
+    expect(
+      await page.evaluate<boolean>(
+        `document.querySelector('[aria-label="Machine"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Machine"`,
+      ),
+    ).toBe(true)
 
     await page.close()
   }, 30_000)
@@ -217,20 +318,55 @@ describe("web design contract inventory", () => {
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {
       await page.setViewport(width, 1000)
-      for (const [view, selector] of [["sessions", ".app--sessions .workspace__scroll > .route-panel"], ["usage", ".app--usage .workspace__scroll > .route-panel"], ["settings", ".app--settings .pane"], ["chat", ".transcript"]] as const) {
+      for (const [view, selector] of [
+        ["sessions", ".app--sessions .workspace__scroll > .route-panel"],
+        ["usage", ".app--usage .workspace__scroll > .route-panel"],
+        ["settings", ".app--settings .pane"],
+        ["chat", ".transcript"],
+      ] as const) {
         await page.navigate(url(`/verify/remote.html?view=${view}`))
-        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector('.workspace__scroll') !== null`); attempt += 1) await Bun.sleep(50)
-        for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt += 1) await Bun.sleep(50)
-        expect(await page.evaluate<string>(`JSON.stringify({ view: document.querySelector('.app')?.className ?? '', found: document.querySelector(${JSON.stringify(selector)}) !== null })`), `${view} ${width} mounted`).toContain('"found":true')
-        const geometry = await page.evaluate<{ readonly width: number; readonly available: number; readonly gutter: number; readonly overflow: boolean; readonly centered: boolean }>(`(() => {
+        for (
+          let attempt = 0;
+          attempt < 100 && !(await page.evaluate<boolean>(`document.querySelector('.workspace__scroll') !== null`));
+          attempt += 1
+        )
+          await Bun.sleep(50)
+        for (
+          let attempt = 0;
+          attempt < 100 &&
+          !(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`));
+          attempt += 1
+        )
+          await Bun.sleep(50)
+        expect(
+          await page.evaluate<string>(
+            `JSON.stringify({ view: document.querySelector('.app')?.className ?? '', found: document.querySelector(${JSON.stringify(selector)}) !== null })`,
+          ),
+          `${view} ${width} mounted`,
+        ).toContain('"found":true')
+        const geometry = await page.evaluate<{
+          readonly width: number
+          readonly measure: number
+          readonly available: number
+          readonly gutter: number
+          readonly overflow: boolean
+          readonly centered: boolean
+        }>(`(() => {
           const element = document.querySelector(${JSON.stringify(selector)})
           const scroll = document.querySelector('.workspace__scroll')
           const box = element.getBoundingClientRect()
           const host = scroll.getBoundingClientRect()
-          const styles = getComputedStyle(scroll)
+          const availableHost=${JSON.stringify(view)}==='chat'?element.parentElement:scroll
+          const styles = getComputedStyle(availableHost)
+          const probe=document.createElement('span')
+          probe.style.cssText='position:absolute;inline-size:var(--yc-measure-wide);font:'+getComputedStyle(element).font
+          element.appendChild(probe)
+          const measure=probe.getBoundingClientRect().width
+          probe.remove()
           return {
             width: Math.round(box.width),
-            available: Math.round(scroll.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight)),
+            measure,
+            available: Math.round(availableHost.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight)),
             gutter: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-gutter')),
             overflow: document.documentElement.scrollWidth > innerWidth,
             centered: Math.abs((box.left - host.left) - (host.right - box.right)) <= 16,
@@ -239,7 +375,13 @@ describe("web design contract inventory", () => {
         expect(geometry.overflow, `${view} ${width}`).toBe(false)
         expect(geometry.centered, `${view} ${width}`).toBe(true)
         expect(geometry.gutter, `${view} ${width}`).toBe(width >= 1600 ? 48 : 40)
-        if (view === "chat") { expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(740); continue }
+        if (view === "chat") {
+          expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(Math.ceil(geometry.measure))
+          expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(
+            Math.min(geometry.measure, geometry.available) - 1,
+          )
+          continue
+        }
         // The column is the declared cap, or the scroll area's content box when that is narrower.
         expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(expected)
         expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(expected, geometry.available) - 1)
@@ -250,13 +392,37 @@ describe("web design contract inventory", () => {
 
   test("keeps the handoff viewport matrix usable on public and remote surfaces", async () => {
     const page = await requireBrowser().openPage()
-    for (const [width, height] of [[320, 568], [360, 740], [430, 932], [1024, 1366], [1280, 800], [1920, 1080]] as const) {
-      for (const theme of width === 1024 ? ["light", "dark"] as const : ["light"] as const) {
+    for (const [width, height] of [
+      [320, 568],
+      [360, 740],
+      [430, 932],
+      [1024, 1366],
+      [1280, 800],
+      [1920, 1080],
+    ] as const) {
+      for (const theme of width === 1024 ? (["light", "dark"] as const) : (["light"] as const)) {
         await page.setViewport(width, height)
-        for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=settings"]) {
+        for (const path of [
+          "/",
+          "/docs/quickstart",
+          "/changelog",
+          "/verify/remote.html?view=chat",
+          "/verify/remote.html?view=settings",
+        ]) {
           await page.navigate(url(path))
-          if (path.includes("view=chat")) for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('.composer') !== null`); attempt += 1) await Bun.sleep(50)
-          const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly undersizedTabs: readonly string[]; readonly composer: boolean }>(`(() => {
+          if (path.includes("view=chat"))
+            for (
+              let attempt = 0;
+              attempt < 50 && !(await page.evaluate<boolean>(`document.querySelector('.composer') !== null`));
+              attempt += 1
+            )
+              await Bun.sleep(50)
+          const layout = await page.evaluate<{
+            readonly overflow: boolean
+            readonly escaped: readonly string[]
+            readonly undersizedTabs: readonly string[]
+            readonly composer: boolean
+          }>(`(() => {
             document.documentElement.dataset.theme = ${JSON.stringify(theme)}
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
             const controls = [...document.querySelectorAll('.app-header button, .app-header a, .remote-nav a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
@@ -279,7 +445,13 @@ describe("web design contract inventory", () => {
 })
 
 function missingRoutePatterns(paths: readonly string[], patterns: readonly string[]): readonly string[] {
-  return paths.filter((path) => !patterns.some((pattern) => pattern === path || (pattern.endsWith("/*slug") && path.startsWith(pattern.slice(0, -"*slug".length)))))
+  return paths.filter(
+    (path) =>
+      !patterns.some(
+        (pattern) =>
+          pattern === path || (pattern.endsWith("/*slug") && path.startsWith(pattern.slice(0, -"*slug".length))),
+      ),
+  )
 }
 
 function fixturePath(scenario: { readonly view: string; readonly noSelection?: boolean }): string {
