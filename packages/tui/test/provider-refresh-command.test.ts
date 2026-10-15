@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { FrontendPaths } from "../src/frontend-paths"
@@ -49,8 +50,13 @@ test("the command palette refreshes models and providers for the current locatio
     await waitForFrame("Message YCoding…")
 
     setup.mockInput.pressKey("p", { ctrl: true })
+    await setup.renderOnce()
     await waitForFrame("Commands")
+    await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
+    const filter = setup.renderer.currentFocusedEditor
+    if (!(filter instanceof InputRenderable)) throw new Error("Command palette filter is not focused")
     await setup.mockInput.typeText("Refresh models")
+    expect(filter.value).toBe("Refresh models")
     await waitForFrame("Refresh models and providers")
     const before = requests.length
     setup.mockInput.pressEnter()
