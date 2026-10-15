@@ -1242,7 +1242,7 @@ test("an existing Session without a model uses the catalog default identity, not
   }
 })
 
-test("named profile choices replace the body inside the same full-screen model panel on phones", async () => {
+test("named profile choices replace the body inside the same content-sized model sheet on phones", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" }, undefined, undefined, [390, 844])
   try {
     await wait(h.page, `document.querySelector('.composer__mobile-trigger')?.disabled === false`)
@@ -1255,6 +1255,7 @@ test("named profile choices replace the body inside the same full-screen model p
     )
     await h.page.evaluate(`document.querySelector('.composer__selection-sheet .model-control__trigger')?.click()`)
     await wait(h.page, `document.querySelector('.model-control__profile [aria-label="Profile"]') !== null`)
+    await h.page.evaluate(`window.profileSheet=document.querySelector('.model-control__surface')`)
     await h.page.evaluate(`document.querySelector('.model-control__profile [aria-label="Profile"]').click()`)
     await wait(
       h.page,
@@ -1267,7 +1268,7 @@ test("named profile choices replace the body inside the same full-screen model p
     ).toMatchObject({ modal: "true" })
     expect(
       await h.page.evaluate<boolean>(
-        `(() => { const rect=document.querySelector('.model-control__surface[aria-label="Choose profile"]').getBoundingClientRect(); return rect.width >= innerWidth - 16 && rect.height >= innerHeight - 24; })()`,
+        `(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(); return surface===window.profileSheet && rect.width>=innerWidth-16 && rect.height<innerHeight-24 && rect.bottom<=innerHeight && rect.top>=0 && Math.abs(rect.bottom-innerHeight)<=1 && [...surface.querySelectorAll('[role="option"]')].every(option=>option.getBoundingClientRect().height>=44) && surface.contains(document.activeElement); })()`,
       ),
     ).toBe(true)
     expect(
