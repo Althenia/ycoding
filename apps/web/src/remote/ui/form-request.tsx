@@ -1,14 +1,18 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
-import type { FormFieldView, FormView } from "../projection"
+import type { FormAnswerView, FormFieldView, FormView } from "../projection"
 import { formInputState, safeFormLink, type FormDraft } from "../view-model"
 
-export function FormRequest(props: { readonly form: () => FormView; readonly activeSessionID?: string }): JSX.Element {
+export type FormReview = { readonly busy: boolean; readonly submit: (answer: FormAnswerView) => void; readonly dismiss: () => void }
+
+export function FormRequest(props: { readonly form: () => FormView; readonly activeSessionID?: string; readonly review?: FormReview }): JSX.Element {
   const remote = useRemote()
   const [draft, setDraft] = createSignal<FormDraft>({})
   const inputs = createMemo(() => formInputState(props.form(), draft()))
-  const disabled = () => props.activeSessionID !== props.form().sessionID
+  const disabled = () => props.review !== undefined
+    ? props.review.busy || remote.state().connection.kind !== "connected"
+    : props.activeSessionID !== props.form().sessionID
     || remote.state().connection.kind !== "connected"
     || remote.state().mutations.some(mutation => mutation.kind === "form"
       && mutation.sessionID === props.form().sessionID
@@ -17,7 +21,9 @@ export function FormRequest(props: { readonly form: () => FormView; readonly act
   return (
     <form noValidate onSubmit={(event) => {
       event.preventDefault()
-      if (!disabled() && inputs().valid) void remote.store.replyForm(props.form().id, inputs().answer)
+      if (disabled() || !inputs().valid) return
+      if (props.review) props.review.submit(inputs().answer)
+      else void remote.store.replyForm(props.form().id, inputs().answer)
     }}>
       <header class="request__header">
         <Icon name="chat" size={16} />
@@ -34,9 +40,9 @@ export function FormRequest(props: { readonly form: () => FormView; readonly act
       )}</For>
       <Show when={!inputs().valid}><p class="request__note">Complete the required fields and check the input constraints before sending.</p></Show>
       <div class="request__actions">
-        <button type="submit" class="button button--primary button--small" disabled={disabled() || !inputs().valid}>Send answer</button>
+        <button type="submit" class="button button--primary button--small" disabled={disabled() || !inputs().valid}>{props.review ? "Submit" : "Send answer"}</button>
         <button type="button" class="button button--secondary button--small" disabled={disabled()}
-          onClick={() => { if (!disabled()) void remote.store.cancelForm(props.form().id) }}>Cancel</button>
+          onClick={() => { if (disabled()) return; if (props.review) props.review.dismiss(); else void remote.store.cancelForm(props.form().id) }}>{props.review ? "Dismiss" : "Cancel"}</button>
       </div>
     </form>
   )

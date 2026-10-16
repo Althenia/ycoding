@@ -9,6 +9,7 @@ import { EventTable } from "../event/sql"
 import type { Job } from "../job"
 import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
+import { SessionReviewFold } from "./review-fold"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "./sql"
 
@@ -278,6 +279,7 @@ const unfinished = Effect.fnUntraced(function* (
     .get()
     .pipe(Effect.orDie)
   if (pending) return true
+  if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return true
   const state = yield* db
     .select({ id: SessionTable.id })
     .from(SessionTable)

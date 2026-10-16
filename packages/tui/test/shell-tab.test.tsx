@@ -41,25 +41,24 @@ function shell(
   }
 }
 
-test("renders owner groups, supported statuses, and derived elapsed durations", async () => {
+test("renders only family owner groups, supported statuses, and derived elapsed durations", async () => {
   const main = shell("main", "ses_main", "running", { started: 10_000 })
   const child = shell("child", "ses_child", "exited", { started: 10_000, completed: 30_000 })
   const timedOut = shell("timeout", "ses_child", "timeout", { started: 10_000, completed: 40_000 })
   const orphan = shell("orphan", undefined, "killed", { started: 10_000, completed: 50_000 })
-  const grouped = groupSessionShells(
-    [main, shell("child-running", "ses_child", "running", { started: 10_000 }), shell("missing", undefined, "running", { started: 10_000 })],
-    [
-      session("ses_main", { title: "Main session" }),
-      session("ses_child", { parentID: "ses_main", agent: "reviewer", title: "Check shell ownership" }),
-    ],
-    "ses_main",
-  )
+  const external = shell("external", "ses_external", "running", { started: 10_000 })
+  const sessions = [
+    session("ses_main", { title: "Main session" }),
+    session("ses_child", { parentID: "ses_main", agent: "reviewer", title: "Check shell ownership" }),
+    session("ses_external", { agent: "builder", title: "Outside lane" }),
+  ]
+  const grouped = groupSessionShells([main, child, timedOut, orphan, external], sessions, "ses_main", { includeSettled: true })
 
   expect(grouped.map((group) => group.owner.label)).toEqual([
     "Main chat",
     "reviewer · Check shell ownership",
-    "Unknown session",
   ])
+  expect(grouped.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["main", "child", "timeout"])
   expect(formatShellElapsed(main, 75_000)).toBe("1m05s")
   expect(formatShellElapsed(child, 75_000)).toBe("20s")
 
@@ -68,16 +67,7 @@ test("renders owner groups, supported statuses, and derived elapsed durations", 
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ShellRows
-              groups={[
-                { owner: { label: "Main chat" }, shells: [main] },
-                { owner: { label: "reviewer · Check shell ownership" }, shells: [child, timedOut] },
-                { owner: { label: "Unknown session" }, shells: [orphan] },
-              ]}
-              now={75_000}
-              selected="sh_main"
-              onSelect={() => {}}
-            />
+            <ShellRows groups={grouped} now={75_000} selected="sh_main" onSelect={() => {}} designLabels />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
@@ -85,17 +75,18 @@ test("renders owner groups, supported statuses, and derived elapsed durations", 
     { width: 120, height: 30 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Unknown session"))
+  await app.waitForFrame((frame) => frame.includes("MAIN CHAT"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Main chat")
-    expect(frame).toContain("reviewer · Check shell ownership")
-    expect(frame).toContain("Unknown session")
+    expect(frame).toContain("MAIN CHAT · THIS SESSION")
+    expect(frame).toContain("SUBAGENT · REVIEWER · CHECK SHELL OWNERSHIP")
+    expect(frame).not.toContain("UNKNOWN SESSION")
+    expect(frame).not.toContain("command orphan")
+    expect(frame).not.toContain("command external")
     expect(frame).toContain("running")
     expect(frame).toContain("exited")
     expect(frame).toContain("timeout")
-    expect(frame).toContain("killed")
     expect(frame).toContain("/workspace")
     expect(frame).toContain("pid 104")
     expect(frame).toContain("1m05s")

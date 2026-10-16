@@ -2,7 +2,9 @@ export * as SessionContext from "./context"
 
 import { Context, Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
+import type { Model } from "@ycoding-ai/schema/model"
 import { Agent } from "../agent"
+import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigMemory } from "../config/memory"
 import { Database } from "../database/database"
@@ -13,6 +15,7 @@ import { InstructionBuiltIns } from "../instructions/builtins"
 import { ProjectArtifactInstructions } from "../project-artifact/instructions"
 import { Location } from "../location"
 import { McpInstructions } from "../mcp/instructions"
+import { ModelGuidanceInstructions } from "../model-incident/instructions"
 import { Permission } from "../permission"
 import { MemoryInstructions } from "../memory/instructions"
 import { PluginSupervisor } from "../plugin/supervisor"
@@ -53,8 +56,11 @@ export interface Loaded {
 export interface Interface {
   /** Selects the Session, agent, and instruction sources used by subsequent work. */
   readonly select: (sessionID: SessionSchema.ID) => Effect.Effect<Selection, AgentNotFoundError>
-  /** Resolves the model and active history for that selection. */
-  readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
+  /** Resolves the model and active history for that selection, or for `model` in place of the Session's model. */
+  readonly load: (
+    selection: Selection,
+    options?: { readonly model?: Model.Ref },
+  ) => Effect.Effect<Loaded, SessionRunnerModel.Error>
   /** Reads the active context revision without preparing model-visible history. */
   readonly revision: (sessionID: SessionSchema.ID) => Effect.Effect<number>
 }
@@ -82,6 +88,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
+    const catalog = yield* Catalog.Service
     const builtins = yield* InstructionBuiltIns.Service
     const config = yield* Config.Service
     const db = (yield* Database.Service).db
@@ -128,6 +135,7 @@ const layer = Layer.effect(
       const memoryEnabled = ConfigMemory.resolve(
         configEntries.flatMap((entry) => (entry.type === "document" && entry.info.memory ? [entry.info.memory] : [])),
       ).enabled
+      const guidanceModel = session.model ?? (yield* catalog.model.defaultSelection())
       const instructions = yield* Effect.all(
         [
           builtins.load({ sessionID, capabilities, tools }),
@@ -147,6 +155,14 @@ const layer = Layer.effect(
               memoryInstructions,
             ),
           ),
+          Effect.succeed(
+            guidanceModel === undefined
+              ? Instructions.empty
+              : Instructions.when(
+                  InstructionBuiltIns.enabled("model-guidance", { capabilities, tools }),
+                  ModelGuidanceInstructions.make(db, guidanceModel),
+                ),
+          ),
           entries.load(sessionID),
         ],
         { concurrency: "unbounded" },
@@ -154,9 +170,14 @@ const layer = Layer.effect(
       return { session, agent: { ...agent, info: agent.info }, instructions }
     })
 
-    const load = Effect.fn("SessionContext.load")(function* (selection: Selection) {
+    const load = Effect.fn("SessionContext.load")(function* (
+      selection: Selection,
+      options?: { readonly model?: Model.Ref },
+    ) {
       const contextRevision = yield* revision(selection.session.id)
-      const model = yield* models.resolve(selection.session)
+      const model = yield* models.resolve(
+        options?.model === undefined ? selection.session : { ...selection.session, model: options.model },
+      )
       const history = yield* SessionHistory.entriesForRunner(
         db,
         selection.session.id,
@@ -185,6 +206,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
+    Catalog.node,
     Config.node,
     Database.node,
     InstructionBuiltIns.node,

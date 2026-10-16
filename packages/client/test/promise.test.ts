@@ -156,11 +156,15 @@ test("exposes every standard HTTP API group", () => {
     "browser",
     "isolatedBrowser",
     "usage",
+    "incident",
     "remote",
     "keepAwake",
     "config",
+    "review",
   ])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
+  expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
+  expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
   expect(Object.keys(client.message)).toEqual(["list", "capturedInputs"])

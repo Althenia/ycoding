@@ -11,6 +11,7 @@ import { Readable, Writable } from "node:stream"
 import { connect, type Client, type Event } from "./isolated-cdp"
 import { capturePage } from "./isolated-capture"
 import { makeLocationNode } from "../effect/app-node"
+import { BrowserOperation } from "./operation"
 
 const INSTALLED_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 const CHROME =
@@ -51,7 +52,7 @@ export interface Snapshot {
   readonly url: string
   readonly documentGeneration: number
   readonly revision: number
-  readonly elements: ReadonlyArray<Browser.Element>
+  readonly elements: ReadonlyArray<BrowserOperation.Element>
   readonly truncated: boolean
 }
 
@@ -424,7 +425,7 @@ async function configureRuntime(
           const attributes = attributesOf(dom.attributes)
           const destination = attributes.get("href")
           refs.set(`b${index + 1}`, backendNodeId)
-          return {
+          const element = {
             ref: Browser.Element.fields.ref.make(`b${index + 1}`),
             role: bounded(stringMaybe(recordMaybe(node.role)?.value) ?? "", 64),
             name: bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH),
@@ -443,6 +444,7 @@ async function configureRuntime(
               ? { destination: safePageMaybe(new URL(destination, url).toString()) }
               : {}),
           } satisfies Browser.Element
+          return { ...element, identity: BrowserOperation.elementIdentity(url.toString(), element, destination ? new URL(destination, url).toString() : undefined) }
         }),
       )
     ).filter((element) => element !== undefined)

@@ -3,7 +3,7 @@ import { useTheme } from "../../context/theme"
 import { useData } from "../../context/data"
 import { PromptFooterIdentity } from "../../component/prompt"
 import { ModeChips } from "../../component/prompt/mode-chips"
-import { useKeepAwake } from "../../keep-awake"
+import { KeepAwakeIndicator, useKeepAwake } from "../../keep-awake"
 import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
@@ -55,37 +55,48 @@ export function Footer(props: {
   return (
     <box
       width="100%"
-      height={props.subagent ? 1 : 3}
       flexShrink={0}
-      flexDirection="row"
-      justifyContent="space-between"
-      alignItems="center"
+      flexDirection="column"
       paddingLeft={3}
       paddingRight={3}
       backgroundColor={theme.background.chrome}
     >
-      <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
-        <PromptFooterIdentity branch={props.branch} />
-        <ModeChips autonomy={props.autonomy} machineAwake={keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on"} />
-        <text fg={theme.text.subdued} wrapMode="none" flexShrink={0}>
-          subagents {subagents()}
-        </text>
-        <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
-          shells {shells()}
-        </text>
-      </box>
-      <box flexDirection="row" gap={3} flexShrink={0}>
-        <text fg={theme.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
-          <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>
-          <span style={{ fg: theme.text.subdued }}>usage</span>
-        </text>
-        <Show when={paletteShortcut()}>
-          {(shortcut) => (
-            <text fg={theme.text.default} wrapMode="none" flexShrink={0}>
-              {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span>
-            </text>
-          )}
-        </Show>
+      <KeepAwakeIndicator />
+      <box
+        width="100%"
+        height={props.subagent ? 1 : 3}
+        flexShrink={0}
+        flexDirection="row"
+        justifyContent="space-between"
+        alignItems="center"
+      >
+        <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
+          <PromptFooterIdentity branch={props.branch} />
+          <ModeChips
+            autonomy={props.autonomy}
+            machineAwake={keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on"}
+            review={data.session.review.list(props.sessionID).length}
+          />
+          <text fg={theme.text.subdued} wrapMode="none" flexShrink={0}>
+            subagents {subagents()}
+          </text>
+          <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
+            shells {shells()}
+          </text>
+        </box>
+        <box flexDirection="row" gap={3} flexShrink={0}>
+          <text fg={theme.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
+            <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>
+            <span style={{ fg: theme.text.subdued }}>usage</span>
+          </text>
+          <Show when={paletteShortcut()}>
+            {(shortcut) => (
+              <text fg={theme.text.default} wrapMode="none" flexShrink={0}>
+                {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: theme.text.subdued }}>commands</span>
+              </text>
+            )}
+          </Show>
+        </box>
       </box>
     </box>
   )

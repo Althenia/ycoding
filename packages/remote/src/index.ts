@@ -76,6 +76,8 @@ export const remoteOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
+  "session.review.list",
+  "session.review.decide",
   "session.form.list",
   "session.form.reply",
   "session.form.cancel",
@@ -101,6 +103,10 @@ export const remoteOperations = [
   "session.promptCosts",
   "session.taskCosts",
   "usage.forecast",
+  "incident.report",
+  "incident.recent",
+  "incident.guidance",
+  "incident.guidance.clear",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -145,6 +151,8 @@ export const remoteSessionOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
+  "session.review.list",
+  "session.review.decide",
   "session.form.list",
   "session.form.reply",
   "session.form.cancel",
@@ -215,6 +223,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.guardrail.status": "read",
   "session.guardrail.request.list": "read",
   "session.guardrail.reply": "mutation",
+  "session.review.list": "read",
+  "session.review.decide": "mutation",
   "session.form.list": "read",
   "session.form.reply": "mutation",
   "session.form.cancel": "mutation",
@@ -240,6 +250,10 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.promptCosts": "read",
   "session.taskCosts": "read",
   "usage.forecast": "read",
+  "incident.report": "read",
+  "incident.recent": "read",
+  "incident.guidance": "read",
+  "incident.guidance.clear": "mutation",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -446,6 +460,12 @@ export type RemotePriority = { readonly type: "priority"; readonly clientID: str
 /** Bounded invalidation: clients page the authoritative backend list after receipt. */
 export type RemoteSessions = { readonly type: "sessions" }
 export type RemoteAttentionNeed = "permission" | "question" | "review"
+export type RemoteRecoveryChoice = "continue" | "stop"
+export const remoteRecoveryChoices: readonly RemoteRecoveryChoice[] = ["continue", "stop"]
+export type RemoteStoppedRecovery = { readonly itemID: string }
+export function isRemoteReviewItemID(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128 && /^rvw_[A-Za-z0-9_-]+$/.test(value)
+}
 export type RemoteAttentionDetail = { readonly sessionID: string; readonly title?: string; readonly need?: RemoteAttentionNeed }
 export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[];
   readonly details?: readonly RemoteAttentionDetail[] }
@@ -734,6 +754,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
   if ((operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
+    operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
     operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set" ||
     operation === "machine.latency.append" || operation === "machine.latency.list") && frame.sessionID !== undefined)
@@ -758,6 +779,11 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.list") return input === undefined || isRecord(input) &&
+    (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
+    (input.around === undefined && input.before === undefined || isSessionID(input.around) && input.order === "active" && input.cursor === undefined &&
+      (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= RemoteLimits.maxSessionListPage) &&
+      (input.before === undefined || typeof input.before === "number" && Number.isSafeInteger(input.before) && input.before >= 0 && input.before < (typeof input.limit === "number" ? input.limit : 50)))
   if (operation.startsWith("provider.auth.")) return parseProviderAuthInput(operation, input) !== undefined
   if (operation === "machine.latency.append") return isRecord(input) && Object.keys(input).length === 1 &&
     Array.isArray(input.samples) && input.samples.length >= 1 && input.samples.length <= RemoteLimits.maxLatencyBatch &&
@@ -794,6 +820,21 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     Object.keys(input).every((key) => key === "refresh") && (input.refresh === undefined || typeof input.refresh === "boolean"))
   if (operation === "usage.forecast") return isRecord(input) && Object.keys(input).length === 1 &&
     (input.localScope === "backend" || input.localScope === "location")
+  if (operation === "incident.report") {
+    if (!isRecord(input) || (input.group !== "model" && input.group !== "agent") ||
+      !Object.keys(input).every((key) => ["group", "from", "to", "offset", "limit"].includes(key))) return false
+    const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
+      (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
+    return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+      integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
+      (typeof input.from !== "number" || typeof input.to !== "number" || input.from <= input.to)
+  }
+  if (operation === "incident.recent") return isRecord(input) && validName(input.provider) && validName(input.model) &&
+    (input.agent === undefined || validName(input.agent)) &&
+    (input.limit === undefined || (typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 50)) &&
+    Object.keys(input).every((key) => key === "provider" || key === "model" || key === "agent" || key === "limit")
+  if (operation === "incident.guidance" || operation === "incident.guidance.clear") return isRecord(input) &&
+    validName(input.provider) && validName(input.model) && Object.keys(input).length === 2
   if (operation === "session.promptCosts" || operation === "session.taskCosts") {
     const key = operation === "session.promptCosts" ? "inputIDs" : "sessionIDs"
     if (!isRecord(input) || Object.keys(input).length !== 1 || !Array.isArray(input[key])) return false
@@ -1399,6 +1440,20 @@ export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: 
     readonly reason?: string; readonly observedFrom?: number; readonly observedTo?: number; readonly ratePerHour?: number;
     readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number }[] }
 export type RemoteUsageForecastValue = { readonly data: RemoteUsageForecast }
+
+export type RemoteIncidentKind = "fallback" | "guardrail-escalated" | "guardrail-rejected"
+export type RemoteIncidentModelRef = { readonly id: string; readonly providerID: string; readonly variant?: string; readonly profile?: string }
+export type RemoteIncidentReportInput = { readonly group: "model" | "agent"; readonly from?: number; readonly to?: number; readonly offset?: number; readonly limit?: number }
+export type RemoteIncidentReportRow = { readonly providerID: string; readonly modelID: string; readonly agent?: string;
+  readonly fallbacks: number; readonly escalated: number; readonly rejected: number; readonly last: number }
+export type RemoteIncidentReport = { readonly data: { readonly rows: readonly RemoteIncidentReportRow[]; readonly groups: number } }
+export type RemoteIncidentRecentInput = { readonly provider: string; readonly model: string; readonly agent?: string; readonly limit?: number }
+export type RemoteIncidentItem = { readonly id: string; readonly time: number; readonly kind: RemoteIncidentKind; readonly category: string;
+  readonly ruleIDs: readonly string[]; readonly agent: string; readonly variant?: string; readonly profile?: string;
+  readonly target?: RemoteIncidentModelRef; readonly decidedBy?: "decision-model" | "human" }
+export type RemoteIncidentRecent = { readonly data: { readonly items: readonly RemoteIncidentItem[] } }
+export type RemoteIncidentGuidanceInput = { readonly provider: string; readonly model: string }
+export type RemoteIncidentGuidance = { readonly data: { readonly text?: string; readonly clearedAt?: number; readonly enabled: boolean } }
 
 export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {
   if (!isRecord(value) || !isRecord(value.keys)) return invalidBody()

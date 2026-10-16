@@ -16,11 +16,13 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Decision } from "@ycoding-ai/core/decision"
+import { Database } from "@ycoding-ai/core/database/database"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
 import { Permission } from "@ycoding-ai/core/permission"
+import { Hash } from "@ycoding-ai/core/util/hash"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
@@ -190,6 +192,7 @@ function resourceMcpLayer(
     ),
     Layer.provide(
       Layer.mergeAll(
+        Database.layer({ path: ":memory:" }),
         Layer.succeed(
           Config.Service,
           Config.Service.of({ diagnostics: () => Effect.succeed([]),
@@ -991,7 +994,7 @@ it.effect("waits for permission before calling an MCP tool", () =>
       action: "demo_search",
       resources: ["*"],
       save: ["*"],
-      metadata: {},
+      metadata: { operationDigest: Hash.json({ server: "demo", tool: "search", arguments: {} }) },
       sessionID: Session.ID.make("ses_mcp_permission"),
       agent: toolIdentity.agent,
       source: {

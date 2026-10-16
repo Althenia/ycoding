@@ -8,6 +8,7 @@ import { IsolatedBrowser } from "../isolated-browser"
 import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "browser"
 
@@ -180,19 +181,19 @@ export const Plugin = {
                   for (const action of ["browser_navigate", "browser_read"] as const)
                     yield* permission.assert({
                       action, resources: [resource], save: [new URL(resource).origin],
-                      metadata: { operation: "open", mode: "owned", incidentalDownloads: true, site: new URL(resource).origin },
+                      metadata: { operationDigest: requestDigest(input), operation: "open", mode: "owned", incidentalDownloads: true, site: new URL(resource).origin },
                       sessionID: context.sessionID, agent: context.agent, source,
                     })
-                  const reservation = yield* guardrail.assert({
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID, action: "browser_owned_open", resources: [resource],
-                    metadata: { operation: "open" }, skipReview: true,
+                    metadata: { operationDigest: requestDigest(input), operation: "open" }, skipReview: true,
                   })
                   const tab = yield* browser.open({ sessionID: context.sessionID, generation: input.generation,
                     url: input.url, callID: context.callID })
                     .pipe(Effect.ensuring(reservation.release))
                   yield* permission.assert({
                     action: "browser_read", resources: [`${tab.page.origin}${tab.page.path}`],
-                    save: [tab.page.origin], metadata: { operation: "open" },
+                    save: [tab.page.origin], metadata: { operationDigest: requestDigest(input), operation: "open" },
                     sessionID: context.sessionID, agent: context.agent, source,
                   }).pipe(Effect.catchIf(
                     (error) => error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError,
@@ -212,11 +213,11 @@ export const Plugin = {
                   const tab = (yield* browser.list(context.sessionID)).find((item) => item.id === input.tabID && item.mode === "owned")
                   if (!tab) return yield* new ToolFailure({ message: "Chrome tab is not owned by this Session" })
                   yield* permission.assert({ action: "browser_control", resources: ["close"], save: ["*"],
-                    metadata: { action: "close", mode: "owned" }, sessionID: context.sessionID, agent: context.agent, source })
+                    metadata: { operationDigest: requestDigest(input), action: "close", mode: "owned" }, sessionID: context.sessionID, agent: context.agent, source })
                   yield* permission.assert({ action: "browser_read", resources: [`${tab.page.origin}${tab.page.path}`],
-                    save: [tab.page.origin], metadata: { operation: "close" }, sessionID: context.sessionID, agent: context.agent, source })
-                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID,
-                    action: "browser_mutation", resources: [`${tab.page.origin}${tab.page.path}`], metadata: { operation: "close" },
+                    save: [tab.page.origin], metadata: { operationDigest: requestDigest(input), operation: "close" }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID }, sessionID: context.sessionID,
+                    action: "browser_mutation", resources: [`${tab.page.origin}${tab.page.path}`], metadata: { operationDigest: requestDigest(input), operation: "close" },
                     skipReview: true })
                   yield* browser.close({ sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
                     callID: context.callID }).pipe(Effect.ensuring(reservation.release))
@@ -246,7 +247,7 @@ export const Plugin = {
                       action: "browser_read",
                       resources: tabs.map((tab) => `${tab.page.origin}${tab.page.path}`),
                       save: tabs.map((tab) => tab.page.origin),
-                      metadata: { operation: "tabs" },
+                      metadata: { operationDigest: requestDigest(input), operation: "tabs" },
                       sessionID: context.sessionID,
                       agent: context.agent,
                       source,
@@ -262,7 +263,7 @@ export const Plugin = {
                     action: "browser_control",
                     resources: [input.action],
                     save: ["*"],
-                    metadata: { action: input.action },
+                    metadata: { operationDigest: requestDigest(input), action: input.action },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -279,7 +280,7 @@ export const Plugin = {
                     action: "browser_control",
                     resources: ["stop"],
                     save: ["*"],
-                    metadata: { action: "stop" },
+                    metadata: { operationDigest: requestDigest(input), action: "stop" },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -302,7 +303,7 @@ export const Plugin = {
                     action: "browser_read",
                     resources: [page],
                     save: [tab.page.origin],
-                    metadata: { operation: "observe" },
+                    metadata: { operationDigest: requestDigest(input), operation: "observe" },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -328,13 +329,15 @@ export const Plugin = {
                       action: "browser_read",
                       resources: [`${observation.page.origin}${observation.page.path}`],
                       save: [observation.page.origin],
-                      metadata: { operation: "observe" },
+                      metadata: { operationDigest: requestDigest(input), operation: "observe" },
                       sessionID: context.sessionID,
                       agent: context.agent,
                       source,
                     })
                   return { type: "observation" as const, observation }
                 }
+                const identityInput = { sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
+                  documentGeneration: input.documentGeneration, observationRevision: input.observationRevision, action: input.action }
                 if (input.action.type === "group" || input.action.type === "ungroup") {
                   if (!profileMode) return yield* new ToolFailure({ message: "Tab groups require profile mode" })
                   const groupAction = input.action
@@ -343,22 +346,25 @@ export const Plugin = {
                   if (members.length !== groupAction.tabIDs.length || !groupAction.tabIDs.includes(tab.id))
                     return yield* new ToolFailure({ message: "Group members are not granted profile tabs" })
                   if (members.some((item) => item.lease === "other")) return yield* new ToolFailure({ message: LEASE_HELD })
+                  const actionDigest = (yield* browser.actionIdentity(identityInput)).digest
                   const resources = members.map((item) => `${item.page.origin}${item.page.path}`)
                   yield* permission.assert({ action: "browser_read", resources,
-                    save: members.map((item) => item.page.origin), metadata: { operation: input.action.type },
+                    save: members.map((item) => item.page.origin), metadata: { operationDigest: actionDigest, operation: input.action.type },
                     sessionID: context.sessionID, agent: context.agent, source })
                   yield* permission.assert({ action: "browser_control", resources: [input.action.type], save: ["*"],
-                    metadata: { action: input.action.type, mode: "profile" },
+                    metadata: { operationDigest: actionDigest, action: input.action.type, mode: "profile" },
                     sessionID: context.sessionID, agent: context.agent, source })
-                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID,
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID }, sessionID: context.sessionID,
                     action: "browser_profile_mutation", resources,
-                    metadata: { operation: input.action.type }, skipReview: true })
+                    metadata: { operationDigest: actionDigest, operation: input.action.type }, skipReview: true })
                   const result = yield* browser.action({ sessionID: context.sessionID, tabID: input.tabID,
                     generation: input.generation, documentGeneration: input.documentGeneration,
                     observationRevision: input.observationRevision, callID: context.callID,
                     action: input.action }).pipe(Effect.ensuring(reservation.release))
                   return { type: "action" as const, result }
                 }
+                const identity = yield* (isolatedMode ? isolated.actionIdentity({ ...identityInput, instanceID: input.instanceID }) : browser.actionIdentity(identityInput))
+                const actionDigest = identity.digest
                 const navigationURL = input.action.type === "navigate" ? input.action.url : undefined
                 const extensionMode = !isolatedMode
                 if (extensionMode)
@@ -366,7 +372,8 @@ export const Plugin = {
                     action: "browser_read",
                     resources: [page],
                     save: [tab.page.origin],
-                    metadata: { operation: input.action.type },
+                    metadata: { operationDigest: actionDigest, operation: input.action.type },
+                    consumeReview: identity.reusable,
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -397,11 +404,12 @@ export const Plugin = {
                       : "browser_interact"
                 yield* permission.assert({
                   action: permissionAction,
+                  consumeReview: identity.reusable,
                   resources: [resource],
                   save: [new URL(resource).origin],
                   metadata: {
+                    operationDigest: actionDigest,
                     operation: input.action.type,
-                    ...(input.action.type === "click" || input.action.type === "type" ? { ref: input.action.ref } : {}),
                     ...(extensionMode && ["navigate", "click", "type"].includes(input.action.type)
                       ? { mode: ownedMode ? "owned" : "profile", incidentalDownloads: true, site: new URL(resource).origin }
                       : {}),
@@ -418,8 +426,10 @@ export const Plugin = {
                   yield* permission.assert({
                     action: "browser_navigate",
                     resources: [destination],
+                    consumeReview: identity.reusable,
                     save: [new URL(destination).origin],
                     metadata: {
+                      operationDigest: actionDigest,
                       operation: "click",
                       mode: ownedMode ? "owned" : "profile",
                       incidentalDownloads: true,
@@ -434,19 +444,20 @@ export const Plugin = {
                   yield* permission.assert({
                     action: "browser_read",
                     resources: [destination ?? resource],
+                    consumeReview: identity.reusable,
                     save: [new URL(destination ?? resource).origin],
-                    metadata: { operation: input.action.type },
+                    metadata: { operationDigest: actionDigest, operation: input.action.type },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
                   })
                 const mutating = ["navigate", "click", "type"].includes(input.action.type)
                 const reservation = mutating
-                  ? yield* guardrail.assert({
+                  ? yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                       sessionID: context.sessionID,
                       action: profileMode ? "browser_profile_mutation" : "browser_mutation",
                       resources: destination ? [resource, destination] : [resource],
-                      metadata: { operation: input.action.type },
+                      metadata: { operationDigest: actionDigest, operation: input.action.type },
                       skipReview: true,
                     })
                   : { release: Effect.void }
@@ -480,8 +491,9 @@ export const Plugin = {
                   yield* permission.assert({
                     action: "browser_read",
                     resources: [`${result.tab.page.origin}${result.tab.page.path}`],
+                    consumeReview: identity.reusable,
                     save: [result.tab.page.origin],
-                    metadata: { operation: input.action.type },
+                    metadata: { operationDigest: actionDigest, operation: input.action.type },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -495,7 +507,7 @@ export const Plugin = {
                     action: "browser_read",
                     resources: [`${output.status.tab.page.origin}${output.status.tab.page.path}`],
                     save: [output.status.tab.page.origin],
-                    metadata: { operation: input.operation },
+                    metadata: { operationDigest: requestDigest(input), operation: input.operation },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source: { type: "tool", messageID: context.messageID, callID: context.callID },
@@ -516,6 +528,10 @@ export const Plugin = {
       )
       .pipe(Effect.orDie)
   }),
+}
+
+function requestDigest(input: typeof Input.Type) {
+  return Hash.json({ ...input, generation: undefined, documentGeneration: undefined, observationRevision: undefined })
 }
 
 function safeResource(input: string) {

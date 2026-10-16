@@ -4,7 +4,7 @@ import path from "path"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
 import { and, asc, desc, eq } from "drizzle-orm"
-import { Context, Deferred, Duration, Effect, Layer, Option, Schema } from "effect"
+import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Schema } from "effect"
 import { Config } from "../config"
 import { ConfigGuardrail } from "../config/guardrail"
 import { Decision } from "../decision"
@@ -19,6 +19,7 @@ import { Global } from "../global"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
+import { optional } from "../schema"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
@@ -27,6 +28,8 @@ import { SessionStore } from "./store"
 import { SessionGuardrailCounter } from "./guardrail-counter"
 import { SessionGuardrailMatch } from "./guardrail-match"
 import { SessionGuardrailStandard } from "./guardrail-standard"
+import { SessionReviewFold } from "./review-fold"
+import { ModelIncident } from "../model-incident/index"
 import type { ShellQueue } from "../shell/queue"
 
 export const RequestID = Guardrail.RequestID
@@ -35,6 +38,7 @@ export interface EvaluateInput {
   readonly sessionID: Session.ID
   readonly action: string
   readonly resources: ReadonlyArray<string>
+  readonly source?: Guardrail.Source
   readonly metadata?: Guardrail.Request["metadata"]
   /** Admit ordinary and hard review decisions without a request; deny decisions still block. */
   readonly skipReview?: boolean
@@ -78,7 +82,22 @@ export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Guard
 
 export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Guardrail.DeclinedError", {
   requestID: Guardrail.RequestID,
+  message: Schema.String.pipe(optional),
 }) {}
+
+export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Guardrail.DeferredError", {
+  requestID: Guardrail.RequestID,
+  itemID: SessionReviewFold.ID,
+  ruleIDs: Schema.Array(Schema.String),
+}) {
+  override get message() {
+    return `This action did not run. Guardrail rule(s) ${this.ruleIDs.join(", ")} need the user's decision and were added to the review box as item ${this.itemID} while the user is asleep. Do not retry it or work around it. If the user approves, you will be told to re-issue exactly this action. Continue with independent work.`
+  }
+}
+
+export function reviewMessage(error: unknown): string | undefined {
+  if (error instanceof DeferredError || error instanceof DeclinedError) return error.message || undefined
+}
 
 export class RequestNotFoundError extends Schema.TaggedErrorClass<RequestNotFoundError>()(
   "Guardrail.RequestNotFoundError",
@@ -88,6 +107,7 @@ export class RequestNotFoundError extends Schema.TaggedErrorClass<RequestNotFoun
 export type AssertError =
   | BlockedError
   | DeclinedError
+  | DeferredError
   | SessionGuardrailCounter.CapExceededError
   | SessionErrors.NotFoundError
 
@@ -95,7 +115,7 @@ export interface Interface {
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
-  readonly rejectEscalated: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
+  readonly deferPending: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
   readonly forSession: (
     sessionID: Session.ID,
   ) => Effect.Effect<ReadonlyArray<Guardrail.Request>, SessionErrors.NotFoundError>
@@ -111,10 +131,11 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 interface Pending {
   readonly request: Guardrail.Request
-  readonly deferred: Deferred.Deferred<void, DeclinedError>
+  readonly deferred: Deferred.Deferred<void, DeclinedError | DeferredError>
   readonly review: ManagedReservation
   readonly directories: ReadonlyArray<string>
   readonly decisionModel: boolean
+  readonly source?: Guardrail.Source
 }
 
 interface Classification {
@@ -397,6 +418,60 @@ export const layer = Layer.effect(
         ),
       )
 
+    const reviewFingerprint = (input: EvaluateInput, result: Evaluation) =>
+      SessionReviewFold.fingerprint({
+        action: input.action,
+        resources: input.resources,
+        workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
+        ruleIDs: result.ruleIDs,
+        hardReview: result.hardReview,
+        metadata: input.metadata,
+      })
+
+    const openReview = Effect.fnUntraced(function* (
+      item: Pending,
+      outcome: Guardrail.Escalation & { readonly reason: "disabled" | "escalated" | "sleep_entry" | DecisionChoice.UnsettledReason },
+      conversion = false,
+    ) {
+      return yield* SessionReviewFold.open(database.db, events, {
+        sessionID: item.request.sessionID,
+        rootID: item.request.rootSessionID,
+        kind: "guardrail",
+        reason: outcome.reason,
+        ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+        ...(outcome.grades === undefined ? {} : { grades: outcome.grades }),
+        origin: item.source ? { messageID: item.source.messageID, callID: item.source.callID } : { requestID: item.request.id },
+        payload: {
+          type: "guardrail",
+          action: DecisionChoice.redactText(item.request.action),
+          resources: item.request.resources.map((resource) => DecisionChoice.redactText(resource)),
+          ruleIDs: [...item.request.ruleIDs],
+          reason: item.request.reason,
+          hardReview: item.request.hardReview ?? false,
+          directories: [...item.directories],
+          fingerprint: reviewFingerprint(
+            {
+              sessionID: item.request.sessionID,
+              action: item.request.action,
+              resources: item.request.resources,
+              metadata: item.request.metadata,
+            },
+            {
+              rootSessionID: item.request.rootSessionID,
+              decision: "ask",
+              ruleIDs: item.request.ruleIDs,
+              standard: item.request.standard,
+              hardReview: item.request.hardReview ?? false,
+            },
+          ),
+          requestID: item.request.id,
+        },
+        limit: settings?.max_pending_reviews ?? 16,
+        conversion,
+      })
+    })
+
     const assert = Effect.fn("SessionGuardrail.assert")((input: EvaluateInput) =>
       Effect.gen(function* () {
         const classification = yield* Effect.gen(function* () {
@@ -405,12 +480,12 @@ export const layer = Layer.effect(
             const current = yield* classify(input, dismissedStandardRules)
             const matched = current.evaluation
             const ruleID = matched.ruleIDs[0]
-            if (matched.decision !== "ask" || !matched.standard || !ruleID?.startsWith("standard.review.") || input.skipReview) return current
+            if (settings?.decide_reviews !== true || matched.decision !== "ask" || !matched.standard || !ruleID?.startsWith("standard.review.") || input.skipReview) return current
             if (!current.evidence) return current
             if (!matched.hardReview) {
               const auto = yield* autonomy.canAutoGuardrail(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              const delegated = yield* autonomy.guardrailDecisionEnabled(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              if (auto && !delegated) return current
+              const asleep = yield* autonomy.isAsleep(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+              if (auto && !asleep) return current
             }
             const judgment = yield* DecisionChoice.verifyMatch(decision, {
               sessionID: input.sessionID,
@@ -425,7 +500,7 @@ export const layer = Layer.effect(
               },
             })
             if (!judgment || judgment.answer) return current
-            yield* events.publish(SessionEvent.GuardrailDismissed, { sessionID: matched.rootSessionID, reviewSessionID: input.sessionID, ruleID, confidence: judgment.confidence })
+            yield* events.publish(SessionEvent.GuardrailDismissed, { sessionID: matched.rootSessionID, reviewSessionID: input.sessionID, ruleID, confidence: judgment.confidence, ...(input.source ? { source: input.source } : {}) })
             dismissedStandardRules.add(ruleID)
           }
         })
@@ -458,13 +533,29 @@ export const layer = Layer.effect(
             const autoGuardrail = yield* autonomy
               .canAutoGuardrail(result.rootSessionID)
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-            const decisionEnabled = yield* autonomy
-              .guardrailDecisionEnabled(result.rootSessionID)
+            const asleep = yield* autonomy
+              .isAsleep(result.rootSessionID)
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            const decisionEnabled = settings?.decide_reviews === true && (!result.hardReview || settings?.decide_hard_reviews !== false)
             if (
               result.decision === "allow" ||
               input.skipReview ||
-              (result.decision === "ask" && !result.hardReview && autoGuardrail && !decisionEnabled)
+              (result.decision === "ask" && !result.hardReview && autoGuardrail && !asleep)
+            ) {
+              const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
+              yield* events.publish(Guardrail.Event.Decided, {
+                rootSessionID: result.rootSessionID,
+                sessionID: input.sessionID,
+                action: input.action,
+                ruleIDs: [...result.ruleIDs],
+                decision: "allow",
+              })
+              return { type: "allowed" as const, reservation }
+            }
+
+            if (
+              result.decision === "ask" &&
+              (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "guardrail", reviewFingerprint(input, result)))
             ) {
               const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
               yield* events.publish(Guardrail.Event.Decided, {
@@ -491,16 +582,17 @@ export const layer = Layer.effect(
               ...(result.risk ? { risk: result.risk } : {}),
               ...(input.metadata === undefined ? {} : { metadata: structuredClone(input.metadata) }),
             })
-            const deferred = yield* Deferred.make<void, DeclinedError>()
+            const deferred = yield* Deferred.make<void, DeclinedError | DeferredError>()
             pending.set(request.id, {
               request,
               deferred,
               review,
               directories: classification.directories,
               decisionModel: decisionEnabled,
+              ...(input.source ? { source: input.source } : {}),
             })
             advanceUnlocked(result.rootSessionID)
-            if (!decisionEnabled)
+            if (!decisionEnabled && !asleep)
               yield* events
                 .publish(Guardrail.Event.Asked, request)
                 .pipe(
@@ -508,19 +600,20 @@ export const layer = Layer.effect(
                     Effect.sync(() => removePendingUnlocked(request.id)).pipe(Effect.andThen(review.releaseUnlocked)),
                   ),
                 )
-            return decisionEnabled
+            return decisionEnabled || asleep
               ? { type: "decision-review" as const, request, deferred, review }
               : { type: "review" as const, request, deferred, review }
           }),
         ), (admission) => Effect.gen(function* () {
           if (admission.type === "allowed") return admission.reservation
           if (admission.type === "decision-review") {
-            const judgment = yield* DecisionChoice.choose(decision, {
+            const outcome = settings?.decide_reviews !== true || (result.hardReview && settings?.decide_hard_reviews === false)
+              ? { type: "unsettled" as const, reason: "disabled" as const }
+              : yield* DecisionChoice.grade(decision, {
               sessionID: input.sessionID,
               name: "guardrail",
-              minimumConfidence: 0,
               instructions:
-                "Choose approve, reject, or escalate for this guardrail review. Approve once only when the action is scoped to its intended target and reversible or low-impact if wrong. Reject when the evidence establishes that the action should not proceed. Escalate when evidence is insufficient, scope or intent is ambiguous, or a human must decide. Hard reviews need stronger evidence. Approve and reject require confidence at least 0.8; lower confidence escalates. Never choose Always.",
+                "Grade every listed choice independently with bounded evidence; do not select a winner. Approve when the action is scoped to its intended target and reversible or low-impact if wrong. Approve_all grants the offered ordinary Always approval, including durable outside-directory approval where applicable, and needs stronger evidence. Reject when evidence establishes the action should not proceed. Escalate when evidence is insufficient, scope or intent is ambiguous, or a human must decide. Approve_all requires 0.9; approve requires 0.8 for ordinary reviews and 0.95 for hard reviews; reject requires 0.8. Conflicting qualifying approval and rejection grades escalate.",
               state: {
                 action: input.action,
                 resources: [...input.resources],
@@ -541,20 +634,73 @@ export const layer = Layer.effect(
                 workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
               },
               choices: [
-                { value: "approve", description: "Approve this single guardrail review (once, never always)" },
+                ...(result.hardReview ? [] : [{ value: "approve_all", description: "Grant this ordinary review's Always approval" }]),
+                { value: "approve", description: "Approve this single guardrail review once" },
                 { value: "reject", description: "Reject this guardrail review" },
                 { value: "escalate", description: "Ask the user to decide this guardrail review" },
               ],
             })
-            const provenance = judgment ? { choice: judgment.value as Guardrail.DecisionChoice, confidence: judgment.confidence } : {}
-            const escalated = !judgment || judgment.value === "escalate" || judgment.confidence < DecisionChoice.ConfidenceThreshold
+            const grades = outcome.type === "grades" ? Schema.decodeUnknownOption(Schema.Array(Guardrail.Grade))(outcome.grades) : Option.none()
+            const ranked = Option.isSome(grades) ? grades.value.toSorted((a, b) => b.confidence - a.confidence) : []
+            const qualifying = ranked.filter((grade) => grade.choice === "approve_all" ? grade.confidence >= 0.9
+              : grade.choice === "approve" ? grade.confidence >= (result.hardReview ? 0.95 : 0.8)
+              : grade.choice === "reject" && grade.confidence >= 0.8)
+            const escalated = qualifying.length === 0 ||
+              ranked.some((grade) => grade.choice === "escalate" && grade.confidence >= (ranked[0]?.confidence ?? 0)) ||
+              (qualifying.some((grade) => grade.choice === "reject") && qualifying.some((grade) => grade.choice === "approve" || grade.choice === "approve_all"))
+            const selected = escalated ? ranked.find((grade) => grade.choice === "escalate" && grade.confidence === ranked[0]?.confidence) ?? ranked[0] : qualifying[0]
+            const choice = selected?.choice
+            const provenance = {
+              ...(choice === undefined ? {} : { choice }),
+              ...(selected === undefined ? {} : { confidence: selected.confidence }),
+              ...(Option.isSome(grades) ? { grades: grades.value } : {}),
+            }
             const handedOff = escalated && (yield* withRootLock(result.rootSessionID, Effect.gen(function* () {
               const asleep = yield* autonomy.isAsleep(result.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true)))
-              if (asleep) return false
               const item = pending.get(admission.request.id)
               if (!item) return yield* new DeclinedError({ requestID: admission.request.id })
+              if (asleep) {
+                const opened = yield* openReview(item, {
+                  reason: outcome.type === "unsettled" ? outcome.reason : qualifying.length === 0 && choice !== "escalate" ? "low_confidence" : "escalated",
+                  ...provenance,
+                }).pipe(
+                  Effect.catchTag("SessionReview.FullError", () => Effect.succeed(undefined)),
+                )
+                removePendingUnlocked(item.request.id)
+                if (!opened) {
+                  yield* Deferred.fail(item.deferred, new DeclinedError({
+                    requestID: item.request.id,
+                    message: "This action did not run. The user's review box is full, so this guardrail review was not recorded. Continue independent work and stop when only blocked work remains.",
+                  }))
+                  return "settled" as const
+                }
+                yield* events.publish(Guardrail.Event.Deferred, {
+                  rootSessionID: result.rootSessionID,
+                  sessionID: input.sessionID,
+                  requestID: item.request.id,
+                  itemID: opened.itemID,
+                })
+                yield* Deferred.fail(item.deferred, new DeferredError({ requestID: item.request.id, itemID: opened.itemID, ruleIDs: [...result.ruleIDs] }))
+                return "settled" as const
+              }
+              if (outcome.type === "unsettled" && outcome.reason === "disabled") {
+                pending.set(item.request.id, { ...item, decisionModel: false })
+                advanceUnlocked(result.rootSessionID)
+                yield* events.publish(Guardrail.Event.Asked, item.request)
+                return true
+              }
+              const time = yield* Clock.currentTimeMillis
               yield* events.publish(SessionEvent.GuardrailEscalated, {
-                sessionID: input.sessionID, requestID: admission.request.id, ...provenance,
+                sessionID: input.sessionID, requestID: admission.request.id, ruleIDs: [...item.request.ruleIDs], ...provenance, ...(item.source ? { source: item.source } : {}),
+              }, {
+                commit: () => ModelIncident.recordEscalation(database.db, {
+                  sessionID: input.sessionID,
+                  requestID: admission.request.id,
+                  messageID: item.source?.messageID,
+                  ruleIDs: item.request.ruleIDs,
+                  hardReview: item.request.hardReview === true,
+                  time,
+                }),
               })
               const request = new Guardrail.Request({ ...item.request, escalation: provenance })
               pending.set(request.id, { ...item, request, decisionModel: false })
@@ -566,7 +712,7 @@ export const layer = Layer.effect(
               {
                 sessionID: result.rootSessionID,
                 requestID: admission.request.id,
-                reply: !escalated && judgment?.value === "approve" ? "once" : "reject",
+                reply: choice === "approve_all" ? "always" : choice === "approve" ? "once" : "reject",
               },
               provenance,
             ).pipe(
@@ -610,7 +756,7 @@ export const layer = Layer.effect(
 
     const reply = Effect.fn("SessionGuardrail.reply")(function* (
       input: ReplyInput,
-      provenance?: { readonly choice?: Guardrail.DecisionChoice; readonly confidence?: number },
+      provenance?: Guardrail.Escalation,
     ) {
       if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
       const rootSessionID = yield* root(input.sessionID)
@@ -632,11 +778,19 @@ export const layer = Layer.effect(
               requestID: item.request.id,
               reply,
               ...(provenance
-                ? { decidedBy: "decision-model" as const, choice: provenance.choice, confidence: provenance.confidence }
+                ? { decidedBy: "decision-model" as const, ...provenance }
                 : {}),
             })
             .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
-          if (provenance && reply !== "always") {
+          const rejection = {
+            sessionID: item.request.sessionID,
+            requestID: item.request.id,
+            messageID: item.source?.messageID,
+            ruleIDs: item.request.ruleIDs,
+            hardReview: item.request.hardReview === true,
+          }
+          const time = yield* Clock.currentTimeMillis
+          if (provenance) {
             yield* events
               .publish(SessionEvent.GuardrailDecided, {
                 sessionID: item.request.rootSessionID,
@@ -645,12 +799,23 @@ export const layer = Layer.effect(
                 reply,
                 choice: provenance.choice,
                 confidence: provenance.confidence,
+                grades: provenance.grades,
+                ruleIDs: [...item.request.ruleIDs],
+                ...(item.source ? { source: item.source } : {}),
+              }, {
+                commit: () => reply === "reject"
+                  ? ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "decision-model", time })
+                  : Effect.void,
               })
               .pipe(
                 Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
               )
           }
           if (reply === "reject") {
+            if (!provenance)
+              yield* ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "human", time }).pipe(
+                Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
+              )
             yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
             return yield* Effect.void
           }
@@ -683,12 +848,29 @@ export const layer = Layer.effect(
       )
     })
 
-    const rejectEscalated = Effect.fn("SessionGuardrail.rejectEscalated")(function* (sessionID: Session.ID) {
+    const deferPending = Effect.fn("SessionGuardrail.deferPending")(function* (sessionID: Session.ID) {
       const requests = yield* forSession(sessionID)
-      yield* Effect.forEach(requests.filter((request) => request.escalation !== undefined), (request) =>
-        reply({ sessionID, requestID: request.id, reply: "reject" }, request.escalation).pipe(
-          Effect.catchTag("Guardrail.RequestNotFoundError", () => Effect.void),
-        ), { discard: true })
+      const rootSessionID = yield* root(sessionID)
+      yield* withRootLock(rootSessionID, Effect.forEach(requests, (request) =>
+        Effect.gen(function* () {
+          const item = pending.get(request.id)
+          if (!item || item.decisionModel) return
+          const opened = yield* openReview(item, {
+            reason: "sleep_entry",
+            ...(request.escalation?.choice === undefined ? {} : { choice: request.escalation.choice }),
+            ...(request.escalation?.confidence === undefined ? {} : { confidence: request.escalation.confidence }),
+            ...(request.escalation?.grades === undefined ? {} : { grades: request.escalation.grades }),
+          }, true).pipe(Effect.orDie)
+          removePendingUnlocked(request.id)
+          yield* events.publish(Guardrail.Event.Deferred, {
+            rootSessionID,
+            sessionID: request.sessionID,
+            requestID: request.id,
+            itemID: opened.itemID,
+          })
+          yield* Deferred.fail(item.deferred, new DeferredError({ requestID: request.id, itemID: opened.itemID, ruleIDs: [...request.ruleIDs] }))
+          yield* item.review.releaseUnlocked
+        }), { discard: true }))
     })
 
     const statusUnlocked = Effect.fnUntraced(function* (rootSessionID: Session.ID) {
@@ -781,7 +963,7 @@ export const layer = Layer.effect(
                 Option.match(decode(row.data), {
                   onNone: () => [],
                   onSome: (data) => [
-                    { sessionID: data.reviewSessionID, created: row.created, requestID: data.requestID, reply: data.reply, choice: data.choice, confidence: data.confidence },
+                    { sessionID: data.reviewSessionID, created: row.created, requestID: data.requestID, reply: data.reply, choice: data.choice, confidence: data.confidence, grades: data.grades, ruleIDs: data.ruleIDs, source: data.source },
                   ],
                 }),
               )
@@ -791,7 +973,7 @@ export const layer = Layer.effect(
               )).orderBy(desc(EventTable.seq)).limit(100).all().pipe(Effect.orDie)
               const decodeDismissal = Schema.decodeUnknownOption(SessionEvent.GuardrailDismissed.data)
               const dismissals = dismissedRows.toReversed().flatMap((row) => Option.match(decodeDismissal(row.data), {
-                onNone: () => [], onSome: (data) => [{ sessionID: data.reviewSessionID, created: row.created, eventID: row.id, ruleID: data.ruleID, confidence: data.confidence }],
+                onNone: () => [], onSome: (data) => [{ sessionID: data.reviewSessionID, created: row.created, eventID: row.id, ruleID: data.ruleID, confidence: data.confidence, source: data.source }],
               }))
               return new Guardrail.Status({ ...current, ...(decisions.length ? { decisions } : {}), ...(dismissals.length ? { dismissals } : {}) })
             }),
@@ -804,7 +986,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ evaluate, assert, reply: (input) => reply(input), rejectEscalated, forSession, status, snapshot, withSnapshot })
+    return Service.of({ evaluate, assert, reply: (input) => reply(input), deferPending, forSession, status, snapshot, withSnapshot })
   }),
 )
 

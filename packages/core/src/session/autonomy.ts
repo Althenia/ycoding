@@ -1,7 +1,7 @@
 export * as SessionAutonomy from "./autonomy"
 
 import { and, eq, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, SchemaGetter } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "../util/hash"
@@ -36,16 +36,16 @@ export const YOLO_LEVEL_OFF = 0 as const
 export const YOLO_LEVEL_APPROVALS = 1 as const
 export const YOLO_LEVEL_ANSWERS = 2 as const
 
-export const Sleep = Schema.Struct({
-  priorGuardrailDecision: Schema.Boolean,
-})
+export const Sleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
+  decode: SchemaGetter.transform(() => ({})),
+  encode: SchemaGetter.transform(() => ({})),
+}))
 export type Sleep = typeof Sleep.Type
 
 export const State = Schema.Struct({
   mode: Mode,
   yolo: YoloLevel,
   goal: Goal.pipe(Schema.optional),
-  guardrailDecision: Schema.Boolean.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
 })
 export type State = typeof State.Type
@@ -57,7 +57,6 @@ const LegacyState = Schema.Struct({
   mode: Schema.Literals(["normal", "yolo", "goal"]),
   yolo: Schema.optional(Schema.Unknown),
   goal: Goal.pipe(Schema.optional),
-  guardrailDecision: Schema.Boolean.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
 })
 const decodeLegacy = Schema.decodeUnknownOption(LegacyState)
@@ -95,10 +94,6 @@ export function isAsleep(state: State): boolean {
   return state.sleep !== undefined
 }
 
-export function guardrailDecisionEnabled(state: State): boolean {
-  return state.guardrailDecision === true || isAsleep(state)
-}
-
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly snapshot: (
@@ -110,7 +105,6 @@ export interface Interface {
   readonly canAutoAnswer: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoPermission: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoGuardrail: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly guardrailDecisionEnabled: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly isAsleep: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly setMode: (input: {
     sessionID: SessionSchema.ID
@@ -146,7 +140,6 @@ export interface Interface {
     goal?: string | null | true
     rawText?: string
     maxNoProgress?: number
-    guardrailDecision?: boolean
     sleep?: boolean
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
@@ -173,7 +166,6 @@ export const read = (value: unknown): State => {
     const v = legacy.value
     const level = v.yolo === undefined ? 0 : normalizeYolo(v.yolo)
     const extras = {
-      ...(v.guardrailDecision !== undefined ? { guardrailDecision: v.guardrailDecision } : {}),
       ...(v.sleep ? { sleep: v.sleep } : {}),
     }
     if (v.mode === "yolo")
@@ -259,7 +251,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       const rootID = yield* familyID(sessionID)
       if (rootID === sessionID) return state
       const root = yield* load(rootID)
-      return { ...state, guardrailDecision: root.guardrailDecision, sleep: root.sleep }
+      return { ...state, sleep: root.sleep }
     })
 
   const mutate = (
@@ -347,9 +339,6 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const canAutoGuardrailEffect: Interface["canAutoGuardrail"] = (sessionID) =>
     walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS))
 
-  const guardrailDecisionEnabledEffect: Interface["guardrailDecisionEnabled"] = (sessionID) =>
-    familyState(sessionID).pipe(Effect.map(guardrailDecisionEnabled))
-
   const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
 
   const isAutonomous: Interface["isAutonomous"] = (sessionID) =>
@@ -421,23 +410,17 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       }
     })
 
-  const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress, guardrailDecision, sleep }) =>
+  const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress, sleep }) =>
     apply(sessionID, (state) => {
       let next: State = { ...state, mode: "normal" }
       let changed = false
-      if (guardrailDecision !== undefined) {
-        if ((next.guardrailDecision ?? false) !== guardrailDecision) {
-          next = { ...next, guardrailDecision }
-          changed = true
-        }
-      }
       if (sleep !== undefined) {
         if (sleep && !next.sleep) {
-          next = { ...next, sleep: { priorGuardrailDecision: next.guardrailDecision ?? false } }
+          next = { ...next, sleep: {} }
           changed = true
         }
         if (!sleep && next.sleep) {
-          next = { ...next, guardrailDecision: next.sleep.priorGuardrailDecision, sleep: undefined }
+          next = { ...next, sleep: undefined }
           changed = true
         }
       }
@@ -484,7 +467,6 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     canAutoAnswer: canAutoAnswerEffect,
     canAutoPermission: canAutoPermissionEffect,
     canAutoGuardrail: canAutoGuardrailEffect,
-    guardrailDecisionEnabled: guardrailDecisionEnabledEffect,
     isAsleep: isAsleepEffect,
     setMode,
     setYolo,

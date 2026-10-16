@@ -3,8 +3,8 @@ import { REMOTE_SCENARIOS, remoteScenario } from "./remote-scenarios"
 
 describe("remote product-state scenarios", () => {
   test("defines product states on the handoff viewport matrix with unique IDs", () => {
-    expect(REMOTE_SCENARIOS).toHaveLength(25)
-    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(25)
+    expect(REMOTE_SCENARIOS).toHaveLength(27)
+    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(27)
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-workspace")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-landing")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("session-list")

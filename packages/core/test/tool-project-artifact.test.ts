@@ -84,7 +84,10 @@ const permission = Layer.mock(Permission.Service, {
   ask: () => Effect.die("project_artifact must not publish permission asks"),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
-  assert: () => Effect.succeed({ release: Effect.void }),
+  assert: (input) => Effect.sync(() => {
+    expect(input.source).toEqual({ messageID, callID: expect.any(String) })
+    return { release: Effect.void }
+  }),
 })
 const locationLayer = Layer.succeed(Location.Service, Location.Service.of(location))
 const projectArtifactToolNode = makeLocationNode({

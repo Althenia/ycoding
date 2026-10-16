@@ -26,6 +26,12 @@ test("decodes closed client timings and rejects excess properties", () => {
     expect(() => Schema.decodeUnknownSync(Telemetry.Sample)(invalid)).toThrow()
 })
 
+test("accepts every incident operation name", () => {
+  const names = ["incident.report", "incident.recent", "incident.guidance", "incident.guidance.get", "incident.guidance.clear"]
+  expect(new Set(names).size).toBe(5)
+  for (const operation of names) expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation as never)
+})
+
 test("validates notice versions and omits undecided consent", () => {
   expect(Schema.decodeUnknownSync(Telemetry.ConsentInput)({ enabled: true, noticeVersion: 1 })).toEqual({
     enabled: true,

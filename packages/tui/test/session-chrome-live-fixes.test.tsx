@@ -83,7 +83,7 @@ describe("session footer identity", () => {
       const frame = app.captureCharFrame()
       expect(frame).toContain("main")
       expect(frame).toContain("goal off")
-      expect(frame).toContain("YOLO off")
+      expect(frame).toContain("Manual")
       expect(frame).toContain("subagents 0")
       expect(frame).toContain("shells 0")
       expect(frame).not.toContain("ses_")

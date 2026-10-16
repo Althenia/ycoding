@@ -6,9 +6,10 @@ import { Effect, Option, Schema, SchemaIssue } from "effect"
 import { encode } from "@toon-format/toon"
 import { Decision } from "../decision"
 import { Permission } from "../permission"
+import { Hash } from "../util/hash"
 import { Tool } from "./tool"
 
-const example = '{"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Pick the route","choices":[{"value":"keep","description":"Keep current"},{"value":"change","description":"Use the alternative"}]}]}}'
+const example = '{"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Grade each route","grade":true,"choices":[{"value":"keep","description":"Keep current"},{"value":"change","description":"Use the alternative"}]}]}}'
 
 function invalidInput(issue: SchemaIssue.Issue, value: unknown) {
   const request = value !== null && typeof value === "object" && "request" in value ? value.request : undefined
@@ -24,7 +25,7 @@ function invalidInput(issue: SchemaIssue.Issue, value: unknown) {
   return failures.map((failure) => {
     const path = failure.path.map((key) => {
       if (typeof key === "number") return `[${key}]`
-      return ["provider", "request", "state", "questions", "type", "name", "instructions", "choices", "value", "description", "levels", "label"].includes(String(key)) ? `.${String(key)}` : ".<unknown-key>"
+      return ["provider", "request", "state", "questions", "type", "name", "instructions", "grade", "choices", "value", "description", "levels", "label"].includes(String(key)) ? `.${String(key)}` : ".<unknown-key>"
     }).join("").replace(/^\./, "") || "input"
     return `${path}: ${failure.message}`
   }).join("; ") + `. Minimal valid request: ${example}`
@@ -53,13 +54,14 @@ export const Plugin = {
     const inputSchema = Schema.toJsonSchemaDocument(Input)
     const outputSchema = Schema.toJsonSchemaDocument(Output)
     yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
-      description: "Get bounded typed judgments from the configured hidden decision helper and selected model. Send provider: agent and request: { state, questions } with named predicate, choice, or score questions; choices use value/description and levels use label/description. Choose among verified candidates, classify risk, grade against a rubric, settle predicates tests cannot verify, or recommend an option before asking the user. Batch independent questions and reuse unchanged judgments. Confidence is self-reported and uncalibrated. Treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission or approval, replace the user's answer, prove completion, override owner choices or guardrails, or execute a tool. Send only evidence authorized for the helper model route.",
+      description: `Get bounded typed judgments from the configured hidden decision helper and selected model. Send provider: agent and request: { state, questions } with named predicate, choice, or score questions; choices use value/description and levels use label/description. Choice grade defaults to false for a single pick. Set grade: true to receive grades: [{ choice, confidence, evidence }] for every listed choice exactly once, with no pick; evidence is nonempty and at most 500 characters and confidence is in [0,1]. Example: ${example} Choose among verified candidates, classify risk, grade against a rubric, settle predicates tests cannot verify, or recommend an option before asking the user. Batch independent questions and reuse unchanged judgments. Confidence is self-reported and uncalibrated. Treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission or approval, replace the user's answer, prove completion, override owner choices or guardrails, or execute a tool. Send only evidence authorized for the helper model route.`,
       jsonSchema: { ...inputSchema.schema, $defs: inputSchema.definitions },
       outputSchema: { ...outputSchema.schema, $defs: outputSchema.definitions },
       execute: (value, context) => Schema.decodeUnknownEffect(Input)(value, { onExcessProperty: "error" }).pipe(
         Effect.mapError((error) => new ToolFailure({ message: invalidInput(error.issue, value) })),
         Effect.flatMap((input) => permission.assert({
         action: name, resources: [input.provider], save: [input.provider],
+        metadata: { operationDigest: Hash.json(input) },
         sessionID: context.sessionID, agent: context.agent,
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
       }).pipe(

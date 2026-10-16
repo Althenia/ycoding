@@ -22,10 +22,14 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
-import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { asc, eq, sql } from "drizzle-orm"
+import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
+import { EventTable } from "@ycoding-ai/core/event/sql"
+import { Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionMessageUpdater } from "@ycoding-ai/core/session/message-updater"
@@ -67,11 +71,14 @@ priority: ${input.priority ?? 0}
 }
 
 function harness(input?: {
+  readonly defaults?: boolean
   readonly entries?: ReadonlyArray<Config.Entry>
   readonly documents?: ReadonlyMap<string, string>
   readonly autoGuardrail?: boolean
-  readonly guardrailDecision?: boolean
+  readonly realAutonomy?: boolean
+  readonly yolo?: 0 | 1 | 2 | 3
   readonly asleep?: boolean
+  readonly sleepStates?: Array<boolean>
   readonly failReply?: boolean
   readonly decision?: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>
   readonly verify?: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>
@@ -147,10 +154,9 @@ function harness(input?: {
         ]).get(sessionID),
       ),
   })
-  const autonomy = Layer.mock(SessionAutonomy.Service, {
+  const autonomy = input?.realAutonomy ? SessionAutonomy.layer.pipe(Layer.provide(storage)) : Layer.mock(SessionAutonomy.Service, {
     canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
-    guardrailDecisionEnabled: () => Effect.succeed(input?.guardrailDecision ?? false),
-    isAsleep: () => Effect.succeed(input?.asleep ?? false),
+    isAsleep: () => Effect.sync(() => input?.sleepStates?.shift() ?? input?.asleep ?? false),
   } as unknown as SessionAutonomy.Interface)
   const locationLayer = Layer.succeed(
     Location.Service,
@@ -186,13 +192,22 @@ function harness(input?: {
           return input?.verify?.(request) ?? Effect.succeed(verificationOutput(true, 1))
         }
         choices.push(request)
-        if (input?.decision) return input.decision(request)
-        return Effect.die("Guardrails must not request helper judgments")
+        if (input?.decision) return input.decision(request).pipe(Effect.map((output) => ({ ...output, response: { ...output.response,
+          answers: output.response.answers.map((answer) => ({ ...answer,
+            ...(answer.grades === undefined ? {} : { grades: answer.grades.filter((grade) => request.request.questions.some((question) =>
+              question.type === "choice" && question.choices.some((choice) => choice.value === grade.choice))) }),
+          })),
+        } })))
+        return Effect.succeed(decisionOutput("escalate", 1))
       },
     }),
     Layer.mock(Config.Service, {
       entries: () => Effect.succeed([
-        ...(input?.entries ?? []),
+        ...(input?.defaults ? [] : [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { decide_reviews: true } }) })]),
+        ...(input?.entries ?? []).map((entry) => input?.defaults || entry.type !== "document" || entry.info.guardrails === undefined ? entry : new Config.Document({
+          ...entry,
+          info: Schema.decodeUnknownSync(Config.Info)({ ...entry.info, guardrails: { decide_reviews: true, ...entry.info.guardrails } }),
+        })),
         ...(permissionRules === undefined ? [] : [new Config.Document({
           type: "document",
           info: Schema.decodeUnknownSync(Config.Info)({ permissions: permissionRules }),
@@ -223,6 +238,13 @@ function harness(input?: {
     escalations,
     asked,
     it: testEffect(Layer.mergeAll(SessionGuardrail.layer, seed).pipe(Layer.provideMerge(dependencies))),
+    seed: Effect.gen(function* () {
+      const database = yield* Database.Service
+      yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/workspace/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* database.db.insert(SessionTable).values({ id: parentID, project_id: Project.ID.global, directory: "/workspace/project", title: "Graded reviews" }).onConflictDoNothing().run().pipe(Effect.orDie)
+      const service = yield* SessionAutonomy.Service
+      yield* service.set({ sessionID: parentID, yolo: input?.yolo ?? 0, sleep: input?.asleep ?? false })
+    }),
   }
 }
 
@@ -575,7 +597,7 @@ describe("SessionGuardrail ordinary review", () => {
       expect(pending.request.hardReview).toBe(true)
       yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
       expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
-      expect(yolo3.choices).toHaveLength(0)
+      expect(yolo3.choices).toHaveLength(1)
     }),
   )
 })
@@ -1301,7 +1323,7 @@ discovery.it.effect("discovers nearest repository layers before broader and glob
   }),
 )
 
-const decisionOutput = (choice: "approve" | "reject" | "escalate" | "refusal", confidence: number) =>
+const decisionOutput = (choice: Guardrail.DecisionChoice | "refusal", confidence: number) =>
   Schema.decodeUnknownSync(Decision.Output)({
     provider: "agent",
     response: {
@@ -1313,9 +1335,12 @@ const decisionOutput = (choice: "approve" | "reject" | "escalate" | "refusal", c
           name: "guardrail",
           type: choice === "refusal" ? "refusal" : "choice",
           answer: null,
-          choice: choice === "refusal" ? null : choice,
+          choice: null,
           score: null,
-          confidence,
+          confidence: 0,
+          ...(choice === "refusal" ? {} : { grades: (["approve_all", "approve", "reject", "escalate"] as const).map((value) => ({
+            choice: value, confidence: value === choice ? confidence : 0, evidence: "Bounded review evidence",
+          })) }),
         },
       ],
     },
@@ -1335,8 +1360,106 @@ const hardReview = {
   metadata: { workdir: "/workspace/project" },
 }
 
+for (const configured of [undefined, false]) for (const asleep of [false, true]) for (const review of [ordinaryReview, hardReview]) {
+  const manual = harness({
+    defaults: true,
+    asleep,
+    entries: configured === undefined ? [] : [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { decide_reviews: configured } }) })],
+    verify: () => Effect.succeed(verificationOutput(false, 1)),
+    decision: () => Effect.succeed(decisionOutput("approve", 1)),
+  })
+  manual.it.effect(`model review=${String(configured)} preserves ${review === hardReview ? "hard" : "ordinary"} review while ${asleep ? "asleep" : "awake"}`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const fiber = yield* service.assert(review).pipe(Effect.forkScoped)
+    yield* TestClock.adjust(0)
+    expect(manual.verifications).toEqual([])
+    expect(manual.choices).toEqual([])
+    expect(manual.dismissals).toEqual([])
+    expect(manual.escalations).toEqual([])
+    if (asleep) {
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+      expect(items).toEqual([expect.objectContaining({ reason: "disabled", kind: "guardrail" })])
+      return
+    }
+    const requests = yield* service.forSession(parentID)
+    expect(requests).toHaveLength(1)
+    yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "once" })
+    yield* (yield* Fiber.join(fiber)).release
+  }))
+}
+
+for (const yolo of [1, 3] as const) for (const asleep of [false, true]) {
+  const independent = harness({
+    defaults: true,
+    realAutonomy: true,
+    yolo,
+    asleep,
+    verify: () => Effect.die("Default-off verification must not reach the helper"),
+    decision: () => Effect.die("Default-off grading must not reach the helper"),
+  })
+  independent.it.effect(`default-off model review keeps YOLO ${yolo} ordinary approval ${asleep ? "out of sleep" : "awake"} without helper calls`, () => Effect.gen(function* () {
+    yield* independent.seed
+    const service = yield* SessionGuardrail.Service
+    const ordinary = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust(0)
+    if (asleep) expect(Exit.isFailure(yield* Fiber.await(ordinary))).toBe(true)
+    else yield* (yield* Fiber.join(ordinary)).release
+    const hard = yield* service.assert(hardReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust(0)
+    if (!asleep) {
+      const requests = yield* service.forSession(parentID)
+      expect(requests).toHaveLength(1)
+      expect(requests[0]).not.toHaveProperty("escalation")
+      yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
+    }
+    expect(Exit.isFailure(yield* Fiber.await(hard))).toBe(true)
+    expect(independent.verifications).toEqual([])
+    expect(independent.choices).toEqual([])
+    expect(independent.dismissals).toEqual([])
+    expect(independent.escalations).toEqual([])
+    expect(independent.decisions).toEqual([])
+    const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+    expect(items.map((item) => item.reason)).toEqual(asleep ? ["disabled", "disabled"] : [])
+    for (const item of items) {
+      expect(item).not.toHaveProperty("choice")
+      expect(item).not.toHaveProperty("confidence")
+      expect(item).not.toHaveProperty("grades")
+    }
+  }))
+}
+
+const sleepStates = [true, false]
+const wakeBeforeHandoff = harness({
+  defaults: true,
+  sleepStates,
+  verify: () => Effect.die("Default-off verification must not reach the helper"),
+  decision: () => Effect.die("Default-off grading must not reach the helper"),
+})
+
+wakeBeforeHandoff.it.effect("a family that wakes between default-off admission and handoff gets one plain human review", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const fiber = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+  yield* TestClock.adjust(0)
+  expect(sleepStates).toEqual([])
+  const requests = yield* service.forSession(parentID)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]).not.toHaveProperty("escalation")
+  expect(wakeBeforeHandoff.asked.map((request) => request.id)).toEqual([requests[0]!.id])
+  yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "once" })
+  yield* (yield* Fiber.join(fiber)).release
+  expect(wakeBeforeHandoff.replies).toHaveLength(1)
+  expect(wakeBeforeHandoff.verifications).toEqual([])
+  expect(wakeBeforeHandoff.choices).toEqual([])
+  expect(wakeBeforeHandoff.escalations).toEqual([])
+  expect(wakeBeforeHandoff.decisions).toEqual([])
+  const db = (yield* Database.Service).db
+  expect(yield* db.select().from(ModelIncidentTable).all().pipe(Effect.orDie)).toEqual([])
+  expect(yield* SessionReviewFold.fold(db, [parentID])).toEqual([])
+}))
+
 function decisionHarness(decision: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>) {
-  return harness({ guardrailDecision: true, decision })
+  return harness({ decision })
 }
 
 for (const review of [ordinaryReview, hardReview]) {
@@ -1390,9 +1513,9 @@ childDecision.it.effect("family status preserves the reviewed child's identity a
   yield* (yield* service.assert({ ...hardReview, sessionID: childID })).release
   expect((yield* service.status(parentID)).decisions).toEqual([expect.objectContaining({ sessionID: childID, created: expect.any(Number), reply: "once" })])
 }))
-const verifyThenDecide = harness({ guardrailDecision: true,
+const verifyThenDecide = harness({
   verify: () => Effect.sync(() => { verificationOrder.push("verify"); return verificationOutput(true, 1) }),
-  decision: () => Effect.sync(() => { verificationOrder.push("approve"); return decisionOutput("approve", 0.9) }),
+  decision: () => Effect.sync(() => { verificationOrder.push("approve"); return decisionOutput("approve", 0.95) }),
 })
 const verificationEntered = Deferred.makeUnsafe<void>()
 const cancelledVerification = harness({ verify: () => Deferred.succeed(verificationEntered, undefined).pipe(Effect.andThen(Effect.never)) })
@@ -1405,7 +1528,7 @@ cancelledVerification.it.effect("interruption during match verification owns no 
   expect(yield* service.forSession(parentID)).toEqual([])
   expect(cancelledVerification.dismissals).toEqual([])
 }))
-verifyThenDecide.it.effect("a kept hard match flows into guardrail-decision after verification", () => Effect.gen(function* () {
+verifyThenDecide.it.effect("a kept hard match flows into graded delegation after verification", () => Effect.gen(function* () {
   const service = yield* SessionGuardrail.Service
   yield* (yield* service.assert(hardReview)).release
   expect(verifyThenDecide.verifications).toHaveLength(1)
@@ -1414,7 +1537,7 @@ verifyThenDecide.it.effect("a kept hard match flows into guardrail-decision afte
   expect(verifyThenDecide.replies).toEqual([expect.objectContaining({ reply: "once", decidedBy: "decision-model" })])
 }))
 
-const dismissedBeforeDelegation = harness({ guardrailDecision: true, verify: () => Effect.succeed(verificationOutput(false, 1)), decision: () => Effect.die("Dismissed matches need no delegated approval") })
+const dismissedBeforeDelegation = harness({ verify: () => Effect.succeed(verificationOutput(false, 1)), decision: () => Effect.die("Dismissed matches need no delegated approval") })
 dismissedBeforeDelegation.it.effect("a dismissed hard match never asks the delegated approval helper", () => Effect.gen(function* () {
   const service = yield* SessionGuardrail.Service
   yield* (yield* service.assert(hardReview)).release
@@ -1498,7 +1621,7 @@ verifyMultiple.it.effect("dismissing one matched standard rule still verifies th
 
 const approvedOrdinary = decisionHarness(() => Effect.succeed(decisionOutput("approve", 0.8)))
 approvedOrdinary.it.effect(
-  "guardrail-decision approves an ordinary review at confidence 0.8 with durable provenance",
+  "graded delegation approves an ordinary review at confidence 0.8 with durable provenance",
   () =>
     Effect.gen(function* () {
       const service = yield* SessionGuardrail.Service
@@ -1515,7 +1638,7 @@ approvedOrdinary.it.effect(
 )
 
 const approvedHard = decisionHarness(() => Effect.succeed(decisionOutput("approve", 0.95)))
-approvedHard.it.effect("guardrail-decision approves a hard review once and never always", () =>
+approvedHard.it.effect("graded delegation approves a hard review once and never always", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     yield* (yield* service.assert(hardReview)).release
@@ -1531,14 +1654,13 @@ approvedHard.it.effect("guardrail-decision approves a hard review once and never
 
 const decisionYolo = harness({
   autoGuardrail: true,
-  guardrailDecision: true,
   decision: () => Effect.succeed(decisionOutput("reject", 0.9)),
 })
-decisionYolo.it.effect("decision mode overrides ordinary YOLO auto-approval", () =>
+decisionYolo.it.effect("awake YOLO auto-approval precedes decision delegation", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
-    expect(Exit.isFailure(yield* service.assert(ordinaryReview).pipe(Effect.exit))).toBe(true)
-    expect(decisionYolo.choices).toHaveLength(1)
+    yield* (yield* service.assert(ordinaryReview)).release
+    expect(decisionYolo.choices).toHaveLength(0)
   }),
 )
 
@@ -1546,7 +1668,7 @@ for (const [name, decide] of [
   ["reject choice", () => Effect.succeed(decisionOutput("reject", 0.8))],
 ] as const) {
   const rejected = decisionHarness(decide)
-  rejected.it.effect(`guardrail-decision rejects an ordinary review on ${name}`, () =>
+  rejected.it.effect(`graded delegation rejects an ordinary review on ${name}`, () =>
     Effect.gen(function* () {
       const service = yield* SessionGuardrail.Service
       const exit = yield* service.assert(ordinaryReview).pipe(Effect.exit)
@@ -1566,7 +1688,7 @@ for (const [name, decide] of [
 }
 
 const deniedDecision = decisionHarness(() => Effect.succeed(decisionOutput("approve", 1)))
-deniedDecision.it.effect("guardrail-decision never sends deny decisions to the decision model", () =>
+deniedDecision.it.effect("graded delegation never sends deny decisions to the decision model", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const exit = yield* service
@@ -1579,7 +1701,7 @@ deniedDecision.it.effect("guardrail-decision never sends deny decisions to the d
 )
 
 const timedDecision = decisionHarness(() => Effect.never)
-const failedReply = harness({ guardrailDecision: true, failReply: true, decision: () => Effect.succeed(decisionOutput("approve", 0.95)) })
+const failedReply = harness({ failReply: true, decision: () => Effect.succeed(decisionOutput("approve", 0.95)) })
 failedReply.it.effect("reply publication failure settles the assertion and releases the review", () => Effect.gen(function* () {
   const service = yield* SessionGuardrail.Service
   const before = yield* service.snapshot(parentID)
@@ -1612,16 +1734,17 @@ timedDecision.it.effect("a nonsettling decision times out into a human review", 
   }),
 )
 
-for (const [name, decide, provenance] of [
-  ["explicit escalation", () => Effect.succeed(decisionOutput("escalate", 0)), { choice: "escalate", confidence: 0 }],
-  ["low-confidence approve", () => Effect.succeed(decisionOutput("approve", 0.799999)), { choice: "approve", confidence: 0.799999 }],
-  ["low-confidence reject", () => Effect.succeed(decisionOutput("reject", 0.799999)), { choice: "reject", confidence: 0.799999 }],
-  ["refusal", () => Effect.succeed(decisionOutput("refusal", 1)), {}],
-  ["provider failure", () => Effect.fail(new Decision.Error({ reason: "provider-failed" })), {}],
-  ["timeout", () => Effect.never, {}],
+for (const [name, decide, provenance, reason] of [
+  ["explicit escalation", () => Effect.succeed(decisionOutput("escalate", 0)), { choice: "escalate", confidence: 0 }, "escalated"],
+  ["low-confidence approve", () => Effect.succeed(decisionOutput("approve", 0.799999)), { choice: "approve", confidence: 0.799999 }, "low_confidence"],
+  ["low-confidence reject", () => Effect.succeed(decisionOutput("reject", 0.799999)), { choice: "reject", confidence: 0.799999 }, "low_confidence"],
+  ["refusal", () => Effect.succeed(decisionOutput("refusal", 1)), {}, "refused"],
+  ["provider failure", () => Effect.fail(new Decision.Error({ reason: "provider-failed" })), {}, "error"],
+  ["invalid output", () => Effect.fail(new Decision.Error({ reason: "invalid-output" })), {}, "error"],
+  ["timeout", () => Effect.never, {}, "timeout"],
 ] as const) for (const asleep of [false, true]) {
-  const escalated = harness({ guardrailDecision: true, asleep, decision: decide })
-  escalated.it.effect(`${name} ${asleep ? "rejects while asleep" : "hands off to the user"}`, () => Effect.gen(function* () {
+  const escalated = harness({ asleep, decision: decide })
+  escalated.it.effect(`${name} ${asleep ? "defers while asleep" : "hands off to the user"}`, () => Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const running = yield* service.assert(hardReview).pipe(Effect.forkScoped)
     yield* TestClock.adjust("60 seconds")
@@ -1629,13 +1752,22 @@ for (const [name, decide, provenance] of [
     if (asleep) {
       expect(yield* service.forSession(parentID)).toEqual([])
       expect(escalated.asked).toEqual([])
-      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
-      expect(escalated.decisions).toMatchObject([{ reply: "reject", ...provenance }])
+      const exited = yield* Fiber.await(running)
+      expect(Exit.isFailure(exited)).toBe(true)
+      if (Exit.isFailure(exited)) expect(exited.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error instanceof SessionGuardrail.DeferredError)).toBe(true)
+      expect(escalated.decisions).toEqual([])
+      const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+      expect(items.filter(SessionReviewFold.isOpen)).toHaveLength(1)
+      expect(items[0]).toMatchObject({ reason, ...provenance })
+      if (["refused", "error", "timeout"].includes(reason)) expect(items[0]).not.toHaveProperty("grades")
+      expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
       return
     }
     const requests = yield* service.forSession(parentID)
     expect(requests).toHaveLength(1)
     expect(requests[0]?.escalation).toBeDefined()
+    if (["refused", "error", "timeout"].includes(reason)) expect(requests[0]?.escalation).not.toHaveProperty("grades")
+    expect(escalated.escalations[0]).toMatchObject({ ruleIDs: ["standard.review.project-deletion"], ...provenance })
     expect(escalated.asked).toHaveLength(1)
     expect(escalated.replies).toEqual([])
     yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
@@ -1649,7 +1781,7 @@ for (const review of [ordinaryReview, hardReview]) for (const reply of ["once", 
   human.it.effect(`an escalated ${review === hardReview ? "hard" : "ordinary"} review accepts human ${reply}`, () => Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const waiting = yield* waitForRequest(service, review)
-    expect(waiting.request.escalation).toEqual({ choice: "escalate", confidence: 1 })
+    expect(waiting.request.escalation).toMatchObject({ choice: "escalate", confidence: 1, grades: expect.any(Array) })
     yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply })
     const result = yield* Fiber.await(waiting.fiber)
     expect(Exit.isSuccess(result)).toBe(reply !== "reject" && !(review === hardReview && reply === "always"))
@@ -1707,11 +1839,10 @@ restartedEscalation.it.effect("shutdown ends an escalated review while its durab
 }))
 
 const customDecision = harness({
-  guardrailDecision: true,
   documents: new Map([
     ["/global/guardrails/hard.md", markdown({ id: "custom-hard", decision: "hard_review", resource: "deploy exact" })],
   ]),
-  decision: () => Effect.succeed(decisionOutput("approve", 0.8)),
+  decision: () => Effect.succeed(decisionOutput("approve", 0.95)),
 })
 customDecision.it.effect("decision mode handles custom hard reviews once at the threshold", () =>
   Effect.gen(function* () {
@@ -1719,14 +1850,13 @@ customDecision.it.effect("decision mode handles custom hard reviews once at the 
     const reservation = yield* service.assert({ sessionID: childID, action: "shell", resources: ["deploy exact"] })
     yield* reservation.release
     expect(customDecision.replies).toEqual([
-      expect.objectContaining({ reply: "once", choice: "approve", confidence: 0.8 }),
+      expect.objectContaining({ reply: "once", choice: "approve", confidence: 0.95 }),
     ])
     expect(JSON.stringify(customDecision.choices)).toContain("custom-hard")
   }),
 )
 
 const customDeniedDecision = harness({
-  guardrailDecision: true,
   documents: new Map([
     ["/global/guardrails/deny.md", markdown({ id: "explicit-deny", decision: "deny", resource: "deploy exact" })],
   ]),
@@ -1751,12 +1881,317 @@ secretDecision.it.effect("guardrail helper evidence redacts credentials and stat
     const reserved = yield* service.assert({
       ...ordinaryReview,
       resources: ["API_KEY=synthetic-secret touch /outside/file"],
+      source: { messageID: SessionMessage.ID.make("msg_guardrail_source"), callID: "call_source" },
     })
     yield* reserved.release
     expect(JSON.stringify(secretDecision.choices)).not.toContain("synthetic-secret")
     expect(JSON.stringify(secretDecision.choices)).toContain("/outside/file")
     expect((yield* service.status(parentID)).decisions).toEqual([
-      expect.objectContaining({ reply: "once", confidence: 0.9 }),
+      expect.objectContaining({ reply: "once", confidence: 0.9, ruleIDs: ["standard.review.outside-repo"], source: { messageID: "msg_guardrail_source", callID: "call_source" } }),
     ])
+    expect(secretDecision.decisions[0]).toMatchObject({ ruleIDs: ["standard.review.outside-repo"], source: { messageID: "msg_guardrail_source", callID: "call_source" } })
+    for (const field of ["action", "resources", "metadata", "evidence", "targets"])
+      expect(secretDecision.decisions[0]).not.toHaveProperty(field)
   }),
 )
+
+for (const model of [false, true]) {
+  const conversion = harness({
+    entries: model ? [] : [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { decide_hard_reviews: false } }) })],
+    decision: () => Effect.succeed(decisionOutput("escalate", 0.9)),
+  })
+  conversion.it.effect(`sleep conversion defers a ${model ? "model-escalated" : "plain"} human review with its source`, () => Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const source = { messageID: SessionMessage.ID.make("msg_conversion"), callID: "call_conversion" }
+    const waiting = yield* waitForRequest(service, { ...(model ? ordinaryReview : hardReview), source })
+    yield* service.deferPending(parentID)
+    const exited = yield* Fiber.await(waiting.fiber)
+    expect(Exit.isFailure(exited)).toBe(true)
+    if (Exit.isFailure(exited)) expect(exited.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error instanceof SessionGuardrail.DeferredError)).toBe(true)
+    expect(yield* service.forSession(parentID)).toEqual([])
+    const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ reason: "sleep_entry", origin: source, payload: { ruleIDs: [model ? "standard.review.outside-repo" : "standard.review.project-deletion"] } })
+    if (model) expect(conversion.escalations[0]).toMatchObject({ source, ruleIDs: ["standard.review.outside-repo"] })
+    if (!model) {
+      expect(conversion.escalations).toEqual([])
+      expect(conversion.choices).toEqual([])
+      expect(items[0]).not.toHaveProperty("grades")
+    }
+    expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
+  }))
+}
+
+const fullReview = harness({ asleep: true, entries: [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { max_pending_reviews: 1 } }) })], decision: () => Effect.succeed(decisionOutput("escalate", 0.9)) })
+fullReview.it.effect("a full family review box declines new guardrail deferrals without losing the existing item", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  expect(yield* service.assert(hardReview).pipe(Effect.flip)).toBeInstanceOf(SessionGuardrail.DeferredError)
+  const second = yield* service.assert(hardReview).pipe(Effect.flip)
+  expect(second).toBeInstanceOf(SessionGuardrail.DeclinedError)
+  expect(second.message).toContain("review box is full")
+  expect(yield* service.forSession(parentID)).toEqual([])
+  expect((yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])).filter(SessionReviewFold.isOpen)).toHaveLength(1)
+  expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
+}))
+
+for (const [hard, choice, confidence, reply] of [
+  [false, "approve", 0.79, undefined], [false, "approve", 0.8, "once"],
+  [false, "reject", 0.79, undefined], [false, "reject", 0.8, "reject"],
+  [false, "approve_all", 0.89, undefined], [false, "approve_all", 0.9, "always"],
+  [true, "approve", 0.94, undefined], [true, "approve", 0.95, "once"],
+] as const) {
+  const matrix = harness({ realAutonomy: true, decision: () => Effect.succeed(decisionOutput(choice, confidence)) })
+  matrix.it.effect(`real autonomy graded ${hard ? "hard" : "ordinary"} ${choice} ${confidence} yields ${reply ?? "human"}`, () => Effect.gen(function* () {
+    yield* matrix.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(hard ? hardReview : ordinaryReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    expect(matrix.choices).toHaveLength(1)
+    const question = matrix.choices[0]!.request.questions[0]!
+    expect(question).toMatchObject({ type: "choice", grade: true })
+    if (question.type !== "choice") throw new Error("Expected graded choice")
+    expect(question.choices.map((choice) => choice.value)).toEqual(hard ? ["approve", "reject", "escalate"] : ["approve_all", "approve", "reject", "escalate"])
+    if (!reply) {
+      const pending = yield* service.forSession(parentID)
+      expect(pending[0]?.escalation).toMatchObject({ choice, confidence, grades: expect.any(Array) })
+      expect(matrix.escalations[0]).toMatchObject({ choice, confidence, grades: pending[0]!.escalation!.grades })
+      yield* service.reply({ sessionID: parentID, requestID: pending[0]!.id, reply: "reject" })
+    }
+    const exited = yield* Fiber.await(running)
+    expect(Exit.isSuccess(exited)).toBe(reply === "once" || reply === "always")
+    if (Exit.isSuccess(exited)) yield* exited.value.release
+    if (reply) {
+      expect(matrix.decisions[0]).toMatchObject({ reply, choice, confidence, grades: expect.any(Array) })
+      expect((yield* service.status(parentID)).decisions?.[0]).toMatchObject({ reply, choice, confidence, grades: expect.any(Array) })
+    }
+  }))
+}
+
+for (const asleep of [false, true]) for (const yolo of [0, 1, 2, 3] as const) {
+  const precedence = harness({ realAutonomy: true, asleep, yolo, decision: () => Effect.succeed(decisionOutput("reject", 0.8)) })
+  precedence.it.effect(`real YOLO ${yolo} ${asleep ? "asleep delegates" : "awake precedes delegation"}`, () => Effect.gen(function* () {
+    yield* precedence.seed
+    const service = yield* SessionGuardrail.Service
+    const outcome = yield* service.assert(ordinaryReview).pipe(Effect.exit)
+    expect(Exit.isSuccess(outcome)).toBe(!asleep && yolo > 0)
+    if (Exit.isSuccess(outcome)) yield* outcome.value.release
+    expect(precedence.choices).toHaveLength(!asleep && yolo > 0 ? 0 : 1)
+    expect(Exit.isFailure(yield* service.assert(hardReview).pipe(Effect.exit))).toBe(true)
+    expect(precedence.choices.at(-1)?.request.questions[0]).toMatchObject({ grade: true })
+  }))
+}
+
+for (const asleep of [false, true]) {
+  const disabled = harness({ realAutonomy: true, asleep, yolo: 3,
+    entries: [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { decide_hard_reviews: false } }) })],
+    decision: () => Effect.die("Disabled hard reviews must not reach the helper"),
+  })
+  disabled.it.effect(`disabled hard delegation ${asleep ? "defers" : "asks the human"} without a helper call`, () => Effect.gen(function* () {
+    yield* disabled.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(hardReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    expect(disabled.choices).toHaveLength(0)
+    if (!asleep) {
+      const requests = yield* service.forSession(parentID)
+      expect(requests).toHaveLength(1)
+      expect(requests[0]).not.toHaveProperty("escalation")
+      yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
+    }
+    const outcome = yield* Fiber.await(running)
+    expect(Exit.isFailure(outcome)).toBe(true)
+    if (asleep) {
+      const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+      expect(items).toHaveLength(1)
+      expect(items[0]).not.toHaveProperty("grades")
+    }
+    expect(disabled.escalations).toHaveLength(0)
+  }))
+}
+
+for (const asleep of [false, true]) {
+  const conflict = harness({ realAutonomy: true, asleep, decision: (input) => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+    model: { providerID: "test", id: "decision" }, semantics: "model-estimate", version: 1,
+    answers: [{ name: "guardrail", type: "choice", answer: null, choice: null, score: null, confidence: 0,
+      grades: input.request.questions.flatMap((question) => question.type === "choice" ? question.choices.map((choice) => ({ choice: choice.value,
+        confidence: choice.value === "approve_all" ? 0.99 : choice.value === "reject" ? 0.8 : 0,
+        evidence: "API_KEY=synthetic-secret bounded evidence",
+      })) : []),
+    }],
+  } })) })
+  conflict.it.effect(`conflicting qualifying grades ${asleep ? "persist redacted review items" : "escalate with redacted provenance"}`, () => Effect.gen(function* () {
+    yield* conflict.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    if (!asleep) {
+      const requests = yield* service.forSession(parentID)
+      expect(requests[0]?.escalation?.grades).toHaveLength(4)
+      expect(JSON.stringify(requests)).not.toContain("synthetic-secret")
+      expect(conflict.escalations[0]).toMatchObject({ choice: "approve_all", confidence: 0.99, grades: requests[0]!.escalation!.grades })
+      yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
+    }
+    expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+    if (asleep) {
+      const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
+      expect(items[0]!.grades).toHaveLength(4)
+      expect(JSON.stringify(items)).not.toContain("synthetic-secret")
+      expect(items[0]).toMatchObject({ reason: "escalated", choice: "approve_all", confidence: 0.99 })
+      const database = yield* Database.Service
+      const publicItem = yield* SessionReviewFold.toItem(database.db, parentID,
+        yield* SessionReviewFold.familySessions(database.db, parentID), items[0]!)
+      expect(publicItem.grades).toEqual(items[0]!.grades)
+    }
+  }))
+}
+
+for (const [hard, scores, expected] of [
+  [false, { approve_all: 0.89, approve: 0.8, reject: 0, escalate: 0 }, "approve"],
+  [true, { approve: 0.94, reject: 0.8, escalate: 0 }, "reject"],
+  [false, { approve_all: 0.9, approve: 0.95, reject: 0, escalate: 0 }, "approve"],
+  [false, { approve_all: 0.9, approve: 0.8, reject: 0, escalate: 1 }, "escalate"],
+] as const) {
+  const ranked = harness({ realAutonomy: true, decision: (input) => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+    model: { providerID: "test", id: "ranked" }, semantics: "model-estimate", version: 1,
+    answers: [{ name: "guardrail", type: "choice", answer: null, choice: null, score: null, confidence: 0,
+      grades: input.request.questions.flatMap((question) => question.type === "choice" ? question.choices.map((choice) => ({
+        choice: choice.value, confidence: typeof choice.value === "string" ? Reflect.get(scores, choice.value) ?? 0 : 0, evidence: "Bounded evidence",
+      })) : []),
+    }],
+  } })) })
+  ranked.it.effect(`selects ${expected} from eligible ${hard ? "hard" : "ordinary"} grades ${JSON.stringify(scores)}`, () => Effect.gen(function* () {
+    yield* ranked.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(hard ? hardReview : ordinaryReview).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    if (expected === "escalate") {
+      const requests = yield* service.forSession(parentID)
+      expect(requests[0]?.escalation).toMatchObject({ choice: "escalate", confidence: 1 })
+      yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
+    }
+    const result = yield* Fiber.await(running)
+    expect(Exit.isSuccess(result)).toBe(expected === "approve")
+    if (Exit.isSuccess(result)) yield* result.value.release
+    if (expected !== "escalate") expect(ranked.decisions[0]).toMatchObject({ choice: expected, reply: expected === "approve" ? "once" : "reject" })
+  }))
+}
+
+const incidentSource = SessionMessage.ID.make("msg_incident_source")
+const sourced = (review: SessionGuardrail.EvaluateInput, callID = "call_incident"): SessionGuardrail.EvaluateInput => ({
+  ...review,
+  source: { messageID: incidentSource, callID },
+})
+const incidentHarness = (decision: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error>) =>
+  harness({ realAutonomy: true, decision })
+const seedIncidentSource = (target: ReturnType<typeof harness>) =>
+  Effect.gen(function* () {
+    yield* target.seed
+    const { db } = yield* Database.Service
+    yield* db
+      .run(sql`
+        INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+        VALUES (${incidentSource}, ${parentID}, 'assistant', 1, 0, 0,
+          ${JSON.stringify({ agent: "build", model: { providerID: "incident-provider", id: "incident-model", variant: "high" } })})
+      `)
+      .pipe(Effect.orDie)
+  })
+const incidentRows = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return yield* db
+    .select()
+    .from(ModelIncidentTable)
+    .orderBy(asc(ModelIncidentTable.time_created), asc(ModelIncidentTable.id))
+    .all()
+    .pipe(Effect.orDie)
+})
+const incidentSummary = (rows: ReadonlyArray<typeof ModelIncidentTable.$inferSelect>) =>
+  rows.map((row) => [row.kind, row.decided_by, row.category, row.provider_id, row.model_id, row.variant, row.agent, row.session_id])
+
+describe("model incident hooks", () => {
+  for (const callID of ["call_incident", "code_exec_1:nested_2"]) {
+    const escalated = incidentHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+    escalated.it.effect(`records the handoff and the human rejection from the exact source (${callID})`, () => Effect.gen(function* () {
+      yield* seedIncidentSource(escalated)
+      const service = yield* SessionGuardrail.Service
+      const waiting = yield* waitForRequest(service, sourced(hardReview, callID))
+      const handoff = yield* incidentRows
+      expect(incidentSummary(handoff)).toEqual([
+        ["guardrail-escalated", null, "hard", "incident-provider", "incident-model", "high", "build", parentID],
+      ])
+      expect(handoff[0]).toMatchObject({ request_id: waiting.request.id, rule_ids: ["standard.review.project-deletion"], project_id: "global" })
+      expect(handoff[0]!.time_created).toBe(yield* Clock.currentTimeMillis)
+      yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(waiting.fiber))).toBe(true)
+      const settled = yield* incidentRows
+      expect(incidentSummary(settled)).toEqual([
+        ["guardrail-escalated", null, "hard", "incident-provider", "incident-model", "high", "build", parentID],
+        ["guardrail-rejected", "human", "hard", "incident-provider", "incident-model", "high", "build", parentID],
+      ])
+      expect(settled.map((row) => row.request_id)).toEqual([waiting.request.id, waiting.request.id])
+      expect(JSON.stringify(settled)).not.toContain("rm -rf")
+    }))
+  }
+
+  for (const reply of ["once", "always"] as const) {
+    const approved = incidentHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+    approved.it.effect(`records only the handoff when the human replies ${reply}`, () => Effect.gen(function* () {
+      yield* seedIncidentSource(approved)
+      const service = yield* SessionGuardrail.Service
+      const waiting = yield* waitForRequest(service, sourced(ordinaryReview))
+      yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply })
+      const reservation = yield* Fiber.join(waiting.fiber)
+      yield* reservation.release
+      expect(incidentSummary(yield* incidentRows).map((row) => row[0])).toEqual(["guardrail-escalated"])
+    }))
+  }
+
+  const modelRejected = incidentHarness(() => Effect.succeed(decisionOutput("reject", 0.8)))
+  modelRejected.it.effect("records a decision-model rejection once with its decider and no handoff", () => Effect.gen(function* () {
+    yield* seedIncidentSource(modelRejected)
+    const service = yield* SessionGuardrail.Service
+    expect(Exit.isFailure(yield* service.assert(sourced(hardReview)).pipe(Effect.exit))).toBe(true)
+    expect(incidentSummary(yield* incidentRows)).toEqual([
+      ["guardrail-rejected", "decision-model", "hard", "incident-provider", "incident-model", "high", "build", parentID],
+    ])
+  }))
+
+  const modelApproved = incidentHarness(() => Effect.succeed(decisionOutput("approve", 0.95)))
+  modelApproved.it.effect("records nothing for an approving decision", () => Effect.gen(function* () {
+    yield* seedIncidentSource(modelApproved)
+    const service = yield* SessionGuardrail.Service
+    yield* (yield* service.assert(sourced(hardReview))).release
+    expect(yield* incidentRows).toEqual([])
+  }))
+
+  const sourceless = incidentHarness(() => Effect.succeed(decisionOutput("escalate", 1)))
+  sourceless.it.effect("records nothing without the canonical assistant source, even when the Session has assistants", () => Effect.gen(function* () {
+    yield* seedIncidentSource(sourceless)
+    const service = yield* SessionGuardrail.Service
+    const waiting = yield* waitForRequest(service, hardReview)
+    yield* service.reply({ sessionID: parentID, requestID: waiting.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(waiting.fiber))).toBe(true)
+    const unknown = yield* waitForRequest(service, { ...hardReview, source: { messageID: SessionMessage.ID.make("msg_incident_missing"), callID: "call_missing" } })
+    yield* service.reply({ sessionID: parentID, requestID: unknown.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(unknown.fiber))).toBe(true)
+    expect(yield* incidentRows).toEqual([])
+  }))
+
+  const sourcelessModel = incidentHarness(() => Effect.succeed(decisionOutput("reject", 0.9)))
+  sourcelessModel.it.effect("records no decision-model rejection without a source", () => Effect.gen(function* () {
+    yield* seedIncidentSource(sourcelessModel)
+    const service = yield* SessionGuardrail.Service
+    expect(Exit.isFailure(yield* service.assert(hardReview).pipe(Effect.exit))).toBe(true)
+    expect(yield* incidentRows).toEqual([])
+  }))
+
+  const atomic = incidentHarness(() => Effect.succeed(decisionOutput("reject", 0.9)))
+  atomic.it.effect("commits the rejection row with its decided event or neither", () => Effect.gen(function* () {
+    yield* seedIncidentSource(atomic)
+    const { db } = yield* Database.Service
+    yield* db.run(sql`DROP TABLE model_incident`).pipe(Effect.orDie)
+    const service = yield* SessionGuardrail.Service
+    expect(Exit.isFailure(yield* service.assert(sourced(hardReview)).pipe(Effect.exit))).toBe(true)
+    const stored = yield* db.select({ id: EventTable.id }).from(EventTable).where(eq(EventTable.type, "session.guardrail.decided.1")).all().pipe(Effect.orDie)
+    expect(stored).toEqual([])
+  }))
+})

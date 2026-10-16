@@ -20,9 +20,11 @@ import { SessionCompletion } from "@ycoding-ai/core/session/completion"
 import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { UserInterruptedError } from "@ycoding-ai/core/session/error"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import { SessionMessageTable, SessionTable, SessionTaskTable, SessionPendingTable } from "@ycoding-ai/core/session/sql"
@@ -52,6 +54,47 @@ function configuredGoals(continuation: SessionGoal.Interface["continuation"]) {
     continuation, synthesize: () => Effect.die("unused"), steer: () => Effect.die("unused"),
   }))
 }
+
+completionIt.effect("open review items pause goal continuation without consuming its retry budget", () => Effect.gen(function* () {
+  const database = yield* Database.Service
+  const events = yield* EventRuntime.Service
+  const sessionID = Session.ID.make("ses_review_goal_pause")
+  yield* seedSessions(database, [sessionID])
+  const autonomy = SessionAutonomy.make({ db: database.db })
+  yield* autonomy.setGoal({ sessionID, text: "Verify the bounded task" })
+  const review = yield* SessionReviewFold.open(database.db, events, { sessionID, kind: "question", reason: "free_text", limit: 16,
+    origin: { requestID: "frm_goal_review" }, payload: { type: "form", title: "Evidence", fields: [{ key: "text", type: "string", required: true }] } })
+  const before = yield* autonomy.get(sessionID)
+  const scope = yield* Scope.make()
+  const context = yield* buildExecution(scope, () => Effect.void, undefined, undefined, undefined, undefined,
+    () => Effect.die("A deferred review must not request goal continuation"))
+  const execution = Context.get(context, SessionExecution.Service)
+  yield* execution.resume(sessionID)
+  yield* execution.awaitIdle(sessionID)
+  expect(yield* autonomy.get(sessionID)).toEqual(before)
+  expect(yield* admittedInputs(database)).toEqual([])
+  expect(yield* SessionReviewFold.openCount(database.db, sessionID)).toBe(1)
+  expect(review.kind).toBe("question")
+  yield* Scope.close(scope, Exit.void)
+}))
+
+completionIt.effect("a deferred review prevents a work-completion receipt after an otherwise verified final response", () => Effect.gen(function* () {
+  const database = yield* Database.Service
+  const events = yield* EventRuntime.Service
+  const sessionID = Session.ID.make("ses_review_completion_pause")
+  yield* seedSessions(database, [sessionID])
+  yield* admitCompletionInput(database, events, sessionID)
+  yield* SessionReviewFold.open(database.db, events, { sessionID, kind: "question", reason: "free_text", limit: 16,
+    origin: { requestID: "frm_completion_review" }, payload: { type: "form", title: "Evidence", fields: [{ key: "text", type: "string", required: true }] } })
+  const scope = yield* Scope.make()
+  const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, { declaration: true, text: "Verified local checks." }))
+  const execution = Context.get(context, SessionExecution.Service)
+  yield* execution.resume(sessionID)
+  yield* execution.awaitIdle(sessionID)
+  const history = yield* database.db.select().from(EventTable).all().pipe(Effect.orDie)
+  expect(history.filter((row) => row.type === "session.work.completed.1")).toEqual([])
+  yield* Scope.close(scope, Exit.void)
+}))
 
   completionIt.effect("goal text continuation advances durable execution until an explicit stop", () =>
     Effect.gen(function* () {
@@ -746,6 +789,49 @@ describe("SessionExecution lifecycle", () => {
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain("waiting")
       expect(warnings[0]).toContain(childID)
+    }),
+  )
+
+  it.effect("drains a running managed child only while this process holds its claim", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const appProcess = yield* AppProcess.Service
+      const self = yield* ShellLedger.identify(appProcess, process.pid)
+      const parentID = Session.ID.make("ses_claim_parent")
+      const claims = [
+        { childID: Session.ID.make("ses_claim_dead"), owner_pid: 2_000_000_000, owner_started: "Thu Jan  1 00:00:00 1970" },
+        { childID: Session.ID.make("ses_claim_self"), owner_pid: self?.pid ?? null, owner_started: self?.started ?? null },
+        { childID: Session.ID.make("ses_claim_unknown"), owner_pid: null, owner_started: null },
+      ]
+      yield* seedSessions(database, [parentID, ...claims.map((claim) => claim.childID)])
+      for (const claim of claims)
+        yield* database.db
+          .insert(SessionTaskTable)
+          .values({
+            session_id: claim.childID,
+            parent_id: parentID,
+            parent_assistant_message_id: SessionMessage.ID.make(`msg_parent_${claim.childID}`),
+            tool_call_id: `call_${claim.childID}`,
+            input_id: SessionMessage.ID.make(`msg_input_${claim.childID}`),
+            description: "claimed",
+            agent: Agent.ID.make("reviewer"),
+            model: CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") }),
+            prompt_digest: "digest",
+            background: true,
+            delivery: "steer",
+            state: "running",
+            owner_pid: claim.owner_pid,
+            owner_started: claim.owner_started,
+          })
+          .run()
+          .pipe(Effect.orDie)
+      const drained: Session.ID[] = []
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)))
+      const execution = Context.get(context, SessionExecution.Service)
+      for (const claim of claims) yield* execution.resume(claim.childID)
+      yield* Scope.close(scope, Exit.void)
+      expect(drained).toEqual([Session.ID.make("ses_claim_self"), Session.ID.make("ses_claim_unknown")])
     }),
   )
 

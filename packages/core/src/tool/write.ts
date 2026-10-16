@@ -14,6 +14,7 @@ import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "write"
 
@@ -74,29 +75,31 @@ export const Plugin = {
                   if (external)
                     yield* permission.assert({
                       ...LocationMutation.externalDirectoryPermission(external),
+                      metadata: { operationDigest: Hash.json(input) },
                       sessionID: context.sessionID,
                       agent: context.agent,
                       source,
                     })
                   yield* permission.assert({
                     action: "edit",
+                    metadata: { operationDigest: Hash.json(input) },
                     resources: [target.resource],
                     save: ["*"],
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
                   })
-                  const reservation = yield* guardrail.assert({
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: "file_mutation",
                     resources: [target.canonical],
-                    metadata: { operation: "write" },
+                    metadata: { operation: "write", operationDigest: Hash.json(input) },
                   })
                   return yield* files
                     .writeTextPreservingBom({ target, content: input.content })
                     .pipe(Effect.ensuring(reservation.release))
                 }).pipe(
-                  Effect.mapError((error) => new ToolFailure({ message: `Unable to write ${input.path}`, error })),
+                  Effect.mapError((error) => new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Unable to write ${input.path}`, error })),
                 ),
             }),
             "edit",

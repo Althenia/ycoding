@@ -6,15 +6,17 @@ import { tmpdir } from "node:os"
 import { basename, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
-import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
+import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
 import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
   alertTitle,
   isRemoteLatencySample,
+  isRemoteReviewItemID,
   isSessionID,
   remoteError,
+  remoteRecoveryChoices,
   parseProviderAuthInput,
   requireSession,
   serializeResponse,
@@ -27,6 +29,9 @@ import {
   type RemoteWorkspaceInfo,
   type RemoteFamilyActivity,
   type RemoteUsageReportInput,
+  type RemoteIncidentGuidanceInput,
+  type RemoteIncidentRecentInput,
+  type RemoteIncidentReportInput,
   type RemoteCapturedChangesPage,
   type RemoteAttentionDetail,
   type RemoteAttentionNeed,
@@ -56,6 +61,8 @@ const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "incident.report",
+  "incident.recent",
   "session.create",
 ])
 
@@ -92,6 +99,7 @@ type CapturedResult = { readonly groups: readonly CapturedGroup[]; readonly dige
 type SessionActivity = { clock: number; epoch: number; floor: number; readonly at: Map<string, number> }
 
 export type OperationCache = {
+  listStatus?: { readonly expiresAt: number; readonly value: Promise<{ readonly running: ReadonlySet<string>; readonly waiting: ReadonlySet<string> }> }
   readonly providerAuth: Map<string, ProviderAuthEntry>
   readonly now: () => number
   readonly capturedChanges: Map<string, CapturedEntry>
@@ -124,6 +132,7 @@ export function markSessionActivity(cache: OperationCache, sessionID: string) {
 
 /** Ends trust in every cached captured summary's member Sessions after the event stream may have missed events. */
 export function resetSessionActivity(cache: OperationCache) {
+  cache.listStatus = undefined
   cache.activity.floor = 0
   cache.activity.epoch++
 }
@@ -786,8 +795,22 @@ async function run(input: OperationInput) {
   }
   if (validated.kind === "session.create")
     return { data: await createRootSession(input, validated.id, validated.workspace, validated.agent, validated.model) }
-  if (validated.kind === "list") return listPage(input.sessions.snapshot(), validated.query,
-    validated.query.status === undefined && validated.query.order !== "active" ? undefined : new Set((await input.local.outstandingSessions()).running))
+  if (validated.kind === "list") {
+    const sessions = input.sessions.snapshot()
+    if (validated.query.status === undefined && validated.query.order !== "active") return listPage(sessions, validated.query)
+    const cache = input.cache ?? createOperationCache()
+    if (cache.listStatus === undefined || cache.listStatus.expiresAt <= cache.now()) {
+      const observation = { expiresAt: Infinity, value: (async () => {
+        const work = await input.local.outstandingSessions(false)
+        const status = await sessionStatus(input.local, sessions, undefined, new Set(), work, false)
+        return { running: new Set(work.running), waiting: new Set([...status.requestAttention, ...(status.lost ?? [])]) }
+      })() }
+      cache.listStatus = observation
+      void observation.value.then(() => { observation.expiresAt = cache.now() + 5_000 }, () => { if (cache.listStatus === observation) cache.listStatus = undefined })
+    }
+    const status = await cache.listStatus.value
+    return listPage(sessions, validated.query, status.running, status.waiting)
+  }
   if (validated.kind === "active") {
     const allowed = new Set(input.sessions.ids())
     const active = await input.local.activeSessions()
@@ -804,6 +827,10 @@ async function run(input: OperationInput) {
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
   if (validated.kind === "usage.forecast" && validated.localScope === "backend") return { data: (await input.local.usageForecast("backend")).data }
+  if (validated.kind === "incident.report") return { data: await input.local.incidentReport(validated.input) }
+  if (validated.kind === "incident.recent") return { data: await input.local.incidentRecent(validated.input) }
+  if (validated.kind === "incident.guidance" && request.sessionID === undefined) return { data: await input.local.incidentGuidance(validated.input) }
+  if (validated.kind === "incident.guidance.clear" && request.sessionID === undefined) return { data: await input.local.incidentGuidanceClear(validated.input) }
   if (validated.kind === "latency.append") return input.local.latencyAppend(validated.samples)
   if (validated.kind === "latency.list") return input.local.latencyList(validated.input)
   if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
@@ -821,6 +848,7 @@ async function run(input: OperationInput) {
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
+    "incident.guidance.clear",
   ].includes(request.operation))
     throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
   const location = locationInfo(verified)
@@ -837,6 +865,10 @@ async function run(input: OperationInput) {
       return { data: await input.local.taskCosts(sessionID, location, validated.ids) }
     case "usage.forecast":
       return { data: (await input.local.usageForecast("location", location)).data }
+    case "incident.guidance":
+      return { data: await input.local.incidentGuidance(validated.input, location) }
+    case "incident.guidance.clear":
+      return { data: await input.local.incidentGuidanceClear(validated.input, location) }
     case "get":
       return { data: verified }
     case "pending.list": {
@@ -898,19 +930,26 @@ async function run(input: OperationInput) {
       const locations = await familyLocations(input, verified)
       const shells = (await Promise.all(locations.map(async (memberLocation) => ({ location: memberLocation, items: await input.local.shellList(memberLocation) })))).flatMap((entry) => entry.items.map((item) => ({ item, location: entry.location })))
       const owners = new Map<string, SessionInfo>()
-      const visible: { id: string; ownerID: string; command: string; status: string; queuePosition?: number; startedAt: number; completedAt?: number }[] = []
+      const visible: { id: string; ownerID: string; ownerAgent?: string; ownerTitle?: string; command: string; status: string; queuePosition?: number; startedAt: number; completedAt?: number }[] = []
+      let chars = serializeResponse({ type: "response", id: request.id, ok: true, value: { data: [], truncated: false } }).length
       for (const { item, location: shellLocation } of shells) {
         if (!item || typeof item !== "object" || !("metadata" in item) || !("id" in item)) continue
         const shell = item as { id: unknown; command?: unknown; status?: unknown; queuePosition?: number; metadata: unknown; time?: { started?: number; completed?: number } }
         const ownerID = shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
         if (typeof ownerID !== "string" || typeof shell.id !== "string") continue
-        const owner = owners.get(ownerID) ?? await input.sessions.verify(ownerID)
-        if (!owner || owner.id !== verified.id && owner.parentID !== verified.id || JSON.stringify(locationInfo(owner)) !== JSON.stringify(shellLocation)) continue
+        const owner = owners.get(ownerID) ?? await verifiedFamilyOwner(input, verified, ownerID)
+        if (!owner || JSON.stringify(locationInfo(owner)) !== JSON.stringify(shellLocation)) continue
         owners.set(ownerID, owner)
         if (visible.length === 50) return { data: visible, truncated: true }
-        visible.push({ id: shell.id, ownerID, command: typeof shell.command === "string" ? shell.command.slice(0, 256) : "", status: typeof shell.status === "string" ? shell.status : "exited",
+        const command = typeof shell.command === "string" ? shell.command : ""
+        const row = { id: shell.id, ownerID, ...(owner.agent === undefined ? {} : { ownerAgent: owner.agent }), ...(owner.title === undefined ? {} : { ownerTitle: owner.title }),
+          command: command.length > 256 ? `${command.slice(0, 255)}…` : command, status: typeof shell.status === "string" ? shell.status : "exited",
           ...(shell.status === "queued" && shell.queuePosition !== undefined ? { queuePosition: shell.queuePosition } : {}), startedAt: shell.time?.started ?? 0,
-          ...(shell.time?.completed === undefined ? {} : { completedAt: shell.time.completed }) })
+          ...(shell.time?.completed === undefined ? {} : { completedAt: shell.time.completed }) }
+        const length = JSON.stringify(row).length + (visible.length === 0 ? 0 : 1)
+        if (chars + length > RemoteLimits.maxAgentMessageChars) return { data: visible, truncated: true }
+        chars += length
+        visible.push(row)
       }
       return { data: visible, truncated: false }
     }
@@ -924,7 +963,8 @@ async function run(input: OperationInput) {
         if (shell === undefined) continue
         const ownerID = typeof shell === "object" && shell !== null && "metadata" in shell && shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
         if (typeof ownerID !== "string") throw new OperationError("forbidden", "Shell has no verified family owner")
-        const member = await requireFamilyMember(input, verified, ownerID)
+        const member = await verifiedFamilyOwner(input, verified, ownerID)
+        if (!member) throw new OperationError("forbidden", "Shell has no verified family owner")
         if (JSON.stringify(locationInfo(member)) !== JSON.stringify(memberLocation)) throw new OperationError("forbidden", "Shell Location does not match its family owner")
         await input.local.shellRemove(validated.shellID, memberLocation)
         return null
@@ -970,6 +1010,19 @@ async function run(input: OperationInput) {
       return { data: await input.local.permissionList(sessionID, location) }
     case "guardrail.status":
       return { data: await input.local.guardrailStatus(sessionID, location) }
+    case "review.list":
+      return { data: await input.local.reviewList(sessionID, location) }
+    case "review.decide": {
+      const item = (await input.local.reviewList(sessionID, location)).find((candidate) => candidate.itemID === validated.itemID)
+      if (item === undefined && !(validated.decision.kind === "recovery" && validated.decision.choice === "continue"))
+        throw new OperationError("invalid_message", "That review item is no longer open; reload before deciding")
+      if (item === undefined) await requireStoppedRecovery(input, verified, validated.itemID)
+      if (item !== undefined && item.kind !== validated.decision.kind) throw new OperationError("invalid_message", "The decision does not match the review item")
+      if (item?.kind === "guardrail" && item.payload.hardReview && "reply" in validated.decision && validated.decision.reply === "always")
+        throw new OperationError("invalid_message", "Hard guardrail reviews accept only once or reject")
+      await input.local.reviewDecide(sessionID, location, validated.itemID, validated.decision)
+      return null
+    }
     case "guardrail.request.list": {
       const listing = await input.local.guardrailRequestList(sessionID, location)
       return { data: asReviewList(listing) }
@@ -979,8 +1032,9 @@ async function run(input: OperationInput) {
     case "shell.output": {
       // Ownership is proven from the shell's own recorded Session before any output
       // byte is read, so a granted Session can never page another Session's capture.
-      await requireOwnedShell(input, sessionID, location, validated.shellID)
+      const shell = await requireOwnedShell(input, sessionID, location, validated.shellID)
       return {
+        ...shell,
         data: await input.local.shellOutput(validated.shellID, location, {
           ...(validated.cursor === undefined ? {} : { cursor: validated.cursor }),
           limit: validated.limit,
@@ -1072,6 +1126,9 @@ type Validated =
   | { readonly kind: "session.usageReport"; readonly input: RemoteUsageReportInput }
   | { readonly kind: "session.promptCosts" | "session.taskCosts"; readonly ids: readonly [string, ...string[]] }
   | { readonly kind: "usage.forecast"; readonly localScope: "backend" | "location" }
+  | { readonly kind: "incident.report"; readonly input: RemoteIncidentReportInput }
+  | { readonly kind: "incident.recent"; readonly input: RemoteIncidentRecentInput }
+  | { readonly kind: "incident.guidance" | "incident.guidance.clear"; readonly input: RemoteIncidentGuidanceInput }
   | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection }
   | { readonly kind: "workspace.catalog"; readonly workspace: string }
   | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
@@ -1121,6 +1178,8 @@ type Validated =
   | { readonly kind: "autonomy.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.stop" }
+  | { readonly kind: "review.list" }
+  | { readonly kind: "review.decide"; readonly itemID: string; readonly decision: ReviewDecision }
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
@@ -1134,6 +1193,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.permission.list": "permission.list",
   "session.guardrail.status": "guardrail.status",
   "session.guardrail.request.list": "guardrail.request.list",
+  "session.review.list": "review.list",
   "session.form.list": "form.list",
   "session.subscribe": "subscribe",
   "session.unsubscribe": "unsubscribe",
@@ -1227,6 +1287,24 @@ function validate(request: RemoteRequest): Validated {
       ...(fields.order === undefined ? {} : { order: literal(fields.order, ["asc", "desc"], "order") }),
     } }
   }
+  if (request.operation === "incident.report") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Incident report does not accept a Session")
+    const from = optionalInteger(fields.from, "from", 0, Number.MAX_SAFE_INTEGER)
+    const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
+    if (from !== undefined && to !== undefined && from > to) throw new OperationError("invalid_message", "Incident report from must not follow to")
+    return { kind: "incident.report", input: { group: literal(fields.group, ["model", "agent"], "group"),
+      ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
+      ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
+      ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 200)! }) } }
+  }
+  if (request.operation === "incident.recent") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Incident recent does not accept a Session")
+    return { kind: "incident.recent", input: { provider: requireString(fields.provider, "provider", 128), model: requireString(fields.model, "model", 128),
+      ...(fields.agent === undefined ? {} : { agent: requireString(fields.agent, "agent", 128) }),
+      ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 50)! }) } }
+  }
+  if (request.operation === "incident.guidance" || request.operation === "incident.guidance.clear")
+    return { kind: request.operation, input: { provider: requireString(fields.provider, "provider", 128), model: requireString(fields.model, "model", 128) } }
   if (request.operation === "workspace.catalog") return { kind: "workspace.catalog", workspace: requireString(fields.workspace, "workspace", 128) }
   if (request.operation === "workspace.file.find" || request.operation === "session.file.find") {
     const query = requireString(fields.query, "query", 200)
@@ -1236,6 +1314,11 @@ function validate(request: RemoteRequest): Validated {
   if (request.operation === "session.subagent.list") return { kind: "subagent.list", cursor: fields.cursor === undefined ? undefined : requireString(fields.cursor, "cursor", 1_024) }
   if (request.operation === "session.pin" || request.operation === "session.unpin") return { kind: request.operation }
   if (request.operation === "session.subagent.cancel") return { kind: "subagent.cancel", childID: sessionID(fields.childID, "childID") }
+  if (request.operation === "session.review.decide") {
+    const itemID = requireString(fields.itemID, "itemID", 128)
+    if (!isRemoteReviewItemID(itemID)) throw new OperationError("invalid_message", "Invalid review item ID")
+    return { kind: "review.decide", itemID, decision: reviewDecision(fields.decision) }
+  }
   if (request.operation === "session.subagent.answer") {
     const questionID = requireString(fields.questionID, "questionID", 128)
     if (!/^qst_[A-Za-z0-9_-]+$/.test(questionID)) throw new OperationError("invalid_message", "Invalid question ID")
@@ -1332,7 +1415,7 @@ function validate(request: RemoteRequest): Validated {
     case "session.form.cancel":
       return { kind: "form.cancel", formID: formID(fields.formID) }
     case "session.autonomy.set":
-      return { kind: "autonomy.set", payload: yoloPayload(fields) }
+      return { kind: "autonomy.set", payload: autonomyPayload(fields) }
     case "session.goal.set":
       return {
         kind: "goal.set",
@@ -1364,6 +1447,34 @@ async function requireOwnedShell(
   const owner = typeof metadata === "object" && metadata !== null ? Reflect.get(metadata, "sessionID") : undefined
   if (owner !== sessionID)
     throw new OperationError("forbidden", "That shell does not belong to the authorized Session")
+  const command: unknown = typeof info === "object" && info !== null ? Reflect.get(info, "command") : undefined
+  const status: unknown = typeof info === "object" && info !== null ? Reflect.get(info, "status") : undefined
+  return { ...(typeof command === "string" ? { command } : {}), ...(typeof status === "string" ? { status } : {}) }
+}
+
+async function requireStoppedRecovery(input: OperationInput, child: SessionInfo, itemID: string) {
+  if (child.parentID === undefined || child.agent === "btw") throw new OperationError("invalid_message", "Only a managed child Session can continue a stopped recovery")
+  const parent = await input.sessions.verify(child.parentID)
+  if (parent === undefined) throw new OperationError("session_not_allowed", "Parent Session is not available at its recorded location")
+  const seen = new Set<string>()
+  let cursor: string | undefined
+  while (true) {
+    const result: unknown = await input.local.subagentPage(parent.id, locationInfo(parent), cursor)
+    const tasks: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "data") : undefined
+    if (Array.isArray(tasks) && tasks.some((task) => ownsStoppedRecovery(task, parent.id, child.id, itemID))) return
+    const page: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "cursor") : undefined
+    const next: unknown = typeof page === "object" && page !== null ? Reflect.get(page, "next") : undefined
+    if (typeof next !== "string" || next.length === 0 || seen.has(next)) break
+    seen.add(next)
+    cursor = next
+  }
+  throw new OperationError("invalid_message", "That recovery was not stopped for this Session; reload before continuing")
+}
+
+function ownsStoppedRecovery(task: unknown, parentID: string, childID: string, itemID: string) {
+  if (typeof task !== "object" || task === null || Reflect.get(task, "parentID") !== parentID || Reflect.get(task, "sessionID") !== childID) return false
+  const stopped: unknown = Reflect.get(task, "stoppedRecovery")
+  return typeof stopped === "object" && stopped !== null && Reflect.get(stopped, "itemID") === itemID
 }
 
 function asReviewList(value: unknown): readonly unknown[] {
@@ -1401,7 +1512,8 @@ async function requireOwnedForm(
 }
 
 function scopedOperation(operation: RemoteOperation) {
-  return operation === "usage.forecast" || !unscopedOperations.has(operation) && requireSession(operation)
+  return operation === "usage.forecast" || operation === "incident.guidance" || operation === "incident.guidance.clear" ||
+    !unscopedOperations.has(operation) && requireSession(operation)
 }
 
 async function requireFamilyMember(input: OperationInput, root: SessionInfo, memberID: string, managed = false): Promise<SessionInfo> {
@@ -1410,6 +1522,24 @@ async function requireFamilyMember(input: OperationInput, root: SessionInfo, mem
   const member = await input.sessions.verify(memberID)
   if (member?.parentID !== root.id || managed && member.agent === "btw") throw new OperationError("forbidden", "Session is not a direct family member")
   return member
+}
+
+// A shell owner belongs to the family when walking its verified parent chain reaches
+// the root, so shells started by nested descendants are attributed to their owner
+// instead of being dropped for not being a direct child.
+async function verifiedFamilyOwner(input: OperationInput, root: SessionInfo, ownerID: string): Promise<SessionInfo | undefined> {
+  if (ownerID === root.id) return root
+  const owner = await input.sessions.verify(ownerID)
+  if (!owner) return undefined
+  let current: SessionInfo | undefined = owner
+  const seen = new Set<string>()
+  while (current && !seen.has(current.id) && seen.size < 16) {
+    seen.add(current.id)
+    if (current.parentID === root.id) return owner
+    if (current.parentID === undefined) return undefined
+    current = await input.sessions.verify(current.parentID)
+  }
+  return undefined
 }
 
 async function capturedChangesPage(input: OperationInput, owner: SessionInfo, sessionID: string, location: LocalLocation, requestID: string, cursor?: string): Promise<RemoteCapturedChangesPage> {
@@ -1525,11 +1655,22 @@ async function familyLocations(input: OperationInput, root: SessionInfo): Promis
   const locations = new Map<string, LocalLocation>()
   const add = (location: LocalLocation) => locations.set(JSON.stringify(location), location)
   add(locationInfo(root))
-  for (const child of input.sessions.snapshot().filter((session) => session.parentID === root.id)) {
+  const snapshot = input.sessions.snapshot()
+  const descendantIDs = new Set<string>()
+  let frontier = [root.id]
+  while (frontier.length > 0) {
+    frontier = snapshot
+      .filter((session) => session.parentID !== undefined && frontier.includes(session.parentID) && !descendantIDs.has(session.id))
+      .map((session) => {
+        descendantIDs.add(session.id)
+        return session.id
+      })
+  }
+  for (const child of snapshot.filter((session) => descendantIDs.has(session.id))) {
     if (locations.has(JSON.stringify(locationInfo(child)))) continue
     if (locations.size >= RemoteLimits.maxFamilyMembers) throw new OperationError("message_too_large", "Team spans too many Locations for one shell read")
-    const current = await input.sessions.verify(child.id)
-    if (current?.parentID === root.id) add(locationInfo(current))
+    const current = await verifiedFamilyOwner(input, root, child.id)
+    if (current) add(locationInfo(current))
   }
   return [...locations.values()]
 }
@@ -1605,13 +1746,13 @@ function boundedActivity(value: string, limit = 80): string {
   return points.length <= limit ? clean : `${points.slice(0, limit - 1).join("")}…`
 }
 
-export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: Readonly<Record<string, RemoteAttentionNeed>>, knownFailures?: ReadonlySet<string>) {
+export async function sessionStatus(local: LocalServer, sessions: readonly SessionInfo[], knownAttention?: Readonly<Record<string, RemoteAttentionNeed>>, knownFailures?: ReadonlySet<string>, knownWork?: Awaited<ReturnType<LocalServer["outstandingSessions"]>>, bounded = true) {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const rootOf = (sessionID: unknown) => {
     const session = typeof sessionID === "string" ? byID.get(sessionID) : undefined
     return session === undefined ? undefined : rootSessionID(session, byID)
   }
-  const work = await local.outstandingSessions(knownFailures === undefined)
+  const work = knownWork ?? await local.outstandingSessions(knownFailures === undefined)
   if (!Array.isArray(work.lost))
     throw new OperationError("internal_error", "Local server requires an update before remote Session status can be read")
   const executing = work.running.flatMap((id) => byID.get(id) ?? [])
@@ -1619,9 +1760,9 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
   const outstanding = new Set(work.data.flatMap((id) => rootOf(id) ?? []).filter((id) => !running.has(id)))
   const failed = knownFailures ?? new Set(work.failed.flatMap((id) => rootOf(id) ?? []))
   const lost = new Set(work.lost.flatMap((id) => rootOf(id) ?? []))
-  if (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && Object.keys(knownAttention).length > RemoteLimits.maxStatusSessions))
+  if (bounded && (running.size > RemoteLimits.maxStatusSessions || (knownAttention !== undefined && Object.keys(knownAttention).length > RemoteLimits.maxStatusSessions)))
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
-  if (outstanding.size > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
+  if (bounded && outstanding.size > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   const attention = new Map<string, RemoteAttentionNeed>(Object.entries(knownAttention ?? {}))
   const need = (rootID: string | undefined, kind: RemoteAttentionNeed) => {
     const current = rootID === undefined ? undefined : attention.get(rootID)
@@ -1648,11 +1789,11 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
         need(root.id, "review")
     }))
   }
-  if (attention.size > RemoteLimits.maxStatusSessions)
+  if (bounded && attention.size > RemoteLimits.maxStatusSessions)
     throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   const requestAttention = [...attention.keys()].sort()
   const combined = [...new Set([...requestAttention, ...failed, ...lost])].sort()
-  if (combined.length > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
+  if (bounded && combined.length > RemoteLimits.maxStatusSessions) throw new OperationError("message_too_large", "Session status exceeds the bounded root count")
   return { running: [...running].sort(), attention: combined, requestAttention, requestNeeds: Object.fromEntries(attention), failed: [...failed],
     ...(outstanding.size === 0 ? {} : { outstanding: [...outstanding].sort() }),
     ...(lost.size === 0 ? {} : { lost: [...lost].sort() }) }
@@ -1689,17 +1830,19 @@ function filterActiveSessions(value: unknown, allowed: ReadonlySet<string>) {
   return Object.fromEntries(Object.entries(value).filter(([sessionID]) => allowed.has(sessionID)))
 }
 
-type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous"; readonly pinned?: number | null; readonly running?: boolean }
+type Cursor = { readonly id: string; readonly time: number; readonly direction: "next" | "previous"; readonly pinned?: number | null; readonly running?: boolean; readonly waiting?: boolean; readonly epoch?: string }
 
 export type ListQuery = {
   readonly order: "asc" | "desc" | "pinned" | "active"
   readonly search?: string
   readonly searchFields?: "summary"
   readonly workspace?: string
-  readonly status?: "running" | "idle"
+  readonly status?: "waiting" | "running" | "idle"
   readonly parentID?: string | null
   readonly limit: number
   readonly anchor?: Cursor
+  readonly around?: string
+  readonly before?: number
 }
 
 export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQuery {
@@ -1707,30 +1850,35 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
   const anchor = fields.cursor === undefined ? undefined : cursor(fields.cursor)
   if (order === "pinned" && anchor !== undefined && anchor.pinned === undefined)
     throw new OperationError("invalid_message", "Pinned Session cursor is missing its sort key")
-  if (order === "active" && anchor !== undefined && anchor.running === undefined)
+  if (order === "active" && anchor !== undefined && (anchor.running === undefined || anchor.waiting === undefined || anchor.epoch === undefined))
     throw new OperationError("invalid_message", "Active Session cursor is missing its sort key")
+  if ((fields.around !== undefined || fields.before !== undefined) && (order !== "active" || anchor !== undefined || fields.around === undefined))
+    throw new OperationError("invalid_message", "A Session window anchor requires active order without a cursor")
   return {
     order,
     search: fields.search === undefined ? undefined : requireString(fields.search, "search", 200, { allowEmpty: true }),
     searchFields: fields.searchFields === undefined ? undefined : literal(fields.searchFields, ["summary"], "searchFields"),
     workspace: fields.workspace === undefined ? undefined : requireString(fields.workspace, "workspace", 128),
-    status: fields.status === undefined ? undefined : literal(fields.status, ["running", "idle"], "status"),
+    status: fields.status === undefined ? undefined : literal(fields.status, ["waiting", "running", "idle"], "status"),
     parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
     limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxSessionListPage)!,
     anchor,
+    around: fields.around === undefined ? undefined : sessionID(fields.around, "around"),
+    before: fields.before === undefined ? undefined : optionalInteger(fields.before, "before", 0, (typeof fields.limit === "number" ? fields.limit : 50) - 1),
   }
 }
 
 /** Page the complete backend Session list without truncation. */
-export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>) {
+export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>, waiting?: ReadonlySet<string>) {
   const { order, search, parentID, limit, anchor } = query
   const direction = anchor?.direction ?? "next"
   const effectiveOrder = order === "pinned" || order === "active" ? order : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
   const byID = new Map(sessions.map((session) => [session.id, session]))
   const runningRoots = new Set(sessions.filter((session) => running?.has(session.id)).map((session) => rootSessionID(session, byID)).filter((id): id is string => id !== undefined))
   const isRunning = (session: SessionInfo) => session.parentID === undefined ? runningRoots.has(session.id) : running?.has(session.id) === true
+  const isWaiting = (session: SessionInfo) => session.parentID === undefined && waiting?.has(session.id) === true
   const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time.active ?? session.time.updated,
-    running: session.parentID === undefined && runningRoots.has(session.id) })
+    waiting: isWaiting(session), running: !isWaiting(session) && session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
   const matching = sessions
     .filter((session) => query.workspace === undefined || workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) === query.workspace)
@@ -1738,28 +1886,35 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
       ? [session.title, session.agent ?? "", ...(session.model === undefined ? [] : [`${session.model.providerID}/${session.model.id}${session.model.variant === undefined ? "" : `#${session.model.variant}`}${session.model.profile === undefined ? "" : ` profile ${session.model.profile}`}`])]
         .some((value) => value.toLowerCase().includes(needle))
       : session.title.toLowerCase().includes(needle)))
-    .filter((session) => query.status === undefined || (query.status === "running" ? isRunning(session) : !isRunning(session) && session.time.archived === undefined))
+    .filter((session) => query.status === undefined || (query.status === "waiting" ? isWaiting(session)
+      : query.status === "running" ? isRunning(session) && !isWaiting(session) : !isWaiting(session) && !isRunning(session) && session.time.archived === undefined))
     .filter((session) => (parentID === undefined ? true : (session.parentID ?? null) === parentID))
     .sort(order === "active" ? (left, right) => compareActiveSessions(activeKey(left), activeKey(right)) : order === "pinned" ? comparePinnedSessions : compareSessions)
+  const epoch = order !== "active" ? undefined : createHash("sha256").update(JSON.stringify([
+    query.workspace, search, query.searchFields, query.status, parentID, matching.map(activeKey),
+  ])).digest("hex")
+  if (order === "active" && anchor !== undefined && anchor.epoch !== epoch) return { data: [], cursor: { previous: undefined, next: undefined }, stale: true }
   const ordered = effectiveOrder === "asc" || ((effectiveOrder === "pinned" || effectiveOrder === "active") && direction === "next") ? matching : matching.toReversed()
   const anchored = anchor === undefined ? ordered : ordered.filter((session) => effectiveOrder === "active"
-    ? compareActiveSessions(activeKey(session), { id: anchor.id, time: anchor.time, running: anchor.running === true }) * (direction === "next" ? 1 : -1) > 0
+    ? compareActiveSessions(activeKey(session), { id: anchor.id, time: anchor.time, running: anchor.running === true, waiting: anchor.waiting === true }) * (direction === "next" ? 1 : -1) > 0
     : effectiveOrder === "pinned"
       ? comparePinnedSessions(session, { id: anchor.id, time: { updated: anchor.time, pinned: anchor.pinned ?? undefined } }) * (direction === "next" ? 1 : -1) > 0
       : afterAnchor(session, anchor, effectiveOrder))
-  const page = anchored.slice(0, limit)
-  const remaining = anchored.length - page.length
+  const windowStart = query.around === undefined ? 0 : Math.max(0, matching.findIndex((session) => session.id === query.around) - (query.before ?? 0))
+  const page = anchored.slice(windowStart, windowStart + limit)
+  const remaining = anchored.length - windowStart - page.length
   const data = direction === "previous" ? page.toReversed() : page
   const first = data[0]
   const last = data.at(-1)
   return {
     data,
+    ...(running === undefined ? {} : { status: { running: data.filter(isRunning).map((session) => session.id), attention: data.filter(isWaiting).map((session) => session.id) } }),
     cursor: {
-      previous: first && (direction === "next" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: first.id, time: order === "active" ? activeKey(first).time : first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running } : {}) })
+      previous: first && (direction === "next" ? anchor !== undefined || windowStart > 0 : remaining > 0)
+        ? encodeCursor({ id: first.id, time: order === "active" ? activeKey(first).time : first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running, waiting: activeKey(first).waiting, epoch } : {}) })
         : undefined,
       next: last && (direction === "previous" ? anchor !== undefined : remaining > 0)
-        ? encodeCursor({ id: last.id, time: order === "active" ? activeKey(last).time : last.time.updated, direction: "next", ...(order === "pinned" ? { pinned: last.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(last).running } : {}) })
+        ? encodeCursor({ id: last.id, time: order === "active" ? activeKey(last).time : last.time.updated, direction: "next", ...(order === "pinned" ? { pinned: last.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(last).running, waiting: activeKey(last).waiting, epoch } : {}) })
         : undefined,
     },
   }
@@ -1779,8 +1934,10 @@ function cursor(value: unknown): Cursor {
     if (typeof record.id !== "string" || typeof record.time !== "number") throw new Error("shape")
     if (record.pinned !== undefined && record.pinned !== null && typeof record.pinned !== "number") throw new Error("shape")
     if (record.running !== undefined && typeof record.running !== "boolean") throw new Error("shape")
+    if (record.waiting !== undefined && typeof record.waiting !== "boolean") throw new Error("shape")
+    if (record.epoch !== undefined && (typeof record.epoch !== "string" || !/^[a-f0-9]{64}$/.test(record.epoch))) throw new Error("shape")
     return { id: record.id, time: record.time, direction: literal(record.direction, ["next", "previous"], "cursor"),
-      ...(record.pinned === undefined ? {} : { pinned: record.pinned }), ...(record.running === undefined ? {} : { running: record.running }) }
+      ...(record.pinned === undefined ? {} : { pinned: record.pinned }), ...(record.running === undefined ? {} : { running: record.running }), ...(record.waiting === undefined ? {} : { waiting: record.waiting }), ...(record.epoch === undefined ? {} : { epoch: record.epoch }) }
   } catch {
     throw new OperationError("invalid_message", "Invalid cursor")
   }
@@ -1802,7 +1959,8 @@ function comparePinnedSessions(left: SessionOrderKey, right: SessionOrderKey) {
   return -compareSessions(left, right)
 }
 
-function compareActiveSessions(left: { readonly id: string; readonly time: number; readonly running: boolean }, right: { readonly id: string; readonly time: number; readonly running: boolean }) {
+function compareActiveSessions(left: { readonly id: string; readonly time: number; readonly running: boolean; readonly waiting: boolean }, right: { readonly id: string; readonly time: number; readonly running: boolean; readonly waiting: boolean }) {
+  if (left.waiting !== right.waiting) return left.waiting ? -1 : 1
   if (left.running !== right.running) return left.running ? -1 : 1
   if (left.time !== right.time) return right.time - left.time
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
@@ -1827,7 +1985,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "machine.telemetry.consent.get": [],
   "machine.telemetry.consent.set": ["enabled", "noticeVersion"],
   "workspace.list": ["sessionsOnly"],
-  "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status"],
+  "session.list": ["limit", "order", "search", "searchFields", "parentID", "cursor", "workspace", "status", "around", "before"],
   "session.active": [],
   "usage.providers": ["refresh"],
   "usage.summary": [],
@@ -1836,6 +1994,10 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.promptCosts": ["inputIDs"],
   "session.taskCosts": ["sessionIDs"],
   "usage.forecast": ["localScope"],
+  "incident.report": ["group", "from", "to", "offset", "limit"],
+  "incident.recent": ["provider", "model", "agent", "limit"],
+  "incident.guidance": ["provider", "model"],
+  "incident.guidance.clear": ["provider", "model"],
   "session.status": [],
   "session.catalog": [],
   "workspace.catalog": ["workspace"],
@@ -1872,6 +2034,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.permission.list": [],
   "session.guardrail.status": [],
   "session.guardrail.request.list": [],
+  "session.review.list": [],
+  "session.review.decide": ["itemID", "decision"],
   "session.form.list": [],
   "session.shell.output": ["shellID", "cursor", "limit"],
   "session.subscribe": [],
@@ -1884,7 +2048,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
-  "session.autonomy.set": ["yolo", "maxNoProgress"],
+  "session.autonomy.set": ["yolo", "maxNoProgress", "sleep"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
   "session.create": ["id", "workspace", "agent", "model"],
@@ -1906,6 +2070,7 @@ const mutations: ReadonlySet<string> = new Set([
   "machine.latency.append",
   "machine.telemetry.consent.set",
   "machine.keepAwake.set",
+  "incident.guidance.clear",
   "session.compact",
   "session.create",
   "session.subagent.cancel",
@@ -1922,6 +2087,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.promptGenerate",
   "session.permission.reply",
   "session.guardrail.reply",
+  "session.review.decide",
   "session.form.reply",
   "session.form.cancel",
   "session.autonomy.set",
@@ -1934,6 +2100,7 @@ function isMutation(request: RemoteRequest) {
 }
 
 const reviewReplies: ReadonlySet<string> = new Set([
+  "session.review.decide",
   "session.permission.reply",
   "session.guardrail.reply",
   "session.form.reply",
@@ -1971,6 +2138,53 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
     default:
       return ["internal_error", "The local server failed the request"]
   }
+}
+
+type ReviewDecision = ReviewDecideInput["decision"]
+
+function reviewDecision(value: unknown): ReviewDecision {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", "Invalid review decision")
+  const fields = value as Readonly<Record<string, unknown>>
+  const kind = literal(fields.kind, ["question", "subagent_question", "guardrail", "permission", "recovery"] as const, "kind")
+  const only = (...keys: readonly string[]) => {
+    if (Object.keys(fields).some((key) => !keys.includes(key))) throw new OperationError("invalid_message", "Unexpected review decision field")
+  }
+  if (fields.dismissed !== undefined) {
+    if (fields.dismissed !== true || kind === "guardrail" || kind === "permission" || kind === "recovery") throw new OperationError("invalid_message", "Only questions can be dismissed")
+    only("kind", "dismissed")
+    return { kind, dismissed: true }
+  }
+  if (kind === "recovery") {
+    only("kind", "choice")
+    return { kind, choice: literal(fields.choice, remoteRecoveryChoices, "choice") }
+  }
+  if (kind === "guardrail" || kind === "permission") {
+    only("kind", "reply")
+    return { kind, reply: reply(fields.reply) }
+  }
+  if (kind === "question") {
+    only("kind", "answers")
+    if (!Array.isArray(fields.answers)) return { kind, answers: formAnswer(fields.answers) }
+    if (!fields.answers.every((answer) => Array.isArray(answer) && answer.every((item) => typeof item === "string")))
+      throw new OperationError("invalid_message", "Question answers must be lists of strings")
+    return { kind, answers: fields.answers as readonly (readonly string[])[] }
+  }
+  only("kind", "text", "data")
+  const text = requireString(fields.text, "text", 64 * 1024)
+  if (fields.data === undefined) return { kind, text }
+  const encoded = JSON.stringify(fields.data)
+  if (encoded === undefined || new TextEncoder().encode(encoded).length > 8 * 1024) throw new OperationError("invalid_message", "Answer data exceeds 8 KiB")
+  return { kind, text, data: fields.data as Extract<ReviewDecision, { kind: "subagent_question"; text: string }>["data"] }
+}
+
+function autonomyPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
+  if (fields.yolo !== undefined || fields.maxNoProgress !== undefined) {
+    if (fields.sleep !== undefined)
+      throw new OperationError("invalid_message", "Set the YOLO level separately from sleep")
+    return yoloPayload(fields)
+  }
+  if (fields.sleep !== undefined) return { sleep: requireBoolean(fields.sleep, "sleep") }
+  throw new OperationError("invalid_message", "Autonomy changes require yolo or sleep")
 }
 
 function yoloPayload(fields: Readonly<Record<string, unknown>>) {

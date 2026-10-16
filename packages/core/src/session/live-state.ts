@@ -16,6 +16,7 @@ import { ContextManifest } from "./context-manifest"
 import { SessionErrors } from "./error"
 import { SessionEvent } from "./event"
 import { SessionGuardrail } from "./guardrail"
+import { SessionReviewFold } from "./review-fold"
 import { readTeamObservation, renderTeamObservation } from "./orchestration-view"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionRunnerCache } from "./runner/cache"
@@ -82,7 +83,7 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
-    "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user unless guardrail-decision or sleep is on for this Session family.",
+    "Choose safe implementation options and continue independent work. Required answers remain manual unless auto_answer is enabled. Model guardrail judgments require guardrails.decide_reviews; hard-review grading also respects guardrails.decide_hard_reviews. Both automatic answers and model guardrail judgments default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
@@ -95,7 +96,7 @@ export const sleepReminder = (autonomy: SessionAutonomy.State, machineAwake?: bo
     return undefined
   return [
     "The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done.",
-    "Questions, forms, and guardrail reviews in this Session family are decided by the decision model while sleep is on.",
+    "Automatic answers require auto_answer and model guardrail judgments require guardrails.decide_reviews; both default off, including during sleep. Disabled or unsettled requests wait in the user's review box. Continue independent work without guessing answers or replaying deferred actions.",
     machineAwake === undefined
       ? undefined
       : machineAwake
@@ -235,7 +236,7 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
         .get()
       if (!parent) break
       const state = SessionAutonomy.read(parent.autonomy)
-      autonomy = { ...autonomy, guardrailDecision: state.guardrailDecision, sleep: state.sleep }
+      autonomy = { ...autonomy, sleep: state.sleep }
       revision += parent.revision
       ancestorID = task.parentID
     }
@@ -305,6 +306,11 @@ export const layer = Layer.effect(
       const guardrail = yield* guardrails.snapshot(sessionID)
       if (before.sequence !== guardrail.sequence || before.digest !== guardrail.digest) return yield* load(sessionID)
       const awake = current.autonomy.sleep ? yield* keepAwake.get : undefined
+      const reviewFamily = yield* SessionReviewFold.familyFold(db, sessionID)
+      const openReviews = reviewFamily?.folded.filter(SessionReviewFold.isOpen) ?? []
+      const reviewNotice = openReviews.length
+        ? `Pending your review: ${openReviews.length} item(s) in this Session family (${openReviews.map((item) => `${item.kind} ${item.itemID}`).join(", ")}). The user decides them through the review box; decisions arrive as user messages without changing sleep. Do not guess outcomes, retry deferred actions, or call goal report for them. Continue independent work; when only these remain, state what is waiting and stop.`
+        : undefined
       const text = [
         authoritativeStatePrefix +
           "\n" +
@@ -315,6 +321,7 @@ export const layer = Layer.effect(
           }),
         goalReminder(current.autonomy),
         sleepReminder(current.autonomy, awake?.state === "on", awake?.lid === "on"),
+        reviewNotice,
       ]
         .filter((part): part is string => part !== undefined)
         .join("\n\n")

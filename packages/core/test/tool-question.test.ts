@@ -51,12 +51,13 @@ const questionToolNode = makeLocationNode({
 const overrides = [
   [Permission.node, permission],
   [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Questions must not request judgments") })],
-  [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([]) })],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig], [Image.node, imagePassthrough],
 ] as const
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode]), [...overrides, [Form.node, form]]))
-const withForms = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Decision.node]), overrides))
-const autonomous = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Database.node, SessionAutonomy.node, Decision.node]), overrides))
+const configured = (info: unknown) =>
+  [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)(info) })]) })] as const
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode]), [...overrides, configured({}), [Form.node, form]]))
+const withForms = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Decision.node]), [...overrides, configured({})]))
+const autonomous = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Database.node, SessionAutonomy.node, Decision.node]), [...overrides, configured({ auto_answer: true })]))
 const seedSession = Effect.gen(function* () {
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp/ycoding-question"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
@@ -131,7 +132,7 @@ describe("QuestionTool", () => {
     expect(capturedInput()).toEqual({ sessionID, title: "Questions", metadata: { kind: "question", tool: { messageID: toolIdentity.messageID, callID: "call-question" } }, fields: [
       { key: "q0", title: "Action", description: "What should happen?", options: [{ value: "Build", label: "Build", description: "Build it" }], custom: true, type: "string" },
       { key: "q1", title: "Environment", description: "Which environment?", options: [{ value: "Dev", label: "Dev", description: "Development" }], custom: true, type: "multiselect" },
-      { key: "q2", title: "Optional", description: "Anything else?", options: [], custom: true, type: "string" },
+      { key: "q2", title: "Optional", description: "Anything else?", options: [], custom: true, type: "string", required: true },
     ] })
   }))
 

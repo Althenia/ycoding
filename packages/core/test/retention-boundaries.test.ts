@@ -33,7 +33,7 @@ const it = testEffect(
       [
         RetentionSettings.node,
         Layer.succeed(RetentionSettings.Service, {
-          read: () => Effect.succeed({ recordsDays, usageDays, latencyDays: 2 }),
+          read: () => Effect.succeed({ recordsDays, usageDays, latencyDays: 2, incidentDays: 30 }),
         }),
       ],
       [SessionExecution.node, Layer.mock(SessionExecution.Service, { active: Effect.succeed(active) })],

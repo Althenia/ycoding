@@ -1,14 +1,15 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import type { SessionInfo, ShellInfo } from "@ycoding-ai/client"
+import type { ShellInfo } from "@ycoding-ai/client"
 import { useClient } from "../../../context/client"
 import { useData } from "../../../context/data"
 import { Keymap } from "../../../context/keymap"
-import { useLocation } from "../../../context/location"
 import { useTheme } from "../../../context/theme"
+import { useToast } from "../../../ui/toast"
+import { errorMessage } from "../../../util/error"
 import { useRoute } from "../../../context/route"
-import type { SessionShellGroup } from "../../../util/session"
+import { groupSessionShells, type SessionShellGroup } from "../../../util/session"
 import { formatDuration } from "../../../util/format"
 import { abbreviateHome } from "../../../util/path-format"
 import { shellStatusLabel, statusColor } from "../../shell-output/util"
@@ -38,15 +39,12 @@ export function ShellRows(props: {
   return (
     <For each={props.groups}>
       {(group, groupIndex) => {
-        const unknown = group.owner.label === "Unknown session"
         return (
           <box flexDirection="column">
-            <text fg={unknown ? theme.text.feedback.warning.default : theme.text.subdued} attributes={TextAttributes.BOLD}>
+            <text fg={theme.text.subdued} attributes={TextAttributes.BOLD}>
               {props.designLabels ? shellOwnerLabel(group.owner.label) : group.owner.label}
             </text>
-            <Show when={!unknown}>
-              <box height={1} />
-            </Show>
+            <box height={1} />
             <For each={group.shells}>
               {(shell, shellIndex) => {
                 const active = createMemo(() => props.selected === shell.id)
@@ -101,25 +99,29 @@ export function ShellRows(props: {
 
 export function ShellTab(props: { sessionID: string }) {
   const data = useData()
-  const location = useLocation()
   const client = useClient()
   const route = useRoute()
   const { theme } = useTheme()
   const composer = useComposerTab()
+  const toast = useToast()
 
-  const session = createMemo(() => data.session.get(props.sessionID))
-  const shells = createMemo(() => data.shell.list(session()?.location))
-  const groups = createMemo(() => pickerShellGroups(shells(), data.session.list(), props.sessionID))
+  const shells = createMemo(() => data.shell.listFamily(props.sessionID))
+  const groups = createMemo(() => groupSessionShells(shells(), data.session.list(), props.sessionID, { includeSettled: true }))
   const entries = createMemo(() => groups().flatMap((group) => group.shells.map((shell) => ({ shell, owner: group.owner }))))
   const [now, setNow] = createSignal(Date.now())
   const [selected, setSelected] = createSignal(0)
   let scroll: ScrollBoxRenderable | undefined
 
   const selectedEntry = createMemo(() => entries()[selected()])
+  let pickerGeneration = 0
 
   createEffect(() => {
+    const sessionID = props.sessionID
+    const generation = ++pickerGeneration
+    onCleanup(() => { pickerGeneration++ })
     if (!composer.active("shell")) return
-    void data.shell.sync(session()?.location).catch((error) => console.error("Failed to load shell commands", error))
+    const current = () => generation === pickerGeneration && props.sessionID === sessionID && composer.active("shell")
+    void data.shell.syncFamily(sessionID, current).catch((error) => { if (current()) console.error("Failed to load shell commands", error) })
   })
 
   createEffect(() => {
@@ -210,15 +212,27 @@ export function ShellTab(props: { sessionID: string }) {
         title: "Kill shell command",
         group: "Composer",
         bind: "<leader>k",
-        run() {
+        async run() {
+          const generation = pickerGeneration
+          const sessionID = props.sessionID
           const entry = selectedEntry()
           if (!entry) return
-          setSelected(0)
-          if (scroll) scroll.scrollTo(0)
-          const ref = location.current
-          void client.api.shell.remove({
+          const current = () => generation === pickerGeneration && props.sessionID === sessionID && composer.active("shell")
+          const verification = await data.shell.owner(entry.shell, sessionID).then((owner) => ({ owner }), (error: unknown) => ({ error }))
+          if (!current()) return
+          if ("error" in verification || !verification.owner) {
+            toast.show({ title: "Failed to verify shell owner", message: "error" in verification ? errorMessage(verification.error) : "Shell is not available in this family.", variant: "error" })
+            return
+          }
+          await client.api.shell.remove({
             id: entry.shell.id,
-            location: ref ? { directory: ref.directory, workspace: ref.workspaceID } : undefined,
+            location: { directory: verification.owner.location.directory, workspace: verification.owner.location.workspaceID },
+          }).then(() => {
+            if (!current()) return
+            setSelected(0)
+            if (scroll) scroll.scrollTo(0)
+          }, (error: unknown) => {
+            if (current()) toast.show({ title: "Failed to kill shell", message: errorMessage(error), variant: "error" })
           })
         },
       },
@@ -247,36 +261,7 @@ export function ShellTab(props: { sessionID: string }) {
   )
 }
 
-function pickerShellGroups(shells: readonly ShellInfo[], sessions: readonly SessionInfo[], currentSessionID: string): SessionShellGroup[] {
-  const descendants = descendantSessionIDs(sessions, currentSessionID)
-  const owners = [currentSessionID, ...descendants]
-  const groups = owners.flatMap((sessionID) => {
-    const owned = shells.filter((shell) => shell.metadata.sessionID === sessionID)
-    if (owned.length === 0) return []
-    const owner = sessions.find((session) => session.id === sessionID)
-    return [
-      {
-        owner: { label: sessionID === currentSessionID ? "Main chat" : `${owner?.agent ?? "Subagent"} · ${owner?.title ?? ""}` },
-        shells: owned,
-      },
-    ]
-  })
-  const unknown = shells.filter((shell) => {
-    const sessionID = shell.metadata.sessionID
-    return typeof sessionID !== "string" || !sessions.some((session) => session.id === sessionID)
-  })
-  if (unknown.length === 0) return groups
-  return [...groups, { owner: { label: "Unknown session" }, shells: unknown }]
-}
-
-function descendantSessionIDs(sessions: readonly SessionInfo[], parentID: string): string[] {
-  return sessions
-    .filter((session) => session.parentID === parentID)
-    .flatMap((session) => [session.id, ...descendantSessionIDs(sessions, session.id)])
-}
-
 function shellOwnerLabel(label: string) {
   if (label === "Main chat") return "MAIN CHAT · THIS SESSION"
-  if (label === "Unknown session") return "UNKNOWN SESSION"
   return `SUBAGENT · ${label.toUpperCase()}`
 }

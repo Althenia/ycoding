@@ -2,6 +2,7 @@ import { Agent } from "../agent"
 import { Database } from "../database/database"
 import { SessionSchema } from "./schema"
 import { SessionTaskTable } from "./sql"
+import { SessionReviewFold } from "./review-fold"
 import { canonicalJson } from "./runner/cache"
 import { Task, TeamView, truncateUtf8, type State } from "@ycoding-ai/schema/session-orchestration"
 import { eq } from "drizzle-orm"
@@ -58,7 +59,7 @@ export const renderTeamObservation = (tasks: ReadonlyArray<Task>, maxBytes = Tea
       state: task.state,
       progress: task.progress ? { text: truncateUtf8(task.progress.text, 4 * 1024) } : undefined,
       question: task.question
-        ? { id: task.question.id, text: truncateUtf8(task.question.text, 8 * 1024), data: task.question.data }
+        ? { id: task.question.id, text: truncateUtf8(task.question.text, 8 * 1024), data: task.question.data, ...(task.question.deferred ? { deferred: true } : {}) }
         : undefined,
     }))
     .toSorted((a, b) => {
@@ -105,6 +106,30 @@ export const readTeamView = Effect.fn("SessionOrchestrationView.readTeamView")(f
   return tasks.length === 0 ? undefined : renderTeamView(tasks)
 })
 
+export const withReviewState = Effect.fn("SessionOrchestrationView.withReviewState")(function* (
+  db: DatabaseService,
+  tasks: ReadonlyArray<Task>,
+) {
+  const reviewed = tasks.filter((task) => task.question !== undefined || task.state === "lost")
+  if (reviewed.length === 0) return tasks
+  const reviews = (yield* SessionReviewFold.fold(db, reviewed.map((task) => task.sessionID))).filter((item) => item.withdrawn === undefined)
+  return tasks.map((task) => {
+    const deferred = task.question && reviews.some((item) =>
+      SessionReviewFold.isOpen(item) && item.sessionID === task.sessionID && (item.kind === "subagent_question" || item.kind === "recovery") &&
+      "questionID" in item.origin && item.origin.questionID === task.question?.id,
+    )
+    const stopped = task.state === "lost"
+      ? reviews.findLast((item) => item.sessionID === task.sessionID && SessionReviewFold.isStoppedRecovery(item))
+      : undefined
+    if (!deferred && !stopped) return task
+    return {
+      ...task,
+      ...(deferred && task.question ? { question: { ...task.question, deferred: true } } : {}),
+      ...(stopped ? { stoppedRecovery: { itemID: stopped.itemID } } : {}),
+    }
+  })
+})
+
 export const readTeamObservation = Effect.fn("SessionOrchestrationView.readTeamObservation")(function* (
   db: DatabaseService,
   parentID: SessionSchema.ID,
@@ -117,10 +142,11 @@ const readTasks = Effect.fn("SessionOrchestrationView.readTasks")(function* (
   db: DatabaseService,
   parentID: SessionSchema.ID,
 ) {
-  return (yield* db
+  const rows = yield* db
     .select()
     .from(SessionTaskTable)
     .where(eq(SessionTaskTable.parent_id, parentID))
     .all()
-    .pipe(Effect.orDie)).map(taskFromRow)
+    .pipe(Effect.orDie)
+  return yield* withReviewState(db, rows.map(taskFromRow))
 })

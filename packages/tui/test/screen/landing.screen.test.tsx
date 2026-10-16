@@ -90,7 +90,7 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     expect(frame).not.toContain("↓ subagents")
     expect(frame).not.toContain("⌃x b sidebar")
 
-    for (const footer of ["main", "goal off", "YOLO off", "subagents 0"]) {
+    for (const footer of ["main", "goal off", "Manual", "subagents 0"]) {
       expect(frame).toContain(footer)
     }
 
@@ -126,9 +126,8 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(viewport.width - header.trimEnd().length).toBe(3)
       expect(lines[footer]?.indexOf("main")).toBe(3)
       expect(lines[footer]?.indexOf("goal off")! - (lines[footer]?.indexOf("main")! + "main".length)).toBe(3)
-      expect(lines[footer]?.indexOf("YOLO off")! - (lines[footer]?.indexOf("goal off")! + "goal off".length)).toBe(3)
-      expect(lines[footer]?.indexOf("guardrail decision off")! - (lines[footer]?.indexOf("YOLO off")! + "YOLO off".length)).toBe(3)
-      expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("guardrail decision off")! + "guardrail decision off".length)).toBe(3)
+      expect(lines[footer]?.indexOf("Manual")! - (lines[footer]?.indexOf("goal off")! + "goal off".length)).toBe(3)
+      expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("Manual")! + "Manual".length)).toBe(3)
     }
 
     // The reference places no agent or model row between the placeholder and the footer.

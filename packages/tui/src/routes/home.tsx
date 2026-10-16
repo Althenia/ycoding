@@ -91,7 +91,7 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
     >
       <box flexDirection="row" gap={3} flexShrink={0}>
         <text fg={theme.text.subdued}>main</text>
-        <ModeChips autonomy={props.autonomy} />
+        <ModeChips autonomy={props.autonomy} keys={["goal", "yolo"]} />
         <text fg={theme.text.subdued}>subagents 0</text>
       </box>
       <box flexDirection="row" gap={3} flexShrink={0} alignSelf={dimensions().width < 120 ? "flex-end" : undefined}>

@@ -268,6 +268,7 @@ it.effect("settles an execution that never reached a terminal event as failed, o
     const events = yield* EventRuntime.Service
     const db = (yield* Database.Service).db
     const store = yield* SessionStore.Service
+    const appProcess = yield* AppProcess.Service
     const model = { id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }
     const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
     const killedParent = Session.ID.make("ses_killed_parent")
@@ -294,7 +295,7 @@ it.effect("settles an execution that never reached a terminal event as failed, o
     yield* events.publish(SessionEvent.Execution.Interrupted, { sessionID: settled[1], reason: "shutdown" })
     expect([...(yield* sessions.outstanding(true)).failed].toSorted()).toEqual([settled[2]])
 
-    yield* SessionInterruptedExecution.reconcile(db, events)
+    yield* SessionInterruptedExecution.reconcile(db, events, appProcess)
 
     const history = (id: Session.ID) => db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable)
       .where(eq(EventTable.aggregate_id, id)).orderBy(EventTable.seq).all().pipe(Effect.map((rows) => rows.map((row) => row.type).filter((type) => !type.startsWith("session.created"))))
@@ -311,7 +312,7 @@ it.effect("settles an execution that never reached a terminal event as failed, o
     expect([...(yield* sessions.outstanding(true)).running]).toEqual([executing])
 
     const before = yield* db.select({ id: EventTable.id }).from(EventTable).all()
-    yield* SessionInterruptedExecution.reconcile(db, events)
+    yield* SessionInterruptedExecution.reconcile(db, events, appProcess)
     expect(yield* db.select({ id: EventTable.id }).from(EventTable).all()).toEqual(before)
   }),
 )

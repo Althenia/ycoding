@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA, TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import type { GuardrailStatusOutput, SessionAutonomyState, SessionCacheDiagnostics, SessionTodoInfo } from "@ycoding-ai/client"
+import type {
+  GuardrailStatusOutput,
+  SessionAutonomyState,
+  SessionCacheDiagnostics,
+  SessionTodoInfo,
+} from "@ycoding-ai/client"
 import { expect, test, beforeEach } from "bun:test"
 import { createSignal, type JSX } from "solid-js"
 import { useTheme } from "../src/context/theme"
@@ -13,7 +18,7 @@ beforeEach(async () => {
   resetRailExpansion()
 })
 
-async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 20 }) {
+async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 20 }, mode: "dark" | "light" = "dark") {
   const config = createTuiResolvedConfig()
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../src/config"),
@@ -23,7 +28,7 @@ async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 
     () => (
       <TestTuiContexts>
         <ConfigProvider config={config}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+          <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
             {body()}
           </ThemeProvider>
         </ConfigProvider>
@@ -55,12 +60,18 @@ test("keeps every section toggleable with others collapsed by default", async ()
     expect(app.captureCharFrame()).not.toContain("mcp body")
 
     // Every section expands: MCP opens when its header is clicked.
-    const mcpRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
+    const mcpRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("MCP"))
     await app.mockMouse.click(2, mcpRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
     expect(app.captureCharFrame()).toContain("mcp body")
 
-    const todoRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    const todoRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("TODO"))
     await app.mockMouse.click(2, todoRow)
     await app.waitForFrame((frame) => !frame.includes("todo body"))
     await app.mockMouse.click(2, todoRow)
@@ -73,11 +84,7 @@ test("keeps every section toggleable with others collapsed by default", async ()
 test("registers sidebar content in the rail design order", async () => {
   const { builtins } = await import("../src/plugin/builtins")
 
-  expect(
-    builtins
-      .map((plugin) => plugin.id)
-      .filter((id) => id.startsWith("internal:sidebar-")),
-  ).toEqual([
+  expect(builtins.map((plugin) => plugin.id).filter((id) => id.startsWith("internal:sidebar-"))).toEqual([
     "internal:sidebar-context",
     "internal:sidebar-todo",
     "internal:sidebar-subagents",
@@ -99,7 +106,9 @@ test("renders expanded when no rail provider is mounted", async () => {
 
 test("renders the session title only inside the section body", async () => {
   const { SessionRailContent } = await import("../src/routes/session/sidebar")
-  const app = await mount(() => <SessionRailContent sessionID="ses_0085fc701234567" title="New session — cache audit" />)
+  const app = await mount(() => (
+    <SessionRailContent sessionID="ses_0085fc701234567" title="New session — cache audit" />
+  ))
   await app.waitForFrame((frame) => frame.includes("New session — cache audit"))
 
   try {
@@ -112,23 +121,43 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
+test("awake Manual rail names the human and the configured decision model for ordinary guardrails only", async () => {
+  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+  const app = await mount(() => <AutonomyRailContent autonomy={{ mode: "normal", yolo: 0 }} />, {
+    width: 40,
+    height: 20,
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("Guardrails"))
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails ordinary · you · decision model if enabled")
+    expect(app.captureCharFrame()).not.toContain("hard reviews")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("renders who decides each action at every YOLO level and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { level: 0, goal: false, values: ["ask you", "ask you", "ask you"] },
-    { level: 1, goal: false, values: ["auto", "auto", "ask you"] },
-    { level: 2, goal: false, values: ["auto", "auto", "auto"] },
-    { level: 3, goal: false, values: ["auto", "auto", "auto"] },
-    { level: 0, goal: true, values: ["auto · goal", "ask you", "auto · goal"] },
+    { level: 0, goal: false, values: ["you", "ordinary · you · decision model if enabled", "you"] },
+    { level: 1, goal: false, values: ["auto · YOLO 1", "ordinary · auto · YOLO 1", "you"] },
+    { level: 2, goal: false, values: ["auto · YOLO 2", "ordinary · auto · YOLO 2", "auto · YOLO 2 · if auto_answer on"] },
+    { level: 3, goal: false, values: ["auto · YOLO 3", "ordinary · auto · YOLO 3", "auto · YOLO 3 · if auto_answer on"] },
+    { level: 0, goal: true, values: ["auto · goal", "ordinary · you · decision model if enabled", "auto · goal · if auto_answer on"] },
   ] as const
 
   for (const item of cases) {
     const autonomy = {
       mode: "normal" as const,
       yolo: item.level,
-      ...(item.goal ? { goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } } : {}),
+      ...(item.goal
+        ? { goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } }
+        : {}),
     }
-    const app = await mount(() => <AutonomyRailContent autonomy={autonomy as SessionAutonomyState} />, { width: 60, height: 40 })
+    const app = await mount(() => <AutonomyRailContent autonomy={autonomy as SessionAutonomyState} />, {
+      width: 60,
+      height: 40,
+    })
     await app.waitForFrame((frame) => frame.includes("Permissions"))
     try {
       const frame = app.captureCharFrame()
@@ -138,38 +167,111 @@ test("renders who decides each action at every YOLO level and with an active goa
       const expected = ["Permissions", "Guardrails", "Questions"]
       expect(frame).not.toContain("Scope dispatch")
       expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
-      expect(expected.map((label) => rows.find((line) => line.includes(label))?.trimEnd().split(label).at(-1)?.trim())).toEqual([...item.values])
-      expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(`${item.level === 0 ? "Manual" : `YOLO ${item.level}`}${item.goal ? " · goal" : ""}`)
-      const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-      const decision = (action: "permissions" | "guardrails" | "questions") => {
-        const level = item.level
-        if (action === "guardrails") return level >= 1 ? "auto" : "ask you"
-        if (action === "permissions") return level >= 1 ? "auto" : item.goal ? "auto · goal" : "ask you"
-        return level >= 2 ? "auto" : item.goal ? "auto · goal" : "ask you"
+      const labelRows = expected.map((label) => rows.findIndex((line) => line.includes(label)))
+      const block = (index: number) => {
+        const start = labelRows[index]!
+        const next = labelRows[index + 1] ?? rows.length
+        const end = rows.findIndex((line, row) => row > start && (row >= next || line.trim() === ""))
+        return Array.from({ length: (end < 0 ? next : Math.min(end, next)) - start }, (_, offset) => start + offset)
       }
-      for (const action of ["permissions", "guardrails", "questions"] as const) {
-        const value = decision(action)
-        const span = spans.find((candidate) => candidate.text.trim() === value)
-        expect(span?.fg.toInts(), `${item.level} ${action} ${value}`).toEqual(
-          RGBA.fromHex(value === "ask you" ? "#67D7A4" : "#F0BE62").toInts(),
+      expect(
+        expected.map((label, index) =>
+          block(index)
+            .map((row) => rows[row]!.trim())
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .replace(label, "")
+            .trim(),
+        ),
+      ).toEqual([...item.values])
+      expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(
+        `${item.level === 0 ? "Manual" : `YOLO ${item.level}`}${item.goal ? " · goal" : ""}`,
+      )
+      const spanLines = app.captureSpans().lines
+      expected.forEach((label, index) => {
+        const value = item.values[index]!
+        const human = value === "you" || value === "ordinary · you · decision model if enabled"
+        const painted = block(index).flatMap((row) =>
+          spanLines[row]!.spans.filter((span) => span.text.trim() !== "" && span.text.trim() !== label),
         )
-      }
+        expect(painted.length, `${item.level} ${value}`).toBeGreaterThan(0)
+        for (const span of painted)
+          expect(span.fg.toInts(), `${item.level} ${value} · ${span.text}`).toEqual(
+            RGBA.fromHex(human ? "#67D7A4" : "#F0BE62").toInts(),
+          )
+      })
     } finally {
       app.renderer.destroy()
     }
   }
 })
 
+for (const mode of ["dark", "light"] as const) {
+  for (const width of [32, 50]) {
+    for (const asleep of [false, true]) {
+      test(`autonomy heading and rows fit ${width} columns in ${mode}, asleep=${asleep}`, async () => {
+        const { RailProvider } = await import("../src/routes/session/rail-section")
+        const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+        const app = await mount(
+          () => (
+            <box width={width}>
+              <RailProvider>
+                <AutonomyRailContent
+                  autonomy={{
+                    mode: "normal",
+                    yolo: 1,
+                    ...(asleep ? { sleep: {} } : {}),
+                  }}
+                />
+              </RailProvider>
+            </box>
+          ),
+          { width: width === 32 ? 120 : 160, height: 28 },
+          mode,
+        )
+        try {
+          await app.waitForFrame((frame) => frame.includes("Permissions"))
+          const lines = app.captureCharFrame().split("\n")
+          const heading = lines.find((line) => line.includes("AUTONOMY"))
+          expect(heading).toBeDefined()
+          expect(heading?.trimEnd().length).toBeLessThanOrEqual(width - 3)
+          expect(heading).toContain(`YOLO 1${asleep ? " · asleep" : ""}`)
+          for (const line of lines) expect(line.slice(width).trim()).toBe("")
+          const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
+          const questionLine = lines.findIndex((line) => line.includes("Questions"))
+          const guardrailValue = asleep ? "ordinary · review box · decision model if enabled" : "ordinary · auto · YOLO 1"
+          const questionValue = asleep ? "review box · decision model if auto_answer on" : "you"
+          expect(lines.slice(guardrailLine, questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
+            `Guardrails ${guardrailValue}`,
+          )
+          expect(lines.slice(questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(`Questions ${questionValue}`)
+          if (width === 32 && asleep) {
+            expect(lines[guardrailLine]?.trim()).toBe("Guardrails")
+            expect(lines[guardrailLine + 1]?.trim()).toContain("ordinary")
+          }
+        } finally {
+          app.renderer.destroy()
+        }
+      })
+    }
+  }
+}
+
 test("renders the goal panel only while its durable status is active", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   for (const status of ["active", "completed", "stopped", "exhausted"] as const) {
-    const app = await mount(() => (
-      <AutonomyRailContent autonomy={{
-        mode: "normal",
-        yolo: 0,
-        goal: { text: "Finish the migration", status, iteration: 3, noProgress: 0, maxNoProgress: 3 },
-      }} />
-    ), { width: 40, height: 24 })
+    const app = await mount(
+      () => (
+        <AutonomyRailContent
+          autonomy={{
+            mode: "normal",
+            yolo: 0,
+            goal: { text: "Finish the migration", status, iteration: 3, noProgress: 0, maxNoProgress: 3 },
+          }}
+        />
+      ),
+      { width: 40, height: 24 },
+    )
     try {
       await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
       expect(app.captureCharFrame().includes("GOAL"), status).toBe(status === "active")
@@ -249,7 +351,10 @@ test("renders compact operational rail summaries from live component state", asy
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
     ])
-  const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+  const autonomy: SessionAutonomyState = {
+    mode: "normal",
+    yolo: true,
+    goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
   }
   const app = await mount(
     () => (
@@ -257,11 +362,22 @@ test("renders compact operational rail summaries from live component state", asy
         <RailProvider allExpanded goal autonomy>
           <SessionRailContent sessionID="ses_summary" title="Summary session" />
           <AutonomyRailContent autonomy={autonomy} />
-          <TodoRailContent list={[{ content: "Done", status: "completed", priority: "low" }, { content: "Open", status: "pending", priority: "low" }]} />
+          <TodoRailContent
+            list={[
+              { content: "Done", status: "completed", priority: "low" },
+              { content: "Open", status: "pending", priority: "low" },
+            ]}
+          />
           <SubagentRailContent
             tasks={[
               { sessionID: "ses_running", description: "running", state: "running", elapsed: "2m" },
-              { sessionID: "ses_waiting", description: "waiting", state: "waiting", question: { id: "question_ses_waiting", text: "Need input", time: 60_000 }, elapsed: "1m" },
+              {
+                sessionID: "ses_waiting",
+                description: "waiting",
+                state: "waiting",
+                question: { id: "question_ses_waiting", text: "Need input", time: 60_000 },
+                elapsed: "1m",
+              },
             ]}
             summary={{ total: 12, active: 5, running: 3, waiting: 2 }}
             position="top"
@@ -394,7 +510,10 @@ test("renders RailRow values right-aligned on a single line with custom value co
       (item): item is TextRenderable => item instanceof TextRenderable,
     )
     const value = rendered.find((item) => item.plainText === "71%")
-    const line = app.captureCharFrame().split("\n").find((item) => item.includes("Hit ratio"))
+    const line = app
+      .captureCharFrame()
+      .split("\n")
+      .find((item) => item.includes("Hit ratio"))
 
     expect(line?.endsWith("71%")).toBe(true)
     expect(value?.fg.toInts()).toEqual(theme()!.text.feedback.success.default.toInts())
@@ -445,16 +564,9 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
 
   try {
     const frame = app.captureCharFrame()
-    const indexes = [
-      "Model",
-      "Context",
-      "Cache",
-      "SPEND",
-      "Total",
-      "CACHE",
-      "Reads",
-      "Writes",
-    ].map((label) => frame.indexOf(label))
+    const indexes = ["Model", "Context", "Cache", "SPEND", "Total", "CACHE", "Reads", "Writes"].map((label) =>
+      frame.indexOf(label),
+    )
     const rendered = descendants(app.renderer.root).filter(
       (item): item is TextRenderable => item instanceof TextRenderable,
     )
@@ -495,9 +607,19 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   await missing.waitForFrame((frame) => frame.includes("CONTEXT"))
   try {
     const frame = missing.captureCharFrame()
-    expect(frame.split("\n").find((line) => line.includes("Cache"))?.trimEnd()).toMatch(/^ +Cache +unreported$/)
+    expect(
+      frame
+        .split("\n")
+        .find((line) => line.includes("Cache"))
+        ?.trimEnd(),
+    ).toMatch(/^ +Cache +unreported$/)
     expect(frame).not.toContain("Reads")
-    expect(frame.split("\n").find((line) => line.includes("Writes"))?.trimEnd()).toMatch(/^ +Writes +7$/)
+    expect(
+      frame
+        .split("\n")
+        .find((line) => line.includes("Writes"))
+        ?.trimEnd(),
+    ).toMatch(/^ +Writes +7$/)
     expect(frame).not.toContain("Prefix")
   } finally {
     missing.renderer.destroy()
@@ -638,7 +760,10 @@ test("auto-expands an expandable section on attention and re-collapses once it c
   ))
   await app.waitForFrame((frame) => frame.includes("TODO"))
   // TODO starts expanded; collapse it first so attention ownership is observable.
-  const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+  const headingRow = app
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("TODO"))
   await app.mockMouse.click(2, headingRow)
   await app.waitForFrame((frame) => !frame.includes("todo body"))
 
@@ -675,14 +800,18 @@ test("expands every section on attention", async () => {
 })
 
 test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TODO LIST in the correct order", async () => {
-  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }] =
-    await Promise.all([
+  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }] = await Promise.all(
+    [
       import("../src/routes/session/sidebar"),
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
-    ])
+    ],
+  )
   const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
-  const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: {
+  const autonomy: SessionAutonomyState = {
+    mode: "normal",
+    yolo: true,
+    goal: {
       text: "Fix provider cache accounting",
       status: "active",
       iteration: 3,
@@ -691,17 +820,22 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     },
   }
   const todos: SessionTodoInfo[] = [{ content: "Verify baseline", status: "completed", priority: "medium" }]
-  const app = await mount(() => {
-    setTheme(useTheme().theme)
-    return (
-      <>
-        <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
-        <AutonomyRailContent autonomy={autonomy} />
-        <TodoRailContent list={todos} />
-        <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", state: "running", elapsed: "2m14s" }]} />
-      </>
-    )
-  }, { width: 40, height: 60 })
+  const app = await mount(
+    () => {
+      setTheme(useTheme().theme)
+      return (
+        <>
+          <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
+          <AutonomyRailContent autonomy={autonomy} />
+          <TodoRailContent list={todos} />
+          <SubagentRailContent
+            tasks={[{ sessionID: "ses_docs", description: "docs-sync", state: "running", elapsed: "2m14s" }]}
+          />
+        </>
+      )
+    },
+    { width: 40, height: 60 },
+  )
   await app.waitForFrame((frame) => frame.includes("Fix provider cache accounting"))
 
   try {
@@ -709,13 +843,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     const rendered = descendants(app.renderer.root).filter(
       (item): item is TextRenderable => item instanceof TextRenderable,
     )
-    const sectionHeaders = [
-      "SESSION",
-      "GOAL",
-      "AUTONOMY",
-      "TODO LIST",
-      "SUBAGENTS",
-    ]
+    const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "TODO LIST", "SUBAGENTS"]
     const indexes = sectionHeaders.map((label) => frame.indexOf(label))
     expect(indexes.every((index) => index >= 0)).toBe(true)
     expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
@@ -751,7 +879,9 @@ function descendants(root: { getChildren(): readonly unknown[] }): unknown[] {
 }
 
 function hasChildren(value: unknown): value is { getChildren(): readonly unknown[] } {
-  return typeof value === "object" && value !== null && "getChildren" in value && typeof value.getChildren === "function"
+  return (
+    typeof value === "object" && value !== null && "getChildren" in value && typeof value.getChildren === "function"
+  )
 }
 
 test("an attention event preserves default-expanded sections and releases its own section", async () => {
@@ -778,7 +908,10 @@ test("an attention event preserves default-expanded sections and releases its ow
   expect(app.captureCharFrame()).toContain("todo body")
 
   // Collapse TODO so attention ownership is observable; CONTEXT stays expanded throughout.
-  const todoRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+  const todoRow = app
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("TODO"))
   await app.mockMouse.click(2, todoRow)
   await app.waitForFrame((frame) => !frame.includes("todo body"))
 
@@ -817,7 +950,10 @@ test("a user can toggle an expandable section from its header", async () => {
 
   try {
     expect(app.captureCharFrame()).toContain("todo body")
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    const headingRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("TODO"))
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("todo body"))
     await app.mockMouse.click(2, headingRow)
@@ -840,7 +976,10 @@ test("every section toggles from its header", async () => {
 
   try {
     expect(app.captureCharFrame()).not.toContain("mcp body")
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
+    const headingRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("MCP"))
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
     expect(app.captureCharFrame()).toContain("mcp body")
@@ -869,7 +1008,10 @@ test("preserves user toggles across session prop changes", async () => {
 
   try {
     expect(app.captureCharFrame()).toContain("todo body")
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    const headingRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("TODO"))
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("todo body"))
     // Simulate navigating to a subagent chat and back by changing session-driven props.
@@ -899,7 +1041,10 @@ test("preserves expand/collapse across Session remounts (main <-> subagent)", as
   ))
   await app.waitForFrame((frame) => frame.includes("todo body"))
   try {
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    const headingRow = app
+      .captureCharFrame()
+      .split("\n")
+      .findIndex((line) => line.includes("TODO"))
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("todo body"))
   } finally {

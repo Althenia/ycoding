@@ -1230,7 +1230,7 @@ function meaningfulProviderMessage(value: string | undefined) {
 function aiSdkProviderReason(error: unknown) {
   if (!isRecord(error)) return undefined
   const structured = "statusCode" in error || "responseBody" in error || "responseHeaders" in error || "url" in error
-  if (!structured) return undefined
+  if (!structured) return error instanceof Error ? undefined : streamedProviderReason(error)
 
   const status = typeof error.statusCode === "number" ? error.statusCode : undefined
   const responseBody = typeof error.responseBody === "string" ? error.responseBody : undefined
@@ -1267,6 +1267,22 @@ function aiSdkProviderReason(error: unknown) {
     rateLimit,
     http,
   })
+}
+
+function streamedProviderReason(error: Record<string, unknown>) {
+  const nested = isRecord(error.error) ? error.error : undefined
+  const response = isRecord(error.response) && isRecord(error.response.error) ? error.response.error : undefined
+  const sources = [nested, response, error].filter((source) => source !== undefined)
+  const text = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined)
+  const code =
+    sources.map((source) => text(source.code)).find((value) => value !== undefined) ??
+    [nested, response]
+      .map((source) => text(source?.type))
+      .find((value) => value !== undefined && value !== "error")
+  const message =
+    sources.map((source) => meaningfulProviderMessage(text(source.message))).find((value) => value !== undefined) ??
+    (code ? `Provider reported ${code}` : "Provider stream failed")
+  return classifyProviderFailure({ message, code })
 }
 
 function llmError(method: string, error: unknown) {

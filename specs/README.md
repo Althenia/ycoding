@@ -30,6 +30,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
 | [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
 | [Concurrent provider profiles](./provider-profiles.md) | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior. |
+| [Model incidents](./model-incidents.md)       | Explain retained fallback and guardrail incidents, deterministic model guidance, clear, and API boundaries. |
 | [Decisions](./decisions.md)                  | Specify explicit agent judgments, abstention, safety, corrective errors, and usage. |
 | [Integration authorization](./integration-auth.md) | Explain automatic OAuth settlement and optional manual-code submission.              |
 | [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |
@@ -43,7 +44,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | Document                                                        | Status                      | Job                                                                                |
 | --------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------- |
 | [Event stream](./event-stream-architecture.md)                  | Accepted and implemented    | Record why public events use one encoded feed with independent queues.             |
-| [Managed restart suspension](./session-restart-continuation.md) | Accepted and implemented    | Record why graceful managed-service restart uses private Session suspension.       |
+| [Managed restart suspension](./session-restart-continuation.md) | Accepted and implemented    | Record private Session suspension on graceful managed restart and managed child-task recovery.       |
 | [Instruction sync](./instruction-sync-proposal.md)              | Accepted and implemented    | Record why instruction state is value deltas plus derived rendering.               |
 | [Provider policy](./provider-policy.md)                         | Proposed and unimplemented  | Explore provider authorization independently from provider configuration.          |
 | [Isolated browser](./isolated-browser.md)                       | Partial; acceptance pending | Define temporary headless ownership, mode separation, and production safety gates. |

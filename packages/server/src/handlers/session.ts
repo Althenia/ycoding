@@ -830,6 +830,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 () => new InvalidRequestError({ message: "Session guardrail review was rejected", kind: "guardrail" }),
               ),
               Effect.catchTag(
+                "Guardrail.DeferredError",
+                (error) => new InvalidRequestError({ message: error.message, kind: "guardrail" }),
+              ),
+              Effect.catchTag(
                 "Guardrail.CapExceededError",
                 (error) =>
                   new ServiceUnavailableError({

@@ -11,6 +11,7 @@ import { ProjectArtifactStore } from "../project-artifact"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "project_artifact"
 
@@ -131,15 +132,15 @@ export const Plugin = {
                           permissions: input.permissions ?? [],
                         }
                 const reservation = yield* guardrail
-                  .assert({
+                  .assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: "project_artifact_mutation",
                     resources: [`${input.kind}/${input.id}`],
-                    metadata: { operation: "automatic_write" },
+                    metadata: { operation: "automatic_write", operationDigest: Hash.json(input) },
                   })
                   .pipe(
                     Effect.mapError(
-                      (error) => new ToolFailure({ message: "Session guardrail rejected project artifact mutation", error }),
+                      (error) => new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? "Session guardrail rejected project artifact mutation", error }),
                     ),
                   )
                 const result = yield* store

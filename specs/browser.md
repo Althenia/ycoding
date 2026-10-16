@@ -35,6 +35,10 @@ Owned open needs per-site `browser_navigate` and `browser_read` permissions befo
 - Bridge stop, forget, disconnect, service shutdown, and profile revocation remove the tabs and therefore every holder. There is no override that moves control between Sessions.
 - The lease covers the `browser` tool and Session API over paired Chrome. The `computer` tool's `webbrowser.*` Apple Events actions address Chrome by window and tab index outside this bridge and are not fenced by it.
 
+## Deferred permission identity
+
+Permission digests bind the tab, operation, submitted payload, and semantic target independently of connection generation, document generation, observation revision, and semantic ref. Every action, including capture, scroll, and group changes, binds a private full-page URL digest independently of semantic elements. Query-only and fragment-only page changes alter that identity. Fresh observations must supply current fences and a target whose role, name, description, page, and exact destination still match the approved identity. Raw observed URL query and fragment values and private page hashes remain absent from public tabs, observations, and durable review payloads. A changed target or payload cannot consume the approval. Indistinguishable semantic targets cannot consume a deferred once grant; configured Allow and matching saved Always policies still authorize their distinct current refs. An unchanged, unambiguous action can consume its approval after execution-end release and a fresh observation, even when the ref or observation revision changes.
+
 ## Control marker
 
 - Before an observe or action is dispatched, the extension shows the fixed title prefix `Ⓨ ` (U+24CE and one space) on the tab, reads it back, and rejects the operation with `dispatched: false` when it cannot; a tab it attached for that operation is detached again. Group and ungroup mark and confirm every member before the group changes. Owned open marks the new tab before reporting it open.

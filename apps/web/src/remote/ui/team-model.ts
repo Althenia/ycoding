@@ -4,18 +4,46 @@ import { tokenCount } from "./usage-model"
 
 export type TeamSubagent = TeamTaskView & {
   readonly startedAt?: number
-  readonly question?: { readonly id: string; readonly text: string }
+  readonly question?: { readonly id: string; readonly text: string; readonly deferred?: true }
   readonly cacheHitRatio?: number
 }
 
 export type TeamShell = {
   readonly id: string
   readonly ownerID: string
+  readonly ownerAgent?: string
+  readonly ownerTitle?: string
   readonly command: string
   readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
   readonly queuePosition?: number
   readonly startedAt: number
   readonly completedAt?: number
+}
+
+export const TEAM_SHELL_OUTPUT_TAIL_LIMIT = 256 * 1024
+
+export function appendTeamShellOutput(current: string, page: string, limit: number = TEAM_SHELL_OUTPUT_TAIL_LIMIT): string {
+  const text = current + page
+  if (text.length <= limit) return text
+  const tail = text.slice(-limit)
+  const newline = tail.indexOf("\n")
+  return newline > 0 && newline < limit / 2 ? tail.slice(newline + 1) : tail
+}
+
+export function shellOwnerLabel(
+  shell: TeamShell,
+  family: {
+    readonly rootID: string
+    readonly tasks: readonly TeamSubagent[]
+    readonly sideChats: readonly TeamSideChat[]
+  },
+): string {
+  if (shell.ownerID === family.rootID) return "Main session"
+  const owner = family.tasks.find((task) => task.sessionID === shell.ownerID)
+  if (owner) return `${owner.agent ?? "Subagent"} · ${owner.description}`
+  const chat = family.sideChats.find((item) => item.id === shell.ownerID)
+  if (chat) return `Side chat · ${chat.title}`
+  return shell.ownerTitle ? `${shell.ownerAgent ?? "Subagent"} · ${shell.ownerTitle}` : shell.ownerAgent ?? "Subagent"
 }
 
 type TeamSideChat = {
@@ -47,7 +75,11 @@ export type TeamPanelData = {
 
 export type TeamActionOutcome = { readonly status: "ok" } | { readonly status: "failed" | "unknown"; readonly message: string }
 
-export type TeamShellOutput = { readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }
+export type TeamShellOutput = { readonly command?: string; readonly status?: string; readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }
+
+export function teamShellCommand(shell: Pick<TeamShell, "command">, output?: Pick<TeamShellOutput, "command">): string {
+  return output?.command ?? shell.command
+}
 
 const rank: Readonly<Record<TeamSubagent["state"], number>> = {
   waiting: 0, starting: 1, running: 1, cancelling: 2, completed: 3, cancelled: 4, failed: 5, lost: 6,
@@ -56,6 +88,14 @@ const rank: Readonly<Record<TeamSubagent["state"], number>> = {
 export function isManagedSubagent(session: Pick<SessionInfoView, "parentID" | "agent"> | undefined): boolean {
   return session?.parentID !== undefined && session.agent !== "btw"
 }
+
+export const taskStateLabel = (task: Pick<TeamSubagent, "state" | "stoppedRecovery">) => task.stoppedRecovery === undefined ? task.state : "stopped"
+
+export const canContinueRecovery = (task: Pick<TeamSubagent, "stoppedRecovery">) => task.stoppedRecovery !== undefined
+
+export const isDeferredQuestion = (task: Pick<TeamSubagent, "question">) => task.question?.deferred === true
+
+export const canAnswerSubagent = (task: Pick<TeamSubagent, "state" | "question">) => task.question !== undefined && task.state === "waiting" && !isDeferredQuestion(task)
 
 export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
   return state === "starting" || state === "running" || state === "waiting"

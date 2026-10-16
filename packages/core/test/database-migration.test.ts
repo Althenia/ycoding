@@ -66,6 +66,7 @@ const currentMigrations = [
   { id: "20261015080221_usage-time-cursor" },
   { id: "20261015084712_usage-session-pricing" },
   { id: "20261015122915_usage-analytics" },
+  { id: "20261016080907_model-incident" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import { autonomyModeParts } from "../../util/session-autonomy"
 
 const sessionStatePrefix = "Authoritative current Session state (JSON):\n"
 const teamViewPrefix =
@@ -16,14 +17,12 @@ export function noticeSummary(source: string | undefined, text: string) {
 
 function sessionStateSummary(value: Record<string, unknown>) {
   const autonomy = record(value.autonomy)
-  const mode = typeof autonomy?.mode === "string" ? autonomy.mode : "unknown"
-  const yolo = autonomy?.yolo ?? 0
   const todos = Array.isArray(value.todos) ? value.todos.length : 0
-  const extras = [
-    autonomy?.guardrailDecision === true || autonomy?.sleep !== undefined ? "guardrail decision" : undefined,
-    autonomy?.sleep !== undefined ? "asleep" : undefined,
-  ].filter((part): part is string => part !== undefined)
-  return `Session state · ${mode} · YOLO ${yolo}${extras.length > 0 ? ` · ${extras.join(" · ")}` : ""} · ${todos} ${todos === 1 ? "task" : "tasks"}`
+  const parts = autonomyModeParts({
+    ...autonomy,
+    goal: record(autonomy?.goal),
+  })
+  return `Session state · ${parts.join(" · ")} · ${todos} ${todos === 1 ? "task" : "tasks"}`
 }
 
 function teamViewSummary(value: Record<string, unknown>) {

@@ -25,10 +25,11 @@ export const PROVIDER_USAGE_VIEWS = [
   "agents",
   "prompts",
   "tasks",
+  "incidents",
 ] as const
 
 export type ProviderUsageView = (typeof PROVIDER_USAGE_VIEWS)[number]
-export type ProviderUsageReportView = Exclude<ProviderUsageView, "overview" | "usage">
+export type ProviderUsageReportView = Exclude<ProviderUsageView, "overview" | "usage" | "incidents">
 export type ProviderUsageReportInput = {
   group: UsageReportOutput["group"]
   from?: number
@@ -43,7 +44,7 @@ export type ProviderUsageReportInput = {
   selectedEffort?: string
 }
 
-type DateRange =
+export type DateRange =
   | { type: "last7" | "last30" | "all" }
   | { type: "custom"; from: number; to: number; fromLabel: string; toLabel: string }
 type ReportMetrics = UsageReportOutput["total"] | UsageReportOutput["rows"][number]
@@ -62,7 +63,7 @@ type ReportState = {
   stale: boolean
 }
 
-const PAGE_SIZE = 100
+export const PAGE_SIZE = 100
 const REPORT_LEGEND = "Configured request-date analytics retention · STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where cache reads were unreported"
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -456,7 +457,7 @@ function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: Us
   )
 }
 
-function UsageRangeDialog(props: {
+export function UsageRangeDialog(props: {
   range: DateRange
   onSelect: (range: DateRange) => void
   onError: (error: string | undefined) => void
@@ -769,7 +770,7 @@ function nameHeading(view: ProviderUsageReportView) {
   return view === "daily" || view === "hourly" || view === "monthly" ? "DATE" : "NAME"
 }
 
-function dateBounds(range: DateRange, now: number) {
+export function dateBounds(range: DateRange, now: number) {
   if (range.type === "all") return {}
   if (range.type === "custom") return { from: range.from, to: range.to }
   const tomorrow = startOfUtcDay(now) + DAY
@@ -794,7 +795,7 @@ function parseUtcDate(value: string) {
   return result
 }
 
-function rangeLabel(range: DateRange) {
+export function rangeLabel(range: DateRange) {
   if (range.type === "custom") return `${range.fromLabel} → ${range.toLabel}`
   if (range.type === "last7") return "Last 7 days"
   if (range.type === "last30") return "Last 30 days"

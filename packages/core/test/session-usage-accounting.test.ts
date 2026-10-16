@@ -42,7 +42,7 @@ const runtime = AppNodeBuilder.build(
     [
       RetentionSettings.node,
       Layer.succeed(RetentionSettings.Service, {
-        read: () => Effect.succeed({ recordsDays, usageDays: 30, latencyDays: 30 }),
+        read: () => Effect.succeed({ recordsDays, usageDays: 30, latencyDays: 30, incidentDays: 30 }),
       }),
     ],
   ],

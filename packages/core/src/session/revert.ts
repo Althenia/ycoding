@@ -10,6 +10,7 @@ import { SessionContextState } from "./context-state"
 import { HistoryPrunedError } from "./error"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
+import { SessionReviewFold } from "./review-fold"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable } from "./sql"
 
@@ -118,10 +119,17 @@ export const clear = Effect.fn("SessionRevert.clear")(function* (session: Sessio
 })
 
 export const commit = Effect.fn("SessionRevert.commit")(function* (session: SessionSchema.Info) {
-  if (!session.revert) return
+  if (!session.revert) return undefined
   const events = yield* EventRuntime.Service
-  yield* events.publish(SessionEvent.RevertEvent.Committed, {
-    sessionID: session.id,
-    to: session.revert.messageID,
-  })
+  const database = yield* Database.Service
+  const rootID = yield* SessionReviewFold.rootOf(database.db, session.id)
+  if (!rootID) return yield* Effect.die(new Error(`Session not found: ${session.id}`))
+  const messageID = session.revert.messageID
+  return yield* SessionReviewFold.withFamilyLock(rootID)(Effect.gen(function* () {
+    const withdrawn = yield* SessionReviewFold.withdrawals(database.db, session.id, messageID, true)
+    yield* events.publishBatch([
+      { definition: SessionEvent.RevertEvent.Committed, data: { sessionID: session.id, to: messageID } },
+      ...withdrawn.map((data) => ({ definition: SessionEvent.Review.Withdrawn, data })),
+    ])
+  }))
 })

@@ -1,5 +1,15 @@
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
-import type { RemoteOperation, RemoteWorkspaceInfo, RemoteUsageForecast } from "@ycoding-ai/remote"
+import type {
+  RemoteIncidentGuidance,
+  RemoteIncidentGuidanceInput,
+  RemoteIncidentRecent,
+  RemoteIncidentRecentInput,
+  RemoteIncidentReport,
+  RemoteIncidentReportInput,
+  RemoteOperation,
+  RemoteWorkspaceInfo,
+  RemoteUsageForecast,
+} from "@ycoding-ai/remote"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
@@ -31,9 +41,20 @@ export const remoteKeys = {
   usageSummary: (scope: QueryScope) => [...remoteKeys.usage(scope), "summary"] as const,
   usageForecast: (scope: QueryScope) => [...remoteKeys.usage(scope), "forecast", "backend"] as const,
   usageReport: (scope: QueryScope, input: UsageReportInput) => [...remoteKeys.usage(scope), "report", reportKey(input)] as const,
+  incident: (scope: QueryScope) => [...remoteKeys.scope(scope), "incident"] as const,
+  incidentReport: (scope: QueryScope, input: RemoteIncidentReportInput) =>
+    [...remoteKeys.incident(scope), "report", JSON.stringify({ group: input.group, from: input.from, to: input.to, offset: input.offset, limit: input.limit })] as const,
+  incidentRecent: (scope: QueryScope, input: RemoteIncidentRecentInput) =>
+    [...remoteKeys.incident(scope), "recent", JSON.stringify({ provider: input.provider, model: input.model, agent: input.agent, limit: input.limit })] as const,
+  incidentGuidanceModel: (scope: QueryScope, input: RemoteIncidentGuidanceInput) =>
+    [...remoteKeys.incident(scope), "guidance", input.provider, input.model] as const,
+  incidentGuidance: (scope: QueryScope, input: IncidentGuidanceQueryInput) =>
+    [...remoteKeys.incidentGuidanceModel(scope, input), input.sessionID ?? ""] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
 }
+
+export type IncidentGuidanceQueryInput = RemoteIncidentGuidanceInput & { readonly sessionID?: string }
 
 export type UsageResult<T> = { readonly status: "ready"; readonly data: T } | { readonly status: "unsupported" }
 
@@ -134,6 +155,37 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     label: "Usage report", unreadable: "The device returned an unreadable usage report.",
   })
 
+  const incidentReport = (scope: QueryScope | undefined, enabled: boolean, input: RemoteIncidentReportInput) => usageQuery<RemoteIncidentReport["data"]>({
+    scope, enabled: enabled && validIncidentReport(input), key: (current) => remoteKeys.incidentReport(current, input),
+    operation: "incident.report", request: () => ({ input: reportInput(input) }),
+    read: (raw) => readIncidentReport(raw, input.group), unsupported: unknownOperation,
+    label: "Incident report", unreadable: "The device returned an unreadable incident report.",
+  })
+
+  const incidentRecent = (scope: QueryScope | undefined, enabled: boolean, input: RemoteIncidentRecentInput) => usageQuery<RemoteIncidentRecent["data"]>({
+    scope, enabled: enabled && validIncidentRecent(input), key: (current) => remoteKeys.incidentRecent(current, input),
+    operation: "incident.recent", request: () => ({ input: recentInput(input) }),
+    read: readIncidentRecent, unsupported: unknownOperation,
+    label: "Recent incidents", unreadable: "The device returned unreadable incident data.",
+  })
+
+  const incidentGuidance = (scope: QueryScope | undefined, enabled: boolean, input: IncidentGuidanceQueryInput) => usageQuery<RemoteIncidentGuidance["data"]>({
+    scope, enabled: enabled && validModelPair(input) && (input.sessionID === undefined || input.sessionID.length > 0),
+    key: (current) => remoteKeys.incidentGuidance(current, input),
+    operation: "incident.guidance", request: () => guidanceRequest(input),
+    read: readIncidentGuidance, unsupported: unknownOperation,
+    label: "Model guidance", unreadable: "The device returned unreadable model guidance.",
+  })
+
+  const clearIncidentGuidance = async (scope: QueryScope, input: IncidentGuidanceQueryInput): Promise<RemoteIncidentGuidance["data"]> => {
+    const outcome = await link.request(scope, "incident.guidance.clear", guidanceRequest(input))
+    if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Clear model guidance"))
+    const guidance = readIncidentGuidance(typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined)
+    if (guidance === undefined) throw new Error("The device returned unreadable model guidance.")
+    await client.invalidateQueries({ queryKey: remoteKeys.incidentGuidanceModel(scope, input) }, { cancelRefetch: false })
+    return guidance
+  }
+
   /** Explicit refresh or retry: the next read of each key sends any refresh flag, skips an exhausted error, and replaces a read in flight. */
   const refetchFresh = async (keys: readonly (readonly unknown[])[]) => {
     keys.forEach((key) => refreshing.add(JSON.stringify(key)))
@@ -146,6 +198,9 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
   }
 
   const retryUsageReport = (scope: QueryScope, input: UsageReportInput) => refetchFresh([remoteKeys.usageReport(scope, input)])
+  const retryIncidentReport = (scope: QueryScope, input: RemoteIncidentReportInput) => refetchFresh([remoteKeys.incidentReport(scope, input)])
+  const retryIncidentRecent = (scope: QueryScope, input: RemoteIncidentRecentInput) => refetchFresh([remoteKeys.incidentRecent(scope, input)])
+  const retryIncidentGuidance = (scope: QueryScope, input: IncidentGuidanceQueryInput) => refetchFresh([remoteKeys.incidentGuidance(scope, input)])
 
   const keepAwake = (scope: QueryScope | undefined, enabled: boolean) => {
     const current = scope ?? idleScope
@@ -227,6 +282,17 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     }
   }
 
+  const toggleKeepAwake = async (scope: QueryScope): Promise<{ readonly reached: boolean; readonly message?: string }> => {
+    const state = await client.fetchQuery(keepAwake(scope, true))
+    if (state.read === "outdated") return { reached: false, message: "Update YCoding on this machine to keep it awake from here." }
+    if (state.read !== "ready" || state.status === undefined) return { reached: false, message: state.message ?? "Keep machine awake could not be read." }
+    if (state.status.state === "unsupported") return { reached: false, message: state.status.message ?? "This machine cannot be kept awake from YCoding." }
+    const mutation = keepAwakeMutation(scope)
+    const result = await mutation.mutationFn(!(state.status.manual ?? state.status.state === "on"))
+    await mutation.onSettled(result)
+    return { reached: result.reached }
+  }
+
   const workspaces = (scope: QueryScope | undefined, enabled: boolean) => {
     const current = scope ?? idleScope
     return queryOptions({
@@ -244,10 +310,117 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
-  return { usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport, keepAwake, keepAwakeMutation, workspaces }
+  return {
+    usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport,
+    incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
+    keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,
+  }
 }
 
 export type RemoteQueries = ReturnType<typeof createRemoteQueries>
+
+const integerIn = (value: unknown, minimum: number, maximum: number) =>
+  value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
+const name = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+
+const validModelPair = (input: RemoteIncidentGuidanceInput) => name(input.provider) && name(input.model)
+
+const validIncidentReport = (input: RemoteIncidentReportInput) =>
+  (input.group === "model" || input.group === "agent") && integerIn(input.from, 0, Number.MAX_SAFE_INTEGER) && integerIn(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+  integerIn(input.offset, 0, Number.MAX_SAFE_INTEGER) && integerIn(input.limit, 1, 200) &&
+  (input.from === undefined || input.to === undefined || input.from <= input.to)
+
+const validIncidentRecent = (input: RemoteIncidentRecentInput) =>
+  validModelPair(input) && (input.agent === undefined || name(input.agent)) && integerIn(input.limit, 1, 50)
+
+const reportInput = (input: RemoteIncidentReportInput): RemoteIncidentReportInput => ({
+  group: input.group,
+  ...(input.from === undefined ? {} : { from: input.from }),
+  ...(input.to === undefined ? {} : { to: input.to }),
+  ...(input.offset === undefined ? {} : { offset: input.offset }),
+  ...(input.limit === undefined ? {} : { limit: input.limit }),
+})
+
+const recentInput = (input: RemoteIncidentRecentInput): RemoteIncidentRecentInput => ({
+  provider: input.provider,
+  model: input.model,
+  ...(input.agent === undefined ? {} : { agent: input.agent }),
+  ...(input.limit === undefined ? {} : { limit: input.limit }),
+})
+
+const guidanceRequest = (input: IncidentGuidanceQueryInput): RemoteTransportRequest => ({
+  input: { provider: input.provider, model: input.model },
+  ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),
+})
+
+export function readIncidentReport(value: unknown, group: RemoteIncidentReportInput["group"]): RemoteIncidentReport["data"] | undefined {
+  if (typeof value !== "object" || value === null || !Array.isArray(Reflect.get(value, "rows")) || !count(Reflect.get(value, "groups"))) return undefined
+  const rows = (Reflect.get(value, "rows") as unknown[]).flatMap((row) => {
+    if (typeof row !== "object" || row === null) return []
+    const agent = Reflect.get(row, "agent")
+    const providerID = Reflect.get(row, "providerID")
+    const modelID = Reflect.get(row, "modelID")
+    const fallbacks = Reflect.get(row, "fallbacks")
+    const escalated = Reflect.get(row, "escalated")
+    const rejected = Reflect.get(row, "rejected")
+    const last = Reflect.get(row, "last")
+    if (!name(providerID) || !name(modelID) || (group === "agent") !== (agent !== undefined) || (agent !== undefined && !name(agent)) ||
+      !count(fallbacks) || !count(escalated) || !count(rejected) || !count(last)) return []
+    return [{ providerID, modelID, ...(agent === undefined ? {} : { agent }), fallbacks, escalated, rejected, last }]
+  })
+  const groups = Reflect.get(value, "groups") as number
+  if (rows.length !== (Reflect.get(value, "rows") as unknown[]).length || rows.length > groups) return undefined
+  return { rows, groups }
+}
+
+const incidentKinds = ["fallback", "guardrail-escalated", "guardrail-rejected"] as const
+
+function readModelRef(value: unknown) {
+  if (typeof value !== "object" || value === null) return undefined
+  const id = Reflect.get(value, "id")
+  const providerID = Reflect.get(value, "providerID")
+  const variant = Reflect.get(value, "variant")
+  const profile = Reflect.get(value, "profile")
+  if (!name(id) || !name(providerID) || (variant !== undefined && !name(variant)) || (profile !== undefined && !name(profile))) return undefined
+  return { id, providerID, ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }) }
+}
+
+export function readIncidentRecent(value: unknown): RemoteIncidentRecent["data"] | undefined {
+  const items = typeof value === "object" && value !== null ? Reflect.get(value, "items") : undefined
+  if (!Array.isArray(items)) return undefined
+  const read = items.flatMap((item: unknown) => {
+    if (typeof item !== "object" || item === null) return []
+    const id = Reflect.get(item, "id")
+    const time = Reflect.get(item, "time")
+    const kind = Reflect.get(item, "kind")
+    const category = Reflect.get(item, "category")
+    const ruleIDs = Reflect.get(item, "ruleIDs")
+    const agent = Reflect.get(item, "agent")
+    const variant = Reflect.get(item, "variant")
+    const profile = Reflect.get(item, "profile")
+    const decidedBy = Reflect.get(item, "decidedBy")
+    const target = Reflect.get(item, "target") === undefined ? undefined : readModelRef(Reflect.get(item, "target"))
+    if (!name(id) || !count(time) || !incidentKinds.includes(kind) || typeof category !== "string" || category.length > 128 ||
+      !Array.isArray(ruleIDs) || !ruleIDs.every((rule) => typeof rule === "string" && rule.length <= 128) || !name(agent) ||
+      (variant !== undefined && !name(variant)) || (profile !== undefined && !name(profile)) ||
+      (decidedBy !== undefined && decidedBy !== "decision-model" && decidedBy !== "human") ||
+      (Reflect.get(item, "target") !== undefined && target === undefined)) return []
+    return [{ id, time, kind, category, ruleIDs: [...ruleIDs], agent,
+      ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }),
+      ...(target === undefined ? {} : { target }), ...(decidedBy === undefined ? {} : { decidedBy }) }]
+  })
+  return read.length === items.length ? { items: read } : undefined
+}
+
+export function readIncidentGuidance(value: unknown): RemoteIncidentGuidance["data"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const enabled = Reflect.get(value, "enabled")
+  const text = Reflect.get(value, "text")
+  const clearedAt = Reflect.get(value, "clearedAt")
+  if (typeof enabled !== "boolean" || (text !== undefined && (typeof text !== "string" || text.length > 4_096)) || (clearedAt !== undefined && !count(clearedAt))) return undefined
+  return { enabled, ...(text === undefined ? {} : { text }), ...(clearedAt === undefined ? {} : { clearedAt }) }
+}
 
 function readUsageProviders(value: unknown): readonly UsageProvider[] | undefined {
   if (!Array.isArray(value)) return undefined

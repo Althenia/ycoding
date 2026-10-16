@@ -17,6 +17,7 @@ import { SessionOrchestration } from "../session/orchestration"
 import { SessionRunnerModel } from "../session/runner/model"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "subagent"
 
@@ -132,18 +133,21 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
         Effect.provideService(SessionRunnerModel.Service, models),
         Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
       )
+      const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+      const operationDigest = Hash.json({ action: "launch", agent: prepared.target.id, description: input.description,
+        prompt: input.prompt, model: prepared.resolved.ref, connectionIdentityDigest: prepared.resolved.connectionIdentityDigest, background: true, timeout })
       yield* SessionOrchestration.authorize(context.sessionID, prepared.target.id, {
         agent: context.agent, messageID: context.messageID, callID: context.callID,
-      }).pipe(
+      }, operationDigest).pipe(
         Effect.provideService(Permission.Service, permission),
         Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${prepared.target.id}`, error })),
       )
-      const reservation = yield* guardrail.assert({
+      const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
         sessionID: context.sessionID, action: name, resources: [prepared.target.id],
-        metadata: { description: input.description },
+        metadata: { description: input.description, operationDigest },
       }).pipe(Effect.mapError((error) => error._tag === "Guardrail.CapExceededError"
         ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
-        : new ToolFailure({ message: `Session guardrail rejected subagent: ${prepared.target.id}`, error })))
+        : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Session guardrail rejected subagent: ${prepared.target.id}`, error })))
       const child = yield* orchestration.launch({
         parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.callID,
         agent: Agent.ID.make(input.agent), description: input.description, prompt: input.prompt,
@@ -171,7 +175,6 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
         Effect.tapCause(abortLaunchedTask), Effect.onError(() => reservation.release),
       )
 
-      const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
       const run = Effect.scoped(Effect.gen(function* () {
         yield* repeatProgress(orchestration.send({
           parentID: context.sessionID, childID: child.sessionID, messageID: SessionMessage.ID.create(),

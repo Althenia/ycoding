@@ -202,7 +202,7 @@ async function waitUntil(screen: Screen, predicate: () => boolean, label: string
     await Bun.sleep(20)
   }
   throw new Error(
-    `timed out waiting for ${label}; sets=${JSON.stringify(daybreakSets)} prompts=${JSON.stringify(promptRequests)}`,
+    `timed out waiting for ${label}; sets=${JSON.stringify(daybreakSets)} prompts=${JSON.stringify(promptRequests)}\n${screen.frame()}`,
   )
 }
 

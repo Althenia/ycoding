@@ -4,11 +4,14 @@ import { Form } from "@ycoding-ai/schema/form"
 import { Cache, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Semaphore } from "effect"
 import { Config } from "./config"
 import { ConfigQuestionTimeout } from "./config/question-timeout"
+import { Database } from "./database/database"
 import { Decision } from "./decision"
 import { DecisionChoice } from "./decision-choice"
 import { makeLocationNode } from "./effect/app-node"
 import { EventRuntime } from "./event"
 import { SessionAutonomy } from "./session/autonomy"
+import { SessionMessage } from "./session/message"
+import { SessionReviewFold } from "./session/review-fold"
 import { SessionSchema } from "./session/schema"
 
 const RETENTION = Duration.minutes(10)
@@ -86,7 +89,10 @@ export interface ListInput {
 
 export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
-  readonly ask: (input: CreateInput) => Effect.Effect<TerminalState, AlreadyExistsError | InvalidFormError>
+  readonly ask: (
+    input: CreateInput,
+  ) => Effect.Effect<TerminalState, AlreadyExistsError | InvalidFormError | SessionReviewFold.FullError>
+  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
@@ -101,6 +107,7 @@ interface Entry {
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
   readonly created: number
+  readonly waiting: boolean
   readonly timer?: Fiber.Fiber<void>
 }
 
@@ -108,6 +115,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const database = yield* Database.Service
     const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
@@ -141,8 +149,10 @@ export const layer = Layer.effect(
         ? events.publish(Event.Replied, { id, sessionID, answer: state.answer })
         : state.status === "cancelled"
           ? events.publish(Event.Cancelled, { id, sessionID })
-          : events.publish(Event.TimedOut, { id, sessionID })
-      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, created: entry.created, state })
+          : state.status === "deferred"
+            ? events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
+            : events.publish(Event.TimedOut, { id, sessionID })
+      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, created: entry.created, waiting: entry.waiting, state })
       yield* Deferred.succeed(entry.deferred, state)
       if (entry.timer && state.status !== "timed_out") yield* Fiber.interrupt(entry.timer)
     })
@@ -163,7 +173,7 @@ export const layer = Layer.effect(
       }))
     })
 
-    const createPending = Effect.fn("Form.createPending")((input: CreateInput) =>
+    const createPending = Effect.fn("Form.createPending")((input: CreateInput, waiting = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const id = input.id ?? ID.create()
@@ -183,6 +193,7 @@ export const layer = Layer.effect(
             state: { status: "pending" },
             deferred: yield* Deferred.make<TerminalState>(),
             created: yield* Clock.currentTimeMillis,
+            waiting,
           }
           yield* Cache.set(forms, id, entry)
           yield* events.publish(Event.Created, { form }).pipe(Effect.onError(() => Cache.invalidate(forms, id)))
@@ -190,6 +201,52 @@ export const layer = Layer.effect(
         }),
       ),
     )
+
+    const reviewLimit = Effect.fnUntraced(function* () {
+      return Config.latest(yield* config.entries(), "guardrails")?.max_pending_reviews ?? 16
+    })
+
+    const openReview = Effect.fnUntraced(function* (
+      form: Info,
+      sessionID: SessionSchema.ID,
+      outcome: { readonly reason: "disabled" | "free_text" | "refused" | "low_confidence" | "error" | "timeout" | "sleep_entry"; readonly choice?: string; readonly confidence?: number },
+      conversion = false,
+    ) {
+      const tool = form.metadata?.tool
+      const origin = tool && typeof tool === "object" && !Array.isArray(tool) &&
+        typeof (tool as Record<string, unknown>).messageID === "string" && typeof (tool as Record<string, unknown>).callID === "string"
+        ? { messageID: SessionMessage.ID.make((tool as Record<string, string>).messageID), callID: (tool as Record<string, string>).callID }
+        : { requestID: form.id }
+      return yield* SessionReviewFold.open(database.db, events, {
+        sessionID,
+        kind: "question",
+        reason: outcome.reason,
+        ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+        origin,
+        payload: {
+          type: "form",
+          title: form.title,
+          fields: form.fields,
+          ...(form.metadata?.kind === "question" ? { questionTool: true as const } : {}),
+        },
+        limit: yield* reviewLimit(),
+        conversion,
+      })
+    })
+
+    const deferPending = Effect.fn("Form.deferPending")(function* (sessionID: SessionSchema.ID) {
+      const entries = Array.from(yield* Cache.values(forms)).filter(
+        (entry) => entry.state.status === "pending" && entry.waiting && entry.form.sessionID === sessionID,
+      )
+      yield* Effect.forEach(entries, (entry) =>
+        exclusive(Effect.gen(function* () {
+          const current = yield* find(entry.form.id).pipe(Effect.orDie)
+          if (current.state.status !== "pending") return
+          const item = yield* openReview(current.form, sessionID, { reason: "sleep_entry" }, true).pipe(Effect.orDie)
+          yield* complete(current, { status: "deferred", itemID: item.itemID })
+        })), { discard: true })
+    })
 
     const create = Effect.fn("Form.create")((input: CreateInput) =>
       Effect.uninterruptible(Effect.gen(function* () {
@@ -202,25 +259,43 @@ export const layer = Layer.effect(
     const ask = Effect.fn("Form.ask")((input: CreateInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const form = yield* createPending(input)
+          const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
+          const autoAnswer = Config.latest(yield* config.entries(), "auto_answer") === true
+          const asleep = sessionID
+            ? yield* autonomy
+                .isAsleep(sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            : false
+          if (asleep && sessionID) {
+            const form: Info = {
+              id: input.id ?? ID.create(),
+              sessionID: input.sessionID,
+              title: input.title,
+              ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+              fields: input.fields,
+            }
+            if (!autoAnswer) {
+              const item = yield* openReview(form, sessionID, { reason: "disabled" })
+              return { status: "deferred", itemID: item.itemID } as TerminalState
+            }
+            const outcome = yield* restore(decisionAnswer(decision, sessionID, form))
+            if (outcome.type === "defer") {
+              const item = yield* openReview(form, sessionID, outcome)
+              return { status: "deferred", itemID: item.itemID } as TerminalState
+            }
+            const created = yield* createPending({ ...input, id: form.id }, true)
+            yield* reply({ id: created.id, answer: outcome.answer }).pipe(Effect.orDie)
+            return { status: "answered", answer: outcome.answer } as TerminalState
+          }
+          const form = yield* createPending(input, true)
           const entry = yield* find(form.id).pipe(Effect.orDie)
           return yield* restore(Effect.gen(function* () {
-            const sessionID = Schema.is(SessionSchema.ID)(form.sessionID) ? form.sessionID : undefined
-            const asleep = sessionID
-              ? yield* autonomy
-                  .isAsleep(sessionID)
-                  .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              : false
-            const autonomous = !asleep && sessionID
+            const autonomous = sessionID
               ? yield* autonomy
                   .canAutoAnswer(sessionID)
                   .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
               : false
-            const answer = asleep && sessionID
-              ? yield* decisionAnswer(decision, sessionID, form)
-              : autonomous
-                ? automaticAnswer(form)
-                : undefined
+            const answer = autoAnswer && autonomous ? automaticAnswer(form) : undefined
             if (answer) {
               yield* reply({ id: form.id, answer }).pipe(
                 Effect.catchTag("Form.AlreadySettledError", () => Effect.void),
@@ -296,21 +371,30 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, get, list, state, reply, cancel })
+    return Service.of({ create, ask, deferPending, get, list, state, reply, cancel })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
+  deps: [Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
 })
+
+type SleepOutcome =
+  | { readonly type: "answer"; readonly answer: Answer }
+  | {
+      readonly type: "defer"
+      readonly reason: "free_text" | "refused" | "low_confidence" | "error" | "timeout"
+      readonly choice?: string
+      readonly confidence?: number
+    }
 
 function decisionAnswer(
   decision: Decision.Interface,
   sessionID: SessionSchema.ID,
   form: Info,
-): Effect.Effect<Answer | undefined> {
+): Effect.Effect<SleepOutcome> {
   return Effect.gen(function* () {
     const answer: Record<string, Form.Value> = {}
     for (const field of form.fields) {
@@ -319,31 +403,43 @@ function decisionAnswer(
         continue
       }
       if (!isActive(field, answer)) continue
-      const value = yield* decisionValue(decision, sessionID, form, field)
-      if (value === undefined) {
-        if (field.required) return automaticAnswer(form)
+      const outcome = yield* decisionValue(decision, sessionID, form, field)
+      if (outcome.type === "defer") return outcome
+      if (outcome.value === undefined) {
+        if (field.required) return { type: "defer", reason: "error" } as SleepOutcome
         continue
       }
-      answer[field.key] = value
+      answer[field.key] = outcome.value
     }
-    return validateAnswer(form, answer) ? automaticAnswer(form) : answer
+    return validateAnswer(form, answer)
+      ? ({ type: "defer", reason: "error" } as SleepOutcome)
+      : ({ type: "answer", answer } as SleepOutcome)
   })
 }
+
+type FieldOutcome =
+  | { readonly type: "value"; readonly value: Form.Value | undefined }
+  | Extract<SleepOutcome, { readonly type: "defer" }>
 
 function decisionValue(
   decision: Decision.Interface,
   sessionID: SessionSchema.ID,
   form: Info,
   field: InputField,
-): Effect.Effect<Form.Value | undefined> {
-  if (field.type !== "string" && field.type !== "multiselect") return Effect.succeed(automaticValue(field))
+): Effect.Effect<FieldOutcome> {
+  if (field.type !== "string" && field.type !== "multiselect")
+    return Effect.succeed<FieldOutcome>({ type: "value", value: automaticValue(field) })
   const options = field.options
-  if (!options || options.length === 0) return Effect.succeed(automaticValue(field))
-  return DecisionChoice.choose(decision, {
+  if (!options || options.length === 0) {
+    if (field.required)
+      return Effect.succeed<FieldOutcome>({ type: "defer", reason: "free_text" })
+    return Effect.succeed<FieldOutcome>({ type: "value", value: automaticValue(field) })
+  }
+  return DecisionChoice.chooseDetailed(decision, {
     sessionID,
     name: field.key,
     instructions:
-      "The user is asleep and cannot answer this form. Choose the option that best serves the form's stated purpose with the evidence given. Refuse when the evidence does not support a choice; refusal falls back to the automatic default.",
+      "The user is asleep and cannot answer this form. Choose the option that best serves the form's stated purpose with the evidence given. Refuse when the evidence does not support a choice; refusal defers the form to the user's review box.",
     state: {
       form: form.title,
       field: field.key,
@@ -360,10 +456,18 @@ function decisionValue(
       description: option.description ?? option.label,
     })),
   }).pipe(
-    Effect.map((judgment) => {
-      if (!judgment) return automaticValue(field)
-      const value: Form.Value = field.type === "multiselect" ? [judgment.value] : judgment.value
-      return validateField(field, value) ? automaticValue(field) : value
+    Effect.map((outcome): FieldOutcome => {
+      if (outcome.type === "unsettled")
+        return {
+          type: "defer",
+          reason: outcome.reason,
+          ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+        }
+      const value: Form.Value = field.type === "multiselect" ? [outcome.value] : outcome.value
+      return validateField(field, value)
+        ? { type: "defer", reason: "error", choice: outcome.value, confidence: outcome.confidence }
+        : { type: "value", value }
     }),
   )
 }
@@ -425,7 +529,7 @@ function automaticValue(field: InputField): Form.Value | undefined {
   }
 }
 
-function validateAnswer(form: Info, answer: Answer) {
+export function validateAnswer(form: Pick<Info, "fields">, answer: Answer) {
   const fields = new Map(form.fields.map((field) => [field.key, field] as const))
   for (const key of Object.keys(answer)) {
     if (!fields.has(key)) return `Unknown form field: ${key}`

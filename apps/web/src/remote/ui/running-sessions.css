@@ -8,7 +8,6 @@
 
 .running-sessions--loading {
   grid-template-rows: auto auto;
-  min-block-size: 0;
 }
 
 .running-sessions--ready .running-sessions__list { animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both; }
@@ -113,6 +112,9 @@
   border-radius: 50%;
   background: var(--yc-green-strong);
 }
+
+.running-sessions__status--waiting { color: var(--yc-yellow-strong); }
+.running-sessions__status--waiting .running-sessions__dot { background: var(--yc-yellow-strong); }
 
 .running-sessions__pagination { display: flex; justify-content: center; }
 .running-sessions__pagination button { inline-size: 24px; block-size: 28px; padding: 0; border: 0; background: transparent; display: grid; place-items: center; }

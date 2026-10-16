@@ -40,7 +40,7 @@ export function waitForTool(
 export const registerToolPlugin = <R>(plugin: {
   readonly id: string
   readonly effect: (context: PluginContext) => Effect.Effect<void, never, R>
-}): Effect.Effect<void, never, R | Tools.Service | Scope.Scope> =>
+}, registrationName?: string): Effect.Effect<void, never, R | Tools.Service | Scope.Scope> =>
   Effect.gen(function* () {
     const tools = yield* Tools.Service
     const context = host({
@@ -57,7 +57,7 @@ export const registerToolPlugin = <R>(plugin: {
             }> = []
             callback({
               add: (name, tool, options) => {
-                registrations.push({ name, tool, ...(options ? { options } : {}) })
+                registrations.push({ name: registrationName ?? name, tool, ...(options ? { options } : {}) })
               },
             })
             yield* Effect.forEach(

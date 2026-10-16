@@ -712,6 +712,12 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     })
     return
   }
+  if (change.type === "resumed") {
+    if (task.state !== "running") return yield* conflict()
+    yield* update({ attempt_started: false, ...claim })
+    yield* notify("resumed", "The service restarted while this subagent was working; it resumed with one recovery step.")
+    return
+  }
   if (change.type === "backgrounded") {
     if (task.state !== "running" || task.background) return yield* conflict()
     yield* update({ background: true })
@@ -1096,6 +1102,7 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.ContextObserved, (event) => run(db, event))
     yield* events.project(SessionEvent.GuardrailEscalated, (event) => run(db, event))
+    yield* events.project(SessionEvent.Review.Withdrawn, (event) => run(db, event))
     yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event, owner))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) => run(db, event))
@@ -1158,6 +1165,7 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.RetryScheduled, (event) => run(db, event))
+    yield* events.project(SessionEvent.Step.Rerouted, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Admitted, (event) => projectCurrentCompaction(db, event, "pending"))
     yield* events.project(SessionEvent.Compaction.Started, (event) => projectCurrentCompaction(db, event, "running"))
     yield* events.project(SessionEvent.Compaction.StartedV1, (event) => run(db, event))

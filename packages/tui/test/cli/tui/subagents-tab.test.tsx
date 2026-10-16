@@ -556,3 +556,78 @@ test("renders section headings while keyboard navigation selects only task rows 
     app.renderer.destroy()
   }
 })
+
+test("a stopped task reads stopped and Continue decides the recovery item exactly once, never through subagent control", async () => {
+  const task = {
+    sessionID: "ses_child",
+    parentID: "ses_parent",
+    description: "Wire storage",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-5.6" },
+    background: true,
+    state: "cancelled",
+    stoppedRecovery: { itemID: "rvw_recovery" },
+    revision: 4,
+    time: { created: 1, updated: 4 },
+  } as unknown as SessionOrchestrationTask
+  const decisions: Array<{ pathname: string; method: string; body: unknown }> = []
+  const control: string[] = []
+  const calls = createFetch(async (url, request) => {
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: [task], summary: { total: 1, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_child/review/rvw_recovery/decide") {
+      decisions.push({ pathname: url.pathname, method: request.method, body: await request.json() })
+      return json({ message: "Decision outcome unknown" }, { status: 503 })
+    }
+    if (/\/subagent\/|\/resume|\/prompt/.test(url.pathname) && request.method !== "GET") control.push(url.pathname)
+    return undefined
+  })
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <ToastProvider><DialogProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></DialogProvider></ToastProvider>
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 32, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Wire storage") && frame.includes("stopped"))
+    expect(app.captureCharFrame()).not.toContain("cancelled")
+    expect(app.captureCharFrame()).toContain("continue")
+    app.mockInput.pressKey("c", { shift: true })
+    await app.waitForFrame((frame) => frame.includes("Continue unresolved"))
+    expect(decisions).toEqual([{ pathname: "/api/session/ses_child/review/rvw_recovery/decide", method: "POST", body: { decision: { kind: "recovery", choice: "continue" } } }])
+    app.mockInput.pressKey("c", { shift: true })
+    app.mockInput.pressKey("c", { shift: true })
+    await app.renderOnce()
+    expect(decisions).toHaveLength(1)
+    expect(control).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a task without stoppedRecovery keeps its state label and offers no Continue", () => {
+  expect(module.taskStatusLabel("cancelled")).toBe("cancelled")
+  expect(module.taskStatusLabel("cancelled", true)).toBe("stopped")
+})

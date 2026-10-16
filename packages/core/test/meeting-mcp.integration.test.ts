@@ -16,6 +16,7 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { Database } from "@ycoding-ai/core/database/database"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Effect, Layer, Stream } from "effect"
 import { location } from "./fixture/location"
@@ -407,6 +408,7 @@ function knowledgeLayer(url: string) {
     ),
     Layer.provide(
       Layer.mergeAll(
+        Database.layer({ path: ":memory:" }),
         Layer.succeed(
           Config.Service,
           Config.Service.of({

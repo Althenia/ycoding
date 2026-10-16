@@ -1,6 +1,6 @@
 export * as SessionRestart from "./restart"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Scope } from "effect"
 import { makeGlobalNode } from "../../effect/app-node"
 import { Database } from "../../database/database"
 import { EventRuntime } from "../../event"
@@ -8,7 +8,9 @@ import { AppProcess } from "../../process"
 import { ShellLedger } from "../../shell/ledger"
 import { SessionExecution } from "../execution"
 import { SessionInterruptedExecution } from "./interrupted"
+import { SessionTaskRecovery } from "./recovery"
 import { SessionStore } from "../store"
+import { SessionTask } from "../task"
 
 export interface Interface {
   /**
@@ -22,11 +24,14 @@ export interface Interface {
    */
   readonly reconcileInterruptedExecutions: Effect.Effect<void>
   readonly reconcileShells: Effect.Effect<void>
+  readonly recoverTasks: Effect.Effect<void>
+  readonly loseStaleTasks: Effect.Effect<void>
 }
 
 /**
  * Restart continuity actions for the managed server. The service is inert until called: managed
- * startup never resumes suspended Sessions, and default, embedded, and stdio servers never suspend.
+ * startup recovers only managed child tasks, and default, embedded, and stdio servers never suspend
+ * or recover.
  */
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionRestart") {}
 
@@ -38,12 +43,15 @@ export const layer = Layer.effect(
     const appProcess = yield* AppProcess.Service
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
+    const lifetime = yield* Scope.Scope
     return Service.of({
       suspendActiveSessions: Effect.gen(function* () {
         yield* store.suspend(yield* execution.active)
       }),
-      reconcileInterruptedExecutions: SessionInterruptedExecution.reconcile(db, events),
+      reconcileInterruptedExecutions: SessionInterruptedExecution.reconcile(db, events, appProcess),
       reconcileShells: ShellLedger.reconcile(db, appProcess),
+      recoverTasks: SessionTaskRecovery.recover({ db, events, appProcess, execution, lifetime }),
+      loseStaleTasks: SessionTask.reconcileStaleTasks(db, appProcess).pipe(Effect.provideService(EventRuntime.Service, events)),
     })
   }),
 )

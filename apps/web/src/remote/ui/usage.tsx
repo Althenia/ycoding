@@ -7,6 +7,7 @@ import { LoadingPlaceholder } from "./loading"
 import type { RemoteUsageForecast } from "@ycoding-ai/remote"
 import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
 import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
+import { ModelIncidents } from "./model-incidents"
 import { QuotaForecastBlock, UsageStatisticsDetails } from "./usage-cost"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
@@ -335,6 +336,7 @@ export function UsagePage() {
         </Show></Show>
       </div>
     </section>
+    <ModelIncidents />
     <footer class="usage-cost-note">Costs are estimates from recorded usage and model pricing, not provider bills. Analytics use configurable request-date retention (default 30 days), independently of Session deletion. Session-owned prompt and task views can have a shorter retained history.</footer>
   </div>
 }

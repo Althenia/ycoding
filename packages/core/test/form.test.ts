@@ -29,12 +29,10 @@ const forms = AppNodeBuilder.build(
       Layer.mock(Config.Service, {
         entries: () =>
           Effect.sync(() =>
-            configuredTimeout === undefined
-              ? []
-              : [
+            [
                   new Config.Document({
                     type: "document",
-                    info: new Config.Info({ question_timeout_seconds: configuredTimeout }),
+                    info: new Config.Info({ auto_answer: true, ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
                   }),
                 ],
           ),
@@ -558,7 +556,7 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("sleep falls back to the automatic answer when the decision model fails", () =>
+  it.effect("sleep defers to the review box when the decision model fails", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
@@ -581,55 +579,47 @@ describe("Form", () => {
           },
         ],
       } satisfies Form.CreateInput
-      expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { plan: "Fast" } })
+      const deferred = yield* service.ask(settings)
+      expect(deferred.status).toBe("deferred")
+      expect(yield* service.list()).toEqual([])
     }),
   )
 
-  for (const settlement of ["reply", "cancel"] as const) {
-    it.effect(`a human ${settlement} during sleep inference wins without a second reply`, () =>
-      Effect.gen(function* () {
-        configuredTimeout = undefined
-        yield* setupAutonomy("yolo")
-        const autonomy = yield* SessionAutonomy.Service
-        yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
-        yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
-        const entered = yield* Deferred.make<void>()
-        const release = yield* Deferred.make<void>()
-        decisionBehavior = (value) => Deferred.succeed(entered, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.andThen(decisionChoice("Careful", 0.9)(value)),
-        )
-        const events = yield* EventRuntime.Service
-        const published: string[] = []
-        const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
-          if (event.type.startsWith("form.")) published.push(event.type)
-        }))
-        yield* Effect.addFinalizer(() => unsubscribe)
-        const service = yield* Form.Service
-        const id = Form.ID.create(`frm_sleep_${settlement}_race`)
-        const fiber = yield* service.ask({
-          id, sessionID: input.sessionID, title: "Choose a plan",
-          fields: [{ key: "plan", type: "string", required: true, options: [
-            { value: "Fast", label: "Fast" }, { value: "Careful", label: "Careful" },
-          ] }],
-        }).pipe(Effect.forkScoped)
-        yield* Deferred.await(entered)
-        yield* autonomy.set({ sessionID: input.sessionID, sleep: false })
-        yield* settlement === "reply"
-          ? service.reply({ id, answer: { plan: "Fast" } })
-          : service.cancel(id)
-        const expected: Form.TerminalState = settlement === "reply"
-          ? { status: "answered", answer: { plan: "Fast" } }
-          : { status: "cancelled" }
-        expect(yield* service.state(id)).toEqual(expected)
-        yield* Deferred.succeed(release, undefined)
-        expect(yield* Fiber.join(fiber)).toEqual(expected)
-        expect(yield* service.state(id)).toEqual(expected)
-        expect(published).toEqual([Form.Event.Created.type,
-          settlement === "reply" ? Form.Event.Replied.type : Form.Event.Cancelled.type])
-      }),
-    )
-  }
+  it.effect("sleep inference creates no human-wait form state before the decision settles", () =>
+    Effect.gen(function* () {
+      configuredTimeout = undefined
+      yield* setupAutonomy("yolo")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
+      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      decisionBehavior = (value) => Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(decisionChoice("Careful", 0.9)(value)),
+      )
+      const events = yield* EventRuntime.Service
+      const published: string[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+        if (event.type.startsWith("form.")) published.push(event.type)
+      }))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const service = yield* Form.Service
+      const id = Form.ID.create("frm_sleep_inference_state")
+      const fiber = yield* service.ask({
+        id, sessionID: input.sessionID, title: "Choose a plan",
+        fields: [{ key: "plan", type: "string", required: true, options: [
+          { value: "Fast", label: "Fast" }, { value: "Careful", label: "Careful" },
+        ] }],
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      expect(yield* service.list()).toEqual([])
+      expect(yield* service.reply({ id, answer: { plan: "Fast" } }).pipe(Effect.flip)).toBeInstanceOf(Form.NotFoundError)
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { plan: "Careful" } })
+      expect(published).toEqual([Form.Event.Created.type, Form.Event.Replied.type])
+    }),
+  )
 
   describe("timeout", () => {
     const start = Effect.fn("FormTest.start")(function* (service: Form.Interface, create: Form.CreateInput = input) {

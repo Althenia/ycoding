@@ -6,6 +6,8 @@ import type {
   SessionMessageInfo,
   YCodingEvent,
   SessionOrchestrationTask,
+  GuardrailStatusOutput,
+  SessionInfo,
 } from "@ycoding-ai/client"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -364,7 +366,9 @@ test("refreshes resources into reactive getters", async () => {
         },
       })
     if (url.pathname === "/api/session/ses_test/snapshot")
-      return sessionSnapshot("ses_test", [
+      return sessionSnapshot(
+        "ses_test",
+        [
           {
             id: "msg_second",
             created: 0,
@@ -379,7 +383,9 @@ test("refreshes resources into reactive getters", async () => {
             text: "First",
             time: { created: 1 },
           },
-        ], { session: { title: "Test session", time: { created: 0, updated: 0 }, location: { directory } } })
+        ],
+        { session: { title: "Test session", time: { created: 0, updated: 0 }, location: { directory } } },
+      )
     if (url.pathname === "/api/agent")
       return json({
         location,
@@ -869,13 +875,13 @@ test("reconnects the event stream and resyncs active data", async () => {
       requests.message++
       if (requests.message === 1)
         return sessionSnapshot("session-stale", [
-            {
-              id: "message-stale",
-              type: "user",
-              text: "Stale",
-              time: { created: 1 },
-            },
-          ])
+          {
+            id: "message-stale",
+            type: "user",
+            text: "Stale",
+            time: { created: 1 },
+          },
+        ])
       return new Promise<Response>((resolve) => {
         resolveMessages = resolve
       })
@@ -945,13 +951,13 @@ test("reconnects the event stream and resyncs active data", async () => {
     expect(data.session.message.get("session-stale", "message-stale")?.id).toBe("message-stale")
     resolveMessages(
       sessionSnapshot("session-stale", [
-          {
-            id: "message-fresh",
-            type: "user",
-            text: "Fresh",
-            time: { created: 2 },
-          },
-        ]),
+        {
+          id: "message-fresh",
+          type: "user",
+          text: "Fresh",
+          time: { created: 2 },
+        },
+      ]),
     )
     await wait(() => data.session.message.get("session-stale", "message-fresh") !== undefined)
     expect(data.session.message.get("session-stale", "message-stale")).toBeUndefined()
@@ -1358,7 +1364,10 @@ test("tracks session status from active sessions and execution events", async ()
   const events = createEventStream()
   let settled = false
   const calls = createFetch((url) => {
-    if (["session-live", "session-failed", "session-retry"].some((id) => url.pathname === `/api/session/${id}/snapshot`)) return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
+    if (
+      ["session-live", "session-failed", "session-retry"].some((id) => url.pathname === `/api/session/${id}/snapshot`)
+    )
+      return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (url.pathname === "/api/session/active") return json({ data: { "session-active": { type: "running" } } })
     if (url.pathname === "/api/session/session-live")
       return json({
@@ -1467,6 +1476,34 @@ test("tracks session status from active sessions and execution events", async ()
     await wait(() => {
       const assistant = data.session.message.get("session-live", "message-live")
       return assistant?.type === "assistant" && assistant.retry?.attempt === 2
+    })
+    emitEvent(events, {
+      id: "evt_live_step_rerouted",
+      created: 0,
+      type: "session.step.rerouted",
+      durable: durable("session-live", 1),
+      data: {
+        sessionID: "session-live",
+        assistantMessageID: "message-live",
+        model: { id: "backup", providerID: "provider" },
+        error: { type: "provider.rate-limit", message: "Rate limited" },
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get("session-live", "message-live")
+      return assistant?.type === "assistant" && assistant.model.id === "backup"
+    })
+    const rerouted = JSON.parse(JSON.stringify(data.session.message.get("session-live", "message-live")))
+    expect(rerouted.retry).toBeUndefined()
+    expect(rerouted).toMatchObject({
+      model: { id: "backup", providerID: "provider" },
+      reroutes: [
+        {
+          from: { id: "model", providerID: "provider" },
+          model: { id: "backup", providerID: "provider" },
+          error: { type: "provider.rate-limit", message: "Rate limited" },
+        },
+      ],
     })
     emitEvent(events, {
       id: "evt_step_ended",
@@ -2264,6 +2301,400 @@ test("hydrates and updates root-family guardrail reviews", async () => {
   }
 })
 
+test("retains decision grades, rule IDs and source through hydration, live replies and refresh", async () => {
+  const events = createEventStream()
+  const statusGate = Promise.withResolvers<void>()
+  let holdStatus = false
+  const restored: NonNullable<GuardrailStatusOutput["decisions"]>[number] = {
+    sessionID: "ses_child",
+    created: 1,
+    requestID: "grq_restored",
+    reply: "once" as const,
+    confidence: 0.92,
+    grades: [{ choice: "approve", confidence: 0.92, evidence: "A bounded release operation" }],
+    ruleIDs: ["custom.review.deploy", "standard.review.outside-repository"],
+    source: { messageID: "msg_tool", callID: "call_tool" },
+  }
+  const decisions = [restored]
+  const calls = createFetch(async (url) => {
+    if (["/api/session/ses_root/guardrail/request", "/api/session/ses_child/guardrail/request"].includes(url.pathname))
+      return json({ data: [] })
+    if (["/api/session/ses_root/guardrail", "/api/session/ses_child/guardrail"].includes(url.pathname)) {
+      if (holdStatus) await statusGate.promise
+      return json({
+        data: {
+          rootSessionID: "ses_root",
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+          decisions,
+        },
+      })
+    }
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+  let rows!: SessionRow[]
+  function Probe() {
+    data = useData()
+    client = useClient()
+    rows = createSessionRows(() => "ses_root")
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await wait(() => client.connection.status() === "connected")
+    await data.session.guardrail.sync("ses_root")
+    expect(data.session.guardrail.decided("ses_root")).toEqual([restored])
+    const live: typeof restored = {
+      ...restored,
+      requestID: "grq_live_decision",
+      reply: "always",
+      choice: "approve_all",
+      created: 2,
+      ruleIDs: ["custom.review.release"],
+      grades: [{ choice: "approve_all", confidence: 0.92, evidence: "The offered directory approval is scoped" }],
+    }
+    decisions.push(live)
+    holdStatus = true
+    const event = {
+      id: "evt_live_decision",
+      created: 2,
+      type: "guardrail.replied" as const,
+      data: {
+        rootSessionID: "ses_root",
+        sessionID: "ses_child",
+        requestID: live.requestID,
+        reply: live.reply,
+        decidedBy: "decision-model" as const,
+        choice: live.choice,
+        confidence: live.confidence,
+        grades: live.grades,
+      },
+    }
+    emitEvent(events, event)
+    await wait(() => data.session.guardrail.decided("ses_root")[1]?.grades?.[0]?.choice === "approve_all")
+    expect(data.session.guardrail.decided("ses_root")[1]?.grades).toEqual(live.grades)
+    statusGate.resolve()
+    await wait(() => data.session.guardrail.decided("ses_root")[1]?.ruleIDs?.[0] === "custom.review.release")
+    expect(data.session.guardrail.decided("ses_root")[1]?.source).toEqual(live.source)
+    expect(data.session.guardrail.decided("ses_root")[1]?.ruleIDs).toEqual(live.ruleIDs)
+    emitEvent(events, event)
+    data.session.guardrail.invalidate("ses_root")
+    await data.session.guardrail.sync("ses_root")
+    expect(data.session.guardrail.decided("ses_root")).toEqual([restored, live])
+    const displayed = { ...live, sessionID: "ses_root", requestID: "grq_displayed" }
+    decisions.push(displayed)
+    data.session.guardrail.invalidate("ses_root")
+    await data.session.guardrail.sync("ses_root")
+    await wait(() =>
+      rows.some(
+        (row) =>
+          row.type === "guardrail" && row.detail?.some((line) => line.value.includes("offered directory approval")),
+      ),
+    )
+    displayed.grades = [{ choice: "approve_all", confidence: 0.929999, evidence: "Only the reported grade changed" }]
+    data.session.guardrail.invalidate("ses_root")
+    await data.session.guardrail.sync("ses_root")
+    await wait(() =>
+      rows.some(
+        (row) =>
+          row.type === "guardrail" &&
+          row.detail?.some((line) => line.value === "0.929999 · Only the reported grade changed"),
+      ),
+    )
+    displayed.choice = undefined
+    data.session.guardrail.invalidate("ses_root")
+    await data.session.guardrail.sync("ses_root")
+    await wait(() =>
+      rows.some(
+        (row) =>
+          row.type === "guardrail" &&
+          row.requestID === displayed.requestID &&
+          row.detail?.some((line) => line.label === "grade approve all"),
+      ),
+    )
+    displayed.grades = undefined
+    data.session.guardrail.invalidate("ses_root")
+    await data.session.guardrail.sync("ses_root")
+    await wait(() =>
+      rows.some(
+        (row) =>
+          row.type === "guardrail" &&
+          row.requestID === displayed.requestID &&
+          !row.detail?.some((line) => line.label.startsWith("grade ")),
+      ),
+    )
+  } finally {
+    statusGate.resolve()
+    app.renderer.destroy()
+  }
+})
+
+for (const change of ["decided", "deferred"] as const) {
+  test(`family review ${change} read fences a delayed root response`, async () => {
+    const events = createEventStream()
+    const old = Promise.withResolvers<void>()
+    const oldStarted = Promise.withResolvers<void>()
+    const newerStarted = Promise.withResolvers<void>()
+    const item = {
+      itemID: "rvw_family",
+      kind: "guardrail" as const,
+      reason: "escalated" as const,
+      origin: { requestID: "grq_family" },
+      payload: {
+        type: "guardrail" as const,
+        action: "shell",
+        resources: ["git reset --hard"],
+        ruleIDs: ["standard.review.git-destructive"],
+        reason: "Destructive Git operation",
+        hardReview: true,
+        directories: [],
+        fingerprint: "a".repeat(64),
+        requestID: "grq_family",
+      },
+      sessionID: "ses_review_child",
+      rootSessionID: "ses_review_root",
+      sessionTitle: "Child",
+      created: 1,
+    }
+    let items = change === "decided" ? [item] : []
+    let reads = 0
+    const calls = createFetch(async (url) => {
+      if (["/api/session/ses_review_root", "/api/session/ses_review_child"].includes(url.pathname)) {
+        const id = url.pathname.split("/").at(-1)!
+        const projection: { session: SessionInfo } = await sessionSnapshot(id, [], {
+          session: id === "ses_review_child" ? { parentID: "ses_review_root" } : {},
+        }).json()
+        return json({ data: projection.session })
+      }
+      if (["/api/session/ses_review_root/review", "/api/session/ses_review_child/review"].includes(url.pathname)) {
+        reads++
+        const snapshot = [...items]
+        if (reads > 1) newerStarted.resolve()
+        if (reads === 1) {
+          oldStarted.resolve()
+          await old.promise
+        }
+        return json({ data: snapshot })
+      }
+    }, events)
+    let data!: ReturnType<typeof useData>
+    let client!: ReturnType<typeof useClient>
+    function Probe() {
+      data = useData()
+      client = useClient()
+      return <box />
+    }
+    const app = await testRender(() => (
+      <TestTuiContexts>
+        <ClientProvider api={createApi(calls.fetch)}>
+          <ProjectProvider>
+            <DataProvider>
+              <Probe />
+            </DataProvider>
+          </ProjectProvider>
+        </ClientProvider>
+      </TestTuiContexts>
+    ))
+    try {
+      await wait(() => client.connection.status() === "connected")
+      const first = data.session.review.sync("ses_review_root")
+      await oldStarted.promise
+      items = change === "decided" ? [] : [item]
+      emitEvent(
+        events,
+        change === "decided"
+          ? {
+              id: "evt_family_decided",
+              type: "session.review.decided",
+              created: 2,
+              durable: { aggregateID: "ses_review_child", seq: 2, version: 1 },
+              data: {
+                sessionID: "ses_review_child",
+                itemID: item.itemID,
+                decision: { kind: "guardrail", reply: "reject" },
+              },
+            }
+          : {
+              id: "evt_family_deferred",
+              type: "session.review.deferred",
+              created: 2,
+              durable: { aggregateID: "ses_review_child", seq: 2, version: 1 },
+              data: {
+                sessionID: "ses_review_child",
+                itemID: item.itemID,
+                kind: item.kind,
+                reason: item.reason,
+                origin: item.origin,
+                payload: item.payload,
+              },
+            },
+      )
+      await newerStarted.promise
+      await data.session.review.sync("ses_review_child")
+      expect(data.session.review.list("ses_review_root").map((value) => value.itemID)).toEqual(
+        items.map((value) => value.itemID),
+      )
+      old.resolve()
+      await first
+      expect(data.session.review.list("ses_review_root").map((value) => value.itemID)).toEqual(
+        items.map((value) => value.itemID),
+      )
+      expect(reads).toBe(2)
+    } finally {
+      old.resolve()
+      app.renderer.destroy()
+    }
+  })
+}
+
+test("hydrates review items, follows review events, and drops deferred live requests", async () => {
+  const events = createEventStream()
+  const fingerprint = "b".repeat(64)
+  const first = {
+    itemID: "rvw_first",
+    kind: "guardrail" as const,
+    reason: "escalated" as const,
+    origin: { requestID: "grq_first" },
+    payload: {
+      type: "guardrail" as const,
+      action: "shell",
+      resources: ["git reset --hard"],
+      ruleIDs: ["standard.review.git-destructive"],
+      reason: "Destructive Git operation",
+      hardReview: true,
+      directories: [],
+      fingerprint,
+      requestID: "grq_first",
+    },
+    sessionID: "ses_root",
+    rootSessionID: "ses_root",
+    sessionTitle: "Root",
+    created: 1,
+  }
+  const second = {
+    ...first,
+    itemID: "rvw_second",
+    origin: { requestID: "grq_second" },
+    payload: { ...first.payload, requestID: "grq_second" },
+    created: 2,
+  }
+  let items: unknown[] = [first]
+  const guardrailRequest = {
+    id: "grq_pending",
+    rootSessionID: "ses_root",
+    sessionID: "ses_root",
+    action: "shell",
+    resources: ["rm -rf build"],
+    ruleIDs: ["standard.review.outside-repository"],
+    reason: "Outside work",
+    standard: true,
+  }
+  const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/session/ses_root") {
+      const projection: { session: SessionInfo } = await sessionSnapshot("ses_root", []).json()
+      return json({ data: projection.session })
+    }
+    if (url.pathname === "/api/session/ses_root/review") return json({ data: items })
+    if (url.pathname === "/api/session/ses_root/guardrail/request") return json({ data: [guardrailRequest] })
+    if (url.pathname === "/api/session/ses_root/guardrail")
+      return json({
+        data: {
+          rootSessionID: "ses_root",
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+          decisions: [],
+          dismissals: [],
+        },
+      })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+
+  function Probe() {
+    data = useData()
+    client = useClient()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => client.connection.status() === "connected")
+    await data.session.review.sync("ses_root")
+    expect(data.session.review.list("ses_root").map((item) => item.itemID)).toEqual(["rvw_first"])
+    await data.session.guardrail.sync("ses_root")
+    expect(data.session.guardrail.list("ses_root")).toHaveLength(1)
+
+    items = [first, second]
+    emitEvent(events, {
+      id: "evt_review_deferred_1",
+      created: 2,
+      type: "session.review.deferred",
+      durable: { aggregateID: "ses_root", seq: 2, version: 1 },
+      data: {
+        sessionID: "ses_root",
+        itemID: "rvw_second",
+        kind: "guardrail",
+        reason: "escalated",
+        origin: { requestID: "grq_second" },
+        payload: second.payload,
+      },
+    })
+    await wait(() => data.session.review.list("ses_root").length === 2)
+
+    emitEvent(events, {
+      id: "evt_guardrail_deferred_1",
+      created: 3,
+      type: "guardrail.deferred",
+      data: { rootSessionID: "ses_root", sessionID: "ses_root", requestID: "grq_pending", itemID: "rvw_second" },
+    })
+    await wait(() => data.session.guardrail.list("ses_root").length === 0)
+
+    items = [second]
+    emitEvent(events, {
+      id: "evt_review_decided_1",
+      created: 4,
+      type: "session.review.decided",
+      durable: { aggregateID: "ses_root", seq: 4, version: 1 },
+      data: { sessionID: "ses_root", itemID: "rvw_first", decision: { kind: "guardrail", reply: "once" } },
+    })
+    await wait(() => data.session.review.list("ses_root").length === 1)
+    expect(data.session.review.list("ses_root")[0]?.itemID).toBe("rvw_second")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("reconciles active session permissions when the event stream reconnects", async () => {
   const events = createEventStream()
   let requests = [
@@ -2955,7 +3386,10 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   let canonical = false
   const calls = createFetch((url) => {
     if (url.pathname === `/api/session/${sessionID}/snapshot`)
-      return sessionSnapshot(sessionID, canonical ? [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }] : [])
+      return sessionSnapshot(
+        sessionID,
+        canonical ? [{ id: messageID, type: "user", text: "hello", time: { created: 0 } }] : [],
+      )
   }, events)
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
@@ -3116,8 +3550,7 @@ test("does not remove a resident promoted user message when canonical projection
     })
     await wait(
       () =>
-        sync.session.message.get(sessionID, messageID) !== undefined &&
-        sync.session.input.list(sessionID).length === 0,
+        sync.session.message.get(sessionID, messageID) !== undefined && sync.session.input.list(sessionID).length === 0,
     )
     expect(sync.session.message.get(sessionID, messageID)).toBeDefined()
 
@@ -3127,6 +3560,69 @@ test("does not remove a resident promoted user message when canonical projection
     sync.session.message.invalidate(sessionID)
     await sync.session.message.sync(sessionID)
     expect(sync.session.message.get(sessionID, messageID)).toMatchObject({ type: "user", text: "stay visible" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a canonical consumed prompt replaces its stale pending projection on a later snapshot", async () => {
+  const events = createEventStream()
+  const sessionID = "session-stale-pending"
+  const messageID = "msg-stale-pending"
+  let consumed = false
+  const pending = {
+    id: messageID,
+    sessionID,
+    admittedSeq: 1,
+    timeCreated: 3,
+    type: "user" as const,
+    data: { text: "Latest prompt" },
+    delivery: "queue" as const,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [pending] })
+    if (url.pathname !== `/api/session/${sessionID}/snapshot`) return
+    return sessionSnapshot(
+      sessionID,
+      consumed ? [{ id: messageID, type: "user", text: "Latest prompt", time: { created: 3, consumed: 4 } }] : [],
+    )
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await sync.session.message.sync(sessionID)
+    await sync.session.pending.sync(sessionID)
+    expect(sync.session.message.get(sessionID, messageID)).toMatchObject({ type: "user", time: { created: 3 } })
+    expect(sync.session.message.get(sessionID, messageID)?.time).not.toHaveProperty("consumed")
+
+    consumed = true
+    sync.session.message.invalidate(sessionID)
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.get(sessionID, messageID)).toMatchObject({ type: "user", time: { created: 3, consumed: 4 } })
+    expect(sync.session.message.list(sessionID).filter((item) => item.id === messageID)).toHaveLength(1)
   } finally {
     app.renderer.destroy()
   }
@@ -3207,7 +3703,10 @@ test("restores a pending steer after leaving and reopening a child session", asy
 
 test("skips initial instruction state and projects later updates with their message ID", async () => {
   const events = createEventStream()
-  const calls = createFetch((url) => url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined, events)
+  const calls = createFetch(
+    (url) => (url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined),
+    events,
+  )
   let sync!: ReturnType<typeof useData>
   let ready!: () => void
   const mounted = new Promise<void>((resolve) => {

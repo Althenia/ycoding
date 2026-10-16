@@ -7,6 +7,7 @@ import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
 import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { MemoryTool } from "@ycoding-ai/core/tool/memory"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { Memory } from "@ycoding-ai/core/memory"
 import { Permission } from "@ycoding-ai/core/permission"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
@@ -23,7 +24,7 @@ import { memoryFixture, note } from "./lib/memory"
 
 test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime across a real store flow", async () => {
   await using f = await memoryFixture()
-  const state = { denied: false, catalogDenied: false, guardDenied: false, redirect: false, reads: 0, reservations: 0, releases: 0, actions: [] as string[] }
+  const state = { denied: false, catalogDenied: false, guardDenied: false, deferred: false, redirect: false, reads: 0, reservations: 0, releases: 0, actions: [] as string[], digests: [] as string[] }
   const permissions = Layer.mock(Permission.Service, {
     evaluateEffective: () => Effect.succeed(state.catalogDenied ? "deny" as const : "ask" as const),
     assert: (input) => Effect.gen(function* () {
@@ -33,7 +34,11 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     }),
   })
   const guardrails = Layer.mock(SessionGuardrail.Service, {
-    assert: () => Effect.gen(function* () {
+    assert: (input) => Effect.gen(function* () {
+      expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.stringMatching(/^call-/) })
+      expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
+      if (typeof input.metadata?.operationDigest === "string") state.digests.push(input.metadata.operationDigest)
+      if (state.deferred) return yield* new SessionGuardrail.DeferredError({ requestID: Guardrail.RequestID.make("grq_memory_deferred"), itemID: SessionReview.ID.make("rvw_memory_deferred"), ruleIDs: ["review-memory"] })
       if (state.guardDenied) return yield* new SessionGuardrail.DeclinedError({ requestID: Guardrail.RequestID.make("grq_memory_test") })
       state.reservations++
       return { release: Effect.sync(() => { state.releases++ }) }
@@ -112,6 +117,10 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     expect((yield* call({ action: "write", id: "guide", content: note() })).type).toBe("error")
     expect(yield* Effect.promise(() => fs.stat(path.join(f.directory, "data")).then(() => true, () => false))).toBe(false)
     state.guardDenied = false
+    state.deferred = true
+    expect((yield* call({ action: "write", id: "guide", content: note() }))).toMatchObject({ type: "error", value: expect.stringContaining("review box as item rvw_memory_deferred") })
+    expect(yield* Effect.promise(() => fs.stat(path.join(f.directory, "data")).then(() => true, () => false))).toBe(false)
+    state.deferred = false
     expect((yield* call({ action: "write", id: "guide", content: note() })).type).toBe("text")
     expect((yield* call({ action: "search", query: "build" }))).toMatchObject({ type: "text", value: expect.stringContaining("guide") })
     expect((yield* call({ action: "read", id: "guide" }))).toMatchObject({ type: "text", value: expect.stringContaining("local build") })
@@ -125,6 +134,8 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     expect(state.actions).toContain("memory_read")
     expect(state.actions).toContain("memory_write")
     expect(state.reservations).toBe(3)
+    expect(state.digests.slice(0, 3)).toEqual([state.digests[0], state.digests[0], state.digests[0]])
+    expect(state.digests.at(-1)).not.toBe(state.digests[0])
     expect(state.releases).toBe(state.reservations)
     state.redirect = true
     expect((yield* call({ action: "write", id: "redirected", content: note() }))).toMatchObject({ type: "error", value: expect.stringContaining("location changed") })
@@ -141,5 +152,7 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     f.settings.enabled = true
     expect((yield* f.store.read({ id: "guide" })).content).toBe(note())
     expect((yield* f.store.list({})).concepts.map(concept => concept.id)).toEqual(["guide"])
+    expect((yield* call({ action: "purge", trashID: "missing" })).type).toBe("error")
+    expect(state.digests.at(-1)).not.toBe(state.digests[0])
   }).pipe(Effect.provide(layer), Effect.scoped))
 })

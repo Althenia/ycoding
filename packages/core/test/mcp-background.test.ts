@@ -18,6 +18,7 @@ import { imagePassthrough } from "./lib/image"
 import { settleTool, toolDefinitions, toolIdentity, waitForTool } from "./lib/tool"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { Hash } from "@ycoding-ai/core/util/hash"
 
 const sessionID = Session.ID.make("ses_mcp_background")
 
@@ -25,12 +26,16 @@ const state: {
   latch?: Deferred.Deferred<void>
   notification?: Deferred.Deferred<{ text: string; description?: string }>
   calls: Array<{ name: string; args?: Record<string, unknown> }>
-} = { calls: [] }
+  digests: string[]
+  permissionDigests: string[]
+} = { calls: [], digests: [], permissionDigests: [] }
 
 const reset = () => {
   state.latch = undefined
   state.notification = undefined
   state.calls.length = 0
+  state.digests.length = 0
+  state.permissionDigests.length = 0
 }
 
 const mcp = Layer.mock(MCP.Service, {
@@ -127,16 +132,26 @@ const runtime = Layer.effect(
         settle: unavailable,
         background: unavailable,
         teamView: unavailable,
+        notice: unavailable,
         recover: unavailable(),
+        resolveRecovery: unavailable,
       },
       location: { agent: { list: unavailable } },
     })
   }),
 )
 
-const permissions = Layer.mock(Permission.Service, { assert: () => Effect.void })
+const permissions = Layer.mock(Permission.Service, { assert: (input) => Effect.sync(() => {
+  expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
+  if (typeof input.metadata?.operationDigest === "string") state.permissionDigests.push(input.metadata.operationDigest)
+}) })
 const guardrails = Layer.mock(SessionGuardrail.Service, {
-  assert: () => Effect.succeed({ release: Effect.void }),
+  assert: (input) => Effect.sync(() => {
+    expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
+    expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
+    if (typeof input.metadata?.operationDigest === "string") state.digests.push(input.metadata.operationDigest)
+    return { release: Effect.void }
+  }),
 })
 const events = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.never })
 const it = testEffect(
@@ -233,6 +248,20 @@ describe("MCP tool backgrounding", () => {
       })
     }),
   )
+
+  it.effect("binds grants to MCP argument values with stable object-key ordering", () => Effect.gen(function* () {
+    reset()
+    const registry = yield* ToolRegistry.Service
+    yield* waitForTool(registry, "lean-ctx_ctx_shell")
+    yield* settleTool(registry, call("lean-ctx_ctx_shell", { command: "echo first", token: "synthetic" }, "call_digest_first"))
+    yield* settleTool(registry, call("lean-ctx_ctx_shell", { command: "echo second", token: "synthetic" }, "call_digest_changed"))
+    yield* settleTool(registry, call("lean-ctx_ctx_shell", { token: "synthetic", command: "echo first" }, "call_digest_identical"))
+    expect(state.digests).toHaveLength(3)
+    expect(state.digests[0]).toBe(Hash.json({ server: "lean-ctx", tool: "ctx_shell", arguments: { command: "echo first", token: "synthetic" } }))
+    expect(state.digests[0]).not.toBe(state.digests[1])
+    expect(state.digests[0]).toBe(state.digests[2])
+    expect(state.permissionDigests).toEqual(state.digests)
+  }))
 
   it.live("returns a background result when a foreground MCP job is backgrounded mid-flight", () =>
     Effect.gen(function* () {

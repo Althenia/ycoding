@@ -1,6 +1,6 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "session-list" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
+type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "session-list" | "session-list-waiting" | "conversation-tool-terminal-output" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings" | "usage-quotas"
 type RemoteScenarioViewport = 1440 | 768 | 390
 type RemoteScenarioView = "chat" | "sessions" | "usage" | "settings"
 
@@ -39,6 +39,7 @@ export type RemoteScenario = {
   readonly emptyBackend: boolean
   readonly devices: readonly RemoteDeviceInfo[]
   readonly sessions: readonly WireSession[]
+  readonly attention?: readonly string[]
   readonly messages: readonly WireMessage[]
   readonly permissions: readonly WirePermission[]
   readonly guardrails: readonly WireGuardrail[]
@@ -310,6 +311,15 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     sessions: sessionListSessions,
     expectedText: ["Async Auth Token Revocation Migration", "auth-gate"],
   }
+  if (name === "session-list-waiting") return {
+    ...common, view: "sessions", noSelection: true, permissions: [], guardrails: [], forms: [],
+    sessions: [
+      baseSession({ id: "ses_recent", title: "Recent result", time: time(1) }),
+      baseSession({ id: "ses_running", title: "Running build", running: true, time: time(10) }),
+      baseSession({ id: "ses_waiting", title: "Waiting review", running: true, time: time(100) }),
+    ],
+    attention: ["ses_waiting"], expectedText: ["Waiting review", "Running build", "Recent result"],
+  }
   if (name === "conversation-landing") return {
     ...common,
     view: "chat",
@@ -340,7 +350,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
           [viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*"])],
     forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
     expectedText: viewport === 390
-      ? ["Network Socket Access", "Guardrail review (human decision required)", "Select Target Cluster"]
+      ? ["Network Socket Access", "Guardrail review (hard review)", "Select Target Cluster"]
       : viewport === 768
         ? ["human decision is required", "git reset --hard HEAD~12 && git push -f", "Multi-Choice Question Prompt", "syslog daemon bridge", "opentelemetry otlp-grpc", "prometheus metrics scrape"]
         : ["Write File Request", "/etc/systemd/system/ycoding-worker.service", "High Context Consumption", "Destructive Database Alteration & Git Force Push", "Select Target Runtime Architecture", "Enable Optional Test Harnesses", "Clarify Disambiguation Query"],
@@ -412,6 +422,8 @@ const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [
   ...scenarioNames.flatMap((name) => viewports.map((viewport) => scenario(name, viewport))),
+  scenario("session-list-waiting", 390),
+  scenario("session-list-waiting", 1440),
   scenario("conversation-landing", 390),
   scenario("empty-backend", 1440),
   scenario("selected-machine-offline", 768),

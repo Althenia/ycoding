@@ -134,7 +134,8 @@ async function expectRailDesign(viewport: typeof DESIGN_VIEWPORT) {
   const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: "Claude Opus 5" })
   try {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (screen.frame().includes("Writes") && screen.frame().includes("CONTEXT")) break
+      const frame = screen.frame()
+      if (frame.includes("Writes") && frame.includes("CONTEXT") && frame.includes("Build · Claude Opus 5") && !frame.includes("anthropic/claude-opus-5")) break
       await Bun.sleep(20)
     }
     const lines = screen.lines()

@@ -295,6 +295,7 @@ test("agent skill content expands from its focusable row into a bounded pageable
     settle: "Message YCoding…",
   })
   try {
+    await until(screen, "+ Skill content")
     const row = skillContent(screen.renderer.root)
     expect(row?.focusable).toBe(true)
     row?.focus()

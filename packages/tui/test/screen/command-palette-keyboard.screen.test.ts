@@ -37,7 +37,10 @@ test("Escape closes the palette and restores draft input ownership without dispa
     height: 50,
     kittyKeyboard: true,
     args: { sessionID },
-    settle: "Message YCoding…",
+    settle: (screen) => {
+      const frame = screen.captureCharFrame()
+      return frame.includes("Message YCoding…") && !frame.includes("Loading session…")
+    },
     route: (url, request) => {
       if (request.method === "POST") posts.push(url.pathname)
       return route(url)

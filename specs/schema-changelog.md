@@ -2,6 +2,48 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-16: Require explicit automation opt-in
+
+- Add `auto_answer` and `guardrails.decide_reviews`, both default false. Automatic question, form and child-question answers require the first; model standard-match verification and guardrail grading require the second. YOLO permission and awake ordinary-review approvals remain separate. `guardrails.decide_hard_reviews` retains its narrower grading control.
+- Add review reason `disabled` for sleeping requests deferred without an automatic decision. Existing review records retain their reasons.
+
+## 2026-10-16: Recover managed child tasks after restart
+
+- Add `recovery` review items (reason `restart`) and the human decision `{ kind: "recovery", choice: "continue" | "stop" }` on `session.review.decide`. A stopped child exposes `stoppedRecovery.itemID` on task reads; the same item accepts one later human `continue`, and every other repeated decision returns 409.
+- Managed startup recovers managed child tasks whose owner died: it starts one new Step from projected history, completes a child whose final Step already ended with text, or waits for a human decision when dispatched tools have unknown effects. Other startups mark such tasks `lost`.
+
+Compatibility:
+
+- Additive; root Sessions are never resumed and no provider attempt or tool call is replayed. Clients are regenerated from the owning command.
+
+## 2026-10-16: Add model incidents
+
+- Add `ModelIncident` (`@ycoding-ai/schema/model-incident`): ascending `inc_` ID, closed `Kind` (`fallback`, `guardrail-escalated`, `guardrail-rejected`), `DecidedBy` (`decision-model`, `human`), `Group` (`model`, `agent`), `ReportRow`, `Report { rows, groups }`, `Item`, `Recent`, and `Guidance { text?, clearedAt?, enabled }`.
+- Add local operations `GET /api/incident/report`, `GET /api/incident/recent`, `GET /api/incident/guidance` (`incident.guidance.get`), and `DELETE /api/incident/guidance` (`incident.guidance.clear`). Only the guidance routes accept `location`.
+- Add remote operations `incident.report`, `incident.recent`, `incident.guidance`, and `incident.guidance.clear`.
+- Add `analytics_retention.incident_days` and the `model-guidance` built-in instruction name.
+
+Compatibility:
+
+- The schemas, routes, operations, and configuration are additive and require no stored-data migration beyond the new tables. Clients are regenerated from the owning command.
+
+## 2026-10-16: Grade review alternatives and simplify autonomy
+
+- Choice questions accept optional Boolean `grade`, default false. Graded answers have null answer/choice/score, answer-level confidence 0, and exactly one `{ choice, confidence, evidence }` per supplied typed choice; evidence is non-whitespace and at most 500 characters. Single-pick and refusal answers omit grades.
+- Add `approve_all` to `Guardrail.DecisionChoice` and add `Guardrail.Grade`. Optional `grades` accompany durable decided/escalated events, pending escalation, Status outcomes, and guardrail review-box items. Evidence is redacted before persistence. Decided and Status replies accept `always` for model-approved ordinary reviews.
+- Autonomy state exposes only optional `sleep: {}` for family sleep. Autonomy updates accept `sleep: boolean`; review delegation has no autonomy toggle. Stored `guardrailDecision` and `sleep.priorGuardrailDecision` decode with those fields ignored, without a migration.
+- `guardrails.decide_hard_reviews` is Boolean, default true. Generated clients reflect the current Protocol and Schema contracts.
+
+## 2026-10-16: Add Model Fallback Switches
+
+- Add public durable `session.step.rerouted.1` (`SessionEvent.Step.Rerouted`) with `{ sessionID, assistantMessageID, model, error }`.
+- Add optional `Session.Message.Assistant.reroutes`, an ordered array of `Session.Message.Assistant.Reroute` `{ from, model, error }` folded from those events.
+- Add optional configuration `model_fallbacks`: a record from `provider/model` to at most three distinct model selectors.
+
+Compatibility:
+
+- The event, message field, and configuration key are additive, preserve existing payloads, and require no stored-data migration. Clients are regenerated from the owning command.
+
 ## 2026-10-15: Add Guardrail Decision Escalation
 
 - Add `escalate` to `Guardrail.DecisionChoice`; keep human `Guardrail.Reply` unchanged.
@@ -1206,3 +1248,15 @@ Compatibility:
 Compatibility:
 
 - Additive only. `active` is a new required field on a response object, so generated clients are regenerated; the stored `credential.active` column already exists in every database and no data migration runs. Existing single-credential users see no change in behaviour; a provider that stored several credentials previously kept only one row, so no existing data can contradict the new rule.
+
+## 2026-10-16: Sleep Review Box And Guardrail Source Links
+
+- Add the `SessionReview` contract: `ID` (`rvw_` ascending), `Kind` (`question`, `subagent_question`, `guardrail`, `permission`), `Reason`, `Origin`, kind-tagged `Payload` and `Decision`, and the family `Item` read model.
+- Add durable Session events `session.review.deferred.1`, `session.review.decided.1`, `session.review.withdrawn.1`, and `session.review.consumed.1`; ephemeral `form.deferred`, `question.deferred`, `guardrail.deferred`, and `permission.deferred`; the `deferred` `Form.State` member; and optional `deferred` on `SessionOrchestration.Question`.
+- Add the `server.review` Protocol group: `GET /api/session/:sessionID/review` (`session.review.list`) and `POST /api/session/:sessionID/review/:itemID/decide` (`session.review.decide`), with `ReviewItemNotFoundError`.
+- Add `Guardrail.Source { messageID, callID }` and an optional `source` on durable `session.guardrail.decided.1`, `session.guardrail.escalated.1`, and `session.guardrail.dismissed.1`, plus on `Guardrail.Status` decision and dismissal entries. The link names only the reviewed tool call; command text and targets are never copied into these events.
+- Add `session.review.list` and `session.review.decide` to `Telemetry.Operation`.
+
+Compatibility:
+
+- Additive only. New events and operations do not change existing payloads; `source` is optional so previously stored guardrail provenance events still decode. Generated clients are regenerated. No data migration runs; review state folds from the new durable events.

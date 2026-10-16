@@ -5,6 +5,7 @@ import {
   autonomyDecisionLabel,
   autonomyLevelDescription,
   autonomyModeLabel,
+  autonomyModeParts,
   autonomyProgressLabel,
   createSessionAutonomyRefreshGuard,
   goalToggleAction,
@@ -21,6 +22,14 @@ test("keeps numeric YOLO 3 with the same capabilities as YOLO 2", () => {
   expect(autonomyLevelDescription(3)).toContain("same as YOLO 2")
 })
 
+test("level descriptions promise question answers only when auto_answer is on", () => {
+  expect(autonomyLevelDescription(1)).toBe("permissions and ordinary guardrails")
+  expect(autonomyLevelDescription(2)).toBe("permissions, ordinary guardrails, and questions/forms when auto_answer is on")
+  expect(autonomyLevelDescription(3)).toBe(
+    "permissions, ordinary guardrails, and questions/forms when auto_answer is on (same as YOLO 2)",
+  )
+})
+
 test("maps each decision to the effective YOLO level and goal", () => {
   const labels = (yolo: number, goal = false) => {
     const state = {
@@ -28,27 +37,45 @@ test("maps each decision to the effective YOLO level and goal", () => {
       yolo,
       ...(goal ? { goal: { text: "ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } } : {}),
     } as unknown as SessionAutonomyState
-    return (["permissions", "guardrails", "questions"] as const).map((action) =>
-      autonomyDecisionLabel(state, action),
-    )
+    return (["permissions", "guardrails", "questions"] as const).map((action) => autonomyDecisionLabel(state, action))
   }
-  expect(labels(0)).toEqual(["ask you", "ask you", "ask you"])
-  expect(labels(1)).toEqual(["auto", "auto", "ask you"])
-  expect(labels(2)).toEqual(["auto", "auto", "auto"])
-  expect(labels(3)).toEqual(["auto", "auto", "auto"])
-  expect(labels(0, true)).toEqual(["auto · goal", "ask you", "auto · goal"])
+  const ordinary = "ordinary · you · decision model if enabled"
+  expect(labels(0)).toEqual(["you", ordinary, "you"])
+  expect(labels(1)).toEqual(["auto · YOLO 1", "ordinary · auto · YOLO 1", "you"])
+  expect(labels(2)).toEqual(["auto · YOLO 2", "ordinary · auto · YOLO 2", "auto · YOLO 2 · if auto_answer on"])
+  expect(labels(3)).toEqual(["auto · YOLO 3", "ordinary · auto · YOLO 3", "auto · YOLO 3 · if auto_answer on"])
+  expect(labels(0, true)).toEqual(["auto · goal", ordinary, "auto · goal · if auto_answer on"])
+  expect(labels(1, true)).toEqual(["auto · YOLO 1", "ordinary · auto · YOLO 1", "auto · goal · if auto_answer on"])
 })
 
-test("sleep and guardrail decisions take precedence without changing YOLO permission behavior", () => {
+test("sleep decisions take precedence without changing YOLO permission behavior", () => {
   for (const yolo of [0, 1, 2, 3] as const) {
-    const state: SessionAutonomyState = { mode: "normal", yolo, sleep: { priorGuardrailDecision: false } }
-    expect(autonomyDecisionLabel(state, "guardrails")).toBe("auto · decision")
-    expect(autonomyDecisionLabel(state, "questions")).toBe("auto · decision")
-    expect(autonomyDecisionLabel(state, "permissions")).toBe(yolo ? "auto" : "ask you")
-    expect(autonomyModeLabel(state)).toContain("guardrail decision · asleep")
+    const state: SessionAutonomyState = { mode: "normal", yolo, sleep: {} }
+    expect(autonomyDecisionLabel(state, "guardrails")).toBe("ordinary · review box · decision model if enabled")
+    expect(autonomyDecisionLabel(state, "questions")).toBe("review box · decision model if auto_answer on")
+    expect(autonomyDecisionLabel(state, "permissions")).toBe(yolo ? `auto · YOLO ${yolo}` : "you")
+    expect(autonomyModeLabel(state)).toBe(`${yolo ? `YOLO ${yolo}` : "Manual"} · asleep`)
   }
 })
 
+test("ordinary guardrail policy distinguishes configured grading from YOLO approval and human input", () => {
+  const state: SessionAutonomyState = { mode: "normal", yolo: 0 }
+  expect(autonomyDecisionLabel(state, "guardrails")).toBe("ordinary · you · decision model if enabled")
+  expect(autonomyDecisionLabel({ ...state, yolo: 1 }, "guardrails")).toBe("ordinary · auto · YOLO 1")
+  expect(autonomyDecisionLabel({ ...state, sleep: {} }, "guardrails")).toBe("ordinary · review box · decision model if enabled")
+  expect(autonomyDecisionLabel(state, "permissions")).toBe("you")
+})
+
+test("lists active modes in shared order", () => {
+  const state: SessionAutonomyState = {
+    mode: "normal",
+    yolo: 3,
+    sleep: {},
+    goal: { text: "Ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
+  }
+  expect(autonomyModeParts(state)).toEqual(["YOLO 3", "goal", "asleep"])
+  expect(autonomyModeParts({ ...state, sleep: undefined })).toEqual(["YOLO 3", "goal"])
+})
 
 test("represents explicit goal reports through the progress label", () => {
   expect(

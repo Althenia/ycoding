@@ -87,6 +87,7 @@ export type PromptProps = {
   landingDaybreak?: ModelDaybreak
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
   visible?: boolean
+  focusBlocked?: boolean
   disabled?: boolean
   submitDisabled?: boolean
   onSubmit?: () => void
@@ -916,36 +917,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Toggle guardrail decision",
-        name: "session.autonomy.guardrail-decision.toggle",
-        category: "Session",
-        palette: true,
-        slash: { name: "guardrail-decision" },
-        run: async () => {
-          const sessionID = props.sessionID
-          if (!sessionID) {
-            toast.show({ message: "Open a session to toggle guardrail decision", variant: "warning", duration: 3000 })
-            return
-          }
-          const stored = props.autonomy?.guardrailDecision === true
-          const next = !stored
-          try {
-            const result = await client.api.session.autonomy.set({ sessionID, payload: { guardrailDecision: next } })
-            props.onAutonomyUpdated?.(sessionID, result)
-            toast.show({
-              message: next
-                ? "Guardrail decision on: the decision model decides guardrail reviews"
-                : "Guardrail decision off",
-              variant: "success",
-              duration: 3000,
-            })
-          } catch (error) {
-            toast.show({ title: "Failed to toggle guardrail decision", message: errorMessage(error), variant: "error" })
-          }
-        },
-      },
-      {
-        title: "Sleep (decision model answers and reviews)",
+        title: "Sleep (configured automation, rest to review box)",
         name: "session.autonomy.sleep",
         category: "Session",
         palette: true,
@@ -973,8 +945,8 @@ export function Prompt(props: PromptProps) {
               title: "Sleep on",
               message:
                 awake?.state === "on"
-                  ? `Decision model answers questions and guardrail reviews. Idle sleep held off; lid ${awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
-                  : "Decision model answers questions and guardrail reviews. Keep-awake is not holding this machine; it may sleep.",
+                  ? `Configured automation applies; rest go to review box. Idle sleep held off; lid ${awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+                  : "Configured automation applies; rest go to review box. Keep-awake is not holding this machine; it may sleep.",
               variant: "success",
               duration: 6000,
             })
@@ -999,7 +971,7 @@ export function Prompt(props: PromptProps) {
             const result = await client.api.session.autonomy.set({ sessionID, payload: { sleep: false } })
             props.onAutonomyUpdated?.(sessionID, result)
             await keepAwake.refresh()
-            toast.show({ message: "Awake; pre-sleep autonomy restored", variant: "success", duration: 3000 })
+            toast.show({ message: "Awake; sleep mode is off", variant: "success", duration: 3000 })
           } catch (error) {
             toast.show({ title: "Failed to wake", message: errorMessage(error), variant: "error" })
           }
@@ -1181,6 +1153,7 @@ export function Prompt(props: PromptProps) {
 
     // Slot/plugin updates can remount the background prompt while a dialog is open.
     // Keep focus with the dialog and let the prompt reclaim it after the dialog closes.
+    if (props.focusBlocked) return
     if (!input.focused) input.focus()
   })
 
@@ -1966,7 +1939,7 @@ export function Prompt(props: PromptProps) {
       }
       return true
     }
-    const autonomySlash = (["guardrail-decision", "sleep", "wake"] as const).find((name) => normalized === `/${name}`)
+    const autonomySlash = (["sleep", "wake"] as const).find((name) => normalized === `/${name}`)
     if (autonomySlash) {
       clearPrompt()
       const command = keymapCommands().find((item) => item.slash?.name === autonomySlash)

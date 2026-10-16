@@ -7,6 +7,7 @@ import { NonNegativeInt, optional } from "./schema.js"
 import { SessionDelivery } from "./session-delivery.js"
 import { SessionID } from "./session-id.js"
 import { SessionMessage } from "./session-message.js"
+import { SessionReviewID } from "./session-review-id.js"
 
 const encoder = new TextEncoder()
 export const truncateUtf8 = (input: string, bytes: number) => {
@@ -74,6 +75,7 @@ export const Question = Schema.Struct({
   text: QuestionText,
   data: AnswerData.pipe(optional),
   time: NonNegativeInt,
+  deferred: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "SessionOrchestration.Question" })
 export interface Question extends Schema.Schema.Type<typeof Question> {}
 
@@ -100,6 +102,7 @@ export const Task = Schema.Struct({
     updated: NonNegativeInt,
   }),
   pinnedAt: NonNegativeInt.pipe(optional),
+  stoppedRecovery: Schema.Struct({ itemID: SessionReviewID }).pipe(optional),
 }).annotate({ identifier: "SessionOrchestration.Task" })
 export interface Task extends Schema.Schema.Type<typeof Task> {}
 
@@ -164,7 +167,7 @@ export const Report = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("action"))
 export type Report = typeof Report.Type
 
-export const NotificationType = Schema.Literals(["question", "completed", "failed", "cancelled", "lost"])
+export const NotificationType = Schema.Literals(["question", "completed", "failed", "cancelled", "lost", "resumed"])
 export type NotificationType = typeof NotificationType.Type
 
 export const Notification = Schema.Struct({
@@ -206,5 +209,6 @@ export const Change = Schema.Union([
     excerpt: TerminalExcerpt.pipe(optional),
   }),
   Schema.Struct({ type: Schema.Literal("lost"), excerpt: TerminalExcerpt.pipe(optional) }),
+  Schema.Struct({ type: Schema.Literal("resumed") }),
 ]).pipe(Schema.toTaggedUnion("type"))
 export type Change = typeof Change.Type

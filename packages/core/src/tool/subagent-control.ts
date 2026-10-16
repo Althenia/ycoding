@@ -9,6 +9,7 @@ import { Permission } from "../permission"
 import { SessionOrchestration } from "../session/orchestration"
 import { Tool } from "./tool"
 import { SessionOrchestrationIdentity } from "../session/orchestration-identity"
+import { Hash } from "../util/hash"
 
 export const name = "subagent_control"
 export const Input = Control
@@ -42,7 +43,7 @@ export const Plugin = {
                 if (input.action === "list")
                   return { action: "list" as const, tasks: yield* orchestration.list(context.sessionID) }
                 const target = yield* orchestration.get(context.sessionID, input.sessionID)
-                yield* SessionOrchestration.authorize(context.sessionID, target.agent, source).pipe(
+                yield* SessionOrchestration.authorize(context.sessionID, target.agent, source, Hash.json(input)).pipe(
                   Effect.provideService(Permission.Service, permission),
                 )
                 if (input.action === "send")

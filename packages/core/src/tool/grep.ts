@@ -9,6 +9,7 @@ import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
 import { Permission } from "../permission"
+import { Hash } from "../util/hash"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
 import { ToolOutputStore } from "../tool-output-store"
@@ -126,6 +127,7 @@ export const Plugin = {
                   if (!authorized.has(resource)) {
                     yield* permission.assert({
                       action: "read",
+                      metadata: { operationDigest: Hash.json(input) },
                       resources: [resource],
                       save: ["*"],
                       sessionID: context.sessionID,

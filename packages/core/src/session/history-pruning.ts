@@ -60,6 +60,7 @@ const settledMessageTypes = [
   SessionEvent.Tool.Success,
   SessionEvent.Tool.Failed,
   SessionEvent.RetryScheduled,
+  SessionEvent.Step.Rerouted,
   SessionEvent.InputConsumed,
   SessionEvent.Execution.Started,
   SessionEvent.Execution.Succeeded,

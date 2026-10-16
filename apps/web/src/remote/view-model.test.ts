@@ -18,7 +18,11 @@ import {
   enrollmentInstructions,
   sessionAvailabilityView,
   hasWaitingSession,
+  carouselSessionStatus,
+  sessionActivityGroup,
+  sessionListRefreshNotice,
   sessionStateChips,
+  keepAwakeIndicator,
   shellOutputPaging,
   sessionProjectLabel,
   connectionLabel,
@@ -30,10 +34,41 @@ import {
   type RemoteSessionSummary,
 } from "./view-model"
 
+test("keep-awake chrome is absent until settled or off and distinguishes active, held, unsupported, and failed states", () => {
+  for (const read of ["idle", "loading"] as const) expect(keepAwakeIndicator({ read })).toBeUndefined()
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "off" } })).toBeUndefined()
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", manual: true, lid: "on" } })).toMatchObject({ label: "keep-awake on · lid held", tone: "success" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", manual: false, sleepHold: true, lid: "held" } })).toMatchObject({ label: "keep-awake on · lid held · sleep held", tone: "success" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "off" } })?.label).toBe("keep-awake on · lid off")
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on" } })?.label).toBe("keep-awake on · lid unreported")
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "error" } })).toMatchObject({ label: "keep-awake on · lid error", tone: "danger" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "unsupported" } })).toMatchObject({ label: "keep-awake on · lid unsupported", tone: "attention" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "error", message: "Inhibitor stopped" } })).toMatchObject({ label: "keep-awake error", tone: "danger", detail: "Inhibitor stopped" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "unsupported" } })).toMatchObject({ label: "keep-awake unsupported", tone: "attention" })
+  expect(keepAwakeIndicator({ read: "error", message: "Read failed" })).toMatchObject({ label: "keep-awake error", tone: "danger", detail: "Read failed" })
+})
+
 test("Focus navigation groups Session creation and detail under Sessions", () => {
   for (const path of ["/remote", "/remote/session", "/remote/sessions"]) expect(workspaceDestination(path)).toBe("/remote/sessions")
   expect(workspaceDestination("/remote/usage")).toBe("/remote/usage")
   expect(workspaceDestination("/remote/settings")).toBe("/remote/settings")
+})
+
+test("carousel status prioritizes waiting over execution and excludes failure-only attention", () => {
+  expect(carouselSessionStatus({ attention: true, running: true })).toBe("Waiting for you")
+  expect(carouselSessionStatus({ attention: true })).toBe("Waiting for you")
+  expect(carouselSessionStatus({ attention: true, failed: true, running: true })).toBe("Running")
+  expect(carouselSessionStatus({ attention: true, failed: true })).toBeUndefined()
+  expect(sessionActivityGroup({ attention: true, running: true })).toBe("waiting")
+  expect(sessionActivityGroup({ running: true })).toBe("running")
+  expect(sessionActivityGroup({ attention: true, failed: true })).toBe("idle")
+})
+
+test("Session list refresh notices identify unsupported anchor fields without mislabeling other failures", () => {
+  for (const field of ["around", "before"])
+    expect(sessionListRefreshNotice({ status: "failed", error: { code: "invalid_message", message: `Unknown input field "${field}"` } })).toContain("Update YCoding on this machine")
+  expect(sessionListRefreshNotice({ status: "failed", error: { code: "internal_error", message: "Temporary inventory failure" } })).toBe("Session list refresh: Temporary inventory failure")
+  expect(sessionListRefreshNotice({ status: "failed", error: { code: "invalid_message", message: "Invalid cursor" } })).toBe("Session list refresh: Invalid cursor")
 })
 
 test("prompt receipts distinguish sending from failed and unknown delivery", () => {
@@ -200,9 +235,16 @@ describe("sessionStateChips", () => {
 
   test("always reports mode and guardrail state when it is known", () => {
     const labels = sessionStateChips(session({})).map((chip) => chip.label)
-    expect(labels).toContain("Standard")
+    expect(labels).toContain("Manual")
     expect(labels).toContain("Guardrails enforced")
-    expect(labels).not.toContain("Goal")
+    expect(labels).not.toContain("goal")
+  })
+
+  test("uses the TUI autonomy vocabulary in heading order", () => {
+    expect(sessionStateChips(session({ autonomy: "goal", yoloLevel: 2, goalActive: true, asleep: true, guardrailsEnforced: undefined })))
+      .toEqual([{ label: "YOLO 2", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }])
+    expect(sessionStateChips(session({ asleep: true, guardrailsEnforced: undefined })).map((chip) => chip.label)).toEqual(["Manual", "asleep"])
+    expect(sessionStateChips(session({ autonomy: undefined, guardrailsEnforced: undefined }))).toEqual([])
   })
 
   test("keeps session state chips separate from agent and model metadata", () => {
@@ -213,7 +255,7 @@ describe("sessionStateChips", () => {
     expect(labels).not.toContain("god")
     expect(labels).not.toContain("openai/gpt-5")
     expect(labels).toContain("Running")
-    expect(sessionStateChips(session({ autonomy: "goal" })).map((chip) => chip.label)).toContain("Goal")
+    expect(sessionStateChips(session({ autonomy: "goal" })).map((chip) => chip.label)).toContain("goal")
   })
 
   test("marks automatic guardrails and blocked sessions as attention", () => {
@@ -225,7 +267,7 @@ describe("sessionStateChips", () => {
   test("leads a failed Session with a neutral Failed chip", () => {
     const chips = sessionStateChips(session({ status: "failed", autonomy: "goal" }))
     expect(chips[0]).toEqual({ label: "Failed", tone: "neutral" })
-    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Goal", "Guardrails enforced"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Manual", "goal", "Guardrails enforced"])
   })
 
   test("only attention roots outside the failed set make the Sessions navigation wait", () => {

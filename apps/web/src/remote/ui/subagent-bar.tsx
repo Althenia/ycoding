@@ -25,14 +25,18 @@ export type SubagentEconomicsView = {
 
 export function TeamAnswerForm(props: {
   readonly question: { readonly id: string; readonly text: string }
-  readonly onAnswer: (questionID: string, text: string) => Promise<TeamActionOutcome>
+  readonly onAnswer?: (questionID: string, text: string) => Promise<TeamActionOutcome>
+  readonly review?: { readonly busy: boolean; readonly submit: (text: string) => void; readonly dismiss: () => void }
 }): JSX.Element {
   const [text, setText] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string>()
+  const disabled = () => busy() || props.review?.busy === true
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
-    if (busy() || !text().trim()) return
+    if (disabled() || !text().trim()) return
+    if (props.review) { props.review.submit(text().trim()); return }
+    if (!props.onAnswer) return
     setBusy(true)
     setError(undefined)
     void props.onAnswer(props.question.id, text().trim()).then((result) => {
@@ -41,8 +45,10 @@ export function TeamAnswerForm(props: {
     }, (cause: unknown) => setError(cause instanceof Error ? cause.message : "The answer could not be sent.")).finally(() => setBusy(false))
   }
   return <form class="team-answer" onSubmit={submit}>
-    <label><span>{props.question.text}</span><textarea aria-label="Answer subagent question" value={text()} onInput={(event) => setText(event.currentTarget.value)} disabled={busy()} rows={2} /></label>
-    <button type="submit" class="button button--primary button--small" disabled={busy() || !text().trim()}>{busy() ? "Answering…" : "Answer"}</button>
+    <label><span>{props.question.text}</span><textarea aria-label="Answer subagent question" value={text()} onInput={(event) => setText(event.currentTarget.value)} disabled={disabled()} rows={2} /></label>
+    <Show when={props.review} fallback={<button type="submit" class="button button--primary button--small" disabled={disabled() || !text().trim()}>{busy() ? "Answering…" : "Answer"}</button>}>
+      <div class="request__actions"><button type="submit" class="button button--primary button--small" disabled={disabled() || !text().trim()}>Submit</button><button type="button" class="button button--secondary button--small" disabled={disabled()} onClick={() => { if (!disabled()) props.review?.dismiss() }}>Dismiss</button></div>
+    </Show>
     <Show when={error()}>{(message) => <p role="alert">{message()}</p>}</Show>
   </form>
 }

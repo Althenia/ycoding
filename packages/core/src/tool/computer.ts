@@ -11,6 +11,7 @@ import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "computer"
 
@@ -275,9 +276,9 @@ export const Plugin = {
                   const operation = input.action.slice("webbrowser.".length)
                   const resource = `macos.bundle_id/${bundleID}/webbrowser.${operation}`
                   yield* permission.assert({ action: name, resources: [resource], save: [resource],
-                    metadata: { platform: "macos", application: "webbrowser", bundleID }, sessionID: context.sessionID, agent: context.agent, source })
-                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
-                    metadata: { operation: input.action, platform: "macos", application: "webbrowser", bundleID }, skipReview: true })
+                    metadata: { operationDigest: Hash.json(input), platform: "macos", application: "webbrowser", bundleID }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID }, sessionID: context.sessionID, action: "computer", resources: [resource],
+                    metadata: { operationDigest: Hash.json(input), operation: input.action, platform: "macos", application: "webbrowser", bundleID }, skipReview: true })
                   if (input.action === "webbrowser.tabs")
                     return result(yield* computer.browserTabs({ sessionID: context.sessionID, callID: context.callID, bundleID }).pipe(Effect.ensuring(reservation.release)))
                   const target: MacOSComputer.BrowserTarget = { platform: "macos", application: "webbrowser", bundleID, windowID: input.window_id, tabIndex: input.action === "webbrowser.new_tab" ? 1 : input.tab_index }
@@ -297,9 +298,9 @@ export const Plugin = {
                   }
                   const resource = `macos.bundle_id/${target.bundleID}/stage`
                   yield* permission.assert({ action: name, resources: [resource], save: [resource],
-                    metadata: { platform: target.platform, application: target.application }, sessionID: context.sessionID, agent: context.agent, source })
-                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
-                    metadata: { operation: input.action, platform: target.platform, application: target.application }, skipReview: true })
+                    metadata: { operationDigest: Hash.json(input), platform: target.platform, application: target.application }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID }, sessionID: context.sessionID, action: "computer", resources: [resource],
+                    metadata: { operationDigest: Hash.json(input), operation: input.action, platform: target.platform, application: target.application }, skipReview: true })
                   return input.action === "desktop.stage"
                     ? result(yield* computer.stage({ sessionID: context.sessionID, callID: context.callID, target, expectedRevision: input.expected_revision }).pipe(Effect.ensuring(reservation.release)))
                     : result(yield* computer.unstage({ sessionID: context.sessionID, callID: context.callID, target }).pipe(Effect.ensuring(reservation.release)))
@@ -308,9 +309,9 @@ export const Plugin = {
                   const resource = input.action === "desktop.list" ? "macos.desktop/list"
                     : `macos.bundle_id/${input.bundle_id}/${input.action === "desktop.quit" ? "quit" : input.remote_debugging ? "remote_debugging" : "launch"}`
                   yield* permission.assert({ action: name, resources: [resource], save: [resource],
-                    metadata: { platform: "macos", application: "desktop" }, sessionID: context.sessionID, agent: context.agent, source })
-                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
-                    metadata: { operation: input.action, platform: "macos", application: "desktop" }, skipReview: true })
+                    metadata: { operationDigest: Hash.json(input), platform: "macos", application: "desktop" }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID }, sessionID: context.sessionID, action: "computer", resources: [resource],
+                    metadata: { operationDigest: Hash.json(input), operation: input.action, platform: "macos", application: "desktop" }, skipReview: true })
                   if (input.action === "desktop.list") return result(yield* computer.list({ sessionID: context.sessionID, callID: context.callID }).pipe(Effect.ensuring(reservation.release)))
                   if (input.action === "desktop.quit") return result(yield* computer.quit({ sessionID: context.sessionID, callID: context.callID, bundleID: input.bundle_id, pid: input.pid }).pipe(Effect.ensuring(reservation.release)))
                   return result(yield* computer.launch({ sessionID: context.sessionID, callID: context.callID, bundleID: input.bundle_id, remoteDebugging: input.remote_debugging }).pipe(Effect.ensuring(reservation.release)))
@@ -336,7 +337,7 @@ export const Plugin = {
                     action: name,
                     resources: [resource],
                     save: [resource],
-                    metadata: { platform: target.platform, application: target.application },
+                    metadata: { operationDigest: Hash.json(input), platform: target.platform, application: target.application },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -351,11 +352,11 @@ export const Plugin = {
                           ...(input.action === "desktop.type" ? [input.text] : []),
                           ...(input.action === "desktop.scroll" && "direction" in input ? [input.direction] : []),
                         ]
-                  const reservation = yield* guardrail.assert({
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: "computer",
                     resources: reviewResources,
-                    metadata: { operation: input.action, platform: target.platform, application: target.application },
+                    metadata: { operationDigest: Hash.json(input), operation: input.action, platform: target.platform, application: target.application },
                     skipReview: true,
                   })
                   if (input.action === "desktop.inspect")
@@ -400,7 +401,7 @@ export const Plugin = {
                     action: name,
                     resources: [resource],
                     save: [resource],
-                    metadata: { platform: target.platform, application: target.application },
+                    metadata: { operationDigest: Hash.json(input), platform: target.platform, application: target.application },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -413,11 +414,11 @@ export const Plugin = {
                         target,
                       }),
                     )
-                  const reservation = yield* guardrail.assert({
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: "shell",
                     resources: [input.text],
-                    metadata: { platform: target.platform, application: target.application, target: resource },
+                    metadata: { operationDigest: Hash.json(input), platform: target.platform, application: target.application, target: resource },
                     skipReview: true,
                   })
                   return result(
@@ -453,6 +454,7 @@ export const Plugin = {
                     resources: [target.resource],
                     save: [target.resource],
                     metadata: {
+                      operationDigest: Hash.json(input),
                       platform: computerTarget.platform,
                       application: computerTarget.application,
                       identity,
@@ -490,6 +492,7 @@ export const Plugin = {
                   resources: [target.resource, destination.resource],
                   save: [target.resource, destination.resource],
                   metadata: {
+                    operationDigest: Hash.json(input),
                     platform: computerTarget.platform,
                     application: computerTarget.application,
                     identity,
@@ -498,11 +501,12 @@ export const Plugin = {
                   agent: context.agent,
                   source,
                 })
-                const reservation = yield* guardrail.assert({
+                const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                   sessionID: context.sessionID,
                   action: "file_mutation",
                   resources: [target.canonical, destination.canonical],
                   metadata: {
+                    operationDigest: Hash.json(input),
                     operation: "finder.move",
                     platform: computerTarget.platform,
                     application: computerTarget.application,
@@ -524,7 +528,7 @@ export const Plugin = {
                 Effect.mapError((error) =>
                   error instanceof ToolFailure
                     ? error
-                    : new ToolFailure({ message: `Unable to execute ${input.action}`, error }),
+                    : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Unable to execute ${input.action}`, error }),
                 ),
               ),
           }),

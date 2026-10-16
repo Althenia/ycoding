@@ -32,8 +32,8 @@ import type {
   SessionDiagnosticsOutput,
   SessionOrchestrationPage,
   SessionPendingInfo,
-  SessionPromptCostsOutput,
   SessionTaskCostsOutput,
+  SessionReviewItem,
   SessionTodoInfo,
   ShellInfo,
   SkillInfo,
@@ -47,7 +47,7 @@ import { useClient } from "./client"
 import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
 import { createPromptSubmissions } from "../prompt/submission"
 import { errorMessage } from "../util/error"
-import { isCompactionCheckpoint } from "../util/session"
+import { isCompactionCheckpoint, sessionShellFamily } from "../util/session"
 
 export type DataSessionHistory = {
   status: "loading" | "paging" | "ready" | "error"
@@ -183,14 +183,8 @@ type LocationData = {
   skill?: SkillInfo[]
 }
 
-export type GuardrailDecisionMade = {
-  sessionID: string
-  created: number
-  requestID: string
-  reply: "once" | "reject"
+export type GuardrailDecisionMade = NonNullable<GuardrailStatusOutput["decisions"]>[number] & {
   action?: string
-  choice?: "approve" | "reject" | "escalate"
-  confidence?: number
 }
 
 type GuardrailDismissal = NonNullable<GuardrailStatusOutput["dismissals"]>[number]
@@ -207,9 +201,7 @@ type Store = {
     prediction: Record<string, { sourceMessageID: string; text: string } | undefined>
     predictionDismissed: Record<string, string | undefined>
     usage: Record<string, ProviderRequestSummary>
-    promptCosts: Record<string, SessionPromptCostsOutput["units"]>
     taskCosts: Record<string, SessionTaskCostsOutput["tasks"]>
-    promptCostState: Record<string, "loading" | "ready" | "unavailable">
     taskCostState: Record<string, "loading" | "ready" | "unavailable">
     message: Record<string, SessionMessageInfo[]>
     history: Record<string, DataSessionHistory>
@@ -223,6 +215,7 @@ type Store = {
     guardrail: Record<string, GuardrailRequestListOutput>
     guardrailDecided: Record<string, GuardrailDecisionMade[]>
     guardrailDismissed: Record<string, GuardrailDismissal[]>
+    review: Record<string, SessionReviewItem[]>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
   }
@@ -307,6 +300,7 @@ function messageRevision(message: SessionMessageInfo) {
       message.diagnostics,
       message.error,
       message.retry,
+      message.reroutes,
       message.time.completed,
       message.content.length,
     )
@@ -366,6 +360,9 @@ function reconcileCanonicalMessages(
       (position === undefined && !isMessageComplete(message)) ||
       (position === undefined && older.has(message.id))
     if (!preserve) return
+    const canonical = position === undefined ? undefined : messages[position]
+    const consumed = canonical?.type === "user" && canonical.time.consumed !== undefined
+    if (consumed && message.type === "user" && message.time.consumed === undefined) return
     if (position === undefined) {
       const origin = currentIndex.get(message.id) ?? current.length
       const insertAt = current
@@ -491,6 +488,7 @@ export function estimateResidentSessionMemory(input: {
         message.diagnostics,
         message.error,
         message.retry,
+        message.reroutes,
       ])
       message.content.forEach((content) => {
         if (content.type !== "tool") {
@@ -681,7 +679,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     recordTelemetry?: (metric: TelemetryClientSample["metric"], durationMs: number, at?: number) => void
     selectedSessionID?: () => string | undefined
   }) => {
-    const promptCostInputs = new Map<string, string>()
     const taskCostInputs = new Map<string, readonly string[]>()
     const [store, setStore] = createStore<Store>({
       session: {
@@ -692,9 +689,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         prediction: {},
         predictionDismissed: {},
         usage: {},
-        promptCosts: {},
         taskCosts: {},
-        promptCostState: {},
         taskCostState: {},
         message: {},
         history: {},
@@ -708,6 +703,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         guardrail: {},
         guardrailDecided: {},
         guardrailDismissed: {},
+        review: {},
         form: {},
       },
       project: {
@@ -1087,6 +1083,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return current
     }
 
+    async function loadReviewRoot(sessionID: string) {
+      const seen = new Set<string>()
+      let rootID = sessionID
+      while (true) {
+        seen.add(rootID)
+        if (!untrack(() => store.session.info[rootID])) await result.session.sync(rootID)
+        const parentID = untrack(() => store.session.info[rootID]?.parentID)
+        if (!parentID || seen.has(parentID)) return rootID
+        rootID = parentID
+      }
+    }
+
     // Register one session into the family index. Idempotent: syncing an
     // existing session never duplicates its ID. When a tentative family keyed by
     // sessionID exists (descendants arrived while sessionID's own info was
@@ -1115,6 +1123,52 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
+    // Shell grouping attributes a shell through its owner Session's parent chain, but the
+    // resident session info only preloads roots and sessions this client opened or saw
+    // created. Resolve each shell owner's info (and its ancestors) on demand so a shell
+    // started by a child that finished before this client connected is attributed to that
+    // child instead of falling out of its family.
+    async function syncShellOwners(shells: readonly ShellInfo[], current: () => boolean = () => true) {
+      const owners = new Set(
+        shells.flatMap((shell) => (typeof shell.metadata.sessionID === "string" ? [shell.metadata.sessionID] : [])),
+      )
+      for (const ownerID of owners) {
+        if (!current()) return
+        let sessionID: string | undefined = ownerID
+        const seen = new Set<string>()
+        while (sessionID && !seen.has(sessionID) && seen.size < 16) {
+          if (!current()) return
+          seen.add(sessionID)
+          if (!store.session.info[sessionID]) {
+            await result.session.sync(sessionID).catch(() => undefined)
+            if (!current()) return
+            if (!store.session.info[sessionID]) break
+          }
+          sessionID = store.session.info[sessionID]?.parentID
+        }
+      }
+    }
+
+    async function readShellSession(sessionID: string, current: () => boolean = () => true) {
+      if (!current()) throw new Error("Shell discovery is no longer current")
+      const info = await client.api.session.get({ sessionID })
+      if (!current()) throw new Error("Shell discovery is no longer current")
+      setStore("session", "info", info.id, info)
+      registerSession(info.id)
+      return info
+    }
+
+    async function readShellRoot(info: SessionInfo, isCurrent: () => boolean = () => true) {
+      let current = info
+      const seen = new Set([current.id])
+      while (current.parentID) {
+        if (seen.has(current.parentID)) throw new Error("Session family is unresolved")
+        seen.add(current.parentID)
+        current = await readShellSession(current.parentID, isCurrent)
+      }
+      return current
+    }
+
     function removeSession(sessionID: string) {
       metadataRecency.delete(sessionID)
       messageIndex.delete(sessionID)
@@ -1135,13 +1189,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.forget(`session.compaction:${sessionID}`)
       sync.forget(`session.diagnostics:${sessionID}`)
       sync.forget(`session.usage:${sessionID}`)
-      sync.forget(`session.promptCosts:${sessionID}`)
       sync.forget(`session.taskCosts:${sessionID}`)
-      promptCostInputs.delete(sessionID)
       taskCostInputs.delete(sessionID)
       sync.forget(`session.todo:${sessionID}`)
       sync.forget(`session.permission:${sessionID}`)
       sync.forget(`session.guardrail:${sessionID}`)
+      sync.forget(`session.review:${sessionID}`)
       sync.forget(`session.form:${sessionID}:`)
       setStore(
         "session",
@@ -1156,9 +1209,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.prediction[sessionID]
           delete draft.predictionDismissed[sessionID]
           delete draft.usage[sessionID]
-          delete draft.promptCosts[sessionID]
           delete draft.taskCosts[sessionID]
-          delete draft.promptCostState[sessionID]
           delete draft.taskCostState[sessionID]
           delete draft.pending[sessionID]
           delete draft.todo[sessionID]
@@ -1175,6 +1226,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const next = requests.filter((request) => request.sessionID !== sessionID)
             if (next.length === 0) delete draft.guardrail[rootID]
             else draft.guardrail[rootID] = next
+          }
+          delete draft.review[sessionID]
+          for (const [rootID, items] of Object.entries(draft.review)) {
+            const next = items.filter((item) => item.sessionID !== sessionID)
+            if (next.length === 0) delete draft.review[rootID]
+            else draft.review[rootID] = next
           }
           delete draft.form[sessionID]
           for (const [rootID, family] of Object.entries(draft.family)) {
@@ -1290,7 +1347,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         const ids = taskCostInputs.get(id)
         if (ids) void result.session.taskCosts.sync(id, ids, true).catch(() => undefined)
       }
-      if (promptCostInputs.has(selected)) void result.session.promptCosts.sync(selected, true).catch(() => undefined)
     }
 
     function handleEvent(event: YCodingEvent) {
@@ -1841,6 +1897,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             }
           })
           break
+        case "session.step.rerouted":
+          message.update(event.data.sessionID, (draft, index) => {
+            const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
+            if (!currentAssistant) return
+            currentAssistant.reroutes = [
+              ...(currentAssistant.reroutes ?? []),
+              { from: { ...currentAssistant.model }, model: event.data.model, error: event.data.error },
+            ]
+            currentAssistant.model = event.data.model
+            currentAssistant.content = []
+            currentAssistant.retry = undefined
+          })
+          break
         case "session.retry.scheduled":
           message.update(event.data.sessionID, (draft, index) => {
             const currentAssistant = message.assistant(draft, index, event.data.assistantMessageID)
@@ -1956,11 +2025,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.guardrail.dismissed": {
           const dismissed = store.session.guardrailDismissed[event.data.sessionID] ?? []
-          if (!dismissed.some((item) => item.eventID === event.id)) setStore("session", "guardrailDismissed", event.data.sessionID,
-            [...dismissed, { sessionID: event.data.reviewSessionID, created: event.created, eventID: event.id, ruleID: event.data.ruleID, confidence: event.data.confidence }].slice(-100),
+          const source = event.data.source
+          const existing = dismissed.find((item) => item.eventID === event.id)
+          if (!existing) setStore("session", "guardrailDismissed", event.data.sessionID,
+            [...dismissed, { sessionID: event.data.reviewSessionID, created: event.created, eventID: event.id, ruleID: event.data.ruleID, confidence: event.data.confidence, ...(source ? { source } : {}) }].slice(-100),
           )
+          else if (source && !existing.source)
+            setStore("session", "guardrailDismissed", event.data.sessionID,
+              dismissed.map((item) => item.eventID === event.id ? { ...item, source } : item),
+            )
           break
         }
+
         case "guardrail.asked":
           if (store.session.guardrail[event.data.rootSessionID]?.some((request) => request.id === event.data.id)) break
           setStore("session", "guardrail", event.data.rootSessionID, [
@@ -1980,8 +2056,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               (request) => request.id !== event.data.requestID,
             ),
           )
-          if (event.data.decidedBy === "decision-model" && event.data.reply !== "always") {
+          if (event.data.decidedBy === "decision-model") {
             const decided = store.session.guardrailDecided[event.data.rootSessionID] ?? []
+            const ruleIDs = decidedRequest?.ruleIDs
             if (!decided.some((item) => item.requestID === event.data.requestID))
               setStore(
                 "session",
@@ -1997,10 +2074,43 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                     ...(decidedRequest === undefined ? {} : { action: decidedRequest.action }),
                     ...(event.data.choice === undefined ? {} : { choice: event.data.choice }),
                     ...(event.data.confidence === undefined ? {} : { confidence: event.data.confidence }),
+                    ...(event.data.grades === undefined ? {} : { grades: event.data.grades }),
+                    ...(ruleIDs ? { ruleIDs: [...ruleIDs] } : {}),
                   },
                 ].slice(-100),
               )
+            result.session.guardrail.invalidate(event.data.rootSessionID)
+            void result.session.guardrail.sync(event.data.rootSessionID).catch(() => undefined)
           }
+          break
+        }
+        case "guardrail.deferred":
+          setStore(
+            "session",
+            "guardrail",
+            event.data.rootSessionID,
+            (store.session.guardrail[event.data.rootSessionID] ?? []).filter(
+              (request) => request.id !== event.data.requestID,
+            ),
+          )
+          break
+        case "session.review.deferred":
+        case "session.review.decided":
+        case "session.review.withdrawn":
+        case "session.review.consumed": {
+          if (event.type === "session.review.decided" || event.type === "session.review.withdrawn")
+            setStore(
+              "session",
+              "review",
+              produce((draft) => {
+                for (const [rootID, items] of Object.entries(draft)) {
+                  const next = items.filter((item) => item.itemID !== event.data.itemID)
+                  if (next.length !== items.length) draft[rootID] = next
+                }
+              }),
+            )
+          result.session.review.invalidate(event.data.sessionID)
+          void result.session.review.sync(event.data.sessionID).catch(() => undefined)
           break
         }
         case "form.created":
@@ -2013,6 +2123,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "form.replied":
         case "form.cancelled":
         case "form.timed_out":
+        case "form.deferred":
           setStore(
             "session",
             "form",
@@ -2026,8 +2137,28 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ...data,
             shell: { ...data?.shell, [event.data.info.id]: event.data.info },
           }))
+          if (typeof event.data.info.metadata.sessionID === "string" && !store.session.info[event.data.info.metadata.sessionID])
+            void syncShellOwners([event.data.info])
           break
         case "shell.exited":
+          // Keep the settled shell resident so its tab row and output view survive the
+          // exit; the next shell list sync replaces the record with live shells only.
+          setStore(
+            "location",
+            produce((draft) => {
+              for (const data of Object.values(draft)) {
+                const existing = data.shell?.[event.data.id]
+                if (!existing || !data.shell) continue
+                data.shell[event.data.id] = {
+                  ...existing,
+                  status: event.data.status,
+                  ...(event.data.exit === undefined ? {} : { exit: event.data.exit }),
+                  time: { ...existing.time, completed: event.created },
+                }
+              }
+            }),
+          )
+          break
         case "shell.deleted":
           if (event.location) {
             setStore("location", locationKey(event.location), (data) => ({
@@ -2232,35 +2363,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             sync.invalidate(`session.diagnostics:${sessionID}`)
           },
         },
-        promptCosts: {
-          get(sessionID: string, inputID: string) { return store.session.promptCosts[sessionID]?.find((unit) => unit.anchor.sessionID === sessionID && unit.anchor.inputID === inputID) },
-          state(sessionID: string) { return store.session.promptCostState[sessionID] },
-          invalidate(sessionID: string) { sync.invalidate(`session.promptCosts:${sessionID}`) },
-          sync(sessionID: string, refresh = false) {
-            const ids = (store.session.message[sessionID] ?? []).filter((message) => message.type === "user").map((message) => message.id)
-            const signature = JSON.stringify(ids)
-            if (promptCostInputs.get(sessionID) !== signature) { promptCostInputs.set(sessionID, signature); sync.invalidate(`session.promptCosts:${sessionID}`) }
-            return sync.run(`session.promptCosts:${sessionID}`, async (current) => {
-              if (!ids.length) return
-              setStore("session", "promptCostState", sessionID, "loading")
-              const units: SessionPromptCostsOutput["units"][number][] = []
-              for (let offset = 0; offset < ids.length; offset += 100) {
-                const first = ids[offset]
-                if (first === undefined || !current()) return
-                const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
-                const page = await client.api.session.promptCosts({ sessionID, inputIDs: pageIDs }).catch((error: unknown) => {
-                  if (current()) setStore("session", "promptCostState", sessionID, "unavailable")
-                  throw error
-                })
-                if (!current()) return
-                units.push(...page.units.filter((unit) => unit.anchor.sessionID === sessionID && pageIDs.includes(unit.anchor.inputID)))
-              }
-              if (!current()) return
-              setStore("session", "promptCosts", sessionID, units)
-              setStore("session", "promptCostState", sessionID, "ready")
-            }, refresh)
-          },
-        },
         taskCosts: {
           get(sessionID: string, childID: string) { return store.session.taskCosts[sessionID]?.find((task) => task.sessionID === childID) },
           state(sessionID: string) { return store.session.taskCostState[sessionID] },
@@ -2381,8 +2483,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             streamSequence.delete(sessionID)
             sync.forget(`session.message:${sessionID}`)
             sync.forget(`session.compaction:${sessionID}`)
-            sync.forget(`session.promptCosts:${sessionID}`)
-            promptCostInputs.delete(sessionID)
             setStore(
               "session",
               produce((draft) => {
@@ -2390,8 +2490,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 delete draft.history[sessionID]
                 delete draft.compaction[sessionID]
                 delete draft.compactionHistory[sessionID]
-                delete draft.promptCosts[sessionID]
-                delete draft.promptCostState[sessionID]
               }),
             )
             pruneMetadata()
@@ -2475,6 +2573,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             sync.invalidate(`session.guardrail:${sessionID}`)
           },
         },
+        review: {
+          list(sessionID: string) {
+            return store.session.review[resolveRoot(sessionID)] ?? []
+          },
+          async sync(sessionID: string) {
+            const before = untrack(() => resolveRoot(sessionID))
+            const rootID = await loadReviewRoot(sessionID)
+            if (rootID !== before) sync.forget(`session.review:${rootID}`)
+            return sync.run(`session.review:${rootID}`, async (current) => {
+              const items = await client.api.review.list({ sessionID: rootID })
+              if (!current()) return
+              setStore("session", "review", rootID, reconcile(items))
+            })
+          },
+          invalidate(sessionID: string) {
+            sync.forget(`session.review:${untrack(() => resolveRoot(sessionID))}`)
+          },
+        },
         form: {
           list(sessionID: string, ref?: LocationRef) {
             const forms = store.session.form[sessionID]
@@ -2534,6 +2650,53 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
       },
       shell: {
+        listFamily(sessionID: string) {
+          const members = sessionShellFamily(result.session.list(), sessionID)
+          const locations = new Set(members.map((member) => locationKey(member.location)))
+          return [...locations].flatMap((key) => Object.values(store.location[key]?.shell ?? {}))
+        },
+        async owner(info: ShellInfo, sessionID: string) {
+          const ownerID = info.metadata.sessionID
+          if (typeof ownerID !== "string") return undefined
+          const root = await readShellRoot(await readShellSession(sessionID))
+          if (ownerID === root.id) return root
+          const owner = await readShellSession(ownerID)
+          const ownerRoot = await readShellRoot(owner)
+          return ownerRoot.id === root.id ? owner : undefined
+        },
+        async syncFamily(sessionID: string, current: () => boolean) {
+          const root = await readShellRoot(await readShellSession(sessionID, current), current)
+          if (!current()) return undefined
+          const members = [root]
+          const seen = new Set([root.id])
+          for (const parent of members) {
+            if (!current()) return undefined
+            let cursor: string | undefined
+            do {
+              if (!current()) return undefined
+              const page = await client.api.session.list({ parentID: parent.id, limit: 200, ...(cursor === undefined ? {} : { cursor }) })
+              if (!current()) return undefined
+              for (const child of page.data) {
+                if (child.parentID !== parent.id || seen.has(child.id)) continue
+                const verified = await readShellSession(child.id, current)
+                if (verified.parentID !== parent.id) continue
+                seen.add(verified.id)
+                members.push(verified)
+              }
+              cursor = page.cursor.next ?? undefined
+            } while (cursor !== undefined)
+          }
+          const locations = [...new Map(members.map((member) => [locationKey(member.location), member.location])).values()]
+          let next = 0
+          await Promise.all(locations.slice(0, 4).map(async () => {
+            while (current()) {
+              const ref = locations[next++]
+              if (!ref) return
+              await result.shell.sync(ref, current)
+            }
+          }))
+          return current() ? members : undefined
+        },
         list(location?: LocationRef) {
           return Object.values(store.location[locationKey(location ?? defaultLocation())]?.shell ?? {})
         },
@@ -2542,7 +2705,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             .map((data) => data.shell?.[id])
             .find((shell) => shell !== undefined)
         },
-        sync(ref?: LocationRef) {
+        sync(ref?: LocationRef, isCurrent: () => boolean = () => true) {
+          if (!isCurrent()) return Promise.resolve()
           const id = locationKey(ref ?? defaultLocation())
           return sync.run(`location.shell:${id}`, async (current) => {
             const response = await client.api.shell.list({
@@ -2554,6 +2718,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               ...store.location[key],
               shell: Object.fromEntries(response.data.map((info) => [info.id, info])),
             })
+            await syncShellOwners(response.data, isCurrent)
           })
         },
         invalidate(ref?: LocationRef) {

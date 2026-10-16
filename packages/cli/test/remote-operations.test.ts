@@ -519,6 +519,9 @@ type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
   results.outstandingSessions ??= { data: [], running: [], failed: [], lost: [] }
+  results.permissionRequests ??= []
+  results.formRequests ??= []
+  results.guardrailRequestList ??= []
   results.snapshot ??= (id: string) => ({ sourceEpoch: "epoch_1", watermark: { type: "log.synced", aggregateID: id, seq: 1 } })
   const calls: Call[] = []
   const local = new Proxy({} as LocalServer, {
@@ -976,6 +979,98 @@ describe("operation mapping", () => {
     expect(test.calls.some((call) => call.method === "usageReport")).toBe(false)
   })
 
+  test("maps global incident reads to exact local calls without a Session or browser Location", async () => {
+    const report = { rows: [{ providerID: "p", modelID: "m", fallbacks: 1, escalated: 0, rejected: 0, last: 5 }], groups: 1 }
+    const recent = { items: [{ id: "inc_1", time: 5, kind: "fallback", category: "rate_limit", ruleIDs: [], agent: "build" }] }
+    const test = await harness({ results: { incidentReport: report, incidentRecent: recent } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+      request: { ...request(operation, input), ...(sessionID ? { sessionID } : {}) }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    expect(valueOf(await run("incident.report", { group: "agent", from: 1, to: 9, offset: 2, limit: 50 }))).toEqual({ data: report })
+    expect(valueOf(await run("incident.report", { group: "model" }))).toEqual({ data: report })
+    expect(valueOf(await run("incident.recent", { provider: "p", model: "m" }))).toEqual({ data: recent })
+    expect(valueOf(await run("incident.recent", { provider: "p", model: "m", agent: "build", limit: 20 }))).toEqual({ data: recent })
+    expect(test.calls.filter((call) => call.method.startsWith("incident"))).toEqual([
+      { method: "incidentReport", args: [{ group: "agent", from: 1, to: 9, offset: 2, limit: 50 }] },
+      { method: "incidentReport", args: [{ group: "model" }] },
+      { method: "incidentRecent", args: [{ provider: "p", model: "m" }] },
+      { method: "incidentRecent", args: [{ provider: "p", model: "m", agent: "build", limit: 20 }] },
+    ])
+    test.calls.length = 0
+    for (const [operation, input] of [
+      ["incident.report", undefined], ["incident.report", {}], ["incident.report", { group: "session" }],
+      ["incident.report", { group: "model", limit: 201 }], ["incident.report", { group: "model", limit: 0 }],
+      ["incident.report", { group: "model", offset: -1 }], ["incident.report", { group: "model", from: 9, to: 1 }],
+      ["incident.report", { group: "model", directory: "/private" }], ["incident.report", { group: "model", workspace: "w" }],
+      ["incident.report", { group: "model", location: "/private" }], ["incident.report", { group: "model", sessionID: "ses_1" }],
+      ["incident.recent", undefined], ["incident.recent", { provider: "p" }], ["incident.recent", { provider: "p", model: "m", limit: 51 }],
+      ["incident.recent", { provider: "p", model: "m", agent: "" }], ["incident.recent", { provider: "p", model: "m", directory: "/private" }],
+    ] as const) expect(errorOf(await run(operation, input)).code).toBe("invalid_message")
+    expect(errorOf(await run("incident.report", { group: "model" }, "ses_1")).code).toBe("invalid_message")
+    expect(errorOf(await run("incident.recent", { provider: "p", model: "m" }, "ses_1")).code).toBe("invalid_message")
+    expect(test.calls).toEqual([])
+  })
+
+  test("guidance reads and clears resolve the owning Session Location through the backend, or use the backend default without one", async () => {
+    const guidance = { enabled: true, text: "note" }
+    const cleared = { enabled: true, clearedAt: 7 }
+    const test = await harness({
+      sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_other", { updated: 2, directory: "/other" })],
+      results: { incidentGuidance: guidance, incidentGuidanceClear: cleared },
+    })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+      request: { ...request(operation, input), ...(sessionID ? { sessionID } : {}) }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    const model = { provider: "p", model: "m" }
+    expect(valueOf(await run("incident.guidance", model))).toEqual({ data: guidance })
+    expect(valueOf(await run("incident.guidance", model, "ses_1"))).toEqual({ data: guidance })
+    expect(valueOf(await run("incident.guidance", model, "ses_other"))).toEqual({ data: guidance })
+    expect(valueOf(await run("incident.guidance.clear", model))).toEqual({ data: cleared })
+    expect(valueOf(await run("incident.guidance.clear", model, "ses_1"))).toEqual({ data: cleared })
+    expect(test.calls.filter((call) => call.method.startsWith("incident"))).toEqual([
+      { method: "incidentGuidance", args: [model] },
+      { method: "incidentGuidance", args: [model, { directory: "/work" }] },
+      { method: "incidentGuidance", args: [model, { directory: "/other" }] },
+      { method: "incidentGuidanceClear", args: [model] },
+      { method: "incidentGuidanceClear", args: [model, { directory: "/work" }] },
+    ])
+  })
+
+  test("guidance fails closed for unowned or unknown Sessions and for browser-selected scope", async () => {
+    const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1 })], results: { incidentGuidance: { enabled: true }, incidentGuidanceClear: { enabled: true } } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+      request: { ...request(operation, input), ...(sessionID ? { sessionID } : {}) }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    const model = { provider: "p", model: "m" }
+    test.calls.length = 0
+    for (const operation of ["incident.guidance", "incident.guidance.clear"] as const) {
+      expect(errorOf(await run(operation, model, "ses_foreign")).code).toBe("session_not_allowed")
+      expect(errorOf(await run(operation, model, "ses_unknown")).code).toBe("session_not_allowed")
+      for (const input of [undefined, {}, { provider: "p" }, { provider: "", model: "m" }, { ...model, sessionID: "ses_1" },
+        { ...model, directory: "/private" }, { ...model, workspace: "w" }, { ...model, location: { directory: "/private" } }, { ...model, agent: "build" }])
+        expect(errorOf(await run(operation, input, "ses_1")).code).toBe("invalid_message")
+    }
+    expect(test.calls.filter((call) => call.method.startsWith("incident"))).toEqual([])
+  })
+
+  test("a managed subagent Session cannot clear guidance but may read it", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" })]
+    const test = await harness({ sessions, results: { incidentGuidance: { enabled: true }, incidentGuidanceClear: { enabled: true } } })
+    const send = (operation: RemoteRequest["operation"]) => executeRemoteOperation({
+      request: { ...request(operation, { provider: "p", model: "m" }), sessionID: "ses_child" }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    expect(errorOf(await send("incident.guidance.clear")).code).toBe("subagent_read_only")
+    expect(valueOf(await send("incident.guidance"))).toEqual({ data: { enabled: true } })
+    expect(test.calls.some((call) => call.method === "incidentGuidanceClear")).toBe(false)
+  })
+
+  test("an unconfirmed guidance clear is unknown, not failed or replayed", async () => {
+    const test = await harness({ results: { incidentGuidanceClear: new LocalFailureClass("transport", "Socket closed") } })
+    expect(errorOf(await executeRemoteOperation({ request: request("incident.guidance.clear", { provider: "p", model: "m" }),
+      local: test.local, sessions: test.registry, subscriptions: test.subscriptions })).code).toBe("outcome_unknown")
+    expect(test.calls.filter((call) => call.method === "incidentGuidanceClear")).toHaveLength(1)
+  })
+
   test("a cached-attention status still refuses more than 500 running roots", async () => {
     const sessions = Array.from({ length: RemoteLimits.maxStatusSessions + 1 }, (_, index) => sessionInfo(`ses_${index}`, { updated: index }))
     const { local } = fakeLocal({ outstandingSessions: { data: sessions.map((session) => session.id), running: sessions.map((session) => session.id), failed: [], lost: [] } })
@@ -1308,15 +1403,47 @@ describe("operation mapping", () => {
       request: { ...request(operation, input), sessionID: "ses_root" }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
     })
     expect(valueOf(await run("session.team.shell.list"))).toEqual({ truncated: false, data: [
-      { id: "sh_root", ownerID: "ses_root", command: "bun test", status: "running", startedAt: 1 },
-      { id: "sh_child", ownerID: "ses_child", command: "bun lint", status: "running", startedAt: 2 },
-      { id: "sh_queued", ownerID: "ses_child", command: "bun typecheck", status: "queued", queuePosition: 2, startedAt: 5 },
+      { id: "sh_root", ownerID: "ses_root", ownerTitle: "ses_root", command: "bun test", status: "running", startedAt: 1 },
+      { id: "sh_child", ownerID: "ses_child", ownerAgent: "general", ownerTitle: "ses_child", command: "bun lint", status: "running", startedAt: 2 },
+      { id: "sh_queued", ownerID: "ses_child", ownerAgent: "general", ownerTitle: "ses_child", command: "bun typecheck", status: "queued", queuePosition: 2, startedAt: 5 },
     ] })
     expect(valueOf(await run("session.team.shell.kill", { shellID: "sh_child" }))).toEqual(null)
     for (const shellID of ["sh_foreign", "sh_unknown"])
       expect(errorOf(await run("session.team.shell.kill", { shellID })).code).toBe("forbidden")
     expect(test.calls.filter((call) => call.method === "shellRemove")).toEqual([{ method: "shellRemove", args: ["sh_child", { directory: "/work" }] }])
   })
+  test("Team shells preview descendant commands and read the complete command only for its owner", async () => {
+    const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general" }),
+      sessionInfo("ses_grandchild", { updated: 3, parentID: "ses_child", agent: "reviewer", title: "Nested review" }),
+      sessionInfo("ses_foreign_child", { updated: 4, parentID: "ses_foreign", agent: "general" }), sessionInfo("ses_foreign", { updated: 5 }),
+      sessionInfo("ses_orphan", { updated: 6, parentID: "ses_gone", agent: "general" })]
+    const command = `ycoding grep -rIl ${"pattern-".repeat(40)} packages | head -5`
+    const shells = [
+      { id: "sh_nested", command, status: "running", metadata: { sessionID: "ses_grandchild" }, time: { started: 7 } },
+      { id: "sh_foreignnested", command: "private", status: "running", metadata: { sessionID: "ses_foreign_child" }, time: { started: 8 } },
+      { id: "sh_orphan", command: "private", status: "running", metadata: { sessionID: "ses_orphan" }, time: { started: 9 } },
+      { id: "sh_absent", command: "private", status: "running", metadata: { sessionID: "ses_absent" }, time: { started: 10 } },
+    ]
+    const test = await harness({ sessions, results: { shellList: async () => shells, shellGet: async (id: string) => shells.find((shell) => shell.id === id), shellRemove: async () => undefined,
+      shellOutput: async () => ({ output: "page", cursor: 4, size: 4, truncated: false }) } })
+    const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({
+      request: { ...request(operation, input), sessionID: "ses_root" }, sessions: test.registry, subscriptions: test.subscriptions, local: test.local,
+    })
+    expect(command.length).toBeGreaterThan(256)
+    expect(valueOf(await run("session.team.shell.list"))).toEqual({ truncated: false, data: [
+      { id: "sh_nested", ownerID: "ses_grandchild", ownerAgent: "reviewer", ownerTitle: "Nested review", command: `${command.slice(0, 255)}…`, status: "running", startedAt: 7 },
+    ] })
+    expect(test.calls.some((call) => call.method === "shellOutput")).toBe(false)
+    const read = (shellID: string) => executeRemoteOperation({ request: { ...request("session.shell.output", { shellID }), sessionID: "ses_grandchild" },
+      sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+    expect(valueOf(await read("sh_nested"))).toEqual({ command, status: "running", data: { output: "page", cursor: 4, size: 4, truncated: false } })
+    for (const shellID of ["sh_foreignnested", "sh_orphan", "sh_absent"]) expect(errorOf(await read(shellID)).code).toBe("forbidden")
+    expect(test.calls.filter((call) => call.method === "shellOutput")).toHaveLength(1)
+    expect(valueOf(await run("session.team.shell.kill", { shellID: "sh_nested" }))).toEqual(null)
+    for (const shellID of ["sh_foreignnested", "sh_orphan", "sh_absent"])
+      expect(errorOf(await run("session.team.shell.kill", { shellID })).code).toBe("forbidden")
+  })
+
   test("Team shells resolve a moved direct child's recorded Location instead of borrowing the root header", async () => {
     const sessions = [sessionInfo("ses_root", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_root", agent: "general", directory: "/other-work" })]
     const test = await harness({ sessions, results: {
@@ -1334,6 +1461,35 @@ describe("operation mapping", () => {
     const test = await harness({ results: { shellList: async () => Array.from({ length: 51 }, (_, index) => ({ id: `sh_${index}`, command: "sleep 10", status: "running", metadata: { sessionID: "ses_1" }, time: { started: 1 } })) } })
     const result = valueOf(await executeRemoteOperation({ request: request("session.team.shell.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local }))
     expect(isRecord(result) && Array.isArray(result.data) && result.data.length === 50 && result.truncated === true).toBe(true)
+  })
+
+  test("Team shell previews preserve commands at the boundary and bound many heredocs to one frame", async () => {
+    const commands = ["x".repeat(255), "x".repeat(256), "x".repeat(257), ...Array.from({ length: 47 }, () => `cat <<'EOF'\n${"\\\"\n".repeat(200_000)}\nEOF`)]
+    const test = await harness({ results: { shellList: async () => commands.map((command, index) => ({ id: `sh_${index}`, command, status: "running", metadata: { sessionID: "ses_1" }, time: { started: 1 } })) } })
+    const frames = await executeRemoteOperation({ request: request("session.team.shell.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+    expect(frames).toHaveLength(1)
+    expect(JSON.stringify(frames[0]).length).toBeLessThanOrEqual(RemoteLimits.maxAgentMessageChars)
+    const result = valueOf(frames)
+    if (!isRecord(result) || !Array.isArray(result.data)) throw new Error("Expected shell list")
+    expect(result.truncated).toBe(false)
+    expect(result.data).toHaveLength(50)
+    expect(result.data.slice(0, 3).map((shell) => shell.command)).toEqual([commands[0], commands[1], `${"x".repeat(255)}…`])
+    expect(result.data.every((shell) => shell.command.length <= 256)).toBe(true)
+    expect(result.data[3].command.endsWith("…")).toBe(true)
+  })
+
+  test("Team shell listing bounds aggregate owner metadata and discloses omitted rows", async () => {
+    const test = await harness({ sessions: [sessionInfo("ses_1", { updated: 1, title: "\\\"\n".repeat(25_000) })], results: {
+      shellList: async () => Array.from({ length: 50 }, (_, index) => ({ id: `sh_${index}`, command: "bun test", status: "running", metadata: { sessionID: "ses_1" }, time: { started: 1 } })),
+    } })
+    const frames = await executeRemoteOperation({ request: request("session.team.shell.list"), sessions: test.registry, subscriptions: test.subscriptions, local: test.local })
+    expect(frames).toHaveLength(1)
+    expect(JSON.stringify(frames[0]).length).toBeLessThanOrEqual(RemoteLimits.maxAgentMessageChars)
+    const result = valueOf(frames)
+    if (!isRecord(result) || !Array.isArray(result.data)) throw new Error("Expected shell list")
+    expect(result.truncated).toBe(true)
+    expect(result.data.length).toBeGreaterThan(0)
+    expect(result.data.length).toBeLessThan(50)
   })
 
   test("side chats page only BTW children and create one parent-linked BTW Session", async () => {
@@ -1374,7 +1530,8 @@ describe("operation mapping", () => {
       ["session.prompt", { text: "Hello" }], ["session.command", { command: "test" }], ["session.skill", { skill: "review" }],
       ["session.compact", { id: "cmp_child" }],
       ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
-      ["session.autonomy.set", { yolo: 2 }], ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
+      ["session.autonomy.set", { yolo: 2 }], ["session.autonomy.set", { sleep: true }],
+      ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
     expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
     expect(valueOf(await send("session.get"))).toMatchObject({ data: { id: "ses_child" } })
@@ -1541,6 +1698,17 @@ describe("operation mapping", () => {
       method: "autonomySet",
       args: ["ses_1", { directory: "/work" }, { yolo: 3, maxNoProgress: 2 }],
     })
+
+    for (const payload of [{ sleep: true }, { sleep: false }]) {
+      await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })
+      expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, payload] })
+    }
+
+    for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, sleep: true }]) {
+      const before = calls.length
+      expect(errorOf(await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })).code).toBe("invalid_message")
+      expect(calls.length).toBe(before)
+    }
 
     await executeRemoteOperation({
       request: request("session.goal.set", { goal: "ship it" }),
@@ -1936,8 +2104,198 @@ describe("family-wide guardrail reviews", () => {
   })
 })
 
+describe("session review box", () => {
+  const base = { sessionID: "ses_child", rootSessionID: "ses_1", sessionTitle: "Child", created: 1, reason: "escalated", origin: { requestID: "grq_1" } }
+  const items = [
+    { ...base, itemID: "rvw_hard", kind: "guardrail", payload: { type: "guardrail", action: "shell", resources: ["rm -rf build"], ruleIDs: ["standard.hard.delete"], reason: "delete", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
+    { ...base, itemID: "rvw_question", kind: "question", reason: "free_text", origin: { messageID: "msg_1", callID: "call_1" }, payload: { type: "form", title: "Scope", fields: [{ key: "q0", type: "string" }], questionTool: true } },
+    { ...base, itemID: "rvw_child", kind: "subagent_question", reason: "low_confidence", confidence: 0.4, origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "Which branch?" } },
+    { ...base, itemID: "rvw_permission", kind: "permission", reason: "sleep_entry", origin: { requestID: "per_1" }, payload: { type: "permission", action: "edit", resources: ["src/a.ts"], fingerprint: "b".repeat(64), requestID: "per_1" } },
+  ]
+  const reviewHarness = () => harness({
+    sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 1, parentID: "ses_1", agent: "general" })],
+    results: { reviewList: async () => items, reviewDecide: async () => undefined },
+  })
+  const run = (test: Awaited<ReturnType<typeof reviewHarness>>, operation: RemoteRequest["operation"], input?: Record<string, unknown>, sessionID = "ses_1") =>
+    executeRemoteOperation({ request: { ...request(operation, input), sessionID }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+
+  test("lists the family's open items at the verified Location the backend resolves", async () => {
+    const test = await reviewHarness()
+    expect(valueOf(await run(test, "session.review.list"))).toEqual({ data: items })
+    expect(test.calls.at(-1)).toEqual({ method: "reviewList", args: ["ses_1", { directory: "/work" }] })
+    expect(valueOf(await run(test, "session.review.list", undefined, "ses_child"))).toEqual({ data: items })
+    expect(errorOf(await run(test, "session.review.list", { itemID: "rvw_hard" })).code).toBe("invalid_message")
+  })
+
+  test("forwards each decision shape after confirming the item is open in the addressed family with that kind", async () => {
+    const test = await reviewHarness()
+    for (const [itemID, decision] of [
+      ["rvw_hard", { kind: "guardrail", reply: "once" }],
+      ["rvw_hard", { kind: "guardrail", reply: "reject" }],
+      ["rvw_question", { kind: "question", answers: { q0: "main" } }],
+      ["rvw_question", { kind: "question", answers: [["main"], []] }],
+      ["rvw_question", { kind: "question", dismissed: true }],
+      ["rvw_child", { kind: "subagent_question", text: "Use main", data: { branch: "main" } }],
+      ["rvw_child", { kind: "subagent_question", dismissed: true }],
+      ["rvw_permission", { kind: "permission", reply: "always" }],
+    ] as const) {
+      test.calls.length = 0
+      expect(valueOf(await run(test, "session.review.decide", { itemID, decision }))).toBeNull()
+      expect(test.calls.map((call) => call.method).filter((method) => method.startsWith("review"))).toEqual(["reviewList", "reviewDecide"])
+      expect(test.calls.at(-1)).toEqual({ method: "reviewDecide", args: ["ses_1", { directory: "/work" }, itemID, decision] })
+    }
+  })
+
+  test("refuses malformed, mismatched, unknown, and hard Always decisions before deciding", async () => {
+    const test = await reviewHarness()
+    for (const [input, listed] of [
+      [{ itemID: "rvw_hard", decision: { kind: "guardrail", reply: "always" } }, true],
+      [{ itemID: "rvw_question", decision: { kind: "guardrail", reply: "once" } }, true],
+      [{ itemID: "rvw_missing", decision: { kind: "guardrail", reply: "once" } }, true],
+      [{ itemID: "grq_1", decision: { kind: "guardrail", reply: "once" } }, false],
+      [{ itemID: "rvw_hard", decision: { kind: "guardrail", reply: "maybe" } }, false],
+      [{ itemID: "rvw_hard", decision: { kind: "guardrail", dismissed: true } }, false],
+      [{ itemID: "rvw_hard", decision: { kind: "guardrail", reply: "once", text: "x" } }, false],
+      [{ itemID: "rvw_question", decision: { kind: "question", answers: [[1]] } }, false],
+      [{ itemID: "rvw_question", decision: { kind: "question", answers: { q0: { nested: true } } } }, false],
+      [{ itemID: "rvw_question", decision: { kind: "question", dismissed: false } }, false],
+      [{ itemID: "rvw_child", decision: { kind: "subagent_question", text: "" } }, false],
+      [{ itemID: "rvw_child", decision: { kind: "subagent_question", text: "x", data: "y".repeat(9_000) } }, false],
+      [{ itemID: "rvw_child", decision: { kind: "unknown" } }, false],
+      [{ itemID: "rvw_child", decision: "dismiss" }, false],
+      [{ itemID: "rvw_child" }, false],
+      [{ itemID: "rvw_child", decision: { kind: "subagent_question", dismissed: true }, origin: "browser" }, false],
+    ] as const) {
+      test.calls.length = 0
+      expect(errorOf(await run(test, "session.review.decide", input)).code).toBe("invalid_message")
+      expect(test.calls.map((call) => call.method).filter((method) => method.startsWith("review"))).toEqual(listed ? ["reviewList"] : [])
+    }
+  })
+
+  const recoveryItem = { ...base, itemID: "rvw_recovery", kind: "recovery", reason: "restart", origin: { messageID: "msg_1", callID: "call_1" },
+    payload: { type: "recovery", tools: [{ messageID: "msg_1", callID: "call_1", name: "shell" }, { messageID: "msg_1", callID: "call_2", name: "edit" }] } }
+  const stoppedPage = (tasks: readonly { sessionID: string; parentID: string; itemID?: string }[], next?: string) => ({
+    data: tasks.map((task) => ({ sessionID: task.sessionID, parentID: task.parentID, state: "cancelled", revision: 2, ...(task.itemID === undefined ? {} : { stoppedRecovery: { itemID: task.itemID } }) })),
+    summary: { total: tasks.length, active: 0, running: 0, waiting: 0 }, cursor: next === undefined ? {} : { next },
+  })
+  const familyPages: Record<string, unknown> = {
+    ses_1: stoppedPage([{ sessionID: "ses_child", parentID: "ses_1", itemID: "rvw_stopped" }, { sessionID: "ses_sibling", parentID: "ses_1", itemID: "rvw_sibling" }, { sessionID: "ses_running", parentID: "ses_1" }]),
+    ses_child: stoppedPage([{ sessionID: "ses_grand", parentID: "ses_child", itemID: "rvw_nested" }]),
+    ses_other: stoppedPage([{ sessionID: "ses_foreign_child", parentID: "ses_other", itemID: "rvw_foreign" }]),
+  }
+  const recoveryHarness = (results: Record<string, unknown> = {}) => harness({
+    sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 1, parentID: "ses_1", agent: "general" }),
+      sessionInfo("ses_sibling", { updated: 1, parentID: "ses_1", agent: "general" }), sessionInfo("ses_running", { updated: 1, parentID: "ses_1", agent: "general" }),
+      sessionInfo("ses_grand", { updated: 1, parentID: "ses_child", agent: "general" }), sessionInfo("ses_btw", { updated: 1, parentID: "ses_1", agent: "btw" }),
+      sessionInfo("ses_other", { updated: 1 }), sessionInfo("ses_foreign_child", { updated: 1, parentID: "ses_other", agent: "general" })],
+    results: { reviewList: async () => [...items, recoveryItem], reviewDecide: async () => undefined, subagentPage: async (parentID: string) => familyPages[parentID], ...results },
+  })
+  const continueStopped = (test: Awaited<ReturnType<typeof recoveryHarness>>, itemID: string, sessionID: string) =>
+    run(test, "session.review.decide", { itemID, decision: { kind: "recovery", choice: "continue" } }, sessionID)
+
+  test("forwards Continue and Stop for an open restart recovery item as human decisions of that kind", async () => {
+    const test = await recoveryHarness()
+    for (const choice of ["continue", "stop"] as const) {
+      test.calls.length = 0
+      const decision = { kind: "recovery", choice }
+      expect(valueOf(await run(test, "session.review.decide", { itemID: "rvw_recovery", decision }))).toBeNull()
+      expect(test.calls.map((call) => call.method).filter((method) => method.startsWith("review"))).toEqual(["reviewList", "reviewDecide"])
+      expect(test.calls.at(-1)).toEqual({ method: "reviewDecide", args: ["ses_1", { directory: "/work" }, "rvw_recovery", decision] })
+    }
+  })
+
+  test("forwards a human Continue for a stopped recovery that is no longer open, but never a Stop", async () => {
+    const test = await recoveryHarness()
+    expect(valueOf(await continueStopped(test, "rvw_stopped", "ses_child"))).toBeNull()
+    expect(test.calls.at(-1)).toEqual({ method: "reviewDecide", args: ["ses_child", { directory: "/work" }, "rvw_stopped", { kind: "recovery", choice: "continue" }] })
+    test.calls.length = 0
+    expect(errorOf(await run(test, "session.review.decide", { itemID: "rvw_stopped", decision: { kind: "recovery", choice: "stop" } }, "ses_child")).code).toBe("invalid_message")
+    expect(test.calls.map((call) => call.method)).not.toContain("reviewDecide")
+  })
+
+  test("refuses recovery decisions that are dismissed, malformed, or addressed to another item kind", async () => {
+    const test = await recoveryHarness()
+    for (const [input, decided] of [
+      [{ itemID: "rvw_recovery", decision: { kind: "recovery", dismissed: true } }, false],
+      [{ itemID: "rvw_recovery", decision: { kind: "recovery" } }, false],
+      [{ itemID: "rvw_recovery", decision: { kind: "recovery", choice: "retry" } }, false],
+      [{ itemID: "rvw_recovery", decision: { kind: "recovery", choice: "continue", text: "go" } }, false],
+      [{ itemID: "rvw_recovery", decision: { kind: "recovery", choice: "continue", reply: "once" } }, false],
+      [{ itemID: "rvw_recovery", decision: { kind: "guardrail", reply: "once" } }, false],
+      [{ itemID: "rvw_hard", decision: { kind: "recovery", choice: "continue" } }, false],
+      [{ itemID: "rvw_child", decision: { kind: "recovery", choice: "stop" } }, false],
+      [{ itemID: "not-a-review", decision: { kind: "recovery", choice: "continue" } }, false],
+    ] as const) {
+      test.calls.length = 0
+      expect(errorOf(await run(test, "session.review.decide", input)).code).toBe("invalid_message")
+      expect(test.calls.some((call) => call.method === "reviewDecide")).toBe(decided)
+    }
+  })
+
+  test("a Continue for an item that is not open is forwarded only after the stopped child's actual parent lists it, direct or nested", async () => {
+    const direct = await recoveryHarness()
+    expect(valueOf(await continueStopped(direct, "rvw_stopped", "ses_child"))).toBeNull()
+    expect(direct.calls.filter((call) => call.method === "subagentPage")).toEqual([{ method: "subagentPage", args: ["ses_1", { directory: "/work" }, undefined] }])
+    expect(direct.calls.filter((call) => call.method === "reviewDecide")).toHaveLength(1)
+    const nested = await recoveryHarness()
+    expect(valueOf(await continueStopped(nested, "rvw_nested", "ses_grand"))).toBeNull()
+    expect(nested.calls.filter((call) => call.method === "subagentPage")).toEqual([{ method: "subagentPage", args: ["ses_child", { directory: "/work" }, undefined] }])
+    expect(nested.calls.at(-1)).toEqual({ method: "reviewDecide", args: ["ses_grand", { directory: "/work" }, "rvw_nested", { kind: "recovery", choice: "continue" }] })
+    const open = await recoveryHarness()
+    await run(open, "session.review.decide", { itemID: "rvw_recovery", decision: { kind: "recovery", choice: "continue" } }, "ses_child")
+    expect(open.calls.some((call) => call.method === "subagentPage")).toBe(false)
+  })
+
+  test("a Continue is refused before any decision for a foreign, mismatched, unstopped, unmanaged, or unreadable target", async () => {
+    for (const [name, itemID, sessionID, results] of [
+      ["a foreign item with a valid selected child", "rvw_foreign", "ses_child", {}],
+      ["a sibling's stopped item", "rvw_sibling", "ses_child", {}],
+      ["a nested item addressed to its ancestor", "rvw_nested", "ses_child", {}],
+      ["a child that was never stopped", "rvw_stopped", "ses_running", {}],
+      ["a root Session", "rvw_stopped", "ses_1", {}],
+      ["a side chat", "rvw_stopped", "ses_btw", {}],
+      ["an unreadable page", "rvw_stopped", "ses_child", { subagentPage: async () => ({ data: "nope" }) }],
+      ["a page that cannot be read", "rvw_stopped", "ses_child", { subagentPage: new LocalFailureClass("transport", "timeout") }],
+    ] as const) {
+      const refused = await recoveryHarness(results)
+      expect((errorOf(await continueStopped(refused, itemID, sessionID)) as { code: string }).code, name).not.toBe(undefined)
+      expect(refused.calls.some((call) => call.method === "reviewDecide"), name).toBe(false)
+    }
+  })
+
+  test("the actual parent's task pages are followed to the stopped child, and a cursor that repeats ends the search without a decision", async () => {
+    const paged = await recoveryHarness({ subagentPage: async (_id: string, _location: unknown, cursor?: string) => cursor === undefined
+      ? stoppedPage([{ sessionID: "ses_running", parentID: "ses_1" }], "older")
+      : stoppedPage([{ sessionID: "ses_child", parentID: "ses_1", itemID: "rvw_stopped" }]) })
+    expect(valueOf(await continueStopped(paged, "rvw_stopped", "ses_child"))).toBeNull()
+    expect(paged.calls.filter((call) => call.method === "subagentPage").map((call) => call.args[2])).toEqual([undefined, "older"])
+    const endless = await recoveryHarness({ subagentPage: async () => stoppedPage([{ sessionID: "ses_running", parentID: "ses_1" }], "again") })
+    expect(errorOf(await continueStopped(endless, "rvw_stopped", "ses_child")).code).toBe("invalid_message")
+    expect(endless.calls.filter((call) => call.method === "subagentPage")).toHaveLength(2)
+    expect(endless.calls.some((call) => call.method === "reviewDecide")).toBe(false)
+  })
+
+  test("a repeated or unconfirmed continuation is refused or unknown once and never replayed", async () => {
+    const repeated = await recoveryHarness({ reviewDecide: new LocalFailureClass("conflict", "already continued") })
+    expect(errorOf(await continueStopped(repeated, "rvw_stopped", "ses_child")).code).toBe("invalid_message")
+    expect(repeated.calls.filter((call) => call.method === "reviewDecide")).toHaveLength(1)
+    const lost = await recoveryHarness({ reviewDecide: new LocalFailureClass("transport", "timeout") })
+    expect(errorOf(await continueStopped(lost, "rvw_stopped", "ses_child")).code).toBe("outcome_unknown")
+    expect(lost.calls.filter((call) => call.method === "reviewDecide")).toHaveLength(1)
+    expect(errorOf(await run(lost, "session.review.decide", { itemID: "rvw_recovery", decision: { kind: "recovery", choice: "stop" } })).code).toBe("outcome_unknown")
+  })
+
+  test("reports a decided or withdrawn item as no longer open and never replays an uncertain decision", async () => {
+    const missing = await harness({ results: { reviewList: async () => items, reviewDecide: new LocalFailureClass("not_found", "gone") } })
+    expect(errorOf(await run(missing, "session.review.decide", { itemID: "rvw_hard", decision: { kind: "guardrail", reply: "once" } }))).toMatchObject({ code: "invalid_message" })
+    const lost = await harness({ results: { reviewList: async () => items, reviewDecide: new LocalFailureClass("transport", "timeout") } })
+    expect(errorOf(await run(lost, "session.review.decide", { itemID: "rvw_hard", decision: { kind: "guardrail", reply: "once" } })).code).toBe("outcome_unknown")
+    expect(lost.calls.filter((call) => call.method === "reviewDecide")).toHaveLength(1)
+  })
+})
+
 describe("session shell output read", () => {
-  const ownedShell = { id: "sh_1", status: "exited", metadata: { sessionID: "ses_1" } }
+  const ownedShell = { id: "sh_1", command: `cat <<'EOF'\n${"line\n".repeat(1_000)}EOF`, status: "exited", metadata: { sessionID: "ses_1" } }
 
   async function shellHarness(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
     return harness({
@@ -1987,7 +2345,7 @@ describe("session shell output read", () => {
       subscriptions,
       local,
     })
-    expect(valueOf(outcome)).toEqual({ data: { output: "page", cursor: 4, size: 4, truncated: false } })
+    expect(valueOf(outcome)).toEqual({ command: ownedShell.command, status: "exited", data: { output: "page", cursor: 4, size: 4, truncated: false } })
     expect(calls.filter((call) => call.method === "shellGet")).toEqual([
       { method: "shellGet", args: ["sh_1", { directory: "/work" }] },
     ])
@@ -2083,6 +2441,13 @@ describe("strict validation and error mapping", () => {
       [request("session.form.cancel", { formID: "bad" }), "invalid_message"],
       [request("session.autonomy.set", { yolo: 9 }), "invalid_message"],
       [request("session.autonomy.set", {}), "invalid_message"],
+      [request("session.autonomy.set", { sleep: "yes" }), "invalid_message"],
+      [request("session.autonomy.set", { guardrailDecision: 1 }), "invalid_message"],
+      [request("session.autonomy.set", { guardrailDecision: true, sleep: null }), "invalid_message"],
+      [request("session.autonomy.set", { yolo: 1, sleep: true }), "invalid_message"],
+      [request("session.autonomy.set", { maxNoProgress: 2, guardrailDecision: true }), "invalid_message"],
+      [request("session.autonomy.set", { sleep: true, goal: "x" }), "invalid_message"],
+      [request("session.autonomy.set", { sleep: true, priorGuardrailDecision: false }), "invalid_message"],
       [request("session.goal.set", { goal: "" }), "invalid_message"],
       [request("session.goal.stop", { goal: "stop" }), "invalid_message"],
       [request("session.list", { limit: 0 }), "invalid_message"],
@@ -2190,6 +2555,72 @@ describe("local endpoint scope", () => {
 })
 
 describe("session list paging", () => {
+  test("an anchored active page contains its root when the anchor crosses a page boundary", () => {
+    const sessions = Array.from({ length: 6 }, (_, index) => sessionInfo(`ses_anchor_${index}`, { updated: 6 - index }))
+    expect(listPage(sessions, parseListQuery({ order: "active", limit: 2, around: "ses_anchor_2", before: 1 })).data.map((row) => row.id)).toEqual(["ses_anchor_1", "ses_anchor_2"])
+  })
+
+  test("paged list classification ignores failure-only output ceilings and shares one bounded observation", async () => {
+    const sessions = Array.from({ length: 502 }, (_, index) => sessionInfo(`ses_scope_${index}`, { updated: index, directory: process.cwd() }))
+    const h = await harness({ sessions, results: {
+      outstandingSessions: { data: [], running: [sessions[0]!.id], failed: sessions.slice(1).map((row) => row.id), lost: [] },
+    } })
+    const cache = createOperationCache(() => 1_000)
+    for (const status of ["waiting", "running", "idle"] as const) {
+      const response = await executeRemoteOperation({ request: request("session.list", { status, order: "active", limit: 1, parentID: null }), local: h.local, sessions: h.registry, subscriptions: h.subscriptions, cache })
+      expect(response[0]?.ok).toBe(true)
+    }
+    expect(h.calls.filter((call) => call.method === "outstandingSessions").map((call) => call.args)).toEqual([[false]])
+    expect(h.calls.filter((call) => call.method === "permissionRequests")).toHaveLength(1)
+    expect(h.calls.filter((call) => call.method === "formRequests")).toHaveLength(1)
+    expect(h.calls.filter((call) => call.method === "guardrailRequestList")).toHaveLength(1)
+  })
+
+  test("waiting roots precede running and idle roots with complete exclusive bidirectional pages", () => {
+    const sessions = [
+      { ...sessionInfo("ses_wait_a", { updated: 999 }), time: { created: 1, updated: 999, active: 2, pinned: 1 } },
+      { ...sessionInfo("ses_wait_b", { updated: 2 }), time: { created: 1, updated: 2, active: 2 } },
+      sessionInfo("ses_wait_c", { updated: 3 }),
+      sessionInfo("ses_run_a", { updated: 90 }), sessionInfo("ses_run_b", { updated: 80 }),
+      sessionInfo("ses_idle_a", { updated: 200 }), sessionInfo("ses_idle_b", { updated: 100 }),
+      { ...sessionInfo("ses_archived", { updated: 300 }), time: { created: 1, updated: 300, archived: 300 } },
+      sessionInfo("ses_child", { updated: 400, parentID: "ses_run_b" }),
+    ]
+    const running = new Set(["ses_wait_a", "ses_run_a", "ses_child"])
+    const waiting = new Set(["ses_wait_a", "ses_wait_b", "ses_wait_c"])
+    const expected = {
+      waiting: ["ses_wait_c", "ses_wait_a", "ses_wait_b"], running: ["ses_run_a", "ses_run_b"], idle: ["ses_idle_a", "ses_idle_b"],
+      all: ["ses_wait_c", "ses_wait_a", "ses_wait_b", "ses_run_a", "ses_run_b", "ses_archived", "ses_idle_a", "ses_idle_b"],
+    }
+    for (const status of ["all", "waiting", "running", "idle"] as const) {
+      const query = { order: "active", parentID: null, limit: 1, ...(status === "all" ? {} : { status }) }
+      const pages = [listPage(sessions, parseListQuery(query), running, waiting)]
+      while (pages.at(-1)?.cursor.next) pages.push(listPage(sessions, parseListQuery({ ...query, cursor: pages.at(-1)!.cursor.next }), running, waiting))
+      expect(pages.flatMap((page) => page.data.map((session) => session.id))).toEqual(expected[status])
+      for (let index = pages.length - 1; index > 0; index -= 1) {
+        const previous = listPage(sessions, parseListQuery({ ...query, cursor: pages[index]!.cursor.previous }), running, waiting)
+        expect(previous.data).toEqual(pages[index - 1]!.data)
+      }
+    }
+    for (const key of [{ running: false }, { running: false, waiting: "yes" }])
+      expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_wait_a", time: 2, direction: "next", ...key })).toString("base64url") })).toThrow()
+  })
+
+  test("list status uses request and lost attention but excludes failure-only roots from waiting", async () => {
+    const directory = process.cwd()
+    const sessions = ["waiting", "both", "lost", "failed", "running", "idle"].map((id, index) => sessionInfo(`ses_${id}`, { updated: index, directory }))
+    const h = await harness({ sessions, results: {
+      outstandingSessions: { data: [], running: ["ses_waiting", "ses_both", "ses_running"], failed: ["ses_both", "ses_lost", "ses_failed"], lost: ["ses_lost"] },
+      permissionRequests: [{ id: "per_1", sessionID: "ses_waiting" }, { id: "per_2", sessionID: "ses_both" }], formRequests: [], guardrailRequestList: [],
+    } })
+    const ids = async (status: "waiting" | "running" | "idle") => recordOf(valueOf(await executeRemoteOperation({
+      request: request("session.list", { status, order: "active", parentID: null }), local: h.local, sessions: h.registry, subscriptions: h.subscriptions,
+    }))).data
+    expect(await ids("waiting")).toEqual([sessions[2], sessions[1], sessions[0]])
+    expect(await ids("running")).toEqual([sessions[4]])
+    expect(await ids("idle")).toEqual([sessions[5], sessions[3]])
+  })
+
   test("live background shell owners make their family running; settled notices remain outstanding only", async () => {
     const root = sessionInfo("ses_root", { updated: 1 })
     const child = sessionInfo("ses_child", { updated: 2, parentID: "ses_root" })
@@ -2206,7 +2637,7 @@ describe("session list paging", () => {
     expect(recordOf(await list("idle")).data).toEqual([root])
   })
 
-  test("active order ranks running families then recent activity and pages both directions when running membership changes", () => {
+  test("active cursors reject changed running membership and rebase around a retained root", () => {
     const root = { ...sessionInfo("ses_root", { updated: 2 }), time: { created: 2, updated: 2 } }
     const child = sessionInfo("ses_child", { updated: 5, parentID: "ses_root" })
     const pinned = { ...sessionInfo("ses_pinned", { updated: 3 }), time: { created: 3, updated: 3, pinned: 9 } }
@@ -2216,9 +2647,9 @@ describe("session list paging", () => {
     const page = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 1 }), running)
     expect(page.data.map((session) => session.id)).toEqual(["ses_root"])
     const after = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 2, cursor: page.cursor.next }), new Set(["ses_child", "ses_recent"]))
-    expect(after.data.map((session) => session.id)).toEqual(["ses_pinned"])
-    const previous = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 1, cursor: after.cursor.previous }), running)
-    expect(previous.data.map((session) => session.id)).toEqual(["ses_recent"])
+    expect(after).toMatchObject({ stale: true, data: [] })
+    const rebased = listPage(sessions, parseListQuery({ order: "active", parentID: null, limit: 2, around: "ses_root", before: 1 }), new Set(["ses_child", "ses_recent"]))
+    expect(rebased.data.map((session) => session.id)).toEqual(["ses_recent", "ses_root"])
     expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_root", time: 2, direction: "next" })).toString("base64url") })).toThrow()
   })
 

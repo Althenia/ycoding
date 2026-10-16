@@ -119,9 +119,13 @@ describe("SkillTool", () => {
           const permission = Layer.succeed(
             Permission.Service,
             Permission.Service.of({
+              deferPending: () => Effect.void,
               evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
               assert: (input) =>
-                Effect.sync(() => assertions.push(input)).pipe(
+                Effect.sync(() => {
+                  expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
+                  assertions.push(input)
+                }).pipe(
                   Effect.asVoid,
                   Effect.andThen(Effect.suspend(() => authorize(input))),
                 ),
@@ -216,7 +220,9 @@ describe("SkillTool", () => {
                 settle: unavailable,
                 background: unavailable,
                 teamView: unavailable,
+                notice: unavailable,
                 recover: unavailable(),
+                resolveRecovery: unavailable,
               },
               location: { agent: { list: unavailable } },
             }),

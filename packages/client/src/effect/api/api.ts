@@ -2009,39 +2009,110 @@ export interface UsageApi<E = never> {
   readonly report: UsageReportOperation<E>
 }
 
-export type Endpoint33_0Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.get"]>>["data"]
-export type RemoteGetOperation<E = never> = () => Effect.Effect<Endpoint33_0Output, E>
+type Endpoint33_0Request = Parameters<RawClient["server.incident"]["incident.report"]>[0]
+export type Endpoint33_0Input = {
+  readonly group: Endpoint33_0Request["query"]["group"]
+  readonly from?: Endpoint33_0Request["query"]["from"]
+  readonly to?: Endpoint33_0Request["query"]["to"]
+  readonly offset?: Endpoint33_0Request["query"]["offset"]
+  readonly limit?: Endpoint33_0Request["query"]["limit"]
+}
+export type Endpoint33_0Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.report"]>>["data"]
+export type IncidentReportOperation<E = never> = (input: Endpoint33_0Input) => Effect.Effect<Endpoint33_0Output, E>
 
-type Endpoint33_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
-export type Endpoint33_1Input = { readonly enabled: Endpoint33_1Request["payload"]["enabled"] }
-export type Endpoint33_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
-export type RemoteSetOperation<E = never> = (input: Endpoint33_1Input) => Effect.Effect<Endpoint33_1Output, E>
+type Endpoint33_1Request = Parameters<RawClient["server.incident"]["incident.recent"]>[0]
+export type Endpoint33_1Input = {
+  readonly provider: Endpoint33_1Request["query"]["provider"]
+  readonly model: Endpoint33_1Request["query"]["model"]
+  readonly agent?: Endpoint33_1Request["query"]["agent"]
+  readonly limit?: Endpoint33_1Request["query"]["limit"]
+}
+export type Endpoint33_1Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.recent"]>>["data"]
+export type IncidentRecentOperation<E = never> = (input: Endpoint33_1Input) => Effect.Effect<Endpoint33_1Output, E>
+
+type Endpoint33_2Request = Parameters<RawClient["server.incident"]["incident.guidance.get"]>[0]
+export type Endpoint33_2Input = {
+  readonly provider: Endpoint33_2Request["query"]["provider"]
+  readonly model: Endpoint33_2Request["query"]["model"]
+  readonly location?: Endpoint33_2Request["query"]["location"]
+}
+export type Endpoint33_2Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.guidance.get"]>>["data"]
+export type IncidentGuidanceGetOperation<E = never> = (input: Endpoint33_2Input) => Effect.Effect<Endpoint33_2Output, E>
+
+type Endpoint33_3Request = Parameters<RawClient["server.incident"]["incident.guidance.clear"]>[0]
+export type Endpoint33_3Input = {
+  readonly provider: Endpoint33_3Request["query"]["provider"]
+  readonly model: Endpoint33_3Request["query"]["model"]
+  readonly location?: Endpoint33_3Request["query"]["location"]
+}
+export type Endpoint33_3Output = EffectValue<
+  ReturnType<RawClient["server.incident"]["incident.guidance.clear"]>
+>["data"]
+export type IncidentGuidanceClearOperation<E = never> = (
+  input: Endpoint33_3Input,
+) => Effect.Effect<Endpoint33_3Output, E>
+
+export interface IncidentApi<E = never> {
+  readonly report: IncidentReportOperation<E>
+  readonly recent: IncidentRecentOperation<E>
+  readonly guidance: {
+    readonly get: IncidentGuidanceGetOperation<E>
+    readonly clear: IncidentGuidanceClearOperation<E>
+  }
+}
+
+export type Endpoint34_0Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.get"]>>["data"]
+export type RemoteGetOperation<E = never> = () => Effect.Effect<Endpoint34_0Output, E>
+
+type Endpoint34_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
+export type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
+export type Endpoint34_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
+export type RemoteSetOperation<E = never> = (input: Endpoint34_1Input) => Effect.Effect<Endpoint34_1Output, E>
 
 export interface RemoteApi<E = never> {
   readonly get: RemoteGetOperation<E>
   readonly set: RemoteSetOperation<E>
 }
 
-export type Endpoint34_0Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.get"]>>["data"]
-export type KeepAwakeGetOperation<E = never> = () => Effect.Effect<Endpoint34_0Output, E>
+export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.get"]>>["data"]
+export type KeepAwakeGetOperation<E = never> = () => Effect.Effect<Endpoint35_0Output, E>
 
-type Endpoint34_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
-export type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
-export type Endpoint34_1Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.set"]>>["data"]
-export type KeepAwakeSetOperation<E = never> = (input: Endpoint34_1Input) => Effect.Effect<Endpoint34_1Output, E>
+type Endpoint35_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
+export type Endpoint35_1Input = { readonly enabled: Endpoint35_1Request["payload"]["enabled"] }
+export type Endpoint35_1Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.set"]>>["data"]
+export type KeepAwakeSetOperation<E = never> = (input: Endpoint35_1Input) => Effect.Effect<Endpoint35_1Output, E>
 
 export interface KeepAwakeApi<E = never> {
   readonly get: KeepAwakeGetOperation<E>
   readonly set: KeepAwakeSetOperation<E>
 }
 
-type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
-export type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
-export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
-export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint35_0Input) => Effect.Effect<Endpoint35_0Output, E>
+type Endpoint36_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+export type Endpoint36_0Input = { readonly location?: Endpoint36_0Request["query"]["location"] }
+export type Endpoint36_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
+export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint36_0Input) => Effect.Effect<Endpoint36_0Output, E>
 
 export interface ConfigApi<E = never> {
   readonly diagnostics: ConfigDiagnosticsOperation<E>
+}
+
+type Endpoint37_0Request = Parameters<RawClient["server.review"]["session.review.list"]>[0]
+export type Endpoint37_0Input = { readonly sessionID: Endpoint37_0Request["params"]["sessionID"] }
+export type Endpoint37_0Output = EffectValue<ReturnType<RawClient["server.review"]["session.review.list"]>>["data"]
+export type ReviewListOperation<E = never> = (input: Endpoint37_0Input) => Effect.Effect<Endpoint37_0Output, E>
+
+type Endpoint37_1Request = Parameters<RawClient["server.review"]["session.review.decide"]>[0]
+export type Endpoint37_1Input = {
+  readonly sessionID: Endpoint37_1Request["params"]["sessionID"]
+  readonly itemID: Endpoint37_1Request["params"]["itemID"]
+  readonly decision: Endpoint37_1Request["payload"]["decision"]
+}
+export type Endpoint37_1Output = EffectValue<ReturnType<RawClient["server.review"]["session.review.decide"]>>
+export type ReviewDecideOperation<E = never> = (input: Endpoint37_1Input) => Effect.Effect<Endpoint37_1Output, E>
+
+export interface ReviewApi<E = never> {
+  readonly list: ReviewListOperation<E>
+  readonly decide: ReviewDecideOperation<E>
 }
 
 export interface AppApi<E = never> {
@@ -2078,7 +2149,9 @@ export interface AppApi<E = never> {
   readonly browser: BrowserApi<E>
   readonly isolatedBrowser: IsolatedBrowserApi<E>
   readonly usage: UsageApi<E>
+  readonly incident: IncidentApi<E>
   readonly remote: RemoteApi<E>
   readonly keepAwake: KeepAwakeApi<E>
   readonly config: ConfigApi<E>
+  readonly review: ReviewApi<E>
 }

@@ -16,6 +16,7 @@ import { MCP } from "../mcp"
 import { MCPSkills } from "../mcp/skills"
 import { Skill } from "../skill"
 import { Permission } from "../permission"
+import { Hash } from "../util/hash"
 import { SessionMessage } from "../session/message"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
@@ -144,12 +145,14 @@ const loadMcpSkill = (
     // Content-bound approval: the resource is the digest-derived identity of the manifest the user is
     // approving. A changed manifest yields a different resource and therefore a fresh decision.
     const resource = MCPSkills.identity(entry)
+    const manifest = MCPSkills.manifest(entry)
     yield* services.permission
       .assert({
         action: name,
         resources: [id, resource],
         save: [id, resource],
-        metadata: { server: entry.server, uri: entry.uri, manifest: entry.resources },
+        metadata: { server: entry.server, uri: entry.uri, manifest,
+          operationDigest: Hash.json({ action: "load", id, entry: { ...entry, resources: manifest } }) },
         sessionID: context.sessionID,
         agent: context.agent,
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
@@ -211,12 +214,14 @@ const readMcpResource = (
     const uri = MCPSkills.resolve(entry, reference)
     if (uri === undefined) return yield* resourceFailure(id, reference)
     const resource = MCPSkills.identity(entry)
+    const manifest = MCPSkills.manifest(entry)
     yield* services.permission
       .assert({
         action: name,
         resources: [id, resource],
         save: [id, resource],
-        metadata: { server: entry.server, uri: entry.uri, manifest: entry.resources },
+        metadata: { server: entry.server, uri, manifest,
+          operationDigest: Hash.json({ action: "resource", id, entry: { ...entry, resources: manifest }, uri }) },
         sessionID: context.sessionID,
         agent: context.agent,
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
@@ -296,7 +301,7 @@ export const Plugin = {
                       const realBase = yield* fs.realPath(base)
                       const realTarget = yield* fs.realPath(target)
                       if (!FSUtil.contains(realBase, realTarget)) return yield* resourceFailure(input.id, reference)
-                      const authorized = yield* ReadTool.authorize({ mutation, permission, reader }, realTarget, context)
+                      const authorized = yield* ReadTool.authorize({ mutation, permission, reader }, realTarget, context, Hash.json({ input, path: realTarget }))
                       if (authorized.type !== "file") return yield* resourceFailure(input.id, reference)
                       const content = yield* reader.read(authorized.absolute, authorized.target.resource)
                       return {
@@ -348,6 +353,7 @@ export const Plugin = {
                   yield* permission.assert({
                     action: name,
                     resources: [skill.id],
+                    metadata: { operationDigest: Hash.json({ input, location: skill.location, content: skill.content }) },
                     save: [skill.id],
                     sessionID: context.sessionID,
                     agent: context.agent,

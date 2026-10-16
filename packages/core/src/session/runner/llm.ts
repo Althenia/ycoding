@@ -52,10 +52,13 @@ import { SessionCompactionGate } from "./compaction-gate"
 import { SessionContinuation } from "./continuation"
 import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
+import { SessionModelFallback } from "./fallback"
+import type { Model } from "@ycoding-ai/schema/model"
 import { SessionUsage } from "../usage"
 import { SessionLiveState } from "../live-state"
 import { renderTeamObservation } from "../orchestration-view"
 import { SessionHistory } from "../history"
+import { ModelIncident } from "../../model-incident/index"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
 import { and, eq, inArray, sql } from "drizzle-orm"
 
@@ -74,6 +77,15 @@ type AttemptState = {
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
   skills?: ReadonlyArray<Skill.ID>
+  agent?: SessionContext.Selection["agent"]["id"]
+  route: Route
+}
+
+type Route = {
+  primary?: Model.Ref
+  model?: Model.Ref
+  attempting?: Model.Ref
+  tried: Model.Ref[]
 }
 
 type RecoveryMode = "normal" | "terminal-response" | "provider"
@@ -264,6 +276,18 @@ const layer = Layer.effect(
       onPromotion?: () => void,
     ) {
       const selected = yield* context.select(sessionID)
+      requestTrackerState.agent = selected.agent.id
+      const route = requestTrackerState.route
+      const selectedModel = selected.session.model
+      if (
+        route.primary !== undefined &&
+        selectedModel !== undefined &&
+        (route.primary.providerID !== selectedModel.providerID || route.primary.id !== selectedModel.id)
+      ) {
+        route.primary = undefined
+        route.model = undefined
+        route.tried.length = 0
+      }
       // Establish what the model knows before admitting what the user said, so
       // a blocked first step leaves pending inputs untouched.
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
@@ -319,22 +343,90 @@ const layer = Layer.effect(
       if (!promotion && requestTrackerState.skills?.length)
         yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
       yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
-      const initialContext = yield* context.load(selected)
+      const configEntries = yield* config.entries()
+      const fallbackFrom = (attempted: Model.Ref, error: SessionError.Error) =>
+        Effect.gen(function* () {
+          const primary = route.primary ?? attempted
+          const next =
+            recoveryMode === "terminal-response"
+              ? undefined
+              : SessionModelFallback.next(configEntries, primary, [...route.tried, attempted])
+          if (next === undefined) return undefined
+          route.primary = primary
+          return {
+            _tag: "RestartWithFallback",
+            step: currentStep,
+            promoted,
+            assistantMessageID: yield* startedAssistant(attempted),
+            from: attempted,
+            next,
+            error,
+          } as const
+        })
+      const startedAssistant = (attempted: Model.Ref) =>
+        Effect.gen(function* () {
+          if (assistantMessageID !== undefined) return assistantMessageID
+          const started = SessionMessage.ID.create()
+          const snapshot = yield* snapshots.capture()
+          yield* events.publish(SessionEvent.Step.Started, {
+            sessionID: selected.session.id,
+            assistantMessageID: started,
+            agent: selected.agent.id,
+            model: attempted,
+            snapshot,
+          })
+          return started
+        })
+      const loading = yield* context.load(selected, route.model === undefined ? undefined : { model: route.model }).pipe(
+        Effect.map((loaded) => ({ _tag: "Loaded", loaded }) as const),
+        Effect.catchIf(SessionModelFallback.unavailable, (error) =>
+          Effect.gen(function* () {
+            const attempted = route.model ?? selectedModel
+            if (attempted === undefined) return yield* error
+            return (yield* fallbackFrom(attempted, toSessionError(error))) ?? (yield* error)
+          }),
+        ),
+      )
+      if (loading._tag === "RestartWithFallback") return loading
+      const initialContext = loading.loaded
+      const attempting = initialContext.model.ref
+      const primary = (route.primary ??= selectedModel ?? attempting)
+      route.attempting = attempting
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
         modelRequests.prepare({
           context: loaded,
           step: currentStep,
           execution,
           disableContinuation:
-            fullRebase || requestTrackerState.continuationFallback === true || recoveryMode !== "normal",
+            fullRebase ||
+            requestTrackerState.continuationFallback === true ||
+            recoveryMode !== "normal" ||
+            route.model !== undefined,
           terminalResponseRecovery: recoveryMode === "terminal-response",
         })
       const initialPrepared = yield* prepare(initialContext)
       const limits = initialContext.model.model.route.defaults.limits
-      const compactionPolicy = SessionContextPressure.policy(yield* config.entries())
+      const compactionPolicy = SessionContextPressure.policy(configEntries)
       const lastProviderInput = SessionCacheDiagnostics.latestAssistant(initialContext.messages)?.tokens
+      const fallbackNext =
+        recoveryMode === "terminal-response"
+          ? undefined
+          : SessionModelFallback.next(configEntries, primary, [...route.tried, attempting])
+      if (
+        route.model !== undefined &&
+        fallbackNext !== undefined &&
+        limits?.context !== undefined &&
+        SessionCompactionGate.estimatedProviderInputTokens(initialPrepared.request) >=
+          limits.context - compactionPolicy.contextSafetyMarginTokens
+      ) {
+        const skipped = yield* fallbackFrom(attempting, {
+          type: "context.limit",
+          message: `The request exceeds the input budget of ${attempting.providerID}/${attempting.id}`,
+        })
+        if (skipped) return skipped
+      }
       const candidate =
-        limits?.context === undefined || limits.output === undefined
+        route.model !== undefined || limits?.context === undefined || limits.output === undefined
           ? { context: initialContext, prepared: initialPrepared, compacted: false }
           : yield* SessionCompactionGate.ensureWithinLimit({
               sessionID: initialContext.session.id,
@@ -569,7 +661,11 @@ const layer = Layer.effect(
                 method: "stream",
                 reason: classifyProviderFailure({ message: event.message }),
               })
-              if (SessionRunnerRetry.isRetryable(failure)) yield* failure
+              if (
+                SessionRunnerRetry.isRetryable(failure) ||
+                (fallbackNext !== undefined && !publisher.hasRetryEvidence() && SessionModelFallback.immediate(failure))
+              )
+                yield* failure
             }
             if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
               streamedOutput += event.text
@@ -768,6 +864,7 @@ const layer = Layer.effect(
           if (contextOverflowFailure && !publisher.hasRetryEvidence()) {
             if (
               requestTrackerState.overflowRecovery === undefined &&
+              route.model === undefined &&
               (limits?.context === undefined ||
                 limits.output === undefined ||
                 SessionCompactionGate.canReduce(
@@ -821,6 +918,18 @@ const layer = Layer.effect(
           if (overflowFailure && !overflowLimit) yield* publish(overflowFailure)
           if (llmFailure && !streamInterrupted && !publisher.hasProviderError()) {
             const error = toSessionError(llmFailure)
+            if (fallbackNext !== undefined && !publisher.hasRetryEvidence() && SessionModelFallback.immediate(llmFailure)) {
+              yield* serialized(publisher.flush())
+              return {
+                _tag: "RestartWithFallback",
+                step: currentStep,
+                promoted,
+                assistantMessageID: yield* publisher.startAssistant(),
+                from: attempting,
+                next: fallbackNext,
+                error,
+              } as const
+            }
             if (
               recoveryMode !== "terminal-response" &&
               SessionRunnerRetry.isRetryable(llmFailure) &&
@@ -882,8 +991,6 @@ const layer = Layer.effect(
             if (infraError !== undefined) yield* serialized(publisher.failAssistant(error))
           }
 
-          // Fail unresolved calls before the terminal step event. Local calls have joined, so
-          // these sweeps only close calls that could not produce a truthful settlement.
           if (providerFailed)
             yield* serialized(publisher.failUnsettledTools({ type: "aborted", message: "Tool execution interrupted" }))
           if (llmFailure && !providerFailed)
@@ -912,6 +1019,11 @@ const layer = Layer.effect(
                 message: "Provider did not return a tool result",
               }),
             )
+
+          if (stream._tag === "Success" && !providerFailed && publisher.stepSettlement() !== undefined) {
+            const incomplete = yield* serialized(publisher.failIncompleteToolInputs())
+            if (incomplete.some((name) => prepared.resolveToolCall(name).type === "settle")) needsContinuation = true
+          }
 
           const missingSettlement =
             stream._tag === "Success" && !providerFailed && publisher.stepSettlement() === undefined
@@ -1026,13 +1138,32 @@ const layer = Layer.effect(
       promotion: SessionPending.Delivery | undefined,
       step: number,
       execution: number,
-      recoveryMode: RecoveryMode = "normal",
+      recoveryMode: RecoveryMode,
+      route: Route,
     ) {
       let currentPromotion = promotion
       let currentStep = step
       let assistantMessageID: SessionMessage.ID | undefined
       let promoted = false
-      const requestTrackerState: AttemptState = { attempts: 0 }
+      const requestTrackerState: AttemptState = { attempts: 0, route }
+      const exhaustedFallback = (failure: SessionRunnerRetry.RetryableFailure) =>
+        Effect.gen(function* () {
+          if (route.primary === undefined || route.attempting === undefined) return undefined
+          const next = SessionModelFallback.next(yield* config.entries(), route.primary, [
+            ...route.tried,
+            route.attempting,
+          ])
+          if (next === undefined) return undefined
+          return {
+            _tag: "RestartWithFallback",
+            step: failure.step,
+            promoted: 0,
+            assistantMessageID: failure.assistantMessageID,
+            from: route.attempting,
+            next,
+            error: failure.error,
+          } as const
+        })
       const completeRetryFallback = () =>
         requestTrackerState.completeFallback?.() ?? requestTrackerState.current?.complete({
           assistantMessageID,
@@ -1044,6 +1175,23 @@ const layer = Layer.effect(
           cost: Money.USD.zero,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         }) ?? Effect.void
+      const settleOpenStep = (cause: Cause.Cause<unknown>) =>
+        Effect.gen(function* () {
+          const openAssistantID = assistantMessageID
+          if (openAssistantID === undefined) return
+          const found = yield* store.message(openAssistantID)
+          if (found?.message.type !== "assistant" || found.message.time.completed !== undefined) return
+          yield* completeRetryFallback()
+          yield* events.publish(SessionEvent.Step.Failed, {
+            sessionID,
+            assistantMessageID: openAssistantID,
+            error: Cause.hasInterrupts(cause)
+              ? { type: "aborted", message: "Step interrupted" }
+              : toSessionError(Option.getOrElse(Cause.findErrorOption(cause), () => Cause.squash(cause))),
+            contextBreakdown: requestTrackerState.contextBreakdown,
+          })
+        })
+      return yield* Effect.gen(function* () {
       while (true) {
         const attempt = yield* Effect.suspend(() =>
           (requestTrackerState.current?.retryResume() ?? Effect.void).pipe(Effect.andThen(attemptStep(
@@ -1072,33 +1220,10 @@ const layer = Layer.effect(
             Schedule.tap(() => requestTrackerState.current?.retryWait() ?? Effect.void),
           ), (error) => {
             if (!(error instanceof SessionRunnerRetry.RetryableFailure)) return Effect.fail(error)
-            return completeRetryFallback().pipe(
-              Effect.andThen(
-                events.publish(SessionEvent.Step.Failed, {
-                  sessionID,
-                  assistantMessageID: error.assistantMessageID,
-                  error: error.error,
-                  contextBreakdown: requestTrackerState.contextBreakdown,
-                }),
-              ),
-              Effect.andThen(Effect.fail(error.cause)),
+            return exhaustedFallback(error).pipe(
+              Effect.flatMap((rerouted) => (rerouted ? Effect.succeed(rerouted) : Effect.fail(error.cause))),
             )
           }),
-          // An interrupt during the backoff sleep is a Cause, not a typed error, so the retry
-          // fallback above never runs for it. The retryable attempt already published
-          // Step.Started for its assistant, and every started step owes exactly one terminal
-          // event; without this the interrupted step's assistant stays open forever and the
-          // header keeps reporting the session as working.
-          Effect.onInterrupt(() =>
-            assistantMessageID === undefined
-              ? Effect.void
-              : completeRetryFallback().pipe(Effect.andThen(events.publish(SessionEvent.Step.Failed, {
-                  sessionID,
-                  assistantMessageID,
-                  error: { type: "aborted", message: "Step interrupted" },
-                  contextBreakdown: requestTrackerState.contextBreakdown,
-                }))),
-          ),
         )
         if (attempt._tag === "Completed")
           return {
@@ -1114,10 +1239,62 @@ const layer = Layer.effect(
         }
         if (attempt._tag === "RestartAfterOverflow")
           assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
+        if (attempt._tag === "RestartWithFallback") {
+          assistantMessageID = attempt.assistantMessageID
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* requestTrackerState.current?.complete({
+                assistantMessageID: attempt.assistantMessageID,
+                connectionIdentityDigest: null,
+                invalidation: "retry-fallback",
+                continuation: "fallback",
+                cost: Money.USD.zero,
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              }) ?? Effect.void
+              const agent = requestTrackerState.agent
+              const time = yield* Clock.currentTimeMillis
+              yield* events.publish(
+                SessionEvent.Step.Rerouted,
+                {
+                  sessionID,
+                  assistantMessageID: attempt.assistantMessageID,
+                  model: attempt.next,
+                  error: attempt.error,
+                },
+                {
+                  commit: () =>
+                    agent === undefined
+                      ? Effect.void
+                      : ModelIncident.recordFallback(db, {
+                          sessionID,
+                          agent,
+                          from: attempt.from,
+                          to: attempt.next,
+                          category: attempt.error.type,
+                          time,
+                        }),
+                },
+              )
+              route.tried.push(attempt.from)
+              route.model = attempt.next
+              requestTrackerState.current = undefined
+              requestTrackerState.completeFallback = undefined
+              requestTrackerState.accountIdentityDigest = undefined
+              requestTrackerState.mixedAccountProvenance = undefined
+              requestTrackerState.attempts = 0
+            }),
+          )
+        }
         yield* Effect.yieldNow
         currentPromotion = undefined
         currentStep = attempt.step
       }
+      }).pipe(
+        // Every started Step owes exactly one terminal event. Attempts settle the Steps they
+        // can; this settles a carried Step that a failure, defect, or interruption left open,
+        // including interruption during retry backoff and fallback resolution or preparation.
+        Effect.onError((cause) => settleOpenStep(cause)),
+      )
     })
 
     // Execution lifecycle is published per busy period by SessionExecution, not per drain here.
@@ -1135,6 +1312,7 @@ const layer = Layer.effect(
       let promotion: SessionPending.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let shouldRun = input.force || hasSteer || hasQueue
       let terminalResponseRecoveryUsed = false
+      const route: Route = { tried: [] }
       while (shouldRun) {
         let needsContinuation = true
         let step = 1
@@ -1144,7 +1322,7 @@ const layer = Layer.effect(
         // a provider error suppresses it. Pending steers also continue the loop so
         // interjections are answered before the session goes idle.
         while (needsContinuation) {
-          const result = yield* runStep(input.sessionID, promotion, step, execution, recoveryMode)
+          const result = yield* runStep(input.sessionID, promotion, step, execution, recoveryMode, route)
           // Steer/queue promotion inside runStep has already made the pending input a visible
           // user message by this point, so the first-user-message check below is reliable.
           if (!titleAttempted.has(input.sessionID)) {

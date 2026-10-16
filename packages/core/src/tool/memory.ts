@@ -8,6 +8,7 @@ import { MemoryFormat } from "../memory/format"
 import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 const Limit = Schema.Int.check(Schema.isGreaterThan(0))
 const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
@@ -139,7 +140,7 @@ export const Plugin = {
                   action: mutating ? "memory_write" : "memory_read",
                   resources: [status.root],
                   save: ["*"],
-                  metadata: { operation: input.action, scope: status.scope },
+                  metadata: { operation: input.action, scope: status.scope, operationDigest: Hash.json(input) },
                   sessionID: context.sessionID,
                   agent: context.agent,
                   source,
@@ -167,18 +168,19 @@ export const Plugin = {
                     action: "memory_read",
                     resources: [status.knowledgeRoot],
                     save: ["*"],
-                    metadata: { operation: "graph", scope: "knowledge" },
+                    metadata: { operation: "graph", scope: "knowledge", operationDigest: Hash.json(input) },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
                   })
-                const reservation = yield* guardrail.assert({
+                const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                   sessionID: context.sessionID,
                   action: "file_mutation",
                   resources: [status.root],
                   metadata: {
                     operation: removalActions.has(input.action) ? "remove" : "write",
                     memoryAction: input.action,
+                    operationDigest: Hash.json(input),
                   },
                 })
                 const guarded = (effect: Effect.Effect<unknown, unknown>) =>
@@ -190,14 +192,16 @@ export const Plugin = {
                 if (input.action === "vacuum") return yield* guarded(memory.vacuum(input, status.root))
                 return yield* guarded(memory.graph({ scope: input.scope }, status.root))
               }).pipe(
-                Effect.mapError((error) =>
-                  new ToolFailure({
-                    message:
+                Effect.mapError((error) => {
+                  const review = SessionGuardrail.reviewMessage(error)
+                  return new ToolFailure({
+                    message: review ?? (
                       error instanceof Memory.MemoryError || error instanceof ToolFailure
                         ? error.message
-                        : "Workspace memory operation was denied or failed.",
-                  }),
-                ),
+                        : "Workspace memory operation was denied or failed."),
+                    ...(review ? { error } : {}),
+                  })
+                }),
               ),
           }),
           { codemode: false },

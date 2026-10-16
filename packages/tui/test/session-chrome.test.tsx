@@ -69,6 +69,21 @@ describe("header truncation ladder", () => {
     expect(headerSegments({ width: 160, agent: "Build" }).map((segment) => segment.key)).toEqual(["agent"])
   })
 
+  test("drops location metadata before clipping an inactive model program", () => {
+    const segments = headerSegments({
+      width: 120, availableWidth: 76, path: "/repo/daybreak-command", branch: "main", agent: "Build",
+      profile: "Personal", model: "openai/GPT 5.6 Terra", daybreak: { program: "daybreak_blue", active: false }, variant: "high",
+    })
+    expect(segments.map((segment) => segment.key)).toEqual(["agent", "profile", "model", "daybreak", "variant"])
+    expect(segments.map((segment) => segment.label).join(" · ")).toContain("Daybreak Blue (inactive)")
+    expect(segments.map((segment) => segment.label).join(" · ").length).toBeLessThanOrEqual(76)
+  })
+
+  test("keeps the model readable when narrow status chrome consumes the identity budget", () => {
+    const segments = headerSegments({ width: 80, availableWidth: 26, agent: "General", model: "anthropic/Claude Sonnet 5", variant: "high" })
+    expect(segments).toEqual([{ key: "model", label: "anthropic/Claude Sonnet 5" }])
+  })
+
   test("places the active profile immediately after the agent", () => {
     expect(headerSegments({ ...identity, width: 160, profile: "Work" }).map((segment) => segment.key)).toEqual([
       "path",
@@ -136,8 +151,8 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO 2 · auto-approve · ready"],
-    [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
+    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO 2 · ready"],
+    [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Manual · goal · cooking 4.1s"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -172,13 +187,13 @@ describe("header status", () => {
         undefined,
         10_000,
       ),
-    ).toBe("Goal · autonomous · 1 failed · retry 2 · in 5s")
+    ).toBe("Manual · goal · 1 failed · retry 2 · in 5s")
   })
 
   test("keeps active autonomy and retrying visible together", () => {
     expect(
       headerStatusLabel({ type: "autonomy", yolo: 0, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
-    ).toBe("Goal · autonomous · retrying · attempt 2")
+    ).toBe("Manual · goal · retrying · attempt 2")
   })
 })
 
@@ -402,8 +417,7 @@ describe("autonomy mode chips", () => {
   test("shows both modes off for a normal session", () => {
     expect(modeChips({ autonomy: { mode: "normal", yolo: 0 } })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
-      { key: "yolo", label: "YOLO off", tone: "off" },
-      { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
+      { key: "yolo", label: "Manual", tone: "off" },
     ])
   })
 
@@ -510,8 +524,8 @@ describe("header rendering", () => {
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO 2 · auto-approve · ready", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
+      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO 2 · ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Manual · goal · ready", theme.text.feedback.success.default],
       [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
       [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
     ]
@@ -561,23 +575,18 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders sleep and guardrail decision beside YOLO in the actual header", async () => {
+  test("renders active sleep beside YOLO at narrow and wide header widths", async () => {
     for (const width of [80, 200]) {
-      const app = await renderHeader(width, {
-        type: "autonomy",
-        yolo: 1,
-        goalActive: false,
-        guardrailDecision: true,
-        asleep: true,
-        state: { type: "ready" },
-      })
-      try {
-        expect(app.captureCharFrame()).toContain("YOLO 1")
-        expect(app.captureCharFrame()).toContain("guardrail decision")
-        expect(app.captureCharFrame()).toContain("asleep")
-        expect(app.captureCharFrame()).not.toContain("machine may sleep")
-      } finally {
-        app.renderer.destroy()
+      for (const asleep of [false, true]) {
+        const app = await renderHeader(width, {
+          type: "autonomy", yolo: 1, goalActive: false, asleep, state: { type: "ready" },
+        })
+        try {
+          expect(app.captureCharFrame()).toContain(`YOLO 1${asleep ? " · asleep" : ""} · ready`)
+          expect(app.captureCharFrame()).not.toContain("machine may sleep")
+        } finally {
+          app.renderer.destroy()
+        }
       }
     }
   })
@@ -588,7 +597,7 @@ describe("header rendering", () => {
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
     // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("YOLO 2 \u00b7 auto-approve")
+    expect(frame).toContain("YOLO 2 · ready")
     expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
       (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
@@ -775,7 +784,7 @@ describe("header rendering", () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("YOLO 2 · auto-approve · cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("YOLO 2 · cooking 4.1s"))
 
     expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())

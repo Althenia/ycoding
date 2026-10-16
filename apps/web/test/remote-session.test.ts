@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { isRemoteLatencySample, type RemoteNoticeFrame } from "@ycoding-ai/remote"
-import { canReplyToRequest, hasCompactionCheckpoint, sessionStatusLabel, visibleTranscriptMessages } from "../src/remote/projection"
+import { canReplyToRequest, hasCompactionCheckpoint, sessionExecutionLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
@@ -821,7 +821,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessionStatus !== undefined)
       expect(test.store.state().view?.status).toBe("idle")
       expect(test.store.state().view?.executionStarted).toBeUndefined()
-      expect(sessionStatusLabel(test.store.state().view!, 2_000)).toBe("ready")
+      expect(sessionExecutionLabel(test.store.state().view!, 2_000)).toBe("ready")
     } finally { release(); await test.stop() }
   })
 
@@ -891,11 +891,11 @@ describe("remote store integration", () => {
         test.store.state().sessionStatus?.running.size === 0)
       expect(test.store.state().view?.status).toBe("idle")
       expect(test.store.state().view?.executionStarted).toBeUndefined()
-      expect(sessionStatusLabel(test.store.state().view!, now)).toBe("ready")
+      expect(sessionExecutionLabel(test.store.state().view!, now)).toBe("ready")
       test.relay.pushEvent("ses_a", { type: "session.execution.started", durable: { aggregateID: "ses_a", seq: 4, version: 1 }, data: { sessionID: "ses_a" } })
       await test.flush()
       expect(test.store.state().view?.executionStarted).toBe(11_000)
-      expect(sessionStatusLabel(test.store.state().view!, 12_000)).toBe("cooking · 1.0s")
+      expect(sessionExecutionLabel(test.store.state().view!, 12_000)).toBe("cooking · 1.0s")
     } finally { await test.stop() }
   })
 
@@ -2252,6 +2252,168 @@ describe("remote store integration", () => {
 
       expect(test.store.state().sessions.map((session) => session.title)).toEqual(["Newer list"])
     } finally {
+      await test.stop()
+    }
+  })
+
+  test("sleep and wake set the Session's autonomy and follow Session-state notices", async () => {
+    let autonomy: Record<string, unknown> = { mode: "normal", yolo: 0 }
+    const test = await harness({
+      handler: (request) => {
+        if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomy } }
+        if (request.operation !== "session.autonomy.set") return "default" as const
+        const input = request.input ?? {}
+        if (input.sleep === true) autonomy = { ...autonomy, sleep: {} }
+        if (input.sleep === false) autonomy = Object.fromEntries(Object.entries(autonomy).filter(([key]) => key !== "sleep"))
+        return { ok: true, value: { data: autonomy } }
+      },
+    })
+    const sets = () => test.relay.requests.filter((request) => request.operation === "session.autonomy.set").map((request) => ({ sessionID: request.sessionID, input: request.input }))
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+
+      expect(await test.store.setSleep(true)).toBe(true)
+      expect(test.store.state().view?.autonomy?.sleep).toEqual({})
+      expect(await test.store.setSleep(false)).toBe(true)
+      expect(test.store.state().view?.autonomy?.sleep).toBeUndefined()
+      expect(sets()).toEqual([
+        { sessionID: "ses_a", input: { sleep: true } },
+        { sessionID: "ses_a", input: { sleep: false } },
+      ])
+      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+
+      autonomy = { ...autonomy, sleep: {} }
+      const reads = test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length
+      test.relay.pushEvent("ses_a", { id: "evt_team", type: "session.context.observed", created: 30, data: { sessionID: "ses_a", source: "team-view", text: "{}" } })
+      test.relay.pushEvent("ses_a", { id: "evt_sleep", type: "session.context.observed", created: 31, data: { sessionID: "ses_a", source: "session-state", text: "The user is asleep and cannot interact." } })
+      await test.runUntil(() => test.store.state().view?.autonomy?.sleep !== undefined)
+      expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length).toBe(reads + 1)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("rehydrates graded guardrail outcomes over the relay and reconciles live settlements without duplication", async () => {
+    const grades = [{ choice: "approve_all", confidence: 0.934567, evidence: "Targets verified." }]
+    const decision = { sessionID: "ses_a", requestID: "grq_graded", created: 1, reply: "always" as const, choice: "approve_all", confidence: 0.934567, grades }
+    const test = await harness({ handler: (request) => request.operation === "session.guardrail.status"
+      ? { ok: true, value: { data: { decisions: [decision, { ...decision, sessionID: "ses_child", requestID: "grq_child" }] } } }
+      : "default" as const })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.guardrailDecisions?.length === 1)
+      expect(test.store.state().view?.guardrailDecisions?.[0]).toEqual(decision)
+      test.relay.pushEvent("ses_a", { type: "session.guardrail.decided", created: 1, data: { ...decision, reviewSessionID: "ses_a" } })
+      test.relay.pushEvent("ses_a", { type: "session.guardrail.decided", created: 2, data: { ...decision, sessionID: "ses_a", reviewSessionID: "ses_a", requestID: "grq_new" } })
+      await test.runUntil(() => test.store.state().view?.guardrailDecisions?.length === 2)
+      expect(test.store.state().view?.guardrailDecisions?.map((item) => item.requestID)).toEqual(["grq_graded", "grq_new"])
+      expect(test.store.state().view?.guardrailDecisions?.every((item) => item.grades?.[0]?.evidence === "Targets verified.")).toBe(true)
+    } finally { await test.stop() }
+  })
+
+  test("a restart recovery accepts only a human Continue or Stop, sent once, never dismissed and never to another kind", async () => {
+    let items: Record<string, unknown>[] = [{ itemID: "rvw_recovery", sessionID: "ses_child", rootSessionID: "ses_a", sessionTitle: "Child", created: 1, reason: "restart", kind: "recovery",
+      origin: { messageID: "msg_1", callID: "call_1" }, child: { agent: "general", description: "Prepare" },
+      payload: { type: "recovery", tools: [{ messageID: "msg_1", callID: "call_1", name: "shell" }] } }]
+    let releaseDecide: (() => void) | undefined
+    const test = await harness({
+      handler: async (request) => {
+        if (request.operation === "session.review.list") return { ok: true, value: { data: items } }
+        if (request.operation === "session.review.decide") {
+          await new Promise<void>((resolve) => { releaseDecide = resolve })
+          items = items.filter((item) => item.itemID !== request.input?.itemID)
+          return { ok: true, value: null }
+        }
+        return "default" as const
+      },
+    })
+    const count = (operation: string) => test.relay.requests.filter((request) => request.operation === operation).length
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.review?.items.length === 1)
+      expect(test.store.state().view?.review?.items[0]).toMatchObject({ kind: "recovery", reason: "restart", tools: [{ messageID: "msg_1", callID: "call_1", name: "shell" }] })
+      expect(await test.store.decideReview("rvw_recovery", { kind: "guardrail", reply: "once" })).toBe(false)
+      expect(await test.store.decideReview("rvw_recovery", { kind: "question", dismissed: true })).toBe(false)
+      expect(count("session.review.decide")).toBe(0)
+
+      const deciding = test.store.decideReview("rvw_recovery", { kind: "recovery", choice: "stop" })
+      await test.runUntil(() => count("session.review.decide") === 1)
+      expect(await test.store.decideReview("rvw_recovery", { kind: "recovery", choice: "continue" })).toBe(false)
+      expect(test.store.state().mutations.find((mutation) => mutation.id === "review_rvw_recovery")?.state).toBe("sending")
+      releaseDecide?.()
+      expect(await deciding).toBe(true)
+      await test.runUntil(() => test.store.state().view?.review?.items.length === 0)
+      expect(test.relay.requests.find((request) => request.operation === "session.review.decide")).toMatchObject({ sessionID: "ses_a", input: { itemID: "rvw_recovery", decision: { kind: "recovery", choice: "stop" } } })
+      expect(count("session.prompt")).toBe(0)
+    } finally {
+      releaseDecide?.()
+      await test.stop()
+    }
+  })
+
+  test("lists the family's review items on selection, re-lists after review events, and decides each item once without waking", async () => {
+    let items: Record<string, unknown>[] = [
+      { itemID: "rvw_hard", sessionID: "ses_a", rootSessionID: "ses_a", sessionTitle: "A", created: 1, reason: "escalated", kind: "guardrail", origin: { requestID: "grq_1" },
+        payload: { type: "guardrail", action: "shell", resources: ["rm -rf x"], ruleIDs: ["r"], reason: "delete", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
+    ]
+    let releaseDecide: (() => void) | undefined
+    const test = await harness({
+      handler: async (request) => {
+        if (request.operation === "session.review.list") return { ok: true, value: { data: items } }
+        if (request.operation === "session.review.decide") {
+          await new Promise<void>((resolve) => { releaseDecide = resolve })
+          items = items.filter((item) => item.itemID !== request.input?.itemID)
+          return { ok: true, value: null }
+        }
+        return "default" as const
+      },
+    })
+    const count = (operation: string) => test.relay.requests.filter((request) => request.operation === operation).length
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.review?.items.length === 1)
+      expect(await test.store.decideReview("rvw_hard", { kind: "question", dismissed: true })).toBe(false)
+
+      const deciding = test.store.decideReview("rvw_hard", { kind: "guardrail", reply: "reject" })
+      await test.runUntil(() => count("session.review.decide") === 1)
+      expect(await test.store.decideReview("rvw_hard", { kind: "guardrail", reply: "reject" })).toBe(false)
+      expect(test.store.state().mutations.find((mutation) => mutation.id === "review_rvw_hard")?.state).toBe("sending")
+      releaseDecide?.()
+      expect(await deciding).toBe(true)
+      await test.runUntil(() => test.store.state().view?.review?.items.length === 0)
+      expect(test.relay.requests.find((request) => request.operation === "session.review.decide")).toMatchObject({ sessionID: "ses_a", input: { itemID: "rvw_hard", decision: { kind: "guardrail", reply: "reject" } } })
+      expect(count("session.prompt")).toBe(0)
+      expect(count("session.autonomy.set")).toBe(0)
+
+      items = [{ itemID: "rvw_child", sessionID: "ses_child", rootSessionID: "ses_a", sessionTitle: "Child", created: 2, reason: "free_text", kind: "subagent_question",
+        origin: { questionID: "qst_1" }, child: { agent: "general", description: "Prepare" }, payload: { type: "subagent_question", text: "Which?" } }]
+      const lists = count("session.review.list")
+      test.relay.pushEvent("ses_a", { id: "evt_step", type: "session.step.ended", created: 40, data: { sessionID: "ses_a" } })
+      test.relay.pushEvent("ses_a", { id: "evt_task", type: "session.task.updated", created: 41, data: { sessionID: "ses_a" } })
+      test.relay.pushEvent("ses_a", { id: "evt_deferred", type: "guardrail.deferred", created: 42, data: { rootSessionID: "ses_a", sessionID: "ses_a", requestID: "grq_2", itemID: "rvw_2" } })
+      await test.runUntil(() => test.store.state().view?.review?.items[0]?.itemID === "rvw_child")
+      expect(count("session.review.list") - lists).toBeLessThanOrEqual(2)
+
+      items = []
+      test.relay.pushSessions([])
+      await test.runUntil(() => test.store.state().view?.review?.items.length === 0)
+
+      const beforeSwitch = count("session.review.list")
+      await test.store.selectSession("ses_b")
+      expect(test.store.state().view?.id).toBe("ses_b")
+      await test.runUntil(() => count("session.review.list") > beforeSwitch && test.store.state().view?.review !== undefined)
+      expect(test.relay.requests.filter((request) => request.operation === "session.review.list").at(-1)?.sessionID).toBe("ses_b")
+    } finally {
+      releaseDecide?.()
       await test.stop()
     }
   })

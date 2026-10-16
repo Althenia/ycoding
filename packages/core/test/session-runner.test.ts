@@ -11,6 +11,9 @@ import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
   RateLimitReason,
+  AuthenticationReason,
+  ContentPolicyReason,
+  QuotaExceededReason,
   type LLMClientShape,
   type LLMRequest,
 } from "@ycoding-ai/ai"
@@ -112,6 +115,9 @@ import { Skill } from "@ycoding-ai/core/skill"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { CatalogModel } from "@ycoding-ai/core/model"
+import { AppProcess } from "@ycoding-ai/core/process"
+import { ModelGuidanceInstructions } from "@ycoding-ai/core/model-incident/instructions"
+import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
 import { Location } from "@ycoding-ai/core/location"
 import { Provider } from "@ycoding-ai/core/provider"
 import {
@@ -465,6 +471,7 @@ const permissionFail = Tool.make({
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.sync(() => skillAccess),
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
@@ -546,16 +553,30 @@ let modelResolveHook = Effect.void
 let currentModel = model
 let currentCost: CatalogModel.Info["cost"] = []
 let currentAccountIdentityDigest = "a".repeat(64)
+const fallbackModels = new Map<string, { model: Model; cost: CatalogModel.Info["cost"]; digest: string }>()
+const unavailableModels = new Set<string>()
+const unavailableProfiles = new Set<string>()
+const profileDigests = new Map<string, string>()
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
-    Effect.as(
-      SessionRunnerModel.resolved(
-        session.model?.id === "replacement" ? replacementModel : currentModel,
-        session.model?.variant,
-        currentCost,
-        currentAccountIdentityDigest,
-      ),
-    ),
+    Effect.andThen(Effect.gen(function* () {
+      const selected = session.model
+      if (selected?.profile !== undefined && unavailableProfiles.has(selected.profile))
+        return yield* Effect.fail(
+          new SessionRunnerModel.ProfileUnavailableError({ providerID: selected.providerID, profile: selected.profile }),
+        )
+      if (selected && unavailableModels.has(selected.id))
+        return yield* Effect.fail(
+          new SessionRunnerModel.ModelUnavailableError({ providerID: selected.providerID, modelID: selected.id }),
+        )
+      const fallback = selected ? fallbackModels.get(selected.id) : undefined
+      return SessionRunnerModel.resolved(
+          selected?.id === "replacement" ? replacementModel : (fallback?.model ?? currentModel),
+          selected?.variant,
+          fallback?.cost ?? currentCost,
+          fallback?.digest ?? (selected?.profile ? profileDigests.get(selected.profile) : undefined) ?? currentAccountIdentityDigest,
+      )
+    })),
   ),
 )
 const systemContextKey = Instructions.Key.make("test/context")
@@ -639,6 +660,7 @@ const projects = Layer.mock(Project.Service, {
 let efficiencyConfig: ConfigEfficiency.Info | undefined
 let imageAnalyzerConfig: ConfigImageAnalyzer.Info | undefined
 let capabilitiesConfig: ConfigCapabilities.Info | undefined
+let modelFallbacks: Config.Info["model_fallbacks"]
 let catalogModel: CatalogModel.Info | undefined
 let compactionWakeHook = Effect.void
 let compactionSummary = false
@@ -660,6 +682,7 @@ const config = Layer.succeed(
             ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }),
             ...(imageAnalyzerConfig === undefined ? {} : { image_analyzer: imageAnalyzerConfig }),
             ...(capabilitiesConfig === undefined ? {} : { capabilities: capabilitiesConfig }),
+            ...(modelFallbacks === undefined ? {} : { model_fallbacks: modelFallbacks }),
           }),
         }),
       ]),
@@ -807,6 +830,7 @@ const pluginSupervisor = Layer.succeed(
     flush: Effect.suspend(() => pluginFlushHook),
   }),
 )
+let defaultSelectionRef: CatalogModel.Ref | undefined
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {
     get: () => Effect.succeed(undefined),
@@ -814,7 +838,7 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     available: () => Effect.succeed([]),
   },
   model: {
-    defaultSelection: () => Effect.succeed(undefined),
+    defaultSelection: () => Effect.sync(() => defaultSelectionRef),
     forConnection: (model) => Effect.succeed(model),
     get: (providerID, modelID) =>
       Effect.succeed(catalogModel?.providerID === providerID && catalogModel.id === modelID ? catalogModel : undefined),
@@ -824,8 +848,21 @@ const promptCatalog = Layer.mock(Catalog.Service, {
     small: () => Effect.succeed(undefined),
   },
 })
+let snapshotCapture: Snapshot.ID | undefined
+const snapshotLayer = Layer.succeed(
+  Snapshot.Service,
+  Snapshot.Service.of({
+    capture: () => Effect.sync(() => snapshotCapture),
+    files: () => Effect.succeed([]),
+    fingerprints: (input) => Effect.succeed(input.paths.map((path) => ({ path, digest: "missing" }))),
+    diff: () => Effect.succeed([]),
+    preview: () => Effect.succeed([]),
+    restore: () => Effect.void,
+    checkout: () => Effect.void,
+  }),
+)
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
-  [Snapshot.node, Snapshot.noopLayer],
+  [Snapshot.node, snapshotLayer],
   [LayerNodePlatform.llmClient, client],
   [Catalog.node, promptCatalog],
   [SessionRunnerModel.node, models],
@@ -914,7 +951,7 @@ const it = testEffect(
       [Location.node, Location.boundNode({ directory: runnerDirectory })],
       [SkillInstructions.node, skillInstructions],
       [ReferenceInstructions.node, referenceInstructions],
-      [Snapshot.node, Snapshot.noopLayer],
+      [Snapshot.node, snapshotLayer],
       [SessionExecution.node, execution],
       [Config.node, config],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -972,8 +1009,15 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   pluginFlushHook = Effect.void
   currentModel = model
+  defaultSelectionRef = undefined
   currentCost = []
   currentAccountIdentityDigest = "a".repeat(64)
+  fallbackModels.clear()
+  unavailableModels.clear()
+  unavailableProfiles.clear()
+  snapshotCapture = undefined
+  profileDigests.clear()
+  modelFallbacks = undefined
   efficiencyConfig = undefined
   imageAnalyzerConfig = undefined
   catalogModel = undefined
@@ -1036,6 +1080,7 @@ const realExecution = Effect.gen(function* () {
       Layer.provide(Layer.succeed(Job.Service, jobs)),
       Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compaction)),
       Layer.provide(Layer.succeed(LocationServiceMap.Service, locations)),
+      Layer.provide(LayerNode.compile(AppProcess.node)),
     ),
     scope,
   )
@@ -1195,7 +1240,9 @@ type FragmentExpectedContent =
   | {
       readonly type: "tool"
       readonly id: string
-      readonly state: { readonly status: "streaming"; readonly input: string }
+      readonly state:
+        | { readonly status: "streaming"; readonly input: string }
+        | { readonly status: "error"; readonly error: { readonly type: string } }
     }
 
 type FragmentFixture = {
@@ -1277,7 +1324,7 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
     const events = yield* EventRuntime.Service
     const live = yield* events.subscribe(fixture.delta).pipe(Stream.take(32), Stream.runCollect, Effect.forkScoped)
     yield* Effect.yieldNow
-    response =
+    const completed =
       kind === "text"
         ? fixture.completeEvents
         : [
@@ -1288,6 +1335,8 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
             LLMEvent.stepFinish({ index: 0, reason: "stop" }),
             LLMEvent.finish({ reason: "stop" }),
           ]
+    if (kind === "tool input") responses = [completed, reply.text("Recovered", "text-tool-input-recovery")]
+    else response = completed
 
     yield* session.resume(sessionID)
 
@@ -1300,19 +1349,23 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
       .pipe(Effect.orDie)
     expect(Array.from(yield* Fiber.join(live))).toHaveLength(32)
     expect(deltas).toHaveLength(0)
+    const expectedContent: FragmentExpectedContent =
+      fixture.expectedContent.type === "tool"
+        ? { type: "tool", id: fixture.expectedContent.id, state: { status: "error", error: { type: "tool.input-json" } } }
+        : fixture.expectedContent
     expect(
       requireAssistant(yield* session.context(sessionID)).content.find(
-        (content) => content.type === fixture.expectedContent.type,
+        (content) => content.type === expectedContent.type,
       ),
-    ).toMatchObject(fixture.expectedContent)
+    ).toMatchObject(expectedContent)
 
     yield* replaySessionProjection(sessionID)
 
     expect(
       requireAssistant(yield* session.context(sessionID)).content.find(
-        (content) => content.type === fixture.expectedContent.type,
+        (content) => content.type === expectedContent.type,
       ),
-    ).toMatchObject(fixture.expectedContent)
+    ).toMatchObject(expectedContent)
   })
 
 const verifyPartialFlushOnFailure = (kind: FragmentKind) =>
@@ -10325,6 +10378,169 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  const incompleteToolInputMessage = "Tool call arguments were incomplete when the provider ended the step and were not executed. Retry the call."
+  const incompleteToolInput = (name: string, deltas: readonly string[], id = "call-incomplete") => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.toolInputStart({ id, name }),
+    ...deltas.map((text) => LLMEvent.toolInputDelta({ id, name, text })),
+    LLMEvent.stepFinish({ index: 0, reason: "length" }),
+    LLMEvent.finish({ reason: "length" }),
+  ]
+  const toolResultMessages = (request: LLMRequest | undefined) =>
+    request?.messages.flatMap((message) =>
+      message.content.flatMap((part) => (message.role === "tool" && part.type === "tool-result" ? [part] : [])),
+    ) ?? []
+
+  for (const input of [
+    { name: "empty", deltas: [] },
+    { name: "partial", deltas: ['{"text":"par'] },
+  ])
+    it.effect(`fails ${input.name} local tool input left open by a length-limited step and continues`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Recover incomplete tool input")
+        responses = [incompleteToolInput("echo", input.deltas), reply.text("Recovered", "text-incomplete-recovery")]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(2)
+        expect(executions).toEqual([])
+        const types = yield* recordedEventTypes(sessionID)
+        const firstStep = types.slice(0, types.indexOf("session.step.ended.1") + 1)
+        expect(
+          firstStep.filter((type) => type === "session.tool.input.ended.1" || type === "session.tool.failed.1"),
+        ).toEqual(["session.tool.input.ended.1", "session.tool.failed.1"])
+        expect(types.filter((type) => type === "session.tool.failed.1")).toHaveLength(1)
+        expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(0)
+        expect(requests[1]?.tools.map((tool) => tool.name)).toContain("echo")
+        expect(requests[1]?.toolChoice).toBeUndefined()
+        expect(requests[1]?.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "assistant",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "tool-call", id: "call-incomplete", name: "echo", input: {} }),
+              ]),
+            }),
+          ]),
+        )
+        expect(toolResultMessages(requests[1])).toEqual([
+          expect.objectContaining({
+            id: "call-incomplete",
+            result: expect.objectContaining({
+              type: "error",
+              value: expect.objectContaining({
+                error: expect.objectContaining({ message: incompleteToolInputMessage }),
+              }),
+            }),
+          }),
+        ])
+        const failed = (yield* session.context(sessionID)).find(
+          (message): message is SessionMessage.Assistant =>
+            message.type === "assistant" && message.content.some((item) => item.type === "tool"),
+        )
+        expect(failed).toMatchObject({
+          content: [
+            {
+              type: "tool",
+              id: "call-incomplete",
+              executed: false,
+              state: { status: "error", error: { type: "tool.input-json", message: incompleteToolInputMessage } },
+            },
+          ],
+        })
+        if (!failed) throw new Error("Incomplete tool assistant missing")
+        expect(failed.error).toBeUndefined()
+        expect((yield* recordedStepSettlementEvents(sessionID, failed.id)).map((event) => event.type)).toEqual([
+          "session.step.started.1",
+          "session.tool.failed.1",
+          "session.step.ended.1",
+        ])
+      }),
+    )
+
+  it.effect("runs a complete sibling call and fails the incomplete one in the same step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Run complete call beside incomplete input")
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-valid", name: "echo", input: { text: "valid" } }),
+          LLMEvent.toolInputStart({ id: "call-incomplete", name: "echo" }),
+          LLMEvent.toolInputDelta({ id: "call-incomplete", name: "echo", text: '{"text":"par' }),
+          LLMEvent.stepFinish({ index: 0, reason: "length" }),
+          LLMEvent.finish({ reason: "length" }),
+        ],
+        reply.text("Recovered", "text-sibling-recovery"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(executions).toEqual(["valid"])
+      expect(toolResultMessages(requests[1]).map((result) => [result.id, result.result.type === "error"])).toEqual([
+        ["call-valid", false],
+        ["call-incomplete", true],
+      ])
+    }),
+  )
+
+  it.effect("fails incomplete input once tools are disabled by the step limit and recovers with text only", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.steps = 2
+        }),
+      )
+      yield* admit(session, "Stop incomplete tool input at the step limit")
+      responses = [
+        incompleteToolInput("echo", ['{"text":"par'], "call-first"),
+        incompleteToolInput("echo", ['{"text":"par'], "call-at-limit"),
+        reply.text("Text recovery", "text-limit-recovery"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual([])
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
+      expect(toolResultMessages(requests[2]).map((result) => result.id)).toEqual(["call-first", "call-at-limit"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.tool.failed.1")).toHaveLength(2)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(0)
+    }),
+  )
+
+  it.effect("fails an open local tool input once when the stream fails", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Fail open tool input with the stream")
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolInputStart({ id: "call-incomplete", name: "echo" }),
+          LLMEvent.toolInputDelta({ id: "call-incomplete", name: "echo", text: '{"text":"par' }),
+        ]),
+        Stream.fail(invalidRequest()),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(LLMError)
+
+      expect(requests).toHaveLength(1)
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.tool.failed.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1")).toHaveLength(0)
+      expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject([
+        { type: "tool", id: "call-incomplete", state: { status: "error", error: { type: "provider.invalid-request" } } },
+      ])
+    }),
+  )
+
   it.effect("does not continue automatically after a provider error follows a local tool call", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -10752,6 +10968,730 @@ describe("SessionRunnerLLM", () => {
         { finish: "stop", content: [{ type: "text", text: "Selected boundary checked and verified." }] },
       ])
       expect([...(yield* execution.active)]).toEqual([])
+    }),
+  )
+})
+
+const backupModel = Model.make({
+  id: "backup",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: testLimits }),
+})
+const narrowModel = Model.make({
+  id: "narrow",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: { context: 3_500, output: 100 } }),
+})
+const backupCost: CatalogModel.Info["cost"] = [
+  {
+    input: Money.USDPerMillionTokens.make(1),
+    output: Money.USDPerMillionTokens.make(2),
+    cache: { read: Money.USDPerMillionTokens.make(0.1), write: Money.USDPerMillionTokens.make(0.5) },
+  },
+]
+const backupDigest = "b".repeat(64)
+const quotaExceeded = () =>
+  new LLMError({ module: "test", method: "stream", reason: new QuotaExceededReason({ message: "Quota exhausted" }) })
+const configureFallbacks = (chain: ReadonlyArray<string>) => {
+  modelFallbacks = Schema.decodeUnknownSync(Config.Info)({ model_fallbacks: { "fake/fake-model": chain } }).model_fallbacks
+  fallbackModels.set("backup", { model: backupModel, cost: backupCost, digest: backupDigest })
+  fallbackModels.set("narrow", { model: narrowModel, cost: [], digest: backupDigest })
+}
+const eventData = (type: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return yield* db
+      .select({ data: EventTable.data })
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, type)))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(
+        Effect.orDie,
+        Effect.map((rows) => rows.map((row) => row.data as Record<string, unknown>)),
+      )
+  })
+const providerRecords = SessionProviderRequest.Service.pipe(Effect.flatMap((service) => service.list(sessionID)))
+
+describe("SessionRunnerLLM model fallback", () => {
+  it.effect("reruns the Step on the next configured model after the retry schedule is exhausted", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [
+        ...Array.from({ length: 10 }, () => Stream.fail(rateLimited())),
+        Stream.fromIterable(reply.textWithUsage("Answered by backup", "text-backup", 1_000)),
+      ]
+      yield* admit(session, "Fall back after retries")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000, 120_000].entries()) {
+        yield* TestClock.adjust(delay)
+        while (requests.length < index + 2) yield* Effect.yieldNow
+      }
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(11)
+      expect(requests.slice(0, 10).map((request) => String(request.model.id))).toEqual(Array(10).fill("fake-model"))
+      expect(String(requests[10]?.model.id)).toBe("backup")
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      expect(types).not.toContain("session.step.failed.1")
+      const assistant = requireAssistant(yield* session.context(sessionID))
+      expect(yield* eventData("session.step.rerouted.1")).toEqual([
+        {
+          sessionID,
+          assistantMessageID: assistant.id,
+          model: { providerID: "fake", id: "backup" },
+          error: { type: "provider.rate-limit", message: "Rate limited" },
+        },
+      ])
+      expect(assistant).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        reroutes: [
+          {
+            from: { providerID: "fake", id: "fake-model" },
+            model: { providerID: "fake", id: "backup" },
+            error: { type: "provider.rate-limit" },
+          },
+        ],
+        finish: "stop",
+        content: [{ type: "text", text: "Answered by backup" }],
+      })
+      expect(assistant.cost).toBeCloseTo(SessionUsage.calculateCost(backupCost, assistant.tokens!))
+      expect(assistant.cost).toBeGreaterThan(0)
+      const records = yield* providerRecords
+      expect(records).toHaveLength(2)
+      expect(records[0]).toMatchObject({
+        model: { providerID: "fake", id: "fake-model" },
+        attempts: 10,
+        invalidation: "retry-fallback",
+        tokens: { input: 0, output: 0 },
+      })
+      expect(records[0]?.connectionIdentityDigest).toBeUndefined()
+      expect(records[1]).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        attempts: 1,
+        connectionIdentityDigest: backupDigest,
+        assistantMessageID: assistant.id,
+      })
+    }),
+  )
+
+  it.effect("switches at once when the model's quota is exhausted", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Backup answer", "text-quota"))]
+      yield* admit(session, "Fall back on quota")
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types).not.toContain("session.retry.scheduled.1")
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      expect((yield* eventData("session.step.rerouted.1")).map((data) => data.error)).toEqual([
+        { type: "provider.quota", message: "Quota exhausted" },
+      ])
+    }),
+  )
+
+  it.effect("switches when the selected model cannot be resolved", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }) })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      unavailableModels.add("fake-model")
+      response = reply.text("Resolved backup", "text-resolved")
+      yield* admit(session, "Fall back on an unavailable model")
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["backup"])
+      expect((yield* eventData("session.step.started.1")).map((data) => data.model)).toEqual([
+        { providerID: "fake", id: "fake-model" },
+      ])
+      expect((yield* eventData("session.step.rerouted.1")).map((data) => [data.model, (data.error as SessionMessage.Assistant["error"])?.type])).toEqual([
+        [{ providerID: "fake", id: "backup" }, "provider.no-route"],
+      ])
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        finish: "stop",
+      })
+    }),
+  )
+
+  for (const failure of [
+    { name: "authentication", error: () => new LLMError({ module: "test", method: "stream", reason: new AuthenticationReason({ message: "Expired", kind: "expired" }) }) },
+    { name: "content policy", error: () => new LLMError({ module: "test", method: "stream", reason: new ContentPolicyReason({ message: "Blocked" }) }) },
+    { name: "invalid request", error: invalidRequest },
+  ])
+    it.effect(`does not switch models on ${failure.name} failures`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        configureFallbacks(["fake/backup"])
+        responseStreams = [Stream.fail(failure.error()), Stream.fromIterable(reply.text("Unused", "text-unused"))]
+        yield* admit(session, `No fallback on ${failure.name}`)
+        expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(LLMError)
+
+        expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model"])
+        const types = yield* recordedEventTypes(sessionID)
+        expect(types).not.toContain("session.step.rerouted.1")
+        expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      }),
+    )
+
+  it.effect("fails with the last model's error once every configured model has been tried", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      const last = quotaExceeded()
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fail(last)]
+      yield* admit(session, "Exhaust the fallback chain")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(last)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        error: { type: "provider.quota" },
+      })
+    }),
+  )
+
+  it.effect("keeps later Steps of the drain on the fallback and starts the next drain on the selected model", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [
+        Stream.fail(quotaExceeded()),
+        Stream.fromIterable(reply.tool("call-sticky", "echo", { text: "sticky" })),
+        Stream.fromIterable(reply.text("Finished on backup", "text-sticky")),
+      ]
+      yield* admit(session, "Stay on the fallback")
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup", "backup"])
+      expect((yield* eventData("session.step.started.1")).map((data) => data.model)).toEqual([
+        { providerID: "fake", id: "fake-model" },
+        { providerID: "fake", id: "backup" },
+      ])
+      expect(yield* eventData("session.step.rerouted.1")).toHaveLength(1)
+
+      responseStreams = [Stream.fromIterable(reply.text("Selected model again", "text-primary"))]
+      yield* admit(session, "Next drain")
+      yield* session.resume(sessionID)
+      expect(String(requests[3]?.model.id)).toBe("fake-model")
+    }),
+  )
+
+  it.effect("skips a fallback whose context window cannot hold the request without compacting", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/narrow", "fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Wide backup", "text-wide"))]
+      yield* admit(session, "Skip the narrow fallback")
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup"])
+      expect(
+        (yield* eventData("session.step.rerouted.1")).map((data) => [
+          (data.model as { id: string }).id,
+          (data.error as { type: string }).type,
+        ]),
+      ).toEqual([
+        ["narrow", "provider.quota"],
+        ["backup", "context.limit"],
+      ])
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.compaction.admitted.2")
+      expect(requireAssistant(yield* session.context(sessionID)).reroutes?.map((reroute) => String(reroute.from.id))).toEqual([
+        "fake-model",
+        "narrow",
+      ])
+    }),
+  )
+
+  it.effect("records the start snapshot on the Step when the selected model cannot be resolved", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      snapshotCapture = Snapshot.ID.make("snapshot-before-fallback")
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }) })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      unavailableModels.add("fake-model")
+      response = reply.text("Resolved backup", "text-snapshot-fallback")
+      yield* admit(session, "Snapshot before an unresolved primary")
+      yield* session.resume(sessionID)
+
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toEqual([
+        "session.step.ended.1",
+      ])
+      expect((yield* eventData("session.step.started.1")).map((data) => data.snapshot)).toEqual([
+        "snapshot-before-fallback",
+      ])
+      expect(requireAssistant(yield* session.context(sessionID)).snapshot?.start).toBe(snapshotCapture)
+    }),
+  )
+
+  it.effect("fails the Step without further rerouting when a fallback candidate's profile is unavailable", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["Work#fake/fake-model", "fake/backup"])
+      unavailableProfiles.add("Work")
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Unused", "text-profile-unused"))]
+      yield* admit(session, "Fallback profile unavailable")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(SessionRunnerModel.ProfileUnavailableError)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toEqual([
+        "session.step.failed.1",
+      ])
+    }),
+  )
+
+  it.effect("settles the Step once when the last fallback cannot be resolved", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      unavailableModels.add("backup")
+      responseStreams = [Stream.fail(quotaExceeded())]
+      yield* admit(session, "Last fallback unavailable")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(SessionRunnerModel.ModelUnavailableError)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toEqual([
+        "session.step.failed.1",
+      ])
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        finish: "error",
+        error: { type: "provider.no-route" },
+      })
+    }),
+  )
+
+  it.effect("settles the Step once when every model in the chain is unavailable", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") }) })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      unavailableModels.add("fake-model")
+      unavailableModels.add("backup")
+      yield* admit(session, "Whole chain unavailable")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(SessionRunnerModel.ModelUnavailableError)
+
+      expect(requests).toHaveLength(0)
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toEqual([
+        "session.step.failed.1",
+      ])
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "error",
+        error: { type: "provider.no-route" },
+      })
+    }),
+  )
+
+  it.effect("interrupting an actively streaming fallback publishes the Step terminal once", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [
+        Stream.fail(quotaExceeded()),
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "text-streaming-fallback" }),
+            LLMEvent.textDelta({ id: "text-streaming-fallback", text: "Partial answer" }),
+          ]),
+          Stream.never,
+        ),
+      ]
+      yield* admit(session, "Interrupt the streaming fallback")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (!(yield* recordedEventTypes(sessionID)).includes("session.text.started.1")) yield* Effect.yieldNow
+      yield* session.interrupt(sessionID)
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup"])
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toEqual([
+        "session.step.failed.1",
+      ])
+    }),
+  )
+
+  for (const target of [
+    { name: "another model and account", chain: "fake/backup" },
+    { name: "the same model on another profile", chain: "Work#fake/fake-model" },
+  ])
+    it.effect(`does not replay the failed model's signed reasoning on ${target.name}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        configureFallbacks([target.chain])
+        profileDigests.set("Work", "c".repeat(64))
+        responseStreams = [
+          Stream.concat(
+            Stream.fromIterable([
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.reasoningStart({ id: "reasoning-primary", providerMetadata: { openai: { signature: "sig_primary" } } }),
+              LLMEvent.reasoningEnd({ id: "reasoning-primary", providerMetadata: { openai: { signature: "sig_primary" } } }),
+            ]),
+            Stream.fail(quotaExceeded()),
+          ),
+          Stream.fromIterable(reply.tool("call-signed-fallback", "echo", { text: "signed" })),
+          Stream.fromIterable(reply.text("Finished without foreign state", "text-signed-fallback")),
+        ]
+        yield* admit(session, `Fall back to ${target.name}`)
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(3)
+        expect(requests.slice(1).map((request) => JSON.stringify(request.messages).includes("sig_primary"))).toEqual([
+          false,
+          false,
+        ])
+        expect(JSON.stringify((yield* session.context(sessionID)).filter((message) => message.type === "assistant"))).not.toContain(
+          "sig_primary",
+        )
+      }),
+    )
+
+  it.effect("interrupting a fallback's retry backoff publishes the Step terminal once", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fail(rateLimited())]
+      yield* admit(session, "Interrupt the fallback backoff")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 2) yield* Effect.yieldNow
+      yield* TestClock.adjust("1 millis")
+      while (!(yield* recordedEventTypes(sessionID)).includes("session.retry.scheduled.1")) yield* Effect.yieldNow
+      yield* session.interrupt(sessionID)
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+
+      const types = yield* recordedEventTypes(sessionID)
+      expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
+      expect(types.filter((type) => type === "session.step.ended.1" || type === "session.step.failed.1")).toHaveLength(1)
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        model: { providerID: "fake", id: "backup" },
+        error: { type: "aborted" },
+      })
+    }),
+  )
+})
+
+
+const incidentRows = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return yield* db
+    .select()
+    .from(ModelIncidentTable)
+    .orderBy(asc(ModelIncidentTable.time_created), asc(ModelIncidentTable.id))
+    .all()
+    .pipe(Effect.orDie)
+})
+const fallbackSummary = (rows: ReadonlyArray<typeof ModelIncidentTable.$inferSelect>) =>
+  rows.map((row) => [row.kind, row.provider_id, row.model_id, row.agent, row.session_id, row.category, row.target])
+
+describe("SessionRunnerLLM model fallback incidents", () => {
+  it.effect("records one fallback incident with the abandoned model, selected agent, error category and target in the reroute transaction", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Answered by backup", "text-incident"))]
+      yield* admit(session, "Record the fallback")
+      yield* session.resume(sessionID)
+
+      const rows = yield* incidentRows
+      expect(fallbackSummary(rows)).toEqual([
+        ["fallback", "fake", "fake-model", "build", sessionID, "provider.quota", { providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("backup") }],
+      ])
+      expect(rows[0]).toMatchObject({ request_id: null, rule_ids: [], decided_by: null, project_id: "global" })
+      expect(rows).toHaveLength((yield* eventData("session.step.rerouted.1")).length)
+    }),
+  )
+
+  it.effect("records every hop of a chain from the model that actually failed", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/narrow", "fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Wide backup", "text-hops"))]
+      yield* admit(session, "Record each hop")
+      yield* session.resume(sessionID)
+
+      expect(fallbackSummary(yield* incidentRows).map((row) => [row[2], row[5], (row[6] as { id: string }).id])).toEqual([
+        ["fake-model", "provider.quota", "narrow"],
+        ["narrow", "context.limit", "backup"],
+      ])
+    }),
+  )
+
+  it.effect("records nothing for sticky Steps, later drains, or failures that do not switch models", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      configureFallbacks(["fake/backup"])
+      responseStreams = [
+        Stream.fail(quotaExceeded()),
+        Stream.fromIterable(reply.tool("call-sticky-incident", "echo", { text: "sticky" })),
+        Stream.fromIterable(reply.text("Finished on backup", "text-sticky-incident")),
+      ]
+      yield* admit(session, "Stay on the fallback")
+      yield* session.resume(sessionID)
+      expect(yield* incidentRows).toHaveLength(1)
+
+      responseStreams = [Stream.fromIterable(reply.text("Selected model again", "text-primary-incident"))]
+      yield* admit(session, "Next drain")
+      yield* session.resume(sessionID)
+      expect(yield* incidentRows).toHaveLength(1)
+
+      responseStreams = [
+        Stream.fail(new LLMError({ module: "test", method: "stream", reason: new ContentPolicyReason({ message: "Blocked" }) })),
+      ]
+      yield* admit(session, "No switch")
+      yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(yield* incidentRows).toHaveLength(1)
+    }),
+  )
+
+  it.effect("attributes a child Session's reroute to the child and its selected agent", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const agent = yield* Agent.Service
+      const { db } = yield* Database.Service
+      configureFallbacks(["fake/backup"])
+      yield* insertSession(otherSessionID)
+      yield* agent.transform((editor) =>
+        editor.update(Agent.ID.make("reviewer"), (item) => {
+          item.system = "Reviewer instructions"
+          item.mode = "primary"
+        }),
+      )
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "reviewer", parent_id: otherSessionID })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Child answered", "text-child-incident"))]
+      yield* admit(session, "Child fallback")
+      yield* session.resume(sessionID)
+
+      expect((yield* incidentRows).map((row) => [row.session_id, row.agent, row.model_id])).toEqual([
+        [sessionID, "reviewer", "fake-model"],
+      ])
+    }),
+  )
+
+  it.effect("rolls the reroute back with its incident row when the row cannot be written", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      configureFallbacks(["fake/backup"])
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Unused", "text-rollback"))]
+      yield* db.run(sql`DROP TABLE model_incident`).pipe(Effect.orDie)
+      yield* admit(session, "Fail the incident write")
+      expect(Exit.isFailure(yield* session.resume(sessionID).pipe(Effect.exit))).toBe(true)
+
+      expect(yield* eventData("session.step.rerouted.1")).toEqual([])
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model"])
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({ model: { providerID: "fake", id: "fake-model" } })
+    }),
+  )
+})
+
+const guidanceRule = "standard.review.force-push"
+const guidanceModel = CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model") })
+const guidanceNote = ModelGuidanceInstructions.render([
+  { requestID: "req_a", ruleIDs: [guidanceRule] },
+  { requestID: "req_b", ruleIDs: [guidanceRule] },
+])!
+const guidanceEnabled = Effect.gen(function* () {
+  yield* TestClock.setTime(1_000_000)
+})
+const putGuardrailIncidents = (input: { readonly model?: string; readonly requests: ReadonlyArray<string>; readonly time?: number; readonly rule?: string }) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* Effect.forEach(
+      input.requests,
+      (request) =>
+        db
+          .run(sql`
+            INSERT INTO model_incident
+              (id, time_created, kind, provider_id, model_id, agent, project_id, session_id, request_id, category, rule_ids)
+            VALUES (${`inc_${input.model ?? "fake-model"}_${request}`}, ${input.time ?? 999_000}, 'guardrail-escalated', 'fake',
+              ${input.model ?? "fake-model"}, 'build', 'global', 'ses_elsewhere', ${request}, 'hard', ${JSON.stringify([input.rule ?? guidanceRule])})
+          `)
+          .pipe(Effect.orDie),
+      { discard: true },
+    )
+  })
+const selectSessionModel = (model: CatalogModel.Ref | undefined) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db.update(SessionTable).set({ model: model ?? null }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+  })
+const systemText = (request: LLMRequest | undefined) => request?.system.map((part) => part.text).join("\n") ?? ""
+
+describe("SessionRunnerLLM model guidance", () => {
+  it.effect("adds the selected model's notes to the initial instructions", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* guidanceEnabled
+      yield* selectSessionModel(guidanceModel)
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* putGuardrailIncidents({ model: "backup", requests: ["req_x", "req_y"], rule: "standard.review.git-destructive" })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+
+      expect(systemText(requests[0])).toContain(guidanceNote)
+      expect(systemText(requests[0])).not.toContain("git-destructive")
+    }),
+  )
+
+  it.effect("gives a Session without a selected model the notes of the catalog default selection", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* guidanceEnabled
+      defaultSelectionRef = CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model"), variant: CatalogModel.VariantID.make("high") })
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+
+      expect(systemText(requests[0])).toContain(guidanceNote)
+    }),
+  )
+
+  it.effect("adds no notes when neither the Session nor the catalog selects a model", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* guidanceEnabled
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+
+      expect(systemText(requests[0])).not.toContain("<model-guidance>")
+    }),
+  )
+
+  it.effect("omits the notes when the capability is denied", () =>
+    Effect.gen(function* () {
+      capabilitiesConfig = new ConfigCapabilities.Info({ builtin_instructions: { deny: ["model-guidance"] } })
+      const session = yield* setup
+      yield* guidanceEnabled
+      yield* selectSessionModel(guidanceModel)
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+
+      expect(systemText(requests[0])).not.toContain("<model-guidance>")
+    }).pipe(Effect.ensuring(Effect.sync(() => (capabilitiesConfig = undefined)))),
+  )
+
+  it.effect("publishes later changes and removals as chronological updates while the initial blob stays stable", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      yield* guidanceEnabled
+      yield* selectSessionModel(guidanceModel)
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+      const initial = systemText(requests[0])
+      expect(initial).toContain(guidanceNote)
+
+      yield* putGuardrailIncidents({ requests: ["req_c", "req_d"], rule: "standard.review.outside-repo" })
+      yield* admit(session, "Second")
+      yield* session.resume(sessionID)
+      const changed = ModelGuidanceInstructions.render([
+        { requestID: "req_a", ruleIDs: [guidanceRule] },
+        { requestID: "req_b", ruleIDs: [guidanceRule] },
+        { requestID: "req_c", ruleIDs: ["standard.review.outside-repo"] },
+        { requestID: "req_d", ruleIDs: ["standard.review.outside-repo"] },
+      ])!
+      expect(systemText(requests[1])).toBe(initial)
+      expect(systemTexts(requests[1]!).filter((text) => text.includes(changed))).toHaveLength(1)
+
+      yield* db.run(sql`INSERT INTO model_guidance_clear (provider_id, model_id, cleared_at) VALUES ('fake', 'fake-model', 999500)`).pipe(Effect.orDie)
+      yield* admit(session, "Third")
+      yield* session.resume(sessionID)
+      expect(systemText(requests[2])).toBe(initial)
+      expect(systemTexts(requests[2]!).filter((text) => text.includes(ModelGuidanceInstructions.retraction))).toHaveLength(1)
+    }),
+  )
+
+  it.effect("retracts the notes when the capability is denied later", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* guidanceEnabled
+      yield* selectSessionModel(guidanceModel)
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* admit(session, "First")
+      yield* session.resume(sessionID)
+      capabilitiesConfig = new ConfigCapabilities.Info({ builtin_instructions: { deny: ["model-guidance"] } })
+      yield* admit(session, "Second")
+      yield* session.resume(sessionID)
+
+      expect(systemText(requests[1])).toBe(systemText(requests[0]))
+      expect(systemTexts(requests[1]!).filter((text) => text.includes(ModelGuidanceInstructions.retraction))).toHaveLength(1)
+    }).pipe(Effect.ensuring(Effect.sync(() => (capabilitiesConfig = undefined)))),
+  )
+
+  it.effect("keeps the selected model's notes for a fallback attempt without a mid-Step update", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* guidanceEnabled
+      configureFallbacks(["fake/backup"])
+      yield* selectSessionModel(guidanceModel)
+      yield* putGuardrailIncidents({ requests: ["req_a", "req_b"] })
+      yield* putGuardrailIncidents({ model: "backup", requests: ["req_x", "req_y"], rule: "standard.review.git-destructive" })
+      responseStreams = [Stream.fail(quotaExceeded()), Stream.fromIterable(reply.text("Answered by backup", "text-guidance-fallback"))]
+      yield* admit(session, "Fallback keeps the primary notes")
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "backup"])
+      expect(systemText(requests[1])).toBe(systemText(requests[0]))
+      expect(systemText(requests[1])).toContain(guidanceNote)
+      expect(systemText(requests[1])).not.toContain("git-destructive")
+      expect(yield* eventData("session.instructions.updated.2")).toHaveLength(1)
     }),
   )
 })

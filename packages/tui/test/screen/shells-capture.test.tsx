@@ -117,13 +117,14 @@ test("captures the Shell tab owner rows with populated groups", async () => {
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("UNKNOWN SESSION"))
+    await app.waitForFrame((frame) => frame.includes("MAIN CHAT · THIS SESSION"))
 
     try {
       const frame = app.captureCharFrame()
       expect(frame).toContain("MAIN CHAT · THIS SESSION")
       expect(frame).toContain("SUBAGENT · DOCS-SYNC · SYNC PROVIDER DOCS")
-      expect(frame).toContain("UNKNOWN SESSION")
+      expect(frame).not.toContain("UNKNOWN SESSION")
+      expect(frame).not.toContain("bench cache-warm")
       if (viewport.width === NARROW_VIEWPORT.width) expect(frame).toContain("running         bun test provider")
       await app.mockMouse.moveTo(3, 4)
       expect(selected).toBe("sh_main_dev")
@@ -168,7 +169,6 @@ function shellGroups() {
   return [
     { owner: { label: "Main chat" }, shells: shells.slice(0, 2) },
     { owner: { label: "docs-sync · Sync provider docs" }, shells: [shells[2]] },
-    { owner: { label: "Unknown session" }, shells: [shells[3]] },
   ]
 }
 

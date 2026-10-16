@@ -10,6 +10,8 @@ import { useTheme } from "../../context/theme"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
+import { stringWidth } from "../../util/string-width"
+import { autonomyModeParts, yoloLevel } from "../../util/session-autonomy"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -30,7 +32,15 @@ export type SessionHeaderOperationalState =
 
 export type SessionHeaderState =
   | SessionHeaderOperationalState
-  | { type: "autonomy"; yolo: number; goalActive: boolean; guardrailDecision?: boolean; asleep?: boolean; machineAwake?: boolean; state: SessionHeaderOperationalState }
+  | {
+      type: "autonomy"
+      yolo: number
+      goalActive: boolean
+      asleep?: boolean
+      machineAwake?: boolean
+      review?: number
+      state: SessionHeaderOperationalState
+    }
 
 type SessionHeaderTimedState = Extract<
   SessionHeaderOperationalState,
@@ -61,11 +71,7 @@ const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; v
   variant: { command: "variant.cycle", verb: "cycle" },
 }
 
-export function headerModelLabel(input: {
-  providerID?: string
-  modelID?: string
-  name?: string
-}) {
+export function headerModelLabel(input: { providerID?: string; modelID?: string; name?: string }) {
   const id = input.modelID ?? input.name ?? ""
   const resolvedName = input.name ?? Locale.titlecase(id.replaceAll("-", " "))
   return input.providerID ? `${input.providerID}/${resolvedName}` : resolvedName
@@ -89,7 +95,7 @@ export function headerModelRef<T extends { providerID: string; id: string; varia
  * Truncation ladder from the design contract: ellipsize identifiers and drop them whole rather than
  * shorten status labels; below 120 columns, only working drops its state word.
  */
-export function headerSegments(input: SessionHeaderIdentity & { width: number }) {
+export function headerSegments(input: SessionHeaderIdentity & { width: number; availableWidth?: number }) {
   const path = input.width >= 120 ? truncatePath(input.path, input.width) : undefined
   const branch = input.width >= 100 ? input.branch : undefined
   // A profile names the credential the provider resolves the request through, so it rides with the
@@ -102,12 +108,22 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
     ["agent", input.agent],
     ["profile", profile],
     ["model", model],
-    ["daybreak", model && input.daybreak
-      ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
-      : undefined],
+    [
+      "daybreak",
+      model && input.daybreak
+        ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
+        : undefined,
+    ],
     ["variant", input.variant],
   ]
-  return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
+  return (["path", "branch", "agent", "variant"] as const).reduce(
+    (segments, key) =>
+      input.availableWidth !== undefined &&
+      stringWidth(segments.map((segment) => segment.label).join(" · ")) > input.availableWidth
+        ? segments.filter((segment) => segment.key !== key)
+        : segments,
+    ordered.flatMap(([key, label]) => (label ? [{ key, label }] : [])),
+  )
 }
 
 export function pendingModelVariant(
@@ -127,38 +143,44 @@ function pendingAgent(current: string | undefined, pending: string | undefined) 
   return pending && current?.toLocaleLowerCase() !== pending.toLocaleLowerCase() ? `→ ${pending}` : undefined
 }
 
-function headerYoloLevel(yolo: unknown): number {
-  if (typeof yolo === "number") return yolo
-  if (yolo === true) return 2
-  return 0
-}
-
-export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, now = Date.now()): string {
+export function headerStatusLabel(
+  state: SessionHeaderState,
+  width: number,
+  runningShells?: number,
+  now = Date.now(),
+): string {
   if (state.type === "autonomy") {
-    const level = headerYoloLevel(state.yolo)
-    if (state.asleep && width < 120)
-      return `asleep · guardrail decision · YOLO ${level}${state.goalActive ? " · goal" : ""} · ${headerStatusLabel(state.state, width, runningShells, now)}`
-    let autonomy: string
-    if (level > 0 && state.goalActive) autonomy = `YOLO ${level} + Goal · autonomous`
-    else if (level > 0) autonomy = `YOLO ${level} · auto-approve`
-    else if (state.goalActive) autonomy = "Goal · autonomous"
-    else autonomy = "YOLO 0 · manual"
-    const extras = [
-      state.guardrailDecision ? "guardrail decision" : undefined,
-      state.asleep ? "asleep" : undefined,
-      state.asleep && state.machineAwake === false ? "machine may sleep" : undefined,
-    ].filter((part): part is string => part !== undefined)
-    const label = extras.length > 0 ? `${autonomy} · ${extras.join(" · ")}` : autonomy
-    return `${label} · ${headerStatusLabel(state.state, width, runningShells, now)}`
+    const parts = autonomyModeParts({
+      yolo: state.yolo,
+      goal: { status: state.goalActive ? "active" : undefined },
+      sleep: state.asleep ? {} : undefined,
+    })
+    const inner = headerStatusLabel(state.state, width, runningShells, now)
+    return [
+      ...parts,
+      ...(state.asleep && state.machineAwake === false ? ["machine may sleep"] : []),
+      ...(state.review ? [`review ${state.review}`] : []),
+      state.review && inner === "ready" ? "waiting for your review" : inner,
+    ].join(" · ")
   }
   if (state.type === "retry-scheduled")
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
   if (state.type === "retrying") return `retrying · attempt ${state.attempt}`
-  if (state.type === "working" || state.type === "thinking" || state.type === "tool-running" || state.type === "awaiting-input") {
+  if (
+    state.type === "working" ||
+    state.type === "thinking" ||
+    state.type === "tool-running" ||
+    state.type === "awaiting-input"
+  ) {
     // One rule for every surface: the design writes sub-minute working time with a decimal
     // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
     // it alone cannot express the decimal form.
-    const elapsed = state.elapsed === undefined ? undefined : state.elapsed < 60 ? `${state.elapsed.toFixed(1)}s` : formatDuration(state.elapsed)
+    const elapsed =
+      state.elapsed === undefined
+        ? undefined
+        : state.elapsed < 60
+          ? `${state.elapsed.toFixed(1)}s`
+          : formatDuration(state.elapsed)
     if (state.type === "working") return elapsed ? (width < 120 ? elapsed : `cooking ${elapsed}`) : "cooking"
     if (state.type === "thinking") return elapsed ? `thinking · ${elapsed}` : "thinking"
     if (state.type === "tool-running") return elapsed ? `tool running · ${elapsed}` : "tool running"
@@ -186,7 +208,13 @@ export function sessionRetryHeaderState(
 }
 
 export function Header(
-  props: SessionHeaderIdentity & { state: SessionHeaderState; connection?: string; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
+  props: SessionHeaderIdentity & {
+    state: SessionHeaderState
+    connection?: string
+    focused?: SessionHeaderSegmentKey
+    subagent?: boolean
+    sideChat?: boolean
+  },
 ) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -203,7 +231,13 @@ export function Header(
   })
   const timed = createMemo<SessionHeaderTimedState | undefined>(() => {
     const current = operational()
-    if (current.type === "working" || current.type === "thinking" || current.type === "tool-running" || current.type === "awaiting-input") return current
+    if (
+      current.type === "working" ||
+      current.type === "thinking" ||
+      current.type === "tool-running" ||
+      current.type === "awaiting-input"
+    )
+      return current
   })
   createEffect(() => {
     // The shared `now` tick drives the retry countdown and the active elapsed statuses;
@@ -242,9 +276,30 @@ export function Header(
       ),
     ].filter((value): value is string => !!value)
   })
+  const inset = () => (props.subagent ? 3 : 1)
+  const gap = () => (props.subagent ? 6 : 2)
+  const label = () =>
+    props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())
+  const spinning = () =>
+    !props.connection &&
+    ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")
+  const brandWidth = () =>
+    stringWidth(
+      props.sideChat ? "BTW" : props.subagent ? `${getGlyph("subagent").glyph} subagent` : `v${InstallationVersion}`,
+    ) + (!props.sideChat && !props.subagent ? 3 : 0)
   const segments = createMemo(() =>
     headerSegments({
       width: dimensions().width,
+      availableWidth: Math.max(
+        0,
+        dimensions().width -
+          inset() -
+          3 -
+          gap() * 2 -
+          brandWidth() -
+          stringWidth(label()) -
+          (spinning() ? stringWidth(DOT_TRAIL_FRAMES[0]) + 1 : 0),
+      ),
       path: identity().path,
       branch: identity().branch,
       agent: identity().agent,
@@ -258,13 +313,9 @@ export function Header(
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
     if (current.type === "autonomy")
-      return headerYoloLevel(current.yolo) > 0 || current.guardrailDecision
-        ? theme.text.feedback.error.default
-        : theme.text.feedback.success.default
-    if (active.type === "provider-error")
-      return theme.text.feedback.error.default
-    if (active.type === "retrying" || active.type === "retry-scheduled")
-      return theme.text.feedback.warning.default
+      return yoloLevel(current) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
+    if (active.type === "provider-error") return theme.text.feedback.error.default
+    if (active.type === "retrying" || active.type === "retry-scheduled") return theme.text.feedback.warning.default
     if (active.type === "awaiting-input") return theme.text.feedback.warning.default
     if (active.type === "tool-running" || active.type === "waiting") return theme.text.feedback.info.default
     if (active.type === "working" || active.type === "thinking")
@@ -288,7 +339,9 @@ export function Header(
     if (key === "agent") {
       const agent = local?.agent
         .list()
-        .find((item) => item.id === props.agent || item.name === props.agent || Locale.titlecase(item.id) === props.agent)
+        .find(
+          (item) => item.id === props.agent || item.name === props.agent || Locale.titlecase(item.id) === props.agent,
+        )
       if (agent) return local!.agent.color(agent.id)
     }
     // The branch is info by default, so focused segments retain their roles instead of impersonating it.
@@ -307,8 +360,8 @@ export function Header(
     <>
       <box
         flexDirection="row"
-        gap={props.subagent ? 6 : 2}
-        paddingLeft={props.subagent ? 3 : 1}
+        gap={gap()}
+        paddingLeft={inset()}
         paddingRight={3}
         height={3}
         flexShrink={0}
@@ -320,7 +373,9 @@ export function Header(
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
               <BrandMark width={2} height={1} />
-              <text fg={theme.text.subdued} wrapMode="none">v{InstallationVersion}</text>
+              <text fg={theme.text.subdued} wrapMode="none">
+                v{InstallationVersion}
+              </text>
             </box>
           }
         >
@@ -328,7 +383,7 @@ export function Header(
             {props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
           </text>
         </Show>
-        <text flexGrow={1} wrapMode="none">
+        <text flexGrow={1} minWidth={0} wrapMode="none">
           <For each={segments()}>
             {(segment, index) => (
               <>
@@ -349,14 +404,21 @@ export function Header(
               </>
             )}
           </For>
-          <For each={pending()}>{(value) => <span style={{ fg: theme.text.subdued }}> {"·"} {value}</span>}</For>
+          <For each={pending()}>
+            {(value) => (
+              <span style={{ fg: theme.text.subdued }}>
+                {" "}
+                {"·"} {value}
+              </span>
+            )}
+          </For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-          <Show when={!props.connection && ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")}>
+          <Show when={spinning()}>
             <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
           </Show>
           <text fg={props.connection ? theme.text.subdued : statusColor()} wrapMode="none">
-            {props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}
+            {label()}
           </text>
         </box>
       </box>
@@ -372,8 +434,7 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
   const session = data.session.get(route.sessionID)
   const sessionModel = session?.model
   if (!session || !sessionModel) return props
-  const model = data.location
-    .model
+  const model = data.location.model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
   const modelLabel = headerModelLabel({

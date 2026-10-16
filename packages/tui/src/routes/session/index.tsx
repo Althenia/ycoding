@@ -12,7 +12,6 @@ import {
   Show,
   Switch,
   useContext,
-  untrack,
 } from "solid-js"
 import path from "node:path"
 import { EOL, tmpdir } from "node:os"
@@ -43,6 +42,8 @@ import type {
   SessionInfo,
   SessionAutonomyState,
   SessionOrchestrationTask,
+  SessionReviewDecision,
+  SessionReviewItem,
 } from "@ycoding-ai/client"
 import { capturedChildSessionIDs, capturedPartPatches, capturedPatch, groupCapturedPatches, summarizeCapturedChanges } from "@ycoding-ai/client/file-change-summary"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
@@ -92,8 +93,6 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
-import { PromptCostBlock } from "./usage-cost"
-import { accountingPresentation } from "../../util/usage-accounting"
 import { usePromptRef } from "../../context/prompt"
 import { projectedPromptInput } from "../../prompt/codec"
 import { useEpilogue } from "../../context/epilogue"
@@ -101,6 +100,7 @@ import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
 import { GuardrailPrompt, activeGuardrail } from "./guardrail"
 import { FormPrompt } from "./form"
+import { ReviewBox, ReviewItemEditor } from "./review-box"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
 import { sessionEpilogue } from "../../util/presentation"
@@ -135,7 +135,6 @@ import {
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
-  guardrailDecisionEnabled,
   isAsleep,
   type SessionAutonomyResponse,
   yoloLevel,
@@ -270,6 +269,35 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       .flatMap((sessionID) => data.session.form.list(sessionID) ?? [])
       .concat(global)
   })
+  const reviewItems = createMemo(() => data.session.review.list(route.sessionID))
+  const [reviewFocused, setReviewFocused] = createSignal(false)
+  const [reviewActiveID, setReviewActiveID] = createSignal<string>()
+  const [reviewPendingID, setReviewPendingID] = createSignal<string>()
+  const [reviewFailed, setReviewFailed] = createStore<Record<string, string>>({})
+  const reviewActive = createMemo(() => reviewItems().find((item) => item.itemID === reviewActiveID()))
+  createEffect(() => {
+    if (reviewActiveID() && !reviewActive()) setReviewActiveID(undefined)
+  })
+  async function decideReview(item: SessionReviewItem, decision: SessionReviewDecision) {
+    if (reviewPendingID() !== undefined || reviewFailed[item.itemID] !== undefined)
+      throw new Error(reviewFailed[item.itemID] ?? "Decision already in flight")
+    setReviewPendingID(item.itemID)
+    try {
+      await client.api.review.decide({ sessionID: item.sessionID, itemID: item.itemID, decision })
+    } catch (error) {
+      setReviewFailed(item.itemID, errorMessage(error))
+      throw error
+    } finally {
+      setReviewPendingID(undefined)
+    }
+    if (reviewActiveID() === item.itemID) setReviewActiveID(undefined)
+    data.session.review.invalidate(route.sessionID)
+    void data.session.review.sync(route.sessionID).catch(() => undefined)
+  }
+  const dismissReview = (item: SessionReviewItem) => {
+    if (item.kind !== "question" && item.kind !== "subagent_question") return
+    void decideReview(item, { kind: item.kind, dismissed: true }).catch(() => undefined)
+  }
   const [composer, setComposer] = createStore({
     open: false,
     tab: undefined as string | undefined,
@@ -334,12 +362,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
   const client = useClient()
-  createEffect(() => {
-    const connected = client.connection.status() === "connected"
-    const id = route.sessionID
-    data.session.message.list(id).filter((message) => message.type === "user").map((message) => message.id).join(",")
-    if (connected) untrack(() => { void data.session.promptCosts.sync(id).catch(() => undefined) })
-  })
   let skillReadRevision = 0
   createEffect(on([() => client.connection.status(), () => {
     const history = data.session.message.history(route.sessionID)
@@ -504,6 +526,20 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     }),
   ]
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
+  createEffect(
+    on(
+      () => isAsleep(autonomy()),
+      (asleep, previous) => {
+        if (previous !== true || asleep || reviewItems().length === 0) return
+        const count = reviewItems().length
+        toast.show({
+          message: `${count} item${count === 1 ? "" : "s"} waiting for your review`,
+          variant: "info",
+          duration: 5000,
+        })
+      },
+    ),
+  )
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
     const lastAssistant = messages().findLast((item): item is SessionMessageAssistant => item.type === "assistant")
     const retry = sessionRetryHeaderState(lastAssistant)
@@ -549,16 +585,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
     const level = typeof raw === "number" ? raw : raw === true ? 2 : 0
     const goalActive = autonomy().goal?.status === "active"
-    const guardrailDecision = guardrailDecisionEnabled(autonomy())
     const asleep = isAsleep(autonomy())
-    if (level === 0 && !goalActive && !guardrailDecision && !asleep) return state
     return {
       type: "autonomy",
       yolo: level,
       goalActive,
-      guardrailDecision,
       asleep,
       machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
+      review: reviewItems().length,
       state,
     }
   })
@@ -783,6 +817,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         data.session.message.sync(sessionID),
         data.session.permission.sync(sessionID),
         data.session.guardrail.sync(sessionID),
+        data.session.review.sync(sessionID),
         data.session.form.sync(sessionID),
       ])
       const info = data.session.get(sessionID)
@@ -1969,6 +2004,18 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 onSubagentAnswer={!subagent() ? answerChild : undefined}
                 prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
               /></Show>
+              <ReviewBox
+                items={reviewItems()}
+                currentSessionID={route.sessionID}
+                asleep={isAsleep(autonomy())}
+                activeItemID={reviewActiveID()}
+                pendingItemID={reviewPendingID()}
+                failed={reviewFailed}
+                onOpen={(item) => setReviewActiveID(item.itemID)}
+                onJump={(sessionID) => navigate({ type: "session", sessionID })}
+                onDismiss={dismissReview}
+                onFocusChange={setReviewFocused}
+              />
               <Switch>
                 <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
                 <Match when={permissions().length > 0}>
@@ -1993,6 +2040,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   <Show when={currentTask()?.question?.id} keyed>
                     {(_) => <SubagentAnswerComposer task={currentTask()!} />}
                   </Show>
+                </Match>
+                <Match when={reviewActive()}>
+                  {(item) => (
+                    <ReviewItemEditor
+                      item={item()}
+                      disabled={reviewPendingID() !== undefined || reviewFailed[item().itemID] !== undefined}
+                      error={reviewFailed[item().itemID]}
+                      onDecide={decideReview}
+                      onClose={() => setReviewActiveID(undefined)}
+                    />
+                  )}
                 </Match>
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
                 <Match when={!disabled() && !composer.open}>
@@ -2064,6 +2122,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       >
         <Prompt
           visible={props.visible !== false}
+          focusBlocked={reviewFocused()}
           ref={bind}
           disabled={props.visible === false}
           submitDisabled={!sessionReady()}
@@ -2598,13 +2657,10 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme().contextual("elevated")
-  const model = createMemo(
-    () =>
-      ctx
-        .models()
-        .find((model) => model.providerID === props.message.model.providerID && model.id === props.message.model.id)
-        ?.name ?? `${props.message.model.providerID}/${props.message.model.id}`,
-  )
+  const modelName = (ref: SessionMessageAssistant["model"]) =>
+    ctx.models().find((model) => model.providerID === ref.providerID && model.id === ref.id)?.name ??
+    `${ref.providerID}/${ref.id}`
+  const model = createMemo(() => modelName(props.message.model))
   const duration = createMemo(() =>
     props.message.time.completed ? props.message.time.completed - props.message.time.created : 0,
   )
@@ -2618,6 +2674,16 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
           <text fg={theme.text.feedback.error.default}>{safeProviderErrorMessage(props.message.error)}</text>
         </box>
       </Show>
+      <For each={props.message.reroutes ?? []}>
+        {(reroute) => (
+          <box paddingLeft={3} marginTop={1}>
+            <text fg={theme.text.feedback.warning.default}>
+              ↪ Switched from {modelName(reroute.from)} to {modelName(reroute.model)}:{" "}
+              {safeProviderErrorMessage(reroute.error)}
+            </text>
+          </box>
+        )}
+      </For>
       <AssistantRetry retry={props.message.retry} />
       <box paddingLeft={3} marginTop={providerError() ? 1 : 0}>
         <text>
@@ -2687,7 +2753,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   }
   const notificationStatus = () => {
     const type = stringValue(metadata()?.type)
-    if (type === "completed" || type === "failed" || type === "waiting") return type
+    if (type === "completed" || type === "failed" || type === "waiting" || type === "resumed") return type
     return "updated"
   }
   const heading = () => `${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`
@@ -3084,7 +3150,6 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 function UserMessage(props: { message: SessionMessageUser; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
-  const cost = createMemo(() => data.session.promptCosts.get(ctx.sessionID, props.message.id))
   const send = createMemo(() => data.session.submissions.list(ctx.sessionID).find((entry) => entry.input.promptID === props.message.id), undefined, { equals: false })
   const files = createMemo(() =>
     (send()?.admitted ? projectedPromptInput(props.message).files ?? [] : send()?.input.payload.files ?? projectedPromptInput(props.message).files ?? []).map((file, index) => ({
@@ -3219,9 +3284,6 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
         >
           <Spinner color={theme.text.subdued} frames={DOT_TRAIL_FRAMES} interval={160} />
         </Show>
-        <box width="100%" flexDirection="column">
-          <Show when={cost()} fallback={<box paddingLeft={3} paddingRight={3}><text fg={theme.text.subdued}>Prompt cost {data.session.promptCosts.state(ctx.sessionID) === "loading" ? "loading" : "unreported"}</text></box>}>{(unit) => <PromptCostBlock unit={accountingPresentation(unit(), data.session.promptCosts.state(ctx.sessionID) === "unavailable")} />}</Show>
-        </box>
       </box>
     </Show>
   )

@@ -3,9 +3,12 @@ export * as GoalTool from "./goal"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
+import { Database } from "../database/database"
 import { Permission } from "../permission"
 import { SessionAutonomy } from "../session/autonomy"
+import { SessionReviewFold } from "../session/review-fold"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "goal"
 
@@ -30,6 +33,7 @@ export const Plugin = {
   id: "ycoding.tool.goal",
   effect: Effect.fn("GoalTool.Plugin")(function* (ctx: PluginContext) {
     const autonomy = yield* SessionAutonomy.Service
+    const database = yield* Database.Service
     const permission = yield* Permission.Service
     yield* ctx.tool
       .transform((draft) =>
@@ -46,6 +50,7 @@ export const Plugin = {
                 .assert({
                   action: name,
                   resources: [input.action],
+                  metadata: { operationDigest: Hash.json(input) },
                   save: [input.action],
                   sessionID: context.sessionID,
                   agent: context.agent,
@@ -78,6 +83,13 @@ export const Plugin = {
                         )
                         if (!state.goal || state.goal.status !== "active")
                           return yield* Effect.fail(new ToolFailure({ message: "No active goal to report" }))
+                        const openReviews = yield* SessionReviewFold.openCount(database.db, context.sessionID)
+                        if (openReviews > 0)
+                          return {
+                            action: "report",
+                            goal: state.goal,
+                            message: `Not counted: ${openReviews} item(s) in this Session family await the user's review.`,
+                          }
                         const reported = yield* autonomy.report({ sessionID: context.sessionID })
                         const goal = reported.goal!
                         return {

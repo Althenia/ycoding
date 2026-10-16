@@ -29,12 +29,14 @@ import {
   type IntegrationAttemptStatus,
   type IntegrationCommandAttempt,
   type IntegrationCommandAttemptStatus,
+  type ReviewDecideInput,
+  type ReviewListOutput,
 } from "@ycoding-ai/client/promise"
 import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -55,6 +57,7 @@ export type LocalPrompt = {
 export type LocalAutonomy =
   | { readonly yolo: number | boolean; readonly maxNoProgress?: number | null }
   | { readonly goal: string | null; readonly maxNoProgress?: number | null }
+  | { readonly sleep: boolean }
 
 export type LocalFailureKind = "not_found" | "location_unavailable" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 
@@ -114,6 +117,10 @@ export type LocalServer = {
   readonly promptCosts: (sessionID: string, location: LocalLocation, inputIDs: readonly [string, ...string[]]) => ReturnType<YCodingClient["session"]["promptCosts"]>
   readonly taskCosts: (sessionID: string, location: LocalLocation, sessionIDs: readonly [string, ...string[]]) => ReturnType<YCodingClient["session"]["taskCosts"]>
   readonly usageForecast: (localScope: "backend" | "location", location?: LocalLocation) => ReturnType<YCodingClient["providerUsage"]["forecast"]>
+  readonly incidentReport: (input: RemoteIncidentReportInput) => Promise<RemoteIncidentReport["data"]>
+  readonly incidentRecent: (input: RemoteIncidentRecentInput) => Promise<RemoteIncidentRecent["data"]>
+  readonly incidentGuidance: (input: RemoteIncidentGuidanceInput, location?: LocalLocation) => Promise<RemoteIncidentGuidance["data"]>
+  readonly incidentGuidanceClear: (input: RemoteIncidentGuidanceInput, location?: LocalLocation) => Promise<RemoteIncidentGuidance["data"]>
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
   readonly modelDefault: (location: LocalLocation) => Promise<ModelDefault | null>
@@ -148,6 +155,8 @@ export type LocalServer = {
   readonly formRequests: (location: LocalLocation) => Promise<unknown>
   readonly guardrailStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly guardrailRequestList: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly reviewList: (sessionID: string, location: LocalLocation) => Promise<ReviewListOutput>
+  readonly reviewDecide: (sessionID: string, location: LocalLocation, itemID: string, decision: ReviewDecideInput["decision"]) => Promise<void>
   readonly formList: (sessionID: string, location: LocalLocation) => Promise<readonly FormInfo[]>
   /** Reads one shell's info at the bound Location; the caller proves Session ownership from its metadata. */
   readonly shellGet: (shellID: string, location: LocalLocation) => Promise<unknown>
@@ -283,6 +292,10 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     promptCosts: (sessionID, location, inputIDs) => call(() => client.session.promptCosts({ sessionID, inputIDs }, request(location, timeoutMs))),
     taskCosts: (sessionID, location, sessionIDs) => call(() => client.session.taskCosts({ sessionID, sessionIDs }, request(location, timeoutMs))),
     usageForecast: (localScope, location) => call(() => client.providerUsage.forecast({ localScope }, location ? request(location, timeoutMs) : { signal: AbortSignal.timeout(timeoutMs) })),
+    incidentReport: (input) => call(() => client.incident.report(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    incidentRecent: (input) => call(() => client.incident.recent(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    incidentGuidance: (input, location) => call(() => client.incident.guidance.get(input, location ? request(location, timeoutMs) : { signal: AbortSignal.timeout(timeoutMs) })),
+    incidentGuidanceClear: (input, location) => call(() => client.incident.guidance.clear(input, location ? request(location, timeoutMs) : { signal: AbortSignal.timeout(timeoutMs) })),
     agentList: (location) => call(async () => (await client.agent.list({}, request(location, timeoutMs))).data),
     modelList: (location) => call(async () => (await client.model.list({}, request(location, timeoutMs))).data),
     modelDefault: (location) => call(async () => (await client.model.default({}, request(location, timeoutMs))).data),
@@ -338,6 +351,9 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.guardrail.status({ sessionID }, request(location, timeoutMs))),
     guardrailRequestList: (sessionID, location) =>
       call(() => client.guardrail.request.list({ sessionID }, request(location, timeoutMs))),
+    reviewList: (sessionID, location) => call(() => client.review.list({ sessionID }, request(location, timeoutMs))),
+    reviewDecide: (sessionID, location, itemID, decision) =>
+      call(async () => { await client.review.decide({ sessionID, itemID, decision }, request(location, timeoutMs)) }),
     formList: (sessionID, location) => call(() => client.form.list({ sessionID }, request(location, timeoutMs))),
     shellGet: (shellID, location) =>
       call(async () => (await client.shell.get({ id: shellID }, request(location, timeoutMs))).data),

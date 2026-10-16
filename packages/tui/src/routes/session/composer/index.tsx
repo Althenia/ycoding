@@ -57,9 +57,8 @@ export function Composer(props: ComposerProps) {
   const tabList = createMemo(() => Object.values(store.tabs))
   const activeTab = createMemo(() => tabList().find((t) => t.id === store.active))
   const footerHints = createMemo(() => activeTab()?.hints?.() ?? [])
-  const session = createMemo(() => data.session.get(props.sessionID))
   const shells = createMemo(() =>
-    groupSessionShells(data.shell.list(session()?.location), data.session.list(), props.sessionID).reduce(
+    groupSessionShells(data.shell.listFamily(props.sessionID), data.session.list(), props.sessionID).reduce(
       (count, group) => count + group.shells.length,
       0,
     ),

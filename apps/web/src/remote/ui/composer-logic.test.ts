@@ -187,7 +187,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(92)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(95)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })

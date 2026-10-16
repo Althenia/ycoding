@@ -28,8 +28,10 @@ import { Global } from "@ycoding-ai/core/global"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { ModelsDev } from "@ycoding-ai/core/models-dev"
+import { ModelIncident } from "@ycoding-ai/core/model-incident/index"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
 import { SessionRetention } from "@ycoding-ai/core/session/retention"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
@@ -81,10 +83,12 @@ const applicationServices = LayerNode.group([
   LocationServiceMap.node,
   SessionRestart.node,
   SessionOrchestration.node,
+  SessionReview.node,
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
   TelemetryConsent.node,
   RetentionSettings.node,
+  ModelIncident.node,
 ])
 
 export function createRoutes(

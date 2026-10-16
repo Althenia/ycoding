@@ -1,4 +1,6 @@
 export * as IsolatedBrowser from "./isolated-browser"
+import { BrowserOperation } from "./browser/operation"
+import { Hash } from "./util/hash"
 
 import { Browser } from "@ycoding-ai/schema/browser"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
@@ -43,6 +45,7 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("IsolatedBro
 }) {}
 
 export interface Interface {
+  readonly actionIdentity: (input: Omit<ActionInput, "callID">) => Effect.Effect<BrowserOperation.Identity, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly status: (sessionID: Browser.Tab["sessionID"]) => Effect.Effect<Status, SessionErrors.NotFoundError>
   readonly start: (
     sessionID: Browser.Tab["sessionID"],
@@ -74,7 +77,7 @@ export interface Options {
 const DEFAULT_OPERATION_TIMEOUT = Duration.seconds(30)
 const DEFAULT_SETTLEMENT_LIMIT = 256
 
-type MutableTab = Types.DeepMutable<Browser.Tab> & { elements: Map<string, Browser.Element> }
+type MutableTab = Types.DeepMutable<Browser.Tab> & { pageIdentity: string; elements: Map<string, BrowserOperation.Element> }
 type Settlement = { readonly fingerprint: string; readonly result: ActionResult }
 type PendingAction = {
   readonly callID: string
@@ -119,7 +122,7 @@ export const layer = (options: Options = {}) =>
       })
 
       const publicTab = (tab: MutableTab): Browser.Tab => {
-        const { elements: _elements, ...result } = tab
+        const { elements: _elements, pageIdentity: _pageIdentity, ...result } = tab
         return result
       }
 
@@ -177,7 +180,7 @@ export const layer = (options: Options = {}) =>
             id: tabID,
             sessionID,
             title: "",
-            page,
+            page, pageIdentity: Hash.sha256(input.url),
             status: "unavailable",
             generation: 1,
             documentGeneration: 1,
@@ -306,9 +309,20 @@ export const layer = (options: Options = {}) =>
           revision: instance.tab.observationRevision,
           title: instance.tab.title,
           page: instance.tab.page,
-          elements: [...instance.tab.elements.values()],
+          elements: [...instance.tab.elements.values()].map((element) => Schema.decodeUnknownSync(Browser.Element)(element)),
           truncated: observed.truncated,
         }
+      })
+
+      const actionIdentity: Interface["actionIdentity"] = Effect.fn("IsolatedBrowser.actionIdentity")(function* (input) {
+        const instance = yield* requireInstance(input.sessionID, input.instanceID)
+        if (instance.tab.id !== input.tabID) return yield* new OwnershipError({ message: "Isolated browser tab is stale or belongs to another Session" })
+        if (instance.state !== "ready" || !instance.runtime || instance.tab.generation !== input.generation ||
+          instance.tab.documentGeneration !== input.documentGeneration || instance.tab.observationRevision !== input.observationRevision)
+          return yield* new FenceError({ message: "Isolated browser observation is stale or paused; observe again" })
+        const identity = BrowserOperation.actionIdentity({ ...instance.tab, mode: "isolated" }, input.action, instance.tab.elements)
+        if (identity === undefined) return yield* new FenceError({ message: "Semantic target is stale or disabled; observe again" })
+        return identity
       })
 
       const action = Effect.fn("IsolatedBrowser.action")(function* (input: ActionInput) {
@@ -508,7 +522,7 @@ export const layer = (options: Options = {}) =>
         ).pipe(Effect.ensuring(Effect.sync(() => instances.clear()))),
       )
 
-      return Service.of({ status, start, list, observe, action, control, stop })
+      return Service.of({ status, start, list, observe, actionIdentity, action, control, stop })
     }),
   )
 
@@ -535,6 +549,7 @@ function applySnapshot(instance: Instance, snapshot: Omit<IsolatedBrowserExecuto
   const page = parsePageSync(snapshot.url)
   instance.tab.title = bounded(snapshot.title, Browser.MAX_TITLE_LENGTH)
   instance.tab.page = page
+  instance.tab.pageIdentity = Hash.sha256(snapshot.url)
   instance.tab.documentGeneration = snapshot.documentGeneration
   instance.tab.observationRevision = snapshot.revision
   instance.tab.elements.clear()

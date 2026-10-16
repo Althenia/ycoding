@@ -254,6 +254,11 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (!promoted && event.type !== "session.execution.failed") continue
 
+      if (event.type === "session.step.rerouted") {
+        metrics.started(event.data.model)
+        continue
+      }
+
       if (event.type === "session.step.started") {
         metrics.started(event.data.model)
         const part = {

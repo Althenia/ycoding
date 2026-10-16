@@ -167,6 +167,12 @@ export class GuardrailRequestNotFoundError extends Schema.TaggedErrorClass<Guard
   { httpApiStatus: 404 },
 ) {}
 
+export class ReviewItemNotFoundError extends Schema.TaggedErrorClass<ReviewItemNotFoundError>()(
+  "ReviewItemNotFoundError",
+  { itemID: Schema.String, message: Schema.String },
+  { httpApiStatus: 404 },
+) {}
+
 export class PermissionNotFoundError extends Schema.TaggedErrorClass<PermissionNotFoundError>()(
   "PermissionNotFoundError",
   {

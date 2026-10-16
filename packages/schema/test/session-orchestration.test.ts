@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { Agent, Model, Provider, SessionOrchestration } from "../src/index.js"
+import { Agent, Model, Provider, SessionOrchestration, SessionReview } from "../src/index.js"
 import { SessionID } from "../src/session-id.js"
 
 const parentID = SessionID.make("ses_parent")
@@ -120,6 +120,28 @@ describe("SessionOrchestration", () => {
     expect(Schema.decodeUnknownSync(SessionOrchestration.Change)({ type: "backgrounded" })).toEqual({
       type: "backgrounded",
     })
+  })
+
+  test("records restart recovery as a resumed change and exposes a stopped recovery on the task", () => {
+    expect(Schema.decodeUnknownSync(SessionOrchestration.Change)({ type: "resumed" })).toEqual({ type: "resumed" })
+    expect(Schema.decodeUnknownSync(SessionOrchestration.NotificationType)("resumed")).toBe("resumed")
+    const base = {
+      sessionID,
+      parentID,
+      description: "Implement projection",
+      agent: Agent.ID.make("build"),
+      model,
+      background: true,
+      state: "lost",
+      revision: 4,
+      time: { created: 1, updated: 2 },
+    } as const
+    const stopped = { ...base, stoppedRecovery: { itemID: SessionReview.ID.make("rvw_restart") } }
+    expect(Schema.decodeUnknownSync(SessionOrchestration.Task)(stopped)).toEqual(stopped)
+    expect(Schema.encodeSync(SessionOrchestration.Task)(Schema.decodeUnknownSync(SessionOrchestration.Task)(base))).not.toHaveProperty(
+      "stoppedRecovery",
+    )
+    expect(() => Schema.decodeUnknownSync(SessionOrchestration.Task)({ ...base, stoppedRecovery: { itemID: "qst_restart" } })).toThrow()
   })
 
   test("describes the bounded direct-child TeamView", () => {

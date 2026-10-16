@@ -223,7 +223,7 @@ test("usage waits for a connected machine and loads after connection opens", asy
     await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('Connect to a machine to see usage.') === true`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(0)
     expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
-    expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="status"]').length`)).toBe(1)
+    expect(await page.evaluate<number>(`[...document.querySelectorAll('.usage-page [role="status"]')].filter((item) => !item.closest('.incidents')).length`)).toBe(1)
     await page.evaluate(`window.usageConnect()`)
     await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
@@ -573,7 +573,7 @@ test("first Usage reads reserve visible placeholders without replacing settled c
       const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; monthlyReserve: number; overflow: boolean }>(`(() => {
         const placeholders = [...document.querySelectorAll('.usage-page .loading-placeholder')];
         return { kinds: placeholders.map(item => [...item.classList].find(name => name.startsWith('loading-placeholder--'))), labels: placeholders.map(item => item.textContent.trim()),
-          statuses: document.querySelectorAll('.usage-page [role="status"]').length,
+          statuses: [...document.querySelectorAll('.usage-page [role="status"]')].filter((item) => !item.closest('.incidents')).length,
           heights: placeholders.map(item => item.getBoundingClientRect().height),
           cards: [...document.querySelectorAll('.usage-chart, .usage-distribution')].map(item => item.getBoundingClientRect().height),
           monthlyReserve: document.querySelectorAll('.usage-distribution .loading-placeholder__shape')[0]?.getBoundingClientRect().height ?? 0,

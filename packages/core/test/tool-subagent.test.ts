@@ -23,6 +23,9 @@ import { Job } from "@ycoding-ai/core/job"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionReview } from "@ycoding-ai/core/session/review"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
+import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
@@ -153,6 +156,7 @@ const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
     Session.node,
     SessionExecution.node,
     SessionOrchestration.node,
+    SessionReview.node,
     SessionOrchestrationNotifier.node,
     PluginHooks.node,
     ToolHooks.node,
@@ -203,8 +207,8 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
           background: true,
           prepared,
         })
-        expect((yield* sessions.autonomy.get(parent.id)).sleep).toEqual({ priorGuardrailDecision: false })
-        expect((yield* sessions.autonomy.get(child.sessionID)).sleep).toEqual({ priorGuardrailDecision: false })
+        expect((yield* sessions.autonomy.get(parent.id)).sleep).toEqual({})
+        expect((yield* sessions.autonomy.get(child.sessionID)).sleep).toEqual({})
         const awake = yield* KeepAwake.Service
         expect((yield* awake.get).sleepHold).toBe(true)
       }),
@@ -281,6 +285,37 @@ const withSubagent = (location: Location.Ref) =>
   })
 
 describe("SubagentTool", () => {
+  for (const timeout of [undefined, 1000]) it.live(`binds a launch approval to its prompt, model, and effective timeout ${timeout}`, () =>
+    Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((directory) => Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+        yield* withSubagent(parent.location)
+        const locations = yield* LocationServiceMap.Service
+        const located = locations.get(parent.location)
+        const agents = yield* Agent.Service.pipe(Effect.provide(located))
+        yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [
+          { action: "*", resource: "*", effect: "allow" }, { action: "subagent", resource: "*", effect: "ask" },
+        ] }))
+        const registry = yield* ToolRegistry.Service.pipe(Effect.provide(located))
+        const input = { agent: "reviewer", description: "Approved child", prompt: "Approved task", model: childModel, timeout }
+        const call = (id: string, value: typeof input) => executeTool(registry, { sessionID: parent.id, ...toolIdentity,
+          call: { type: "tool-call", id, name: "subagent", input: value } }).pipe(Effect.exit)
+        yield* sessions.autonomy.set({ sessionID: parent.id, sleep: true })
+        expect((yield* call("approval-first", input))._tag).toBe("Failure")
+        const reviews = yield* SessionReview.Service
+        const item = (yield* reviews.list(parent.id))[0]
+        yield* reviews.decide({ sessionID: parent.id, itemID: item.itemID, decision: { kind: "permission", reply: "once" } })
+        expect((yield* call("approval-changed", { ...input, prompt: "Changed task" }))._tag).toBe("Failure")
+        expect((yield* call("approval-model", { ...input, model: parentModel }))._tag).toBe("Failure")
+        expect((yield* call("approval-timeout", { ...input, timeout: SubagentTool.MAX_TIMEOUT_MS }))._tag).toBe("Failure")
+        const orchestration = yield* SessionOrchestration.Service
+        expect(yield* orchestration.list(parent.id)).toEqual([])
+        expect((yield* call("approval-identical", { ...input, timeout: timeout ?? SubagentTool.DEFAULT_TIMEOUT_MS }))._tag).toBe("Success")
+        expect(yield* orchestration.list(parent.id)).toHaveLength(1)
+      })),
+    ),
+  )
   it.live("preserves restart loss, queue reactivation, new launches, completion notices, and durable replay", () =>
     Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((dir) => Effect.gen(function* () {
@@ -306,6 +341,8 @@ describe("SubagentTool", () => {
           const db = (yield* Database.Service).db
           const events = yield* EventRuntime.Service
           const orchestration = (yield* PluginRuntime.Service).orchestration
+          expect((yield* orchestration.get(child.parentID, child.sessionID)).state).toBe("running")
+          yield* SessionTask.reconcileStaleTasks(db, yield* AppProcess.Service)
           expect((yield* orchestration.get(child.parentID, child.sessionID)).state).toBe("lost")
           const notifier = yield* SessionOrchestrationNotifier.Service
           yield* notifier.dispatch
@@ -1549,6 +1586,7 @@ describe("SubagentTool", () => {
     ).pipe(
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(`${dir.path}/ycoding.json`, JSON.stringify({ auto_answer: true })))
           const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
           const sessions = yield* Session.Service
           const parent = yield* sessions.create({
@@ -2242,4 +2280,573 @@ describe("SubagentTool", () => {
     )
     }
   })
+})
+
+const noticeDrains: Session.ID[] = []
+const noticeRuns: Session.ID[] = []
+const noticeHolds = new Map<Session.ID, Deferred.Deferred<void>>()
+let wakeGate: { sessionID: Session.ID; entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
+let settleBarrier: { sessionID: Session.ID; entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
+
+const noticeExecutionNode = makeGlobalNode({
+  service: SessionExecution.Service,
+  layer: Layer.unwrap(
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      const db = (yield* Database.Service).db
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          drain: ({ sessionID, force }) =>
+            Effect.gen(function* () {
+              noticeDrains.push(sessionID)
+              const promoted = yield* SessionPending.promoteSteers(db, events, sessionID)
+              const hold = noticeHolds.get(sessionID)
+              if (hold) yield* Deferred.await(hold)
+              if (promoted === 0 && !force) return
+              noticeRuns.push(sessionID)
+              const assistantMessageID = SessionMessage.ID.create()
+              yield* events.publish(SessionEvent.Step.Started, {
+                sessionID,
+                assistantMessageID,
+                agent: Agent.ID.make("reviewer"),
+                model: childModel,
+              })
+              yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+              yield* events.publish(SessionEvent.Text.Ended, {
+                sessionID,
+                assistantMessageID,
+                ordinal: 0,
+                text: `reply ${noticeDrains.length}`,
+              })
+              yield* events.publish(SessionEvent.Step.Ended, {
+                sessionID,
+                assistantMessageID,
+                finish: "stop",
+                cost: Money.USD.zero,
+                tokens,
+              })
+            }),
+        }),
+      )
+      const shell = Layer.mock(Shell.Service, { list: () => Effect.succeed([]) })
+      const goals = Layer.succeed(
+        SessionGoal.Service,
+        SessionGoal.Service.of({
+          synthesize: () => Effect.die("unused"),
+          steer: () => Effect.die("unused"),
+          continuation: () => Effect.die("unused"),
+        }),
+      )
+      const locations = Layer.effect(
+        LocationServiceMap.Service,
+        // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+        LayerMap.make(() => Layer.mergeAll(runner, shell, goals) as unknown as Layer.Layer<LocationServices>),
+      )
+      const barriered = EventRuntime.Service.of({
+        ...events,
+        publish: (definition, data, options) =>
+          events.publish(definition, data, options).pipe(
+            Effect.tap(() =>
+              Effect.suspend(() => {
+                const barrier = settleBarrier
+                if (
+                  !barrier ||
+                  definition.type !== SessionEvent.Execution.Succeeded.type ||
+                  (data as { sessionID?: unknown }).sessionID !== barrier.sessionID
+                )
+                  return Effect.void
+                return Deferred.succeed(barrier.entered, undefined).pipe(Effect.andThen(Deferred.await(barrier.release)))
+              }),
+            ),
+          ),
+      })
+      return Layer.effect(
+        SessionExecution.Service,
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            SessionExecution.layer.pipe(
+              Layer.provide(locations),
+              Layer.provide(Layer.succeed(EventRuntime.Service, barriered)),
+            ),
+          )
+          const real = Context.get(context, SessionExecution.Service)
+          return SessionExecution.Service.of({
+            ...real,
+            wake: (sessionID) =>
+              Effect.suspend(() => {
+                const gate = wakeGate
+                if (!gate || gate.sessionID !== sessionID) return real.wake(sessionID)
+                return Deferred.succeed(gate.entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate.release)),
+                  Effect.andThen(real.wake(sessionID)),
+                )
+              }),
+          })
+        }),
+      )
+    }),
+  ),
+  deps: [
+    AppProcess.node,
+    Database.node,
+    SessionAutonomy.node,
+    SessionCompactionExecution.node,
+    SessionStore.node,
+    EventRuntime.node,
+    Job.node,
+  ],
+})
+
+const noticeIt = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      AppProcess.node,
+      KeepAwake.node,
+      Database.node,
+      EventRuntime.node,
+      SessionAutonomy.node,
+      SessionStore.node,
+      Job.node,
+      ToolOutputStore.cleanupNode,
+      Session.node,
+      SessionExecution.node,
+      SessionOrchestration.node,
+      SessionOrchestrationNotifier.node,
+      PluginHooks.node,
+      ToolHooks.node,
+      PluginRuntime.node,
+      PluginRuntime.providerNode,
+      LocationServiceMap.node,
+    ]),
+    [
+      [SessionExecution.node, noticeExecutionNode],
+      [
+        KeepAwake.node,
+        Layer.effect(
+          KeepAwake.Service,
+          Effect.gen(function* () {
+            return yield* KeepAwake.make({
+              spawner: yield* AppProcess.Service,
+              platform: "linux",
+              pid: process.pid,
+              clamshell: { set: () => "unsupported" },
+            })
+          }),
+        ).pipe(Layer.provide(LayerNode.compile(AppProcess.node))),
+      ],
+      fixtureModels,
+    ],
+  ),
+)
+
+const noticeText = '<shell id="call_shell" state="completed" command="true">\n\n</shell>'
+let noticeSequence = 0
+
+const noticeSetup = (options: { hold?: boolean; barrier?: boolean } = {}) =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
+    )
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }),
+      model: parentModel,
+    })
+    yield* withSubagent(parent.location)
+    const locations = yield* LocationServiceMap.Service
+    const prepared = yield* SessionOrchestration.preflight(parent, {
+      agent: Agent.ID.make("reviewer"),
+      caller: toolIdentity.agent,
+    }).pipe(Effect.provide(locations.get(parent.location)))
+    const runtime = yield* PluginRuntime.Service
+    const sequence = noticeSequence++
+    const assistantID = SessionMessage.ID.make(`msg_notice_launch_${sequence}`)
+    const callID = `call_notice_launch_${sequence}`
+    const childID = SessionOrchestrationIdentity.launch(parent.id, assistantID, callID).childID
+    const release = yield* Deferred.make<void>()
+    if (options.hold) noticeHolds.set(childID, release)
+    const barrier = { sessionID: childID, entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
+    if (options.barrier) settleBarrier = barrier
+    const gate = { sessionID: childID, entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (settleBarrier === barrier) settleBarrier = undefined
+        if (wakeGate === gate) wakeGate = undefined
+      }),
+    )
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.andThen(Effect.sync(() => void noticeHolds.delete(childID)))))
+    const child = yield* runtime.orchestration.launch({
+      parentID: parent.id,
+      parentAssistantMessageID: assistantID,
+      toolCallID: callID,
+      agent: Agent.ID.make("reviewer"),
+      description: "background shell child",
+      prompt: "Run a background shell command",
+      background: true,
+      prepared,
+    })
+    const execution = yield* SessionExecution.Service
+    const orchestration = yield* SessionOrchestration.Service
+    const notifier = yield* SessionOrchestrationNotifier.Service
+    const db = (yield* Database.Service).db
+    const events = yield* EventRuntime.Service
+    if (!options.hold && !options.barrier) yield* execution.awaitIdle(child.sessionID)
+    const observe = Effect.gen(function* () {
+      const notices = yield* db
+        .select({ id: SessionTaskNotificationTable.id })
+        .from(SessionTaskNotificationTable)
+        .where(eq(SessionTaskNotificationTable.task_session_id, child.sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const pending = yield* db
+        .select({ id: SessionPendingTable.id })
+        .from(SessionPendingTable)
+        .where(eq(SessionPendingTable.session_id, child.sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const history = yield* db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable).all().pipe(Effect.orDie)
+      return {
+        state: (yield* orchestration.get(parent.id, child.sessionID)).state,
+        childDrains: noticeDrains.filter((id) => id === child.sessionID).length,
+        childRuns: noticeRuns.filter((id) => id === child.sessionID).length,
+        parentDrains: noticeDrains.filter((id) => id === parent.id).length,
+        notices: notices.map((row) => row.id),
+        pending: pending.length,
+        executions: history.filter(
+          (row) => row.type.startsWith(SessionEvent.Execution.Started.type) && row.data.sessionID === child.sessionID,
+        ).length,
+        started: history.filter(
+          (row) =>
+            row.type.startsWith(SessionEvent.Task.Updated.type) &&
+            row.data.sessionID === child.sessionID &&
+            (row.data.change as { type?: string }).type === "started",
+        ).length,
+      }
+    })
+    const notice = (shellID: string, resume = true, sessionID: Session.ID = child.sessionID) =>
+      runtime.orchestration.notice({
+        sessionID,
+        shellID,
+        text: noticeText,
+        description: "true",
+        metadata: { source: "shell", state: "completed" },
+        resume,
+      })
+    const settleParent = notifier.dispatch.pipe(Effect.andThen(execution.awaitIdle(parent.id)))
+    return { sessions, parent, child, execution, orchestration, runtime, events, db, release, barrier, gate, observe, notice, settleParent }
+  })
+
+describe("shell completion notice for managed children", () => {
+  noticeIt.live("wakes a completed child once and tells the parent about the new completion exactly once", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* setup.settleParent
+      const before = yield* setup.observe
+      expect(before).toMatchObject({ state: "completed", childDrains: 1, started: 1, pending: 0 })
+      expect(before.notices).toHaveLength(1)
+      yield* setup.notice("sh_notice_one")
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", childDrains: 2, started: 2, pending: 0 })
+      expect(after.notices).toHaveLength(2)
+      expect(after.parentDrains).toBe(before.parentDrains + 1)
+    }),
+  )
+
+  noticeIt.live("a duplicate after the notice was consumed neither revives the child nor notifies again", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* setup.notice("sh_notice_dup")
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const first = yield* setup.observe
+      yield* setup.notice("sh_notice_dup")
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      expect(yield* setup.observe).toEqual(first)
+    }),
+  )
+
+  noticeIt.live("a duplicate before consumption and concurrent deliveries reactivate the child once", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* setup.notice("sh_notice_race", false)
+      const admitted = yield* setup.observe
+      expect(admitted).toMatchObject({ state: "completed", childDrains: 1, started: 1, pending: 1 })
+      yield* Effect.all([setup.notice("sh_notice_race"), setup.notice("sh_notice_race")], { concurrency: "unbounded" })
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", started: 2, pending: 0, childRuns: 2 })
+      expect(after.childDrains).toBeGreaterThanOrEqual(2)
+      expect(after.notices).toHaveLength(2)
+    }),
+  )
+
+  noticeIt.live("leaves a running child's task state alone", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ hold: true })
+      expect((yield* setup.observe).state).toBe("running")
+      yield* setup.notice("sh_notice_running")
+      expect(yield* setup.observe).toMatchObject({ state: "running", started: 1, pending: 1 })
+    }),
+  )
+
+  for (const terminal of ["failed", "cancelled", "lost"] as const) {
+    noticeIt.live(`admits a ${terminal} child's notice without reviving it`, () =>
+      Effect.gen(function* () {
+        noticeDrains.length = 0
+      noticeRuns.length = 0
+        const setup = yield* noticeSetup({ hold: true })
+        if (terminal === "cancelled")
+          yield* setup.orchestration.cancel({ parentID: setup.parent.id, childID: setup.child.sessionID })
+        else
+          yield* setup.orchestration.settle(
+            setup.child.sessionID,
+            terminal === "failed" ? { type: "failed", error: "failed" } : { type: "lost" },
+          )
+        const before = yield* setup.observe
+        expect(before.state).toBe(terminal)
+        yield* setup.notice(`sh_notice_${terminal}`)
+        const after = yield* setup.observe
+        expect(after).toMatchObject({ state: terminal, started: before.started, childDrains: before.childDrains })
+        expect(after.pending).toBe(before.pending + 1)
+      }),
+    )
+  }
+
+  noticeIt.live("a quiet notice for a completed child is admitted without waking it", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* setup.notice("sh_notice_quiet", false)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      expect(yield* setup.observe).toMatchObject({ state: "completed", childDrains: 1, started: 1, pending: 1 })
+    }),
+  )
+
+  noticeIt.live("a parent send racing a notice reactivates the child once", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* Effect.all(
+        [
+          setup.orchestration.send({
+            parentID: setup.parent.id,
+            childID: setup.child.sessionID,
+            messageID: SessionMessage.ID.make("msg_notice_race_send"),
+            text: "continue",
+            delivery: "steer",
+          }),
+          setup.notice("sh_notice_send_race"),
+        ],
+        { concurrency: "unbounded" },
+      )
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", pending: 0 })
+      expect(after.started).toBe(after.notices.length)
+      expect(after.notices.length).toBeGreaterThan(1)
+    }),
+  )
+
+  noticeIt.live("a cancel racing a notice leaves the child cancelled and unrevived", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ hold: true })
+      yield* Effect.all(
+        [
+          setup.orchestration.cancel({ parentID: setup.parent.id, childID: setup.child.sessionID }),
+          setup.notice("sh_notice_cancel_race"),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(yield* setup.observe).toMatchObject({ state: "cancelled", started: 1 })
+    }),
+  )
+
+  noticeIt.live("a notice delivered between execution success and task completion is consumed by a second run", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      expect(yield* setup.observe).toMatchObject({ state: "running", childRuns: 1, pending: 0 })
+      yield* setup.notice("sh_notice_boundary")
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", pending: 0, childRuns: 2, started: 1, executions: 2 })
+      expect(after.notices).toHaveLength(1)
+    }),
+  )
+
+  noticeIt.live("a completion committed between a notice's admission and its wake does not strand it", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      wakeGate = setup.gate
+      const completed = yield* setup.events.subscribe(SessionEvent.Task.Updated).pipe(
+        Stream.filter((event) => event.data.sessionID === setup.child.sessionID && event.data.change.type === "completed"),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      const delivery = yield* setup.notice("sh_notice_after_admission").pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.await(setup.gate.entered)
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* Fiber.join(completed)
+      yield* Deferred.succeed(setup.gate.release, undefined)
+      yield* Fiber.join(delivery)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", pending: 0, childRuns: 2, started: 2 })
+      expect(after.notices).toHaveLength(2)
+    }),
+  )
+
+  noticeIt.live("a quiet notice delivered while the child execution closes neither wakes nor blocks completion", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      yield* setup.notice("sh_notice_quiet_closing", false)
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", childRuns: 1, started: 1, pending: 1, childDrains: 1, executions: 1 })
+      expect(after.notices).toHaveLength(1)
+    }),
+  )
+
+  noticeIt.live("a cancel while the child execution closes wins over its completion without deadlock", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      yield* setup.orchestration.cancel({ parentID: setup.parent.id, childID: setup.child.sessionID })
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "cancelled", childRuns: 1, started: 1 })
+      expect(after.notices.filter((id) => id.endsWith("_completed"))).toEqual([])
+    }),
+  )
+
+  noticeIt.live("a parent send delivered while the child execution closes is consumed by a second run", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      yield* setup.orchestration.send({
+        parentID: setup.parent.id,
+        childID: setup.child.sessionID,
+        messageID: SessionMessage.ID.make("msg_notice_closing_send"),
+        text: "continue",
+        delivery: "steer",
+      })
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", pending: 0, childRuns: 2, started: 1 })
+      expect(after.notices).toHaveLength(1)
+    }),
+  )
+
+  noticeIt.live("a completion committed between a parent send's admission and its wake does not strand it", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup({ barrier: true })
+      yield* Deferred.await(setup.barrier.entered)
+      wakeGate = setup.gate
+      const completed = yield* setup.events.subscribe(SessionEvent.Task.Updated).pipe(
+        Stream.filter((event) => event.data.sessionID === setup.child.sessionID && event.data.change.type === "completed"),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      const delivery = yield* setup.orchestration
+        .send({
+          parentID: setup.parent.id,
+          childID: setup.child.sessionID,
+          messageID: SessionMessage.ID.make("msg_notice_gate_send"),
+          text: "continue",
+          delivery: "steer",
+        })
+        .pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.await(setup.gate.entered)
+      yield* Deferred.succeed(setup.barrier.release, undefined)
+      yield* Fiber.join(completed)
+      yield* Deferred.succeed(setup.gate.release, undefined)
+      yield* Fiber.join(delivery)
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      yield* setup.settleParent
+      const after = yield* setup.observe
+      expect(after).toMatchObject({ state: "completed", pending: 0, childRuns: 2, started: 2 })
+      expect(after.notices).toHaveLength(2)
+    }),
+  )
+
+  noticeIt.live("a Session without a task wakes as before", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* setup.settleParent
+      const before = yield* setup.observe
+      yield* setup.notice("sh_notice_root", true, setup.parent.id)
+      yield* setup.execution.awaitIdle(setup.parent.id)
+      const after = yield* setup.observe
+      expect(after.parentDrains).toBe(before.parentDrains + 1)
+      expect(after.started).toBe(before.started)
+    }),
+  )
+
+  noticeIt.live("an unknown Session fails with not found", () =>
+    Effect.gen(function* () {
+      const setup = yield* noticeSetup()
+      const exit = yield* Effect.exit(setup.notice("sh_notice_missing", true, Session.ID.make("ses_notice_missing")))
+      expect(exit).toMatchObject({ _tag: "Failure" })
+      expect(JSON.stringify(exit)).toContain("Session.NotFoundError")
+    }),
+  )
+
+  noticeIt.live("a child with an open review stays idle", () =>
+    Effect.gen(function* () {
+      noticeDrains.length = 0
+      noticeRuns.length = 0
+      const setup = yield* noticeSetup()
+      yield* SessionReviewFold.open(setup.db, setup.events, {
+        sessionID: setup.child.sessionID,
+        kind: "question",
+        reason: "free_text",
+        limit: 16,
+        origin: { requestID: "frm_notice_review" },
+        payload: { type: "form", title: "Evidence", fields: [{ key: "text", type: "string", required: true }] },
+      })
+      yield* setup.notice("sh_notice_review")
+      yield* setup.execution.awaitIdle(setup.child.sessionID)
+      expect(yield* setup.observe).toMatchObject({ state: "completed", childDrains: 1, started: 1, pending: 1 })
+    }),
+  )
 })

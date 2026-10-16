@@ -86,6 +86,7 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [parent, child], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: child })
+  if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (["ses_docs", "ses_keymap"].some((id) => url.pathname === `/api/session/${id}`))
     return json({ data: { ...session(url.pathname.slice("/api/session/".length), "Sibling", now), parentID } })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)

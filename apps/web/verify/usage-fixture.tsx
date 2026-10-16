@@ -126,6 +126,7 @@ const report = (input: UsageReportInput) => {
 }
 
 const answer = async (operation: string, request?: RemoteTransportRequest): Promise<RemoteRequestOutcome> => {
+  if (operation === "incident.report") return ok({ rows: [], groups: 0 })
   if (!operation.startsWith("usage.")) return ok([])
   const input = request?.input as UsageReportInput | undefined
   if (operation === "usage.providers" && refreshCycle && input && "refresh" in input && !pendingReload) beginReload()

@@ -190,6 +190,25 @@ function sentEvents(record: ConnectionRecord) {
   )
 }
 
+test("ID-only shell deletions invalidate family lists without forwarding shell identities", async () => {
+  const test = harness({ advertiseCoalesceMs: 0 })
+  try {
+    await test.bridge.connect()
+    const connection = test.records[0]!
+    await waitFor(() => test.streams[0] && sentFrames(connection).some((frame) => frame.type === "sessions") ? true : undefined)
+    connection.sent.length = 0
+    for (const id of ["sh_running_deleted", "sh_queued_deleted"]) {
+      const before = sentFrames(connection).filter((frame) => frame.type === "sessions").length
+      test.streams[0]!.stream.onEvent({ type: "shell.deleted", data: { id } })
+      await waitFor(() => sentFrames(connection).filter((frame) => frame.type === "sessions").length > before ? true : undefined)
+    }
+    sentFrames(connection).filter((frame) => frame.type === "sessions").forEach((frame) => expect(frame).toEqual({ type: "sessions" }))
+    expect(sentEvents(connection)).toEqual([])
+    expect(connection.sent.join("")).not.toContain("sh_running_deleted")
+    expect(connection.sent.join("")).not.toContain("sh_queued_deleted")
+  } finally { await test.bridge.close() }
+})
+
 const completion = (sessionID: string, seq = 12) => ({
   id: `evt_${sessionID}_${seq}`, seq, created: 1_000, sessionID, inputID: "msg_input", assistantMessageID: "msg_final",
 })
@@ -296,7 +315,80 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
   return { type: "request", id: "req_1", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
 }
 
+test("pending-request events invalidate shared list classification before the next cursor or carousel read", async () => {
+  let waiting = false
+  const test = harness({ results: {
+    outstandingSessions: { data: [], running: ["ses_1"], failed: [], lost: [] },
+    permissionRequests: () => waiting ? [{ id: "per_1", sessionID: "ses_1" }] : [],
+  } })
+  try {
+    await test.bridge.connect()
+    await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status"))
+    const ask = async (id: string) => {
+      test.records[0].deliver({ ...requestFrame("session.list", undefined, { status: "waiting", order: "active", parentID: null }), id })
+      const response = await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "response" && frame.id === id))
+      expect(response).toMatchObject({ ok: true })
+      return response
+    }
+    expect(await ask("req_before_attention")).toMatchObject({ value: { data: [] } })
+    waiting = true
+    test.streams[0].stream.onEvent({ type: "permission.asked", data: { sessionID: "ses_1" } })
+    expect(await ask("req_after_attention")).toMatchObject({ value: { data: [expect.objectContaining({ id: "ses_1" })] } })
+  } finally { await test.bridge.close() }
+})
+
 describe("remote bridge", () => {
+  test("forwards guardrail and decision grades through serialized reads and subscribed events", async () => {
+    const grades = [
+      { choice: "approve_all", confidence: 0.934567, evidence: "Every target was checked." },
+      { choice: "approve", confidence: 0.81, evidence: "x".repeat(500) },
+      { choice: "reject", confidence: 0.07, evidence: "No blocking evidence." },
+      { choice: "escalate", confidence: 0.61, evidence: "Confirm scope." },
+    ]
+    const provenance = { choice: "approve_all", confidence: 0.934567, grades }
+    const status = { profile: "standard", decisions: [{ sessionID: "ses_1", requestID: "grq_1", created: 1, reply: "always", ...provenance }] }
+    const pending = [{ id: "grq_1", sessionID: "ses_1", escalation: provenance }]
+    const review = [{ itemID: "rvw_1", sessionID: "ses_1", rootSessionID: "ses_1", sessionTitle: "Root", created: 1, kind: "guardrail", reason: "escalated", ...provenance,
+      origin: { requestID: "grq_1" }, payload: { type: "guardrail", action: "write", resources: ["file"], ruleIDs: [], reason: "Outside", hardReview: false, directories: ["/fixture"], requestID: "grq_1", fingerprint: "a".repeat(64) } }]
+    const messages = [{ id: "msg_1", type: "assistant", time: { created: 1 }, content: [{ type: "tool", id: "call_1", name: "decision", state: {
+      status: "completed", structured: { response: { answers: [{ name: "scope", type: "choice", choice: null, grades }] } }, content: [],
+    } }] }]
+    const test = harness({ results: { guardrailStatus: status, guardrailRequestList: pending, reviewList: review, messages } })
+    try {
+      await test.bridge.connect()
+      const connection = test.records[0]
+      for (const [index, operation, value] of [
+        [0, "session.guardrail.status", status], [1, "session.guardrail.request.list", pending], [2, "session.review.list", review], [3, "session.messages", messages],
+      ] as const) {
+        const id = `req_grades_${index}`
+        connection.deliver({ ...requestFrame(operation, "ses_1"), id })
+        const response = await waitFor(() => sentFrames(connection).find((frame) => frame.type === "response" && frame.id === id))
+        expect(response).toMatchObject({ ok: true, value: { data: value } })
+      }
+      connection.deliver({ type: "subscriptions", clientID: "client-grades", sessionIDs: ["ses_1"] })
+      await waitFor(() => test.streams[0])
+      const events = ["session.guardrail.decided", "session.guardrail.escalated"].map((type) => ({ type, data: { sessionID: "ses_1", requestID: "grq_1", ...provenance } }))
+      events.forEach((event) => test.streams[0].stream.onEvent(event))
+      await waitFor(() => sentEvents(connection).length === 2 ? true : undefined)
+      expect(sentEvents(connection)).toEqual(events.map((event) => ({ sessionID: "ses_1", event })))
+    } finally { await test.bridge.close() }
+  })
+
+  test("review changes invalidate family reads even without a subscription to the owning child", async () => {
+    const test = harness({})
+    try {
+      await test.bridge.connect()
+      await waitFor(() => test.streams[0])
+      const frames = () => sentFrames(test.records[0]).filter((frame) => frame.type === "sessions").length
+      for (const type of ["session.review.deferred", "session.review.decided", "session.review.withdrawn", "session.review.consumed"]) {
+        const before = frames()
+        test.streams[0].stream.onEvent({ type, data: { sessionID: "ses_child", itemID: "rvw_1" } })
+        await waitFor(() => frames() > before ? true : undefined)
+      }
+      expect(sentEvents(test.records[0])).toHaveLength(0)
+    } finally { await test.bridge.close() }
+  })
+
   test("settled activity refreshes the inventory time without a Session-list invalidation", async () => {
     let current = { ...sessionInfo("ses_1"), time: { created: 1, updated: 1, active: 2 } }
     const test = harness({ results: { listPage: async () => ({ data: [current] }), getSession: async () => current } })

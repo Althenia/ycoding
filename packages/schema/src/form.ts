@@ -4,6 +4,7 @@ import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { NonNegativeInt, optional, PositiveInt, statics } from "./schema.js"
+import { SessionReviewID } from "./session-review-id.js"
 
 const IDSchema = Schema.String.check(Schema.isStartsWith("frm_")).pipe(Schema.brand("Form.ID"))
 
@@ -32,7 +33,7 @@ export interface Option extends Schema.Schema.Type<typeof Option> {}
 export const When = Schema.Struct({
   key: Schema.String,
   op: Schema.Literals(["eq", "neq"]),
-  value: Schema.Union([Schema.String, Schema.Number, Schema.Boolean]),
+  value: Schema.Union([Schema.String, Schema.Finite, Schema.Boolean]),
 }).annotate({ identifier: "Form.When" })
 export interface When extends Schema.Schema.Type<typeof When> {}
 
@@ -61,18 +62,18 @@ export interface StringField extends Schema.Schema.Type<typeof StringField> {}
 export const NumberField = Schema.Struct({
   ...FieldBase,
   type: Schema.Literal("number"),
-  minimum: Schema.Number.pipe(optional),
-  maximum: Schema.Number.pipe(optional),
-  default: Schema.Number.pipe(optional),
+  minimum: Schema.Finite.pipe(optional),
+  maximum: Schema.Finite.pipe(optional),
+  default: Schema.Finite.pipe(optional),
 }).annotate({ identifier: "Form.NumberField" })
 export interface NumberField extends Schema.Schema.Type<typeof NumberField> {}
 
 export const IntegerField = Schema.Struct({
   ...FieldBase,
   type: Schema.Literal("integer"),
-  minimum: Schema.Number.pipe(optional),
-  maximum: Schema.Number.pipe(optional),
-  default: Schema.Number.pipe(optional),
+  minimum: Schema.Finite.pipe(optional),
+  maximum: Schema.Finite.pipe(optional),
+  default: Schema.Finite.pipe(optional),
 }).annotate({ identifier: "Form.IntegerField" })
 export interface IntegerField extends Schema.Schema.Type<typeof IntegerField> {}
 
@@ -148,6 +149,7 @@ export const State = Schema.Union([
   Schema.Struct({ status: Schema.Literal("answered"), answer: Answer }),
   Schema.Struct({ status: Schema.Literal("cancelled") }),
   Schema.Struct({ status: Schema.Literal("timed_out"), seconds: PositiveInt }),
+  Schema.Struct({ status: Schema.Literal("deferred"), itemID: SessionReviewID }),
 ])
   .pipe(Schema.toTaggedUnion("status"))
   .annotate({ identifier: "Form.State" })
@@ -162,11 +164,16 @@ const Created = ephemeral({ type: "form.created", schema: { form: Info } })
 const Replied = ephemeral({ type: "form.replied", schema: { id: ID, sessionID: Schema.String, answer: Answer } })
 const Cancelled = ephemeral({ type: "form.cancelled", schema: { id: ID, sessionID: Schema.String } })
 const TimedOut = ephemeral({ type: "form.timed_out", schema: { id: ID, sessionID: Schema.String } })
+const Deferred = ephemeral({
+  type: "form.deferred",
+  schema: { id: ID, sessionID: Schema.String, itemID: SessionReviewID },
+})
 
 export const Event = {
   Created,
   Replied,
   Cancelled,
   TimedOut,
-  Definitions: inventory(Created, Replied, Cancelled, TimedOut),
+  Deferred,
+  Definitions: inventory(Created, Replied, Cancelled, TimedOut, Deferred),
 }

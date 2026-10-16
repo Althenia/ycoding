@@ -256,7 +256,7 @@ test("clears the composer after an explicit /goal starts goal mode from normal",
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     await waitFor(() => !screen.lines().some((line) => line.includes("/goal finish product.")), "cleared composer")
-    await waitFor(() => screen.frame().includes("Goal · autonomous"), "live goal status")
+    await waitFor(() => screen.frame().includes("Manual · goal"), "live goal status")
 
     expect(autonomySets).toEqual([{ goal: "finish product." }])
     expect(promptRequests).toEqual([])
@@ -567,10 +567,10 @@ test("the command palette exposes the goal action and applies it to the active S
 
 test("execution settlement refreshes a completed goal before the header reports readiness", async () => {
   resetFixture(goalState("active", "Ship the patch"))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Goal · autonomous" })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Manual · goal" })
   try {
     await screen.waitForEventStream()
-    expect(screen.frame()).toContain("Goal · autonomous")
+    expect(screen.frame()).toContain("Manual · goal")
     autonomyState = goalState("completed", "Ship the patch")
     screen.events.emit({
       id: "evt_goal_settled",
@@ -581,9 +581,9 @@ test("execution settlement refreshes a completed goal before the header reports 
       data: { sessionID },
     } satisfies YCodingEvent)
     const deadline = Date.now() + 4_000
-    while (screen.frame().includes("Goal · autonomous") && Date.now() < deadline)
+    while (screen.frame().includes("Manual · goal") && Date.now() < deadline)
       await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(screen.frame()).not.toContain("Goal · autonomous")
+    expect(screen.frame()).not.toContain("Manual · goal")
     expect(screen.frame()).not.toContain("GOAL")
   } finally {
     await screen.dispose()

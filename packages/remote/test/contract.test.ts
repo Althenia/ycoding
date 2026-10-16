@@ -28,15 +28,52 @@ import {
   remoteSessionOperations,
   requireSession,
   isNoticeRequest,
+  isRemoteReviewItemID,
+  remoteRecoveryChoices,
   serializeEvent,
+  serializeEvents,
   serializeNoticeFrame,
   serializeRequest,
   serializeResponse,
   serializeSessions,
   serializeStatus,
+  type RemoteIncidentGuidance,
+  type RemoteIncidentGuidanceInput,
+  type RemoteIncidentRecent,
+  type RemoteIncidentRecentInput,
+  type RemoteIncidentReport,
+  type RemoteIncidentReportInput,
   type RemoteNoticeFrame,
   type RemoteOperation,
 } from "../src/index"
+
+test("guardrail and decision grades survive response and event serialization and relay validation", () => {
+  const grades = [
+    { choice: "approve_all", confidence: 0.934567, evidence: "All targets were checked." },
+    { choice: "approve", confidence: 0.81, evidence: "x".repeat(500) },
+    { choice: "reject", confidence: 0.07, evidence: "No blocking evidence." },
+    { choice: "escalate", confidence: 0.61, evidence: "Confirm scope." },
+  ]
+  const provenance = { choice: "approve_all", confidence: 0.934567, grades }
+  for (const value of [
+    { data: { decisions: [{ sessionID: "ses_a", requestID: "grq_a", reply: "always", ...provenance }] } },
+    { data: [{ itemID: "rvw_a", kind: "guardrail", ...provenance }] },
+    { data: [{ id: "grq_a", escalation: provenance }] },
+    { response: { answers: [{ name: "scope", type: "choice", choice: null, grades }] } },
+  ]) {
+    const frame = { type: "response" as const, id: "req_grades", ok: true as const, value }
+    expect(parseAgentMessage(serializeResponse(frame))).toEqual({ ok: true, value: frame })
+    expect(parseRelayToClientMessage(serializeResponse(frame))).toEqual({ ok: true, value: frame })
+  }
+  for (const type of ["session.guardrail.decided", "session.guardrail.escalated"]) {
+    const event = { type, data: { sessionID: "ses_a", requestID: "grq_a", ...provenance } }
+    const single = { type: "event" as const, sessionID: "ses_a", event }
+    expect(parseAgentMessage(serializeEvent(single))).toEqual({ ok: true, value: single })
+    const batch = { type: "events" as const, sessionID: "ses_a", events: [event] }
+    expect(parseAgentMessage(serializeEvents(batch))).toEqual({ ok: true, value: batch })
+    expect(parseRelayToClientMessage(serializeEvents(batch))).toEqual({ ok: true, value: batch })
+  }
+})
 
 test("notice cursors identify one positive safe integer without aliases", () => {
   expect(noticeSequence("ntc_1")).toBe(1)
@@ -272,6 +309,77 @@ test("usage operations are global and validate refresh and bounded ReportInput",
     expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, sessionID: "ses_1", input: operation === "usage.report" ? { group: "model" } : undefined })).ok).toBe(false)
 })
 
+test("incident operations classify as read except guidance clear, and none requires a Session", () => {
+  expect(remoteOperationAccess["incident.report"]).toBe("read")
+  expect(remoteOperationAccess["incident.recent"]).toBe("read")
+  expect(remoteOperationAccess["incident.guidance"]).toBe("read")
+  expect(remoteOperationAccess["incident.guidance.clear"]).toBe("mutation")
+  for (const operation of ["incident.report", "incident.recent", "incident.guidance", "incident.guidance.clear"] as const) {
+    expect(requireSession(operation)).toBe(false)
+    expect(remoteSessionOperations as readonly string[]).not.toContain(operation)
+  }
+})
+
+const incidentFrame = (operation: string, input: unknown, sessionID?: string) =>
+  parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }))
+
+test("incident report and recent are global and validate exact bounded inputs", () => {
+  const accepted = [
+    ["incident.report", { group: "model" }],
+    ["incident.report", { group: "agent", from: 0, to: 100, offset: 0, limit: 200 }],
+    ["incident.report", { group: "model", from: 5, to: 5 }],
+    ["incident.recent", { provider: "p", model: "m" }],
+    ["incident.recent", { provider: "p", model: "m", agent: "build", limit: 50 }],
+  ] as const
+  for (const [operation, input] of accepted) expect(incidentFrame(operation, input)).toMatchObject({ ok: true, value: { operation, input } })
+  const rejected = [
+    ["incident.report", undefined], ["incident.report", {}], ["incident.report", { group: "session" }],
+    ["incident.report", { group: "model", limit: 201 }], ["incident.report", { group: "model", limit: 0 }],
+    ["incident.report", { group: "model", offset: -1 }], ["incident.report", { group: "model", offset: 1.5 }],
+    ["incident.report", { group: "model", from: -1 }], ["incident.report", { group: "model", to: "9" }],
+    ["incident.report", { group: "model", from: 6, to: 5 }],
+    ["incident.report", { group: "model", directory: "/tmp" }], ["incident.report", { group: "model", workspace: "w" }],
+    ["incident.report", { group: "model", location: { directory: "/tmp" } }], ["incident.report", { group: "model", sessionID: "ses_1" }],
+    ["incident.recent", undefined], ["incident.recent", { provider: "p" }], ["incident.recent", { model: "m" }],
+    ["incident.recent", { provider: "", model: "m" }], ["incident.recent", { provider: "p", model: "m".repeat(129) }],
+    ["incident.recent", { provider: "p", model: "m", limit: 51 }], ["incident.recent", { provider: "p", model: "m", limit: 0 }],
+    ["incident.recent", { provider: "p", model: "m", agent: "" }], ["incident.recent", { provider: "p", model: "m", agent: 4 }],
+    ["incident.recent", { provider: "p", model: "m", directory: "/tmp" }], ["incident.recent", { provider: "p", model: "m", location: "x" }],
+  ] as const
+  for (const [operation, input] of rejected) expect(incidentFrame(operation, input)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  for (const [operation, input] of accepted.filter(([operation]) => operation === "incident.report" || operation === "incident.recent"))
+    expect(incidentFrame(operation, input, "ses_1")).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+})
+
+test("incident guidance reads and clears accept only the model pair and an optional owned Session", () => {
+  for (const operation of ["incident.guidance", "incident.guidance.clear"] as const) {
+    expect(incidentFrame(operation, { provider: "p", model: "m" })).toMatchObject({ ok: true, value: { operation, input: { provider: "p", model: "m" } } })
+    expect(incidentFrame(operation, { provider: "p", model: "m" }, "ses_1")).toMatchObject({ ok: true, value: { operation, sessionID: "ses_1" } })
+    for (const input of [
+      undefined, {}, { provider: "p" }, { model: "m" }, { provider: "", model: "m" }, { provider: "p", model: 1 },
+      { provider: "p", model: "m", sessionID: "ses_1" }, { provider: "p", model: "m", directory: "/tmp" },
+      { provider: "p", model: "m", workspace: "w" }, { provider: "p", model: "m", location: { directory: "/tmp" } },
+      { provider: "p", model: "m", agent: "build" },
+    ]) expect(incidentFrame(operation, input)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+    expect(incidentFrame(operation, { provider: "p", model: "m" }, "not a session").ok).toBe(false)
+  }
+})
+
+test("incident wire types carry canonical Schema shapes with plain string identifiers", () => {
+  const report = {
+    data: { rows: [{ providerID: "p", modelID: "m", agent: "build", fallbacks: 1, escalated: 2, rejected: 3, last: 4 }], groups: 1 },
+  } satisfies RemoteIncidentReport
+  const recent = {
+    data: { items: [{ id: "inc_1", time: 1, kind: "fallback", category: "rate_limit", ruleIDs: [], agent: "build", variant: "high", profile: "work",
+      target: { id: "n", providerID: "q", variant: "low", profile: "w" }, decidedBy: "human" }] },
+  } satisfies RemoteIncidentRecent
+  const guidance = { data: { text: "note", clearedAt: 5, enabled: true } } satisfies RemoteIncidentGuidance
+  const reportInput = { group: "agent", from: 1, to: 2, offset: 0, limit: 5 } satisfies RemoteIncidentReportInput
+  const recentInput = { provider: "p", model: "m", agent: "build", limit: 5 } satisfies RemoteIncidentRecentInput
+  const guidanceInput = { provider: "p", model: "m" } satisfies RemoteIncidentGuidanceInput
+  expect([report, recent, guidance, reportInput, recentInput, guidanceInput]).toHaveLength(6)
+})
+
 const jwk = {
   kty: "EC",
   crv: "P-256",
@@ -309,6 +417,21 @@ describe("remote envelope: request", () => {
       ok: true,
       value: { type: "request", id: "a", operation: "session.list" },
     })
+  })
+
+  test("validates waiting, running and idle Session list filters", () => {
+    for (const status of ["waiting", "running", "idle"])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { status, order: "active", parentID: null } })))
+        .toMatchObject({ ok: true, value: { input: { status } } })
+    for (const status of ["blocked", "all", true, null])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { status } })))
+        .toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  })
+
+  test("Session window rebasing accepts only an active root anchor and a bounded preceding row count", () => {
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input: { order: "active", around: "ses_anchor", before: 12, limit: 25 } }))).toMatchObject({ ok: true })
+    for (const input of [{ around: "bad", order: "active" }, { before: 1, order: "active" }, { around: "ses_anchor", order: "desc" }, { around: "ses_anchor", order: "active", cursor: "opaque" }, { around: "ses_anchor", order: "active", before: -1 }, { around: "ses_anchor", order: "active", before: 25, limit: 25 }])
+      expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.list", input }))).toMatchObject({ ok: false })
   })
 
   test("validates the exact workspace inventory and Session creation request shapes", () => {
@@ -701,6 +824,8 @@ describe("remote operations", () => {
       "session.guardrail.status",
       "session.guardrail.request.list",
       "session.guardrail.reply",
+      "session.review.list",
+      "session.review.decide",
       "session.form.list",
       "session.form.reply",
       "session.form.cancel",
@@ -726,6 +851,10 @@ describe("remote operations", () => {
       "session.promptCosts",
       "session.taskCosts",
       "usage.forecast",
+      "incident.report",
+      "incident.recent",
+      "incident.guidance",
+      "incident.guidance.clear",
       "machine.keepAwake.get",
     "machine.keepAwake.set",
     "machine.telemetry.consent.get",
@@ -744,6 +873,10 @@ describe("remote operations", () => {
     expect(parseAgentMessage('{"type":"response","id":"r","ok":false,"error":{"code":"subagent_read_only","message":"Managed subagent"}}')).toMatchObject({ ok: true })
     expect(requireSession("session.goal.stop")).toBe(true)
     expect(requireSession("session.compact")).toBe(true)
+    expect(requireSession("session.review.list")).toBe(true)
+    expect(requireSession("session.review.decide")).toBe(true)
+    expect(remoteOperationAccess["session.review.list"]).toBe("read")
+    expect(remoteOperationAccess["session.review.decide"]).toBe("mutation")
     expect(requireSession("machine.keepAwake.get")).toBe(false)
     expect(requireSession("machine.keepAwake.set")).toBe(false)
     expect(requireSession("machine.latency.append")).toBe(false)
@@ -1053,6 +1186,12 @@ describe("notice log contract", () => {
       { notices: [{ ...notice, title: "secret" }], total: 1, unavailable: false },
       { notices: [], total: 0, unavailable: false, extra: 1 },
     ]) expect(parseNoticePage(bad).ok).toBe(false)
+  })
+
+  test("restart recovery offers only Continue and Stop, and review items are addressed by a closed identifier", () => {
+    expect(remoteRecoveryChoices).toEqual(["continue", "stop"])
+    for (const id of ["rvw_1", "rvw_A-b_9"]) expect(isRemoteReviewItemID(id)).toBe(true)
+    for (const id of ["rvw_", "rvw_a b", "rvw_a/b", "grq_1", "RVW_1", `rvw_${"a".repeat(125)}`, 1, undefined, null, {}]) expect(isRemoteReviewItemID(id)).toBe(false)
   })
 
   test("derives the ordering sequence from a notice id only when it is well formed", () => {

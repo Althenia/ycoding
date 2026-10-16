@@ -34,14 +34,53 @@ test("shell output uses the design header, metadata columns, and footer labels",
   ))
   const lines = frame(app)
 
-  expect(lines[1]).toContain("y. ycoding bun test provider · Main chat · pid 48213")
+  expect(lines[1]).toContain("y. ycoding")
+  expect(lines[1]).toContain("Main chat")
+  expect(lines[1]).toContain("pid 48213")
+  expect(lines[1]).not.toContain("bun test provider")
   expect(lines[1]?.indexOf("y. ycoding")).toBe(3)
+  const commandLine = lines.find((line) => line.includes("bun test provider"))
+  expect(commandLine).toBeDefined()
+  expect(commandLine).not.toContain("y. ycoding")
+  expect(commandLine).not.toContain("Main chat")
+  expect(commandLine?.trim()).toBe("bun test provider")
   expect(lines.join("\n")).toContain("Owner")
   expect(lines.join("\n")).not.toContain("Owner:")
   expect(lines.join("\n")).toContain("⌃x k kill · Esc back")
   expect(lines.find((line) => line.includes("sh_0f21…"))?.indexOf("sh_0f21…")).toBe(3)
 
   app.renderer.destroy()
+})
+
+test("shell output header wraps a command wider than the view without altering it", async () => {
+  const longShell = { ...shell, command: "ycoding grep -rIl some-very-long-pattern packages/tui/src | head -5" }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <box width={40} flexDirection="column">
+              <ShellOutputHeader shell={longShell} owner="Main chat" now={now} />
+            </box>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 40, height: 20 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((value) => value.includes("head -5"))
+  try {
+    const text = frame(app).join("\n")
+    expect(text).toContain("ycoding grep -rIl")
+    expect(text).toContain("some-very-long-")
+    expect(text).toContain("pattern packages/tui/src | head -5")
+    const joined = frame(app).map((line) => line.trim()).join(" ").replaceAll("- ", "-")
+    expect(joined).toContain("ycoding grep -rIl some-very-long-pattern packages/tui/src | head -5")
+    expect(frame(app).some((line) => line.includes("y. ycoding") && line.includes("grep"))).toBe(false)
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("blocked subagent keeps status, task, result, and question on their design rows", async () => {

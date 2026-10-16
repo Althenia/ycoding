@@ -480,6 +480,73 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each([
+    'echo "DROP TABLE scratch_items"',
+    "printf 'TRUNCATE TABLE scratch_items\\n'",
+    'grep -rn "drop table" packages',
+    "rg -n 'DROP SCHEMA' .",
+    'git log --grep="drop table" --oneline',
+    'cat schema.sql | grep -i "drop table"',
+    'echo "DROP TABLE a" | grep -c TABLE',
+    "ls # drop table users",
+    'psql -c "select 1" # DROP TABLE users',
+    'grep -n "delete from" a.sql\n# truncate table b',
+    "# DROP TABLE users\nls",
+    'echo "DROP TABLE a" && psql -c "select 1"',
+    'grep "DROP DATABASE" . ; echo done',
+  ])("does not review SQL that is only printed, searched or commented: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toBeUndefined()
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({ decision: "allow" })
+  })
+
+  test.each([
+    'psql -c "DROP TABLE scratch_items"',
+    "mysql -e 'TRUNCATE TABLE t'",
+    'sqlite3 db.sqlite "DROP TABLE t"',
+    'echo "DROP TABLE t" | psql',
+    "printf 'DROP TABLE t;' | mysql",
+    "cat <<'EOF' | psql\nDROP TABLE t;\nEOF",
+    "psql <<'EOF'\nDROP TABLE t;\nEOF",
+    'psql -f - <<< "DROP TABLE t"',
+    "cat <<'EOF'\nDROP TABLE t\nEOF",
+    "bash -c 'echo \"DROP TABLE x\"'",
+    `sh -c "psql -c 'DROP TABLE x'"`,
+    'echo "$(psql -c \'DROP TABLE x\')"',
+    "echo `psql -c 'drop table x'`",
+    "python -c \"import db; db.run('DROP TABLE x')\"",
+    'echo hi > out.sql; psql -c "DROP TABLE x"',
+    'grep x file && psql -c "DROP TABLE x"',
+    'echo "DROP TABLE x" > script.sql',
+    'echo "DROP TABLE x" |& psql',
+    'echo "DROP TABLE x" & psql',
+    'sudo echo "DROP TABLE x"',
+    'env PGPASSWORD=x psql -c "DROP TABLE x"',
+    'psql -c "select 1 # DROP TABLE x"',
+    "bash <<'EOF'\n# note\ndrop table x\nEOF",
+    'echo "DROP TABLE x" | tee run.sql | psql',
+    "xargs -I{} psql -c {} <<< 'DROP TABLE x'",
+  ])("still reviews SQL that can execute or is not proven inert: %s", (command) => {
+    expect(SessionGuardrailStandard.match("shell", command)).toMatchObject({
+      id: "standard.review.database-destructive",
+      hardReview: true,
+    })
+  })
+
+  test("reports the executed segment as the verification evidence for a mixed command", () => {
+    expect(SessionGuardrailStandard.match("shell", 'echo "DROP TABLE a" && psql -c "DROP TABLE b"')).toMatchObject({
+      id: "standard.review.database-destructive",
+      evidence: { matchedSegment: 'psql -c "DROP TABLE b"' },
+    })
+  })
+
+  test("a printed SQL mention does not hide other hard rules in the same command", () => {
+    expect(SessionGuardrailStandard.match("shell", 'echo "DROP TABLE a"; git push --force origin main')).toMatchObject({
+      id: "standard.review.force-push",
+    })
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ['echo "DROP TABLE a"; rm -rf /'], paths }))
+      .toMatchObject({ decision: "deny", ruleIDs: ["standard.catastrophic.rm-root"] })
+  })
+
+  test.each([
     ["rm -f notes.txt; git push --force-with-lease origin main", "force-push"],
     ["cd repo && git push -f origin main", "force-push"],
     ["bash <<'EOF'\ngit push origin main --force\nEOF", "force-push"],

@@ -106,6 +106,7 @@ const http = Layer.succeed(
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) => Effect.sync(() => assertions.push(input)),
     ask: () => Effect.die("unused"),

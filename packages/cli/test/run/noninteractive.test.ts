@@ -120,6 +120,21 @@ function stepStarted(): ServerEvent {
   }
 }
 
+function stepRerouted(model: { providerID: string; id: string }): ServerEvent {
+  return {
+    id: "evt_step_rerouted",
+    created: 2,
+    type: "session.step.rerouted",
+    durable: { aggregateID: "ses_1", seq: 2, version: 1 },
+    data: {
+      sessionID: "ses_1",
+      assistantMessageID: "msg_assistant",
+      model,
+      error: { type: "provider.quota", message: "Quota exhausted" },
+    },
+  }
+}
+
 function childDrain(sessionID: string, types: string[]): ServerEvent[] {
   return [
     "session.execution.started",
@@ -670,6 +685,26 @@ describe("runNonInteractivePrompt", () => {
       helpers: 0,
       tokens,
       ...extra,
+    })
+
+    test("reports every model a rerouted Step used in run_finish", async () => {
+      const output = await capture({
+        format: "json",
+        turn: (messageID) => [
+          prompted(messageID),
+          stepStarted(),
+          stepRerouted({ providerID: "test", id: "backup-model" }),
+          stepEnded(3),
+          settled(),
+        ],
+      })
+
+      const events = lines(output.stdout)
+      expect(events.map((event) => event.type)).toEqual(["step_start", "step_finish", "run_finish"])
+      expect(events.at(-1).models).toEqual([
+        { providerID: "test", id: "test-model" },
+        { providerID: "test", id: "backup-model" },
+      ])
     })
 
     test("reports step identity, context, cache, and exactly one run summary", async () => {

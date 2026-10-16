@@ -2525,44 +2525,137 @@ const Endpoint32_1 = (raw: RawClient["server.usage"]) => (input: Endpoint32_1Inp
 
 const adaptGroup32 = (raw: RawClient["server.usage"]) => ({ get: Endpoint32_0(raw), report: Endpoint32_1(raw) })
 
-const Endpoint33_0 = (raw: RawClient["server.remote"]) => () =>
+type Endpoint33_0Request = Parameters<RawClient["server.incident"]["incident.report"]>[0]
+type Endpoint33_0Input = {
+  readonly group: Endpoint33_0Request["query"]["group"]
+  readonly from?: Endpoint33_0Request["query"]["from"]
+  readonly to?: Endpoint33_0Request["query"]["to"]
+  readonly offset?: Endpoint33_0Request["query"]["offset"]
+  readonly limit?: Endpoint33_0Request["query"]["limit"]
+}
+const Endpoint33_0 = (raw: RawClient["server.incident"]) => (input: Endpoint33_0Input) =>
+  raw["incident.report"]({
+    query: {
+      group: input["group"],
+      from: input["from"],
+      to: input["to"],
+      offset: input["offset"],
+      limit: input["limit"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint33_1Request = Parameters<RawClient["server.incident"]["incident.recent"]>[0]
+type Endpoint33_1Input = {
+  readonly provider: Endpoint33_1Request["query"]["provider"]
+  readonly model: Endpoint33_1Request["query"]["model"]
+  readonly agent?: Endpoint33_1Request["query"]["agent"]
+  readonly limit?: Endpoint33_1Request["query"]["limit"]
+}
+const Endpoint33_1 = (raw: RawClient["server.incident"]) => (input: Endpoint33_1Input) =>
+  raw["incident.recent"]({
+    query: { provider: input["provider"], model: input["model"], agent: input["agent"], limit: input["limit"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint33_2Request = Parameters<RawClient["server.incident"]["incident.guidance.get"]>[0]
+type Endpoint33_2Input = {
+  readonly provider: Endpoint33_2Request["query"]["provider"]
+  readonly model: Endpoint33_2Request["query"]["model"]
+  readonly location?: Endpoint33_2Request["query"]["location"]
+}
+const Endpoint33_2 = (raw: RawClient["server.incident"]) => (input: Endpoint33_2Input) =>
+  raw["incident.guidance.get"]({
+    query: { provider: input["provider"], model: input["model"], location: input["location"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint33_3Request = Parameters<RawClient["server.incident"]["incident.guidance.clear"]>[0]
+type Endpoint33_3Input = {
+  readonly provider: Endpoint33_3Request["query"]["provider"]
+  readonly model: Endpoint33_3Request["query"]["model"]
+  readonly location?: Endpoint33_3Request["query"]["location"]
+}
+const Endpoint33_3 = (raw: RawClient["server.incident"]) => (input: Endpoint33_3Input) =>
+  raw["incident.guidance.clear"]({
+    query: { provider: input["provider"], model: input["model"], location: input["location"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup33 = (raw: RawClient["server.incident"]) => ({
+  report: Endpoint33_0(raw),
+  recent: Endpoint33_1(raw),
+  guidance: { get: Endpoint33_2(raw), clear: Endpoint33_3(raw) },
+})
+
+const Endpoint34_0 = (raw: RawClient["server.remote"]) => () =>
   raw["remote.get"]({}).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-type Endpoint33_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
-type Endpoint33_1Input = { readonly enabled: Endpoint33_1Request["payload"]["enabled"] }
-const Endpoint33_1 = (raw: RawClient["server.remote"]) => (input: Endpoint33_1Input) =>
+type Endpoint34_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
+type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
+const Endpoint34_1 = (raw: RawClient["server.remote"]) => (input: Endpoint34_1Input) =>
   raw["remote.set"]({ payload: { enabled: input["enabled"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-const adaptGroup33 = (raw: RawClient["server.remote"]) => ({ get: Endpoint33_0(raw), set: Endpoint33_1(raw) })
+const adaptGroup34 = (raw: RawClient["server.remote"]) => ({ get: Endpoint34_0(raw), set: Endpoint34_1(raw) })
 
-const Endpoint34_0 = (raw: RawClient["server.keepAwake"]) => () =>
+const Endpoint35_0 = (raw: RawClient["server.keepAwake"]) => () =>
   raw["keepAwake.get"]({}).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-type Endpoint34_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
-type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
-const Endpoint34_1 = (raw: RawClient["server.keepAwake"]) => (input: Endpoint34_1Input) =>
+type Endpoint35_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
+type Endpoint35_1Input = { readonly enabled: Endpoint35_1Request["payload"]["enabled"] }
+const Endpoint35_1 = (raw: RawClient["server.keepAwake"]) => (input: Endpoint35_1Input) =>
   raw["keepAwake.set"]({ payload: { enabled: input["enabled"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-const adaptGroup34 = (raw: RawClient["server.keepAwake"]) => ({ get: Endpoint34_0(raw), set: Endpoint34_1(raw) })
+const adaptGroup35 = (raw: RawClient["server.keepAwake"]) => ({ get: Endpoint35_0(raw), set: Endpoint35_1(raw) })
 
-type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
-type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
-const Endpoint35_0 = (raw: RawClient["server.config"]) => (input?: Endpoint35_0Input) =>
+type Endpoint36_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+type Endpoint36_0Input = { readonly location?: Endpoint36_0Request["query"]["location"] }
+const Endpoint36_0 = (raw: RawClient["server.config"]) => (input?: Endpoint36_0Input) =>
   raw["config.diagnostics"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup35 = (raw: RawClient["server.config"]) => ({ diagnostics: Endpoint35_0(raw) })
+const adaptGroup36 = (raw: RawClient["server.config"]) => ({ diagnostics: Endpoint36_0(raw) })
+
+type Endpoint37_0Request = Parameters<RawClient["server.review"]["session.review.list"]>[0]
+type Endpoint37_0Input = { readonly sessionID: Endpoint37_0Request["params"]["sessionID"] }
+const Endpoint37_0 = (raw: RawClient["server.review"]) => (input: Endpoint37_0Input) =>
+  raw["session.review.list"]({ params: { sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint37_1Request = Parameters<RawClient["server.review"]["session.review.decide"]>[0]
+type Endpoint37_1Input = {
+  readonly sessionID: Endpoint37_1Request["params"]["sessionID"]
+  readonly itemID: Endpoint37_1Request["params"]["itemID"]
+  readonly decision: Endpoint37_1Request["payload"]["decision"]
+}
+const Endpoint37_1 = (raw: RawClient["server.review"]) => (input: Endpoint37_1Input) =>
+  raw["session.review.decide"]({
+    params: { sessionID: input["sessionID"], itemID: input["itemID"] },
+    payload: { decision: input["decision"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup37 = (raw: RawClient["server.review"]) => ({ list: Endpoint37_0(raw), decide: Endpoint37_1(raw) })
 
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
@@ -2598,9 +2691,11 @@ const adaptClient = (raw: RawClient) => ({
   browser: adaptGroup30(raw["server.browser"]),
   isolatedBrowser: adaptGroup31(raw["server.isolatedBrowser"]),
   usage: adaptGroup32(raw["server.usage"]),
-  remote: adaptGroup33(raw["server.remote"]),
-  keepAwake: adaptGroup34(raw["server.keepAwake"]),
-  config: adaptGroup35(raw["server.config"]),
+  incident: adaptGroup33(raw["server.incident"]),
+  remote: adaptGroup34(raw["server.remote"]),
+  keepAwake: adaptGroup35(raw["server.keepAwake"]),
+  config: adaptGroup36(raw["server.config"]),
+  review: adaptGroup37(raw["server.review"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

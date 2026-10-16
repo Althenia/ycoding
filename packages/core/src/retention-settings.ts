@@ -13,6 +13,7 @@ export interface Interface {
     readonly recordsDays: number
     readonly usageDays: number
     readonly latencyDays: number
+    readonly incidentDays: number
   }>
 }
 
@@ -61,6 +62,9 @@ export function configured(options?: Config.Options) {
               latencyDays:
                 documents.findLast((info) => info.analytics_retention?.latency_days !== undefined)?.analytics_retention
                   ?.latency_days ?? 30,
+              incidentDays:
+                documents.findLast((info) => info.analytics_retention?.incident_days !== undefined)?.analytics_retention
+                  ?.incident_days ?? 30,
             }
           }),
         })

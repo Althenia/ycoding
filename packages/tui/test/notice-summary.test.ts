@@ -11,7 +11,14 @@ test("summarizes Session state", () => {
       "session-state",
       `${sessionPrefix}{"autonomy":{"mode":"normal","yolo":0},"todos":[{"content":"Task","status":"pending"}]}`,
     ),
-  ).toBe("Session state · normal · YOLO 0 · 1 task")
+  ).toBe("Session state · Manual · 1 task")
+})
+
+test("summarizes active autonomy modes", () => {
+  const autonomy = { mode: "normal", yolo: 1, sleep: {}, goal: { status: "active" } }
+  expect(noticeSummary("session-state", `${sessionPrefix}${JSON.stringify({ autonomy, todos: [] })}`)).toBe(
+    "Session state · YOLO 1 · goal · asleep · 0 tasks",
+  )
 })
 
 test("summarizes TeamView states", () => {

@@ -90,6 +90,7 @@ export const Plugin = {
                       .assert({
                         action: name,
                         resources: [repository.worktree],
+                        metadata: { operationDigest: Hash.json(input) },
                         save: ["*"],
                         sessionID: context.sessionID,
                         agent: context.agent,
@@ -135,6 +136,7 @@ export const Plugin = {
                     .assert({
                       action: name,
                       resources: [target],
+                      metadata: { operationDigest: Hash.json(input) },
                       save: ["*"],
                       sessionID: context.sessionID,
                       agent: context.agent,
@@ -148,15 +150,15 @@ export const Plugin = {
                   if (yield* fs.existsSafe(target))
                     return yield* new ToolFailure({ message: `A worktree named ${input.name} already exists` })
                   const reservation = yield* guardrail
-                    .assert({
+                    .assert({ source: { messageID: context.messageID, callID: context.callID },
                       sessionID: context.sessionID,
                       action: "file_mutation",
                       resources: [target],
-                      metadata: { operation: "create_git_worktree" },
+                      metadata: { operation: "create_git_worktree", operationDigest: Hash.json(input) },
                     })
                     .pipe(
                       Effect.mapError(
-                        (error) => new ToolFailure({ message: "Session guardrail rejected worktree creation", error }),
+                        (error) => new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? "Session guardrail rejected worktree creation", error }),
                       ),
                     )
                   const result = yield* copies

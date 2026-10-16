@@ -145,13 +145,16 @@ const Record_ = Schema.Record(Schema.String, Schema.Json)
  * permission resource shape, so no permission-schema migration is required.
  */
 export function identity(entry: McpSkill.Entry): string {
+  return `mcp-skill:sha256:${createHash("sha256")
+    .update(JSON.stringify({ server: entry.server, uri: entry.uri, resources: manifest(entry) }))
+    .digest("hex")}`
+}
+
+export function manifest(entry: McpSkill.Entry) {
   const resources = entry.resources === "dynamic" ? [] : entry.resources
-  const manifest = resources
+  return resources
     .map((resource) => ({ uri: resource.uri, digest: resource.digest, size: resource.size }))
     .toSorted((a, b) => a.uri.localeCompare(b.uri) || a.digest.localeCompare(b.digest) || a.size - b.size)
-  return `mcp-skill:sha256:${createHash("sha256")
-    .update(JSON.stringify({ server: entry.server, uri: entry.uri, resources: manifest }))
-    .digest("hex")}`
 }
 
 /** Collision-safe, reversible model-facing ID for the pair that identifies an MCP-served skill. */

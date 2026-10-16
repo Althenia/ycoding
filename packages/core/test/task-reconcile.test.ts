@@ -21,6 +21,8 @@ import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionTask } from "@ycoding-ai/core/session/task"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
@@ -214,7 +216,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
     }),
   )
 
-  it.effect("startup hook reconciles stale tasks on SessionStore init", () =>
+  it.effect("store initialization leaves stale tasks to the explicit startup reconciliation", () =>
     Effect.gen(function* () {
       const tmpPath = `/tmp/ycoding-reconcile-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
       const parentID = SessionSchema.ID.make("ses_restart_parent")
@@ -261,11 +263,19 @@ describe("SessionTask.reconcileStaleTasks", () => {
       }).pipe(Effect.provide(firstLayer), Effect.scoped)
 
       const secondLayer = AppNodeBuilder.build(
-        LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
-        [[Database.node, Database.layer({ path: tmpPath })]],
+        LayerNode.group([AppProcess.node, Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node, SessionRestart.node]),
+        [
+          [Database.node, Database.layer({ path: tmpPath })],
+          [SessionExecution.node, SessionExecution.noopLayer],
+        ],
       )
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db
+        const opened = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie)
+        expect(opened?.state).toBe("running")
+        expect(opened?.revision).toBe(0)
+        const restart = yield* SessionRestart.Service
+        yield* restart.loseStaleTasks
         const row = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie)
         expect(row?.state).toBe("lost")
         expect(row?.revision).toBe(1)
@@ -392,14 +402,18 @@ describe("SessionTask owner fence", () => {
       Effect.runPromise(
         Effect.gen(function* () {
           const db = (yield* Database.Service).db
+          const appProcess = yield* AppProcess.Service
+          const opened = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie)
+          yield* SessionTask.reconcileStaleTasks(db, appProcess)
           return {
+            opened,
             task: yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get().pipe(Effect.orDie),
             lost: (yield* db.select().from(EventTable).all().pipe(Effect.orDie)).filter((row) => row.id.startsWith("evt_task_restart_lost_")),
           }
         }).pipe(
           Effect.provide(
             AppNodeBuilder.build(
-              LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
+              LayerNode.group([AppProcess.node, Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
               [[Database.node, Database.layer({ path: file })]],
             ),
           ),
@@ -427,6 +441,7 @@ describe("SessionTask owner fence", () => {
       owner.kill("SIGKILL")
       yield* Effect.promise(() => exited)
       const dead = yield* initializeStore(file)
+      expect(dead.opened?.state).toBe("running")
       expect(dead.task?.state).toBe("lost")
       expect(dead.task?.revision).toBe(1)
       expect(dead.lost.map((row) => String(row.id))).toEqual([`evt_task_restart_lost_${childID}_1`])

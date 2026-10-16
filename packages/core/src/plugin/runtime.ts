@@ -79,6 +79,7 @@ export const layerWithCell = (cell: Cell) =>
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
         answer: (input) => require(cell, (runtime) => runtime.orchestration.answer(input)),
         cancel: (input) => require(cell, (runtime) => runtime.orchestration.cancel(input)),
+        notice: (input) => require(cell, (runtime) => runtime.orchestration.notice(input)),
         resume: (input) => require(cell, (runtime) => runtime.orchestration.resume(input)),
         progress: (childID, text) => require(cell, (runtime) => runtime.orchestration.progress(childID, text)),
         question: (childID, text, data) =>
@@ -87,6 +88,10 @@ export const layerWithCell = (cell: Cell) =>
         background: (childID) => require(cell, (runtime) => runtime.orchestration.background(childID)),
         teamView: (parentID) => require(cell, (runtime) => runtime.orchestration.teamView(parentID)),
         recover: require(cell, (runtime) => runtime.orchestration.recover),
+        resolveRecovery: () =>
+          Effect.fail(
+            new SessionOrchestration.ConflictError({ message: "Restart recovery decisions are human-only" }),
+          ),
       },
       location: {
         agent: {

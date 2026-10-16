@@ -1032,6 +1032,84 @@ it.effect("preserves and sanitizes structured AI SDK provider errors", () =>
   }),
 )
 
+const streamedErrorCases = [
+  {
+    name: "nested server_error",
+    payload: {
+      type: "error",
+      sequence_number: 2,
+      error: { type: "server_error", code: null, message: "Synthetic upstream failure" },
+    },
+    expected: { _tag: "ProviderInternal", message: "Synthetic upstream failure" },
+  },
+  {
+    name: "response.failed rate limit",
+    payload: {
+      type: "response.failed",
+      response: { error: { code: "rate_limit_exceeded", message: "Synthetic rate limit reached" } },
+    },
+    expected: { _tag: "RateLimit", message: "Synthetic rate limit reached" },
+  },
+  {
+    name: "nested context_length_exceeded",
+    payload: {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message: "Synthetic input is too large",
+      },
+    },
+    expected: { _tag: "InvalidRequest", classification: "context-overflow", message: "Synthetic input is too large" },
+  },
+  {
+    name: "nested invalid_request_error type",
+    payload: { type: "error", error: { type: "invalid_request_error", message: "Synthetic invalid field" } },
+    expected: { _tag: "InvalidRequest", message: "Synthetic invalid field" },
+  },
+  {
+    name: "top-level message and code",
+    payload: { type: "error", code: "server_error", message: "Synthetic top-level failure" },
+    expected: { _tag: "ProviderInternal", message: "Synthetic top-level failure" },
+  },
+  {
+    name: "code without a message",
+    payload: { type: "error", error: { code: "rate_limit_exceeded", message: "Error" } },
+    expected: { _tag: "RateLimit", message: "Provider reported rate_limit_exceeded" },
+  },
+  {
+    name: "unrecognized object",
+    payload: { foo: 1 },
+    expected: { _tag: "UnknownProvider", message: "Provider stream failed" },
+  },
+  {
+    name: "Error instance",
+    payload: new Error("Synthetic stream failure"),
+    expected: { _tag: "UnknownProvider", message: "Synthetic stream failure" },
+  },
+] as const
+
+streamedErrorCases.forEach((item) =>
+  it.effect(`classifies streamed AI SDK error: ${item.name}`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      yield* aisdk.hook.sdk((event) => {
+        event.sdk = { languageModel: () => streamModel([{ type: "error", error: item.payload }]) }
+      })
+
+      const resolved = yield* aisdk.model(model("@ai-sdk/openai"))
+      const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(client),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject(item.expected)
+      expect(JSON.stringify(error)).not.toContain("[object Object]")
+    }),
+  ),
+)
+
 it.effect("classifies AI SDK socket-closed and WebSocket close 1006 read failures as transport", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

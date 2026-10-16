@@ -109,6 +109,10 @@ import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
 import { AttachmentStore } from "../attachment-store"
+import { Form } from "../form"
+import { Question } from "../question"
+import { SessionReviewFold } from "./review-fold"
+import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 
 export const RevertState = Session.Revert
 export type RevertState = Session.Revert
@@ -188,7 +192,6 @@ type AutonomyInput = {
   goal?: string | null | true
   maxNoProgress?: number
   mode?: "normal" | "yolo" | "goal"
-  guardrailDecision?: boolean
   sleep?: boolean
 }
 
@@ -385,7 +388,7 @@ export interface Interface {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     text: string
-    origin?: "subagent" | "plugin"
+    origin?: "subagent" | "plugin" | "review"
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     metadata?: Record<string, unknown>
@@ -1628,16 +1631,48 @@ const layer = Layer.effect(
     ): Effect.fn.Return<void> {
       if (asleep) yield* Effect.gen(function* () {
         const session = yield* result.get(sessionID)
-        const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
-        yield* guardrail.rejectEscalated(sessionID)
-      }).pipe(Effect.catchCause(() => Effect.logWarning("Unable to reject escalated reviews for sleeping Session", { sessionID })))
+        const located = locations.get(session.location)
+        const convert = <E>(kind: string, effect: Effect.Effect<void, E>) => effect.pipe(
+          Effect.catchCause(() => Effect.logWarning("Unable to defer pending requests for sleeping Session", { sessionID, kind })),
+        )
+        const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(located))
+        yield* convert("guardrail", guardrail.deferPending(sessionID))
+        const forms = yield* Form.Service.pipe(Effect.provide(located))
+        yield* convert("form", forms.deferPending(sessionID))
+        const questions = yield* Question.Service.pipe(Effect.provide(located))
+        yield* convert("question", questions.deferPending(sessionID))
+        const permission = yield* Permission.Service.pipe(Effect.provide(located))
+        yield* convert("permission", permission.deferPending(sessionID))
+        const task = yield* db
+          .select()
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (task?.state === "waiting" && task.question_id && task.question) {
+          if (!(yield* SessionReviewFold.ownsQuestion(db, sessionID, task.question_id)))
+            yield* SessionReviewFold.open(db, events, {
+              sessionID,
+              kind: "subagent_question",
+              reason: "sleep_entry",
+              origin: { questionID: task.question_id },
+              payload: {
+                type: "subagent_question",
+                text: SessionOrchestration.QuestionText.make(task.question),
+                ...(task.question_data === null ? {} : { data: task.question_data }),
+              },
+              limit: 16,
+              conversion: true,
+            }).pipe(Effect.orDie)
+        }
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Unable to defer pending reviews for sleeping Session", { sessionID })))
       const awake = yield* keepAwake.get
       yield* events.publish(SessionEvent.ContextObserved, {
         sessionID,
         source: "session-state",
         text: asleep
-          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Questions, forms, and guardrail reviews are decided by the decision model while sleep is on. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : (awake.lid ?? "unreported")}. On battery this drains the battery and a closed lid traps heat.`
-          : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply.",
+          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Confident decision-model choices apply automatically; anything it cannot settle is deferred to the user's review box and decided after the user wakes. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+          : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply. Items in the review box stay there until the user decides them.",
       }).pipe(Effect.catchCause((cause) => asleep
         ? Effect.logWarning("Unable to record family sleep notice", { sessionID }) : Effect.failCause(cause)))
       const children = yield* result.list({ parentID: sessionID })
@@ -2077,7 +2112,7 @@ const layer = Layer.effect(
             return yield* admitGoalContinuation(input.sessionID, resumed.state, steer)
           }
           const targetID =
-            input.sleep !== undefined || input.guardrailDecision !== undefined
+            input.sleep !== undefined
               ? yield* rootSessionID(input.sessionID)
               : input.sessionID
           return yield* familyAutonomyLocks.withLock(targetID)(
@@ -2089,7 +2124,6 @@ const layer = Layer.effect(
                   yolo,
                   goal,
                   maxNoProgress: input.maxNoProgress,
-                  guardrailDecision: input.guardrailDecision,
                   sleep: input.sleep,
                 })
                 .pipe(notFound)
@@ -2315,8 +2349,9 @@ const layer = Layer.effect(
             const session = yield* result.get(input.sessionID)
             // A staged revert must be committed before admitting new input so the prompt
             // continues from the reverted boundary rather than stale post-boundary history.
-            if (session.revert)
-              yield* SessionRevert.commit(session).pipe(Effect.provideService(EventRuntime.Service, events))
+            if (session.revert) {
+              yield* SessionRevert.commit(session).pipe(Effect.provideService(Database.Service, database), Effect.provideService(EventRuntime.Service, events))
+            }
             const messageID = input.id ?? SessionMessage.ID.create()
             // A reused prompt message ID is the same input: return the durable record and
             // wake without re-resolving attachments, whose re-derived shape can differ from
@@ -3118,7 +3153,8 @@ const layer = Layer.effect(
         commit: Effect.fn("Session.revert.commit")(function* (sessionID) {
           const session = yield* result.get(sessionID)
           if ((yield* execution.active).has(sessionID)) return yield* new BusyError({ sessionID })
-          return yield* SessionRevert.commit(session).pipe(Effect.provideService(EventRuntime.Service, events))
+          const committed = yield* SessionRevert.commit(session).pipe(Effect.provideService(Database.Service, database), Effect.provideService(EventRuntime.Service, events))
+          return committed
         }),
       },
     })

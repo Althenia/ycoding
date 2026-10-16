@@ -126,12 +126,12 @@ function fixture(input: {
   return { route, mutations, creates, admissionStates, current: () => autonomy, failNextAutonomy: () => { failAutonomy = true }, failNextGoal: () => { failGoal = true } }
 }
 
-async function waitFor(check: () => boolean, label: string) {
+async function waitFor(check: () => boolean, label: string | (() => string)) {
   for (let attempt = 0; attempt < 150; attempt++) {
     if (check()) return
     await Bun.sleep(20)
   }
-  throw new Error(`Timed out waiting for ${label}`)
+  throw new Error(`Timed out waiting for ${typeof label === "function" ? label() : label}`)
 }
 
 test("clean Home shows and creates a Session from the configured profile variant", async () => {
@@ -229,11 +229,11 @@ test.each([1, 2, 3] as const)("landing YOLO %d is durable before its first promp
     await waitFor(() => backend.admissionStates.length > 0, "first prompt admission")
     expect(backend.mutations.slice(0, 3)).toEqual(["create", "autonomy", "admit"])
     expect(backend.admissionStates[0]).toMatchObject({ mode: "normal", yolo: level })
-    await waitFor(() => screen.frame().includes(`YOLO ${level}`) && screen.frame().includes("shells 0"), "chat autonomy chip")
+    await waitFor(() => screen.frame().includes(`YOLO ${level} · ready`), () => `chat autonomy header:\n${screen.frame()}`)
     if (level === 3) {
       screen.input.pressKey("x", { ctrl: true })
       screen.input.pressKey("n")
-      await waitFor(() => screen.frame().includes("YOLO off") && screen.frame().includes("subagents 0") && !screen.frame().includes("shells 0"), "fresh landing state")
+      await waitFor(() => screen.frame().includes("Manual") && screen.frame().includes("subagents 0") && !screen.frame().includes("shells 0"), "fresh landing state")
       const nextRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
       await screen.mouse.click(3, nextRow)
       await screen.input.typeText("Unrelated work")
@@ -265,7 +265,7 @@ test("explicit landing goal creates a Session with the displayed YOLO level befo
     expect(backend.mutations.slice(0, 2)).toEqual(["create", "autonomy"])
     expect(backend.current()).toMatchObject({ yolo: 3, goal: { text: "Validate every branch", status: "active" } })
     await waitFor(() => screen.frame().includes(" goal ") && !screen.frame().includes("shells 0"), "landing goal chip after durable set")
-    await waitFor(() => screen.frame().includes("shells 0") && screen.frame().includes("YOLO 3") && screen.frame().includes(" goal "), "chat autonomy state")
+    await waitFor(() => screen.frame().includes("YOLO 3 · goal · ready"), "chat autonomy header")
     await waitFor(() => screen.lines()[1]?.includes("ready") ?? false, "chat history ready")
     await screen.input.typeText("Start the work")
     screen.input.pressEnter()
@@ -273,7 +273,7 @@ test("explicit landing goal creates a Session with the displayed YOLO level befo
     expect(backend.admissionStates[0]).toMatchObject({ yolo: 3, goal: { text: "Validate every branch", status: "active" } })
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("n")
-    await waitFor(() => screen.frame().includes("goal off") && screen.frame().includes("YOLO off") && !screen.frame().includes("shells 0"), "fresh landing goal state")
+    await waitFor(() => screen.frame().includes("goal off") && screen.frame().includes("Manual") && !screen.frame().includes("shells 0"), "fresh landing goal state")
   } finally {
     await screen.dispose()
     await rm(state, { recursive: true, force: true })

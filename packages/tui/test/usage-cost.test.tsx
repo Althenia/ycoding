@@ -5,17 +5,17 @@ import { mkdir } from "node:fs/promises"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ThemeProvider } from "../src/context/theme"
-import { PromptCostBlock, QuotaForecastBlock, TaskCostDetails, TaskCostDialog, UsageSpeedDetails } from "../src/routes/session/usage-cost"
+import { QuotaForecastBlock, TaskCostDetails, TaskCostDialog, UsageSpeedDetails } from "../src/routes/session/usage-cost"
 import { Keymap } from "../src/context/keymap"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-test("prompt costs render unknown pricing, child tails and helper breakdown in narrow and wide themes", async () => {
+test("task costs render unknown pricing, child tails and helper breakdown in narrow and wide themes", async () => {
   for (const width of [40, 80, 120]) for (const mode of ["dark", "light"] as const) {
     const app = await testRender(() => <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}><ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
-      <box flexDirection="column"><PromptCostBlock unit={{ inputID: "msg_first", settled: false, complete: false,
+      <box flexDirection="column"><TaskCostDetails unit={{ settled: false, complete: false,
         cost: { known: 2, pricedRequests: 2, unpricedRequests: 1 }, main: { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 },
         children: { known: 2, pricedRequests: 1, unpricedRequests: 1 }, helpers: [{ label: "Decision", cost: { pricedRequests: 0, unpricedRequests: 1 } }] }} />
       <UsageSpeedDetails speed={{ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, samples: 2 }} />
@@ -23,8 +23,9 @@ test("prompt costs render unknown pricing, child tails and helper breakdown in n
     </ThemeProvider></ConfigProvider></TestTuiContexts>, { width, height: 20 })
     try {
       app.renderer.start()
-      await app.waitForFrame((frame) => frame.includes("Prompt cost"))
+      await app.waitForFrame((frame) => frame.includes("Task cost (inclusive)"))
       const frame = app.captureCharFrame().replace(/\s+/g, " ")
+      expect(frame).not.toContain("Prompt cost")
       expect(frame).toContain("Known $2.00 + unreported")
       expect(frame).toContain("so far")
       expect(frame).toContain("incomplete")

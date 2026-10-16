@@ -122,7 +122,10 @@ test("shows active and terminal tasks in separate sections in Subagents without 
     expect(lines[running + 1]).not.toContain("anthropic/")
     expect(lines[running]).not.toContain("completed")
 
+    for (let attempt = 0; attempt < 200 && !screen.lines().find((line) => line.includes("keymap-audit"))?.includes("100% hit"); attempt++)
+      await Bun.sleep(20)
     const terminalRow = screen.lines().find((line) => line.includes("keymap-audit"))
+    expect(terminalRow).toContain("100% hit")
     expect(terminalRow).toContain("1ms")
     await Bun.sleep(1_100)
     expect(screen.lines().find((line) => line.includes("keymap-audit"))).toBe(terminalRow)

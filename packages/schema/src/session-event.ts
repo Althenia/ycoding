@@ -32,6 +32,7 @@ import { Credential } from "./credential.js"
 import { Integration } from "./integration.js"
 import { Provider } from "./provider.js"
 import { Guardrail } from "./guardrail.js"
+import { SessionReview } from "./session-review.js"
 
 export { FileAttachment }
 
@@ -130,6 +131,33 @@ export const GuardrailApproved = Event.durable({
 })
 export type GuardrailApproved = typeof GuardrailApproved.Type
 
+export namespace Review {
+  export const Deferred = Event.durable({
+    type: "session.review.deferred",
+    ...options,
+    schema: { ...Base, ...SessionReview.Deferral.fields },
+  })
+  export type Deferred = typeof Deferred.Type
+  export const Decided = Event.durable({
+    type: "session.review.decided",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision },
+  })
+  export type Decided = typeof Decided.Type
+  export const Withdrawn = Event.durable({
+    type: "session.review.withdrawn",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID, reason: Schema.Literals(["reverted", "task_closed"]) },
+  })
+  export type Withdrawn = typeof Withdrawn.Type
+  export const Consumed = Event.durable({
+    type: "session.review.consumed",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID },
+  })
+  export type Consumed = typeof Consumed.Type
+}
+
 export const GuardrailDecided = Event.durable({
   type: "session.guardrail.decided",
   ...options,
@@ -137,9 +165,12 @@ export const GuardrailDecided = Event.durable({
     ...Base,
     reviewSessionID: SessionID,
     requestID: Schema.String,
-    reply: Schema.Literals(["once", "reject"]),
+    reply: Guardrail.Reply,
     choice: Guardrail.DecisionChoice.pipe(optional),
+    grades: Schema.Array(Guardrail.Grade).pipe(optional),
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+    ruleIDs: Schema.Array(Schema.String).pipe(optional),
+    source: Guardrail.Source.pipe(optional),
   },
 })
 export type GuardrailDecided = typeof GuardrailDecided.Type
@@ -147,7 +178,13 @@ export type GuardrailDecided = typeof GuardrailDecided.Type
 export const GuardrailEscalated = Event.durable({
   type: "session.guardrail.escalated",
   ...options,
-  schema: { ...Base, requestID: Schema.String, ...Guardrail.Escalation.fields },
+  schema: {
+    ...Base,
+    requestID: Schema.String,
+    ...Guardrail.Escalation.fields,
+    ruleIDs: Schema.Array(Schema.String).pipe(optional),
+    source: Guardrail.Source.pipe(optional),
+  },
 })
 export type GuardrailEscalated = typeof GuardrailEscalated.Type
 
@@ -159,6 +196,7 @@ export const GuardrailDismissed = Event.durable({
     reviewSessionID: SessionID,
     ruleID: Schema.String.check(Schema.isPattern(/^standard\.review\./)),
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0.9, maximum: 1 })),
+    source: Guardrail.Source.pipe(optional),
   },
 })
 export type GuardrailDismissed = typeof GuardrailDismissed.Type
@@ -529,6 +567,18 @@ export namespace Step {
     },
   })
   export type Failed = typeof Failed.Type
+
+  export const Rerouted = Event.durable({
+    type: "session.step.rerouted",
+    ...options,
+    schema: {
+      ...Base,
+      assistantMessageID: SessionMessage.ID,
+      model: Model.Ref,
+      error: SessionError.Error,
+    },
+  })
+  export type Rerouted = typeof Rerouted.Type
 }
 
 export namespace Text {
@@ -888,6 +938,11 @@ export const Definitions = Event.inventory(
   ProjectArtifactsEnded,
   GuardrailDismissed,
   GuardrailEscalated,
+  GuardrailDecided,
+  Review.Deferred,
+  Review.Decided,
+  Review.Withdrawn,
+  Review.Consumed,
   Moved,
   Renamed,
   UsageUpdated,
@@ -918,6 +973,7 @@ export const Definitions = Event.inventory(
   Step.Started,
   Step.Ended,
   Step.Failed,
+  Step.Rerouted,
   Text.Started,
   Text.Delta,
   Text.Ended,
@@ -960,7 +1016,6 @@ export const DurableDefinitions = Event.inventory(
   ProviderRequestRecorded,
   ProfileBound,
   GuardrailApproved,
-  GuardrailDecided,
 )
 
 // Durable replay accepts legacy and current payloads for the same event type.
@@ -971,7 +1026,7 @@ export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).annot
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })
-export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound, GuardrailApproved, GuardrailDecided], {
+export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded, ProfileBound, GuardrailApproved], {
   mode: "oneOf",
 })
 export type Event = typeof All.Type

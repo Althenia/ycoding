@@ -28,7 +28,9 @@ export function DialogSubagent(props: { sessionID: string }) {
                 ? ("connected" as const)
                 : ("disabled" as const),
         footer:
-          task.state === "waiting"
+          task.stoppedRecovery
+            ? "Stopped"
+            : task.state === "waiting"
             ? "Awaiting input"
             : task.state === "running"
               ? task.progress?.text

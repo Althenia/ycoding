@@ -3,7 +3,7 @@ import { LLM, LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai
 import { OpenAIChat } from "@ycoding-ai/ai/protocols/openai-chat"
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { decode } from "@toon-format/toon"
+import { decode, encode } from "@toon-format/toon"
 import { Image } from "../src/image"
 import { Permission } from "../src/permission"
 import { DecisionTool } from "../src/tool/decision"
@@ -36,6 +36,7 @@ import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
 
 const requests: LLMRequest[] = []
+let graded = false
 const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false, score: false, refusal: false }
 const permissions: Permission.AssertInput[] = []
 let entered = Deferred.makeUnsafe<void>()
@@ -46,7 +47,10 @@ const toon = "decisions:\n  version: 1\n  answers[1]{name,type,answer,choice,sco
 const client = Layer.mock(LLMClient.Service, {
   stream: (request) => {
     requests.push(request)
-    const output = LLMEvent.textDelta({ id: "judgment", text: state.malformed ? "{\"probability\":1}" : state.refusal
+    const output = LLMEvent.textDelta({ id: "judgment", text: graded ? encode({ decisions: { version: 1, answers: [{
+      name: "decision", type: "choice", answer: null, choice: null, score: null, confidence: 0,
+      grades: [{ choice: "allow", confidence: 0.8, evidence: "Read only" }, { choice: "review", confidence: 0.2, evidence: "No mutation" }],
+    }] } }) : state.malformed ? "{\"probability\":1}" : state.refusal
       ? toon.replace("decision,choice,null,review,null,0.8", "decision,refusal,null,null,null,0") : state.score
       ? toon.replace("decision,choice,null,review,null,0.8", "decision,score,null,null,3,0.84") : toon })
     if (state.unsettled) return Stream.make(output)
@@ -91,6 +95,7 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
 
 const seed = (id: string) => Effect.gen(function* () {
   requests.length = 0
+  graded = false
   state.malformed = false
   state.unsettled = false
   state.unavailable = false
@@ -269,6 +274,27 @@ it.effect("the callable agent backend preserves provider permission and exposes 
     provider: "agent", response: { semantics: "model-estimate", answers: [{ choice: "review", confidence: 0.8 }] },
   })
   expect(requests).toHaveLength(1)
+}))
+
+it.effect("the agent tool sends graded choices through real decision services and returns evidence without a pick", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_graded_tool")
+  graded = true
+  yield* registerToolPlugin(DecisionTool.Plugin)
+  const registry = yield* ToolRegistry.Service
+  const result = yield* executeTool(registry, { sessionID, ...toolIdentity, call: {
+    type: "tool-call", id: "grade", name: "decision", input: { provider: "agent", request: {
+      state: { action: "read" }, questions: [{ type: "choice", name: "decision", instructions: "Grade every option", grade: true,
+        choices: [{ value: "allow" }, { value: "review" }] }],
+    } },
+  } })
+  expect(result.type).toBe("text")
+  if (result.type !== "text" || typeof result.value !== "string") throw new Error("Expected graded TOON")
+  expect(Schema.decodeUnknownSync(Decision.Output)(decode(result.value)).response.answers[0]).toEqual({
+    name: "decision", type: "choice", answer: null, choice: null, score: null, confidence: 0,
+    grades: [{ choice: "allow", confidence: 0.8, evidence: "Read only" }, { choice: "review", confidence: 0.2, evidence: "No mutation" }],
+  })
+  expect(requests).toHaveLength(1)
+  expect(JSON.stringify(requests[0].messages)).toContain("grade: true")
 }))
 
 it.effect("Chat and Responses expose the named agent judgment request contract", () => Effect.gen(function* () {

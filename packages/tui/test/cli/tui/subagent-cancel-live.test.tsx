@@ -19,6 +19,8 @@ const otherChildID = "ses_child_b"
 
 type State = "running" | "cancelling" | "cancelled" | "completed"
 
+const startedAt = Date.now() - 5_000
+
 function task(sessionID: string, state: State) {
   return {
     sessionID,
@@ -29,7 +31,7 @@ function task(sessionID: string, state: State) {
     background: true,
     state,
     revision: 1,
-    time: { created: 1, updated: 2 },
+    time: { created: startedAt, updated: startedAt + 1 },
   }
 }
 

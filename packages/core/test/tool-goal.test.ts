@@ -23,7 +23,7 @@ const authority = { denied: false }
 const plugin = makeLocationNode({
   name: "test/goal-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(GoalTool.Plugin)),
-  deps: [SessionAutonomy.node, ToolRegistry.toolsNode, Permission.node],
+  deps: [Database.node, SessionAutonomy.node, ToolRegistry.toolsNode, Permission.node],
 })
 const it = testEffect(AppNodeBuilder.build(
   LayerNode.group([Database.node, SessionAutonomy.node, ToolRegistry.node, plugin]),

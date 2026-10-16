@@ -1,7 +1,8 @@
 export * as DecisionChoice from "./decision-choice"
 
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Result } from "effect"
 import { Decision } from "./decision"
+import { DecisionJudgment } from "./decision-judgment"
 import { SessionSchema } from "./session/schema"
 
 export const ConfidenceThreshold = 0.8
@@ -15,6 +16,12 @@ export interface Judgment {
   readonly value: string
   readonly confidence: number
 }
+
+export type UnsettledReason = "refused" | "low_confidence" | "error" | "timeout"
+
+export type Outcome =
+  | { readonly type: "judgment"; readonly value: string; readonly confidence: number }
+  | { readonly type: "unsettled"; readonly reason: UnsettledReason; readonly choice?: string; readonly confidence?: number }
 
 export function choose(
   decision: Decision.Interface,
@@ -66,6 +73,104 @@ export function choose(
     )
 }
 
+export function chooseDetailed(
+  decision: Decision.Interface,
+  input: {
+    readonly sessionID: SessionSchema.ID
+    readonly name: string
+    readonly instructions: string
+    readonly state: Decision.Input["request"]["state"]
+    readonly choices: ReadonlyArray<Choice>
+  },
+): Effect.Effect<Outcome> {
+  if (input.choices.length === 0) return Effect.succeed({ type: "unsettled", reason: "refused" } as Outcome)
+  return decision
+    .evaluate(
+      {
+        provider: "agent",
+        request: {
+          state: redactEvidence(input.state),
+          questions: [
+            {
+              type: "choice",
+              name: input.name,
+              instructions: redactText(input.instructions),
+              choices: input.choices.map((choice) => ({
+                value: redactText(choice.value),
+                ...(choice.description === undefined ? {} : { description: redactText(choice.description) }),
+              })),
+            },
+          ],
+        },
+      },
+      { sessionID: input.sessionID },
+    )
+    .pipe(
+      Effect.interruptible,
+      Effect.timeoutOption("60 seconds"),
+      Effect.exit,
+      Effect.map((exit): Outcome => {
+        if (Exit.isFailure(exit)) return { type: "unsettled", reason: "error" }
+        if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+        const answer = exit.value.value.response.answers.find((item) => item.name === input.name)
+        if (!answer || answer.type === "refusal" || typeof answer.choice !== "string")
+          return { type: "unsettled", reason: "refused" }
+        if (answer.type !== "choice") return { type: "unsettled", reason: "error" }
+        const choice = input.choices.find((candidate) => redactText(candidate.value) === answer.choice)
+        if (!choice) return { type: "unsettled", reason: "error" }
+        if (!Number.isFinite(answer.confidence)) return { type: "unsettled", reason: "error", choice: choice.value }
+        if (answer.confidence < ConfidenceThreshold)
+          return { type: "unsettled", reason: "low_confidence", choice: choice.value, confidence: answer.confidence }
+        return { type: "judgment", value: choice.value, confidence: answer.confidence }
+      }),
+    )
+}
+
+export interface Grade {
+  readonly choice: string
+  readonly confidence: number
+  readonly evidence: string
+}
+
+export type GradedOutcome =
+  | { readonly type: "grades"; readonly grades: ReadonlyArray<Grade> }
+  | { readonly type: "unsettled"; readonly reason: "refused" | "error" | "timeout" }
+
+export function grade(decision: Decision.Interface, input: {
+  readonly sessionID: SessionSchema.ID
+  readonly name: string
+  readonly instructions: string
+  readonly state: Decision.Input["request"]["state"]
+  readonly choices: ReadonlyArray<Choice>
+}): Effect.Effect<GradedOutcome> {
+  const request = {
+    state: redactEvidence(input.state),
+    questions: [{
+      type: "choice" as const, name: input.name, instructions: redactText(input.instructions), grade: true,
+      choices: input.choices.map((choice) => ({ value: choice.value,
+        ...(choice.description === undefined ? {} : { description: redactText(choice.description) }),
+      })),
+    }],
+  }
+  return decision.evaluate({ provider: "agent", request }, { sessionID: input.sessionID }).pipe(
+    Effect.interruptible,
+    Effect.timeoutOption("60 seconds"),
+    Effect.exit,
+    Effect.map((exit): GradedOutcome => {
+      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "error" }
+      if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
+      const parsed = DecisionJudgment.parse(DecisionJudgment.encode({ decisions: exit.value.value.response }), request)
+      if (Result.isFailure(parsed)) return { type: "unsettled", reason: "error" }
+      const answer = parsed.success.decisions.answers[0]
+      if (!answer || answer.type === "refusal") return { type: "unsettled", reason: "refused" }
+      if (!answer.grades) return { type: "unsettled", reason: "error" }
+      return { type: "grades", grades: answer.grades.map((grade) => ({
+        choice: String(grade.choice), confidence: grade.confidence, evidence: redactText(grade.evidence).slice(0, 500),
+      })) }
+    }),
+  )
+}
+
 export function verifyMatch(decision: Decision.Interface, input: {
   readonly sessionID: SessionSchema.ID
   readonly state: Decision.Input["request"]["state"]
@@ -107,7 +212,7 @@ function redactEvidence(value: Decision.Input["request"]["state"]): Decision.Inp
   return value
 }
 
-function redactText(value: string): string {
+export function redactText(value: string): string {
   const secrets = Object.entries(process.env).filter(
     ([key, secret]) =>
       /password|secret|token|credential|authorization|api[-_]?key|private[-_]?key/i.test(key) &&

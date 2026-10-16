@@ -1,15 +1,16 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Portal } from "solid-js/web"
 import { useRemote } from "../context"
-import { sessionStatusLabel, sessionStatusTimed } from "../projection"
+import { reviewItemsInScope, sessionExecutionLabel, sessionStatusTimed } from "../projection"
+import { createRemoteQuery } from "../query"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
 
 const levels = [
-  { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
+  { level: 0 as const, label: "Manual", detail: "Manual questions and approval requests." },
   { level: 1 as const, label: "YOLO 1", detail: "Automatically approves tool permissions and ordinary guardrail reviews." },
-  { level: 2 as const, label: "YOLO 2", detail: "Also answers questions and forms." },
-  { level: 3 as const, label: "YOLO 3", detail: "Same as YOLO 2: also answers questions and forms." },
+  { level: 2 as const, label: "YOLO 2", detail: "Answers questions/forms if enabled." },
+  { level: 3 as const, label: "YOLO 3", detail: "Same as YOLO 2; keeps level 3." },
 ]
 
 export function ComposerStatus() {
@@ -36,14 +37,26 @@ export function ComposerStatus() {
     const timer = setInterval(() => setNow(Date.now()), 100)
     onCleanup(() => clearInterval(timer))
   })
-  const label = () => current() ? sessionStatusLabel(current()!, now(), waiting()) : "ready"
-  const stateText = () => label().replace(/^(?:YOLO \d+(?: \+ Goal)?|Goal) · (?:auto-approve|autonomous) · /, "").replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")
+  const label = () => current() ? sessionExecutionLabel(current()!, now(), waiting()) : "ready"
+  const stateText = () => label().replace(/\? awaiting input/i, "Waiting for your decision").replace(/cooking/i, "Running")
   const elapsed = () => current()?.executionStarted === undefined ? "" : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
-  const visible = () => current()?.status === "running" || current()?.status === "failed"
+  const visible = () => current()?.status === "running" || current()?.status === "failed" || review() > 0
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
   const goalSetting = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.goal.set" && mutation.state === "sending")
   const yolo = () => view()?.autonomy?.yolo ?? 0
+  const asleep = () => view()?.autonomy?.sleep !== undefined
+  const reachable = () => remote.state().transport.kind === "open" && remote.state().connection.kind === "connected"
+  const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), asleep() && reachable()))
+  const machineMaySleep = () => {
+    const read = keepAwake().data
+    return read?.read === "ready" && read.status !== undefined && read.status.state !== "on"
+  }
+  const review = () => { const selected = view(); return selected === undefined ? 0 : reviewItemsInScope(selected).length }
+  const modes = () => [
+    ...(asleep() ? [machineMaySleep() ? { key: "sleep", label: "asleep · machine may sleep", compact: "Zz!", tone: "attention" } : { key: "sleep", label: "asleep", compact: "Zz", tone: "on" }] : []),
+    ...(review() > 0 ? [{ key: "review", label: `review ${review()}`, compact: `R${review()}`, tone: "attention" }] : []),
+  ]
   const close = (focus = false) => {
     if (!open() || leaving()) return
     const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
@@ -105,8 +118,9 @@ export function ComposerStatus() {
       <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
     </span>
     <Show when={view()?.autonomy}>
-    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
+    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Manual"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
     <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() || goalSetting() }} aria-label={goalSetting() ? "Setting goal" : goalActive() ? "Goal active" : "Goal off"} aria-busy={goalSetting() ? "true" : undefined} aria-haspopup="dialog" aria-expanded={open() === "goal" && !leaving()} onClick={() => toggle("goal")}>Goal<Show when={goalActive()}>{" "}<span class="session-status__goal-count" aria-hidden="true">{goal()?.iteration}</span></Show></button>
+    <For each={modes()}>{(mode) => <span class={`session-status__mode session-status__mode--${mode.tone}`} data-mode={mode.key} title={mode.label}><span class="session-status__mode-full">{mode.label}</span><span class="session-status__mode-compact" aria-hidden="true">{mode.compact}</span></span>}</For>
     <Show when={goalActive()}><span class="session-status__active-goal" role="status" title={goal()?.text}>Goal active · {goal()?.text}</span></Show>
     <Show when={open()}><Portal><div ref={popover} class="session-status__popover" classList={{ "session-status__yolo-popover": open() === "yolo", "session-status__goal-popover": open() === "goal", "session-status__popover--leaving": leaving() }} role="dialog" aria-label={open() === "yolo" ? "Autonomy level" : "Goal details"} aria-hidden={leaving() ? "true" : undefined} inert={leaving()} style={{ left: `${position().left}px`, top: `${position().top}px`, width: `${position().width}px` }} onAnimationEnd={finish} onAnimationCancel={finish} onKeyDown={(event) => { if (event.key === "Escape" && !leaving()) { event.preventDefault(); close(true) } }}>
       <Show when={open() === "yolo"}><div role="radiogroup" aria-label="Autonomy level"><For each={levels}>{(option, index) => <button type="button" role="radio" aria-checked={yolo() === option.level} tabIndex={yolo() === option.level ? 0 : -1} onClick={() => void remote.store.setYolo(option.level)} onKeyDown={(event) => {
@@ -115,7 +129,7 @@ export function ComposerStatus() {
         event.preventDefault()
         void remote.store.setYolo(levels[next]!.level)
         queueMicrotask(() => popover?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus())
-      }}><strong>{option.label}</strong><span>{option.detail}</span></button>}</For></div><p class="session-status__guardrail-note">Hard guardrail reviews always require a human decision, even at level 3.</p></Show>
+      }}><strong>{option.label}</strong><span>{option.detail}</span></button>}</For></div><p class="session-status__guardrail-note">Hard reviews follow configured policy, not YOLO. Unsettled reviews defer during sleep.</p></Show>
       <Show when={open() === "goal"}><Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()).then((accepted) => { if (!accepted) return; setDraft(""); close(true) }) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim() || goalSetting()}>Set goal</button></form>}><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { close(true); void remote.store.stopGoal() }}>Stop goal</button></Show></Show>
     </div></Portal></Show>
     </Show>

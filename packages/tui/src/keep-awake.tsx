@@ -1,4 +1,4 @@
-import { createContext, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
+import { createContext, createSignal, onCleanup, onMount, Show, useContext, type ParentProps } from "solid-js"
 import type { KeepAwake } from "@ycoding-ai/schema/keep-awake"
 import { Keymap } from "./context/keymap"
 import { useClient } from "./context/client"
@@ -39,6 +39,29 @@ const unavailable: KeepAwakeContextValue = {
 
 export function useKeepAwake() {
   return useContext(Context) ?? unavailable
+}
+
+export function KeepAwakeIndicator() {
+  const awake = useKeepAwake()
+  const { theme } = useTheme()
+  const status = () => {
+    const current = awake.status()
+    return current && current.state !== "off" ? current : undefined
+  }
+  return (
+    <Show when={status()}>
+      {(current) => (
+        <text
+          flexShrink={0}
+          wrapMode="word"
+          fg={current().state === "on" ? theme.text.feedback.success.default
+            : current().state === "error" ? theme.text.feedback.error.default : theme.text.feedback.warning.default}
+        >
+          keep awake {keepAwakeStatusLabel(current()).replace("sleep-held", "sleep held")}
+        </text>
+      )}
+    </Show>
+  )
 }
 
 export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer }>) {

@@ -212,7 +212,7 @@ describe("web design contract inventory", () => {
     await page.close()
   }, 30_000)
 
-  test("widens the Sessions, Usage and Settings column from 1600 while Session detail keeps its measure", async () => {
+  test("widens the Sessions, Usage and Settings column from 1600 while Session detail fills its container up to the 120ch measure", async () => {
     const page = await requireBrowser().openPage()
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {
@@ -222,14 +222,28 @@ describe("web design contract inventory", () => {
         for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector('.workspace__scroll') !== null`); attempt += 1) await Bun.sleep(50)
         for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`); attempt += 1) await Bun.sleep(50)
         expect(await page.evaluate<string>(`JSON.stringify({ view: document.querySelector('.app')?.className ?? '', found: document.querySelector(${JSON.stringify(selector)}) !== null })`), `${view} ${width} mounted`).toContain('"found":true')
-        const geometry = await page.evaluate<{ readonly width: number; readonly available: number; readonly gutter: number; readonly overflow: boolean; readonly centered: boolean }>(`(() => {
+        const geometry = await page.evaluate<{ readonly width: number; readonly wide: number; readonly reserve: number; readonly container: number; readonly available: number; readonly gutter: number; readonly overflow: boolean; readonly centered: boolean }>(`(() => {
           const element = document.querySelector(${JSON.stringify(selector)})
           const scroll = document.querySelector('.workspace__scroll')
           const box = element.getBoundingClientRect()
           const host = scroll.getBoundingClientRect()
           const styles = getComputedStyle(scroll)
+          const probe = document.createElement('div')
+          probe.style.width = 'var(--yc-measure-wide)'
+          element.append(probe)
+          const wide = Math.round(probe.getBoundingClientRect().width)
+          probe.style.width = 'var(--yc-space-12)'
+          const reserve = Math.round(probe.getBoundingClientRect().width)
+          probe.remove()
+          const parent = (element.closest('.conversation-pane') ?? element).parentElement
+          if (!parent) throw new Error('Route container is missing')
+          const parentStyles = getComputedStyle(parent)
+          const container = Math.round(parent.clientWidth - parseFloat(parentStyles.paddingLeft) - parseFloat(parentStyles.paddingRight))
           return {
             width: Math.round(box.width),
+            wide,
+            reserve,
+            container,
             available: Math.round(scroll.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight)),
             gutter: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--yc-gutter')),
             overflow: document.documentElement.scrollWidth > innerWidth,
@@ -239,7 +253,15 @@ describe("web design contract inventory", () => {
         expect(geometry.overflow, `${view} ${width}`).toBe(false)
         expect(geometry.centered, `${view} ${width}`).toBe(true)
         expect(geometry.gutter, `${view} ${width}`).toBe(width >= 1600 ? 48 : 40)
-        if (view === "chat") { expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(740); continue }
+        if (view === "chat") {
+          // Session detail fills its container minus the 48px (--yc-space-12) end reserve, up to the 120ch wide measure.
+          expect(geometry.reserve, `${view} ${width}`).toBe(48)
+          expect(geometry.container, `${view} ${width}`).toBeGreaterThanOrEqual(geometry.available - 1)
+          const column = Math.min(geometry.container - geometry.reserve, geometry.wide)
+          expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(column + 1)
+          expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(column - 1)
+          continue
+        }
         // The column is the declared cap, or the scroll area's content box when that is narrower.
         expect(geometry.width, `${view} ${width}`).toBeLessThanOrEqual(expected)
         expect(geometry.width, `${view} ${width}`).toBeGreaterThanOrEqual(Math.min(expected, geometry.available) - 1)

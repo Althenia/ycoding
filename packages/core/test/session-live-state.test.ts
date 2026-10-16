@@ -22,7 +22,7 @@ const sessionID = Session.ID.make("ses_live_state")
 
 testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
   Effect.sync(() => {
-    const state = { mode: "normal", yolo: 0, sleep: { priorGuardrailDecision: false } } as const
+    const state = { mode: "normal", yolo: 0, sleep: {} } as const
     expect(SessionLiveState.sleepReminder(state, true, false)).toContain(
       "lid-closed keep-awake is unavailable or unreported",
     )
@@ -38,7 +38,7 @@ const guardrails = Layer.succeed(
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
-    rejectEscalated: () => Effect.die("unused"),
+    deferPending: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     status: () => Effect.die("unused"),
     snapshot: () => Effect.succeed({ sequence: 4, digest: guardrailDigest }),

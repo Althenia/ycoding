@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { createThrottler } from "@tanstack/solid-pacer"
 import type { SessionInfoView } from "../store"
+import { carouselSessionStatus, sessionActivityGroup } from "../view-model"
 import { LoadingPlaceholder } from "./loading"
 import "./running-sessions.css"
 
@@ -92,12 +93,13 @@ export function RunningSessions(props: {
             return <li role="group" aria-label={`${index() + 1} of ${props.sessions.length}`}>
             <button type="button" class="running-sessions__item"
               aria-label={`Open ${session.title} in ${session.workspaceName}`}
+              aria-description={carouselSessionStatus(session) ?? (lastActive === undefined ? "Last active not reported" : `Last active ${lastActive.toLocaleString()}`)}
               onClick={() => props.onSelectSession(session.id)}>
               <span class="running-sessions__title">{session.title}</span>
               <span class="running-sessions__workspace">{session.workspaceName}</span>
-              <span class="running-sessions__status">
-                <Show when={session.running} fallback={lastActive === undefined ? "Last active not reported" : <time dateTime={lastActive.toISOString()}>Last active {lastActive.toLocaleString()}</time>}>
-                  <span aria-hidden="true" class="running-sessions__dot" />Running
+              <span class={`running-sessions__status${sessionActivityGroup(session) === "waiting" ? " running-sessions__status--waiting" : ""}`}>
+                <Show when={carouselSessionStatus(session)} fallback={lastActive === undefined ? "Last active not reported" : <time dateTime={lastActive.toISOString()}>Last active {lastActive.toLocaleString()}</time>}>
+                  <span aria-hidden="true" class="running-sessions__dot" />{carouselSessionStatus(session)}
                 </Show>
               </span>
             </button>

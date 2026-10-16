@@ -23,6 +23,95 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("a queued Team shell disappears once its cancellation succeeds", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two&queuedTeamShell`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('queued #2') ?? false`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('queued #2') ?? false`)).toBe(true)
+    await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click(); document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`)).toBe(true)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter((item) => item.operation === 'session.team.shell.kill').length`)).toBe(1)
+  } finally { await page.close() }
+}, 15_000)
+
+test("a failed Team shell poll stays paused after row removal until an explicit retry", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&shellReadFailure`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`(() => { let serial = 0; const timers = new Map(); window.setInterval = (callback) => { const id = ++serial; timers.set(id, callback); return id }; window.clearInterval = (id) => timers.delete(id); window.tickShell = () => [...timers.values()].forEach((callback) => callback()); document.querySelector('.team-view [data-tab="shell"]').click(); document.querySelector('.team-view__shell [data-action="output"]').click() })()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Tests passed') ?? false`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`window.tickShell()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view')?.textContent.includes('Shell output is unavailable') ?? false`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`window.teamDropShell()`)
+    await page.evaluate(`(async () => { for (let index = 0; index < 3; index++) { window.tickShell(); await Promise.resolve(); await Promise.resolve() } })()`)
+    expect(await page.evaluate<number>(`window.teamEvents().filter((event) => event.startsWith('output:')).length`)).toBe(2)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Shell output is unavailable') ?? false`)).toBe(true)
+    await page.evaluate(`[...document.querySelectorAll('.team-view__output button')].find((button) => button.textContent === 'Retry output').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Final bytes before exit') ?? false`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<number>(`window.teamEvents().filter((event) => event.startsWith('output:')).length`)).toBe(3)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Final bytes before exit') && !document.querySelector('.team-view__output')?.textContent.includes('Shell output is unavailable')`)).toBe(true)
+  } finally { await page.close() }
+}, 15_000)
+
+test("an opened Team shell catches final output after its live row disappears", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click(); document.querySelector('.team-view__shell [data-action="output"]').click()`)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Tests passed') ?? false`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`window.teamDropShell()`)
+    for (let attempt = 0; attempt < 120 && !await page.evaluate<boolean>(`document.querySelector('.team-view__output')?.textContent.includes('Final bytes before exit') ?? false`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null && document.querySelector('.team-view__output')?.textContent.includes('Final bytes before exit') && document.querySelector('.team-view__command code')?.textContent === 'bun test'`)).toBe(true)
+  } finally { await page.close() }
+}, 15_000)
+
+test("a completed background shell tool polls its queued, running, and exited shell state", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&backgroundShellLifecycle`)
+    for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.transcript-tool__toggle')].some((button) => button.textContent.includes('bun test --watch'))`); attempt += 1) await Bun.sleep(25)
+    await page.evaluate(`[...document.querySelectorAll('.transcript-tool__toggle')].find((button) => button.textContent.includes('bun test --watch')).click()`)
+    for (let attempt = 0; attempt < 200 && !await page.evaluate<boolean>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent.includes('final-output') ?? false`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("queued-output")
+    expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("running-output")
+    expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("final-output")
+  } finally { await page.close() }
+}, 15_000)
+
+test("Team shell lists a marked preview and opens the complete command on demand", async () => {
+  if (!browser) throw new Error("Browser not started")
+  const command = `cat <<'EOF'\n${"command content ".repeat(100)}\nEOF`
+  for (const [width, height, theme] of [[390, 844, "light"], [1440, 900, "dark"]] as const) {
+    const page = await browser.openPage()
+    try {
+      await page.setViewport(width, height)
+      await page.navigate(`http://127.0.0.1:${port}/verify/team-fixture.html?mode=team&longShell&theme=${theme}`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
+      await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.team-view__shell .team-view__title').textContent`)).toBe(`${command.slice(0, 255)}…`)
+      expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual([])
+      await page.evaluate(`document.querySelector('.team-view__shell [data-action="output"]').click()`)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__command code')?.textContent.endsWith('EOF') ?? false`); attempt += 1) await Bun.sleep(25)
+      expect(await page.evaluate<string>(`document.querySelector('.team-view__command code').textContent`)).toBe(command)
+      expect(await page.evaluate<string>(`document.querySelector('.team-view__shell .team-view__title').textContent`)).toBe(`${command.slice(0, 255)}…`)
+      expect(await page.evaluate<string[]>(`window.teamEvents()`)).toEqual(["output:ses_root:sh_1"])
+      expect(await page.evaluate<{ readonly overflow: boolean; readonly wrap: string }>(`({ overflow: document.documentElement.scrollWidth > innerWidth, wrap: getComputedStyle(document.querySelector('.team-view__command code')).overflowWrap })`)).toEqual({ overflow: false, wrap: "anywhere" })
+    } finally { await page.close() }
+  }
+}, 20_000)
+
 test("Office-selected managed child opens read-only Conversation instead of a prompt composer", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
@@ -83,8 +172,8 @@ test("real remote Team cancels, kills, creates and opens a BTW side chat; manage
     await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell [data-action="kill"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click(); document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
-    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('killed') ?? false`); attempt += 1) await Bun.sleep(25)
-    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('killed') ?? false`)).toBe(true)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`)).toBe(true)
     await page.evaluate(`document.querySelector('.team-view [data-tab="side-chats"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-action="new-side-chat"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('.team-view [data-action="new-side-chat"]').click()`)

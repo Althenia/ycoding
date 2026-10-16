@@ -1,7 +1,7 @@
 export * as Permission from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Layer, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { EventRuntime } from "./event"
 import { Location } from "./location"
@@ -11,8 +11,13 @@ import { SessionSchema } from "./session/schema"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
+import { Database } from "./database/database"
+import { Config } from "./config"
+import { DecisionChoice } from "./decision-choice"
 import { PermissionSaved } from "./permission/saved"
 import { SessionEvent } from "./session/event"
+import { SessionMessage } from "./session/message"
+import { SessionReviewFold } from "./session/review-fold"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -44,6 +49,7 @@ export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
   ...RequestFields,
   agent: Agent.ID.pipe(Schema.optional),
+  consumeReview: Schema.Boolean.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -63,6 +69,16 @@ export type AskResult = typeof AskResult.Type
 export const Event = Permission.Event
 
 export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Permission.DeclinedError", {}) {}
+
+export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Permission.DeferredError", {
+  requestID: ID,
+  itemID: SessionReviewFold.ID,
+  action: Schema.String,
+}) {
+  override get message() {
+    return `This action did not run. Permission ${this.action} needs the user's decision and was added to the review box as item ${this.itemID} while the user is asleep. Do not retry it or work around it. If the user approves, you will be told to re-issue exactly this action. Continue with independent work.`
+  }
+}
 
 export class CorrectedError extends Schema.TaggedErrorClass<CorrectedError>()("Permission.CorrectedError", {
   feedback: Schema.String,
@@ -133,6 +149,7 @@ export interface Interface {
   ) => Effect.Effect<Permission.Effect, SessionErrors.NotFoundError>
   readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
   readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
@@ -149,21 +166,25 @@ export const evaluateEffective = Effect.fn("Permission.evaluateEffective")(funct
 interface Pending {
   readonly request: Request
   readonly agent?: Agent.ID
-  readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
+  readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError | DeferredError>
 }
 
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
+    const database = yield* Database.Service
+    const config = yield* Config.Service
     const location = yield* Location.Service
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const settlement = yield* Semaphore.make(1)
+    const exclusive = settlement.withPermit
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
+      exclusive(Effect.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
         discard: true,
       }).pipe(
         Effect.ensuring(
@@ -171,7 +192,7 @@ const layer = Layer.effect(
             pending.clear()
           }),
         ),
-      ),
+      )),
     )
 
     const savedRules = Effect.fnUntraced(function* () {
@@ -222,23 +243,28 @@ const layer = Layer.effect(
     }
 
     const create = (request: Request, agent?: Agent.ID) =>
-      Effect.uninterruptible(
+      exclusive(Effect.uninterruptible(
         Effect.gen(function* () {
-          const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
+          const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError | DeferredError>()
           const item = { request, agent, deferred }
           if (pending.has(request.id))
             return yield* Effect.die(new Error(`Duplicate pending permission ID: ${request.id}`))
+          if (yield* asleep(request.sessionID)) {
+            const review = yield* openReview(request).pipe(Effect.orDie)
+            yield* Deferred.fail(deferred, new DeferredError({ requestID: request.id, itemID: review.itemID, action: request.action }))
+            return item
+          }
           pending.set(request.id, item)
           yield* events
             .publish(Event.Asked, request)
             .pipe(Effect.onError(() => Effect.sync(() => pending.delete(request.id))))
           return item
         }),
-      )
+      ))
 
     yield* events.subscribe(SessionEvent.AgentSelected).pipe(
       Stream.runForEach((event) =>
-        Effect.gen(function* () {
+        exclusive(Effect.gen(function* () {
           for (const [id, item] of pending) {
             if (item.request.sessionID !== event.data.sessionID || item.agent === event.data.agent) continue
             yield* events.publish(Event.Replied, {
@@ -249,7 +275,7 @@ const layer = Layer.effect(
             yield* Deferred.fail(item.deferred, new DeclinedError())
             pending.delete(id)
           }
-        }),
+        })),
       ),
       Effect.forkScoped({ startImmediately: true }),
     )
@@ -261,12 +287,63 @@ const layer = Layer.effect(
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
+    const fingerprintOf = (input: AssertInput) =>
+      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.metadata })
+
+    const openReview = Effect.fnUntraced(function* (value: Request, conversion = false) {
+      const origin = value.source?.messageID.startsWith("msg_")
+        ? { messageID: SessionMessage.ID.make(value.source.messageID), callID: value.source.callID }
+        : { requestID: value.id }
+      return yield* SessionReviewFold.open(database.db, events, {
+        sessionID: value.sessionID,
+        kind: "permission",
+        reason: conversion ? "sleep_entry" : "escalated",
+        origin,
+        payload: {
+          type: "permission",
+          action: DecisionChoice.redactText(value.action),
+          resources: value.resources.map((resource) => DecisionChoice.redactText(resource)),
+          ...(value.save === undefined ? {} : { save: [...value.save] }),
+          fingerprint: fingerprintOf(value),
+          requestID: value.id,
+        },
+        limit: Config.latest(yield* config.entries(), "guardrails")?.max_pending_reviews ?? 16,
+        conversion,
+      })
+    })
+
+    const asleep = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      return yield* autonomy.isAsleep(sessionID).pipe(
+        Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })),
+      )
+    })
+
+    const deferPending = Effect.fn("Permission.deferPending")(function* (sessionID: SessionSchema.ID) {
+      const entries = Array.from(pending.values()).filter((item) => item.request.sessionID === sessionID)
+      yield* Effect.forEach(entries, (item) =>
+        exclusive(Effect.uninterruptible(Effect.gen(function* () {
+          if (pending.get(item.request.id) !== item) return
+          const review = yield* openReview(item.request, true).pipe(Effect.orDie)
+          pending.delete(item.request.id)
+          yield* Deferred.fail(item.deferred, new DeferredError({ requestID: item.request.id, itemID: review.itemID, action: item.request.action }))
+          yield* events.publish(Event.Deferred, { sessionID, requestID: item.request.id, itemID: review.itemID })
+        }))), { discard: true })
+    })
+
     const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
       if (result.effect === "ask" && (yield* autonomousPermission(input.sessionID)))
         return { id: value.id, effect: "allow" as const }
-      if (result.effect === "ask") yield* create(value, input.agent)
+      if (result.effect === "ask") {
+        if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input))))
+          return { id: value.id, effect: "allow" as const }
+        if (yield* asleep(input.sessionID)) {
+          yield* openReview(value).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
+          return { id: value.id, effect: result.effect }
+        }
+        yield* create(value, input.agent)
+      }
       return { id: value.id, effect: result.effect }
     })
 
@@ -283,13 +360,22 @@ const layer = Layer.effect(
           }
           if (result.effect === "allow") return
           if (yield* autonomousPermission(input.sessionID)) return
-          const item = yield* create(request(input), input.agent)
+          if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input)))) return
+          const value = request(input)
+          if (yield* asleep(input.sessionID)) {
+            const review = yield* openReview(value).pipe(
+              Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)),
+            )
+            return yield* Effect.die(new DeferredError({ requestID: value.id, itemID: review.itemID, action: value.action }))
+          }
+          const item = yield* create(value, input.agent)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
+            Effect.catchTag("Permission.DeferredError", (error) => Effect.die(error)),
             Effect.ensuring(
-              Effect.sync(() => {
-                pending.delete(item.request.id)
-              }),
+              exclusive(Effect.sync(() => {
+                if (pending.get(item.request.id) === item) pending.delete(item.request.id)
+              })),
             ),
           )
         }),
@@ -297,7 +383,7 @@ const layer = Layer.effect(
     )
 
     const reply = Effect.fn("Permission.reply")((input: ReplyInput) =>
-      Effect.uninterruptible(
+      exclusive(Effect.uninterruptible(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
@@ -361,7 +447,7 @@ const layer = Layer.effect(
             pending.delete(id)
           }
         }),
-      ),
+      )),
     )
 
     const list = Effect.fn("Permission.list")(function* () {
@@ -376,12 +462,12 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ evaluateEffective, ask, assert, reply, get, forSession, list })
+    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, get, forSession, list })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventRuntime.node, Location.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
 })

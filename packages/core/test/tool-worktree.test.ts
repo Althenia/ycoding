@@ -52,6 +52,7 @@ const permission = Layer.succeed(Permission.Service, {
   evaluateEffective: () => Effect.succeed(state.deny ? "deny" : "ask"),
   assert: (input: Permission.AssertInput) =>
     Effect.gen(function* () {
+      expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
       state.permissions.push(input.action)
       if (state.deny)
         return yield* new Permission.BlockedError({ permission: input.action, resources: input.resources, rules: [] })
@@ -59,8 +60,9 @@ const permission = Layer.succeed(Permission.Service, {
   ask: () => Effect.die("unused"),
 } as unknown as Permission.Interface)
 const guardrail = Layer.succeed(SessionGuardrail.Service, {
-  assert: () =>
+  assert: (input: SessionGuardrail.EvaluateInput) =>
     Effect.sync(() => {
+      expect(input.source).toEqual({ messageID, callID: expect.any(String) })
       state.guardrails++
       return { release: Effect.void }
     }),

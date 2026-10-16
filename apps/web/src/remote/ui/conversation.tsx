@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
@@ -24,6 +24,9 @@ import {
 import { capturedChangesVisible, latestPromptProcessing, promptReceipt, shellOutputPaging } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormRequest } from "./form-request"
+import { readGradedAnswers } from "../decision-grades"
+import { DecisionGrades, DecisionProvenance } from "./decision-grades"
+import { guardrailHeading } from "./guardrail-label"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
 import { FileChangeCard } from "./file-change-card"
@@ -97,16 +100,27 @@ function BoundedText(props: { readonly text: string }): JSX.Element {
 /**
  * One shell's captured output. It keeps two separate controls: "Show more" / "Show less"
  * expands only the text the client already holds, while "Load output" / "Load more output"
- * asks the device for one more explicit page. The device's own retained-bytes limit stays a
- * notice, so neither control stands in for output the device never sent, and a failed or
- * stalled page offers a retry instead of repeating itself.
+ * asks the device for one more explicit page. While the shell runs, the section re-polls
+ * for the next page on an interval and keeps only the bounded tail. The device's own
+ * retained-bytes limit stays a notice, so neither control stands in for output the device
+ * never sent, and a failed page offers a retry instead of repeating itself.
  */
 function ShellOutputSection(props: {
   readonly shellID: string
   readonly output?: ShellOutputView
   readonly fetch?: ShellOutputFetch
+  readonly status?: string
 }): JSX.Element {
   const remote = useRemote()
+  createEffect(() => {
+    const state = props.output?.status ?? props.status
+    const live = state === "running" || state === "queued"
+    const more = props.output !== undefined && props.output.cursor < props.output.size
+    if ((!live && !more) || props.fetch?.state === "loading" || props.fetch?.state === "error") return
+    if (props.output === undefined) void remote.store.loadShellOutputPage(props.shellID)
+    const interval = setInterval(() => void remote.store.loadShellOutputPage(props.shellID), 1_000)
+    onCleanup(() => clearInterval(interval))
+  })
   const paging = () => shellOutputPaging(props.output, props.fetch)
   const status = () => {
     const current = paging().status
@@ -161,6 +175,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   })
   const expanded = () => toolPartExpanded({ touched: touched(), manual: manual(), status: props.part().status })
   const shellID = () => toolShellID(props.part())
+  const graded = () => props.part().name === "decision" ? readGradedAnswers(props.part().structured) : []
   const statusLabel = () => {
     if (props.part().name.toLowerCase() === "subagent" && props.part().structured?.status === "running") return "Background"
     if (props.part().status === "streaming") return "Preparing input"
@@ -207,6 +222,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
           </pre>
         </Show>
+        <For each={graded()}>{(answer) => <section aria-label={`Graded choice ${answer.name}`}><h4 class="decision-grades__title">{answer.name}</h4><DecisionGrades grades={answer.grades} /></section>}</For>
         <For each={output().content.map(toolContentKey)}>
           {(key) => {
             const block = () => output().content[Number(key.slice(key.lastIndexOf(":") + 1))]!
@@ -233,7 +249,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
           <p class="transcript-tool__note">Tool output was truncated on the device.</p>
         </Show>
         <Show when={shellID()}>
-          {(id) => <ShellOutputSection shellID={id()} output={props.part().shellOutput} fetch={props.part().shellOutputFetch} />}
+          {(id) => <ShellOutputSection shellID={id()} output={props.part().shellOutput} fetch={props.part().shellOutputFetch} status={typeof props.part().structured?.status === "string" ? props.part().structured!.status as string : undefined} />}
         </Show>
         </div>
       </Show>
@@ -367,6 +383,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
     return message.kind === "synthetic" || message.kind === "system" ? noticeSummary(message.source, message.text) : undefined
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
+  const guardrail = () => { const message = props.message(); return message.kind === "system" ? message.guardrail : undefined }
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
   const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
   const promptMutation = () => sendMutation()?.state !== "sending" ? sendMutation() : undefined
@@ -411,9 +428,11 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         </Show>
 
         <Show when={kind() === "system" || kind() === "synthetic"}>
+          <Show when={guardrail()} fallback={
           <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
             {(notice) => <SyntheticNotice notice={notice()} />}
           </Show>}>{(answer) => <section class="request request--form" aria-label="Recorded parent answer"><header class="request__header"><Icon name="chat" size={16} /><span>Parent answer</span></header><div class="request__body"><Markdown text={answer()} /></div></section>}</Show>
+          }>{(provenance) => <details class="transcript-notice transcript-notice--waiting"><summary><Icon name="chevron-right" size={16} />{fallbackText()}</summary><DecisionProvenance provenance={provenance()} /></details>}</Show>
         </Show>
 
         <Show when={kind() === "shell"}>
@@ -427,6 +446,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
               shellID={shellOf(props.message())?.shellID ?? ""}
               output={shellOf(props.message())?.output}
               fetch={shellOf(props.message())?.outputFetch}
+              status={shellOf(props.message())?.status}
             />
           </div>
         </Show>
@@ -498,7 +518,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
       <Show when={props.request().kind === "guardrail"}>
         <header class="request__header">
           <Icon name="alert" size={16} />
-          <span>Guardrail review{isHardReview(props.request()) ? " (human decision required unless guardrail-decision or sleep is on)" : ""}</span>
+          <span>{guardrailHeading(isHardReview(props.request()))}</span>
           <Show when={isHardReview(props.request())}>
             <span class="request__badge">Hard review</span>
           </Show>

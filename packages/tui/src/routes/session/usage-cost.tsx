@@ -6,13 +6,6 @@ import { DialogHeader, DialogTitle, useDialog } from "../../ui/dialog"
 import { useTheme } from "../../context/theme"
 import { forecastLines, measuredSpeedLines, unitCostLines, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "../../util/usage-accounting"
 
-export function PromptCostBlock(props: { unit: UnitCostPresentation }) {
-  const { theme } = useTheme()
-  return <box flexDirection="column" paddingLeft={3} paddingRight={3} flexShrink={0}>
-    <For each={unitCostLines(props.unit)}>{(line, index) => <text fg={index() === 0 && !props.unit.complete ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="word">{line}</text>}</For>
-  </box>
-}
-
 export function UsageSpeedDetails(props: { speed?: SpeedPresentation }) {
   const { theme } = useTheme()
   return <box flexDirection="column" flexShrink={0}><For each={measuredSpeedLines(props.speed)}>{(line) => <text fg={theme.text.subdued} wrapMode="word">{line}</text>}</For></box>

@@ -21,7 +21,7 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, heig
       args: { sessionID },
       settle: viewport.width >= 120 ? "18.4K / 200K · 9%" : "docs-sync (1 of 3)",
       stable: ["Claude Sonnet 5", "◦ docs-sync", ...(viewport.width >= 120
-        ? ["Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions."] : [])],
+        ? ["Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions.", "18.4K / 200K · 9%", "41,208"] : [])],
       route,
     })
     expect(lines).toHaveLength(viewport.height)

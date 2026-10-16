@@ -3,6 +3,7 @@ import { Tool } from "@ycoding-ai/plugin/effect/tool"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Permission } from "../permission"
 import { Question } from "../question"
+import { SessionGuardrail } from "./guardrail"
 import { Integration } from "../integration"
 import { ToolOutputStore } from "../tool-output-store"
 import { AgentNotFoundError, StepFailedError, UserInterruptedError } from "./error"
@@ -38,6 +39,8 @@ export function toSessionError(cause: unknown): SessionError.Error {
     }
   }
   if (cause instanceof Permission.BlockedError) return { type: "permission.rejected", message: cause.message }
+  if (cause instanceof Permission.DeferredError) return { type: "tool.execution", message: cause.message }
+  if (cause instanceof SessionGuardrail.DeferredError) return { type: "tool.execution", message: cause.message }
   if (cause instanceof Question.RejectedError) return { type: "aborted", message: cause.message }
   if (cause instanceof ToolFailure || cause instanceof Tool.Failure) {
     if (cause.error === undefined) return { type: "tool.execution", message: cause.message }

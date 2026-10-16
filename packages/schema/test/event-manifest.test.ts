@@ -25,6 +25,15 @@ import { SessionMessage } from "../src/session-message.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
+  test("matches documented guardrail durable-event visibility", async () => {
+    const specification = await Bun.file(new URL("../../../specs/session-guardrails.md", import.meta.url)).text()
+    const claims = Array.from(specification.matchAll(/\b(public|private) durable `(session\.guardrail\.[a-z]+)`/g))
+    expect(claims.length).toBeGreaterThan(0)
+    for (const claim of claims) {
+      expect(Array.from(EventManifest.Durable.values()).some((definition) => definition.type === claim[2])).toBe(true)
+      expect(Array.from(EventManifest.Server.values()).some((definition) => definition.type === claim[2])).toBe(claim[1] === "public")
+    }
+  })
   test("publishes minimal durable standard-match dismissal provenance", () => {
     const data = { sessionID: SessionID.make("ses_root"), reviewSessionID: SessionID.make("ses_child"), ruleID: "standard.review.force-push", confidence: 0.9 }
     expect(Schema.decodeUnknownSync(SessionEvent.GuardrailDismissed.data)(data)).toEqual(data)
@@ -143,7 +152,7 @@ describe("public event manifest", () => {
     expect(Config.Event.Definitions).toEqual([Config.Event.Updated])
     expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Changed])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])
-    expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied])
+    expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied, Permission.Event.Deferred])
     expect(EventManifest.Latest.get("permission.asked")).toBe(Permission.Event.Asked)
     expect(EventManifest.Latest.get("permission.replied")).toBe(Permission.Event.Replied)
     expect(EventManifest.Latest.get("question.asked")).toBe(Question.Event.Asked)
@@ -155,6 +164,7 @@ describe("public event manifest", () => {
       Form.Event.Replied,
       Form.Event.Cancelled,
       Form.Event.TimedOut,
+      Form.Event.Deferred,
     ])
     expect(Reference.Event.Definitions).toEqual([Reference.Event.Updated])
     expect(Plugin.Event.Definitions).toEqual([Plugin.Event.Added, Plugin.Event.Updated])
@@ -258,6 +268,10 @@ describe("public event manifest", () => {
         "session.work.completed.1",
         "session.guardrail.dismissed.1",
         "session.guardrail.escalated.1",
+        "session.review.deferred.1",
+        "session.review.decided.1",
+        "session.review.withdrawn.1",
+        "session.review.consumed.1",
         "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.context.observed.1",
@@ -270,6 +284,7 @@ describe("public event manifest", () => {
         "session.step.started.1",
         "session.step.ended.1",
         "session.step.failed.1",
+        "session.step.rerouted.1",
         "session.text.started.1",
         "session.text.ended.1",
         "session.tool.input.started.1",
@@ -306,7 +321,6 @@ describe("public event manifest", () => {
       SessionEvent.ProviderRequestRecorded,
       SessionEvent.ProfileBound,
       SessionEvent.GuardrailApproved,
-      SessionEvent.GuardrailDecided,
     ])
     expect(SessionEvent.UsageRecorded.durability).toBe("durable")
     expect(SessionEvent.ProviderRequestRecorded.durability).toBe("durable")

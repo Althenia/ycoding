@@ -35,5 +35,6 @@ export const migrations = (
     import("./migration/20261015080221_usage-time-cursor"),
     import("./migration/20261015084712_usage-session-pricing"),
     import("./migration/20261015122915_usage-analytics"),
+    import("./migration/20261016080907_model-incident"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

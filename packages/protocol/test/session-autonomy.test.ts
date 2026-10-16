@@ -94,9 +94,10 @@ test("R7 documents typed goal resume, stale calculation, and provider failures",
 
 test("family autonomy accepts explicit switches without accepting empty or invalid requests", () => {
   const decode = Schema.decodeUnknownSync(SessionAutonomySet)
-  expect(decode({ guardrailDecision: true })).toEqual({ guardrailDecision: true })
   expect(decode({ sleep: false })).toEqual({ sleep: false })
-  expect(decode({ guardrailDecision: false, sleep: true })).toEqual({ guardrailDecision: false, sleep: true })
-  for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: 1 }])
+  expect(decode({ sleep: true })).toEqual({ sleep: true })
+  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: 0, guardrailDecision: true,
+    sleep: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", yolo: 0, sleep: {} })
+  for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: true }])
     expect(() => decode(value)).toThrow()
 })

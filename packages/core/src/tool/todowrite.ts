@@ -6,6 +6,7 @@ import { Effect, Schema } from "effect"
 import { Permission } from "../permission"
 import { SessionTodo } from "../session/todo"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "todowrite"
 export const Input = Schema.Struct({
@@ -35,6 +36,7 @@ export const Plugin = {
                   action: name,
                   resources: ["*"],
                   save: ["*"],
+                  metadata: { operationDigest: Hash.json(input) },
                   sessionID: context.sessionID,
                   agent: context.agent,
                   source: { type: "tool", messageID: context.messageID, callID: context.callID },

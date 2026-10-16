@@ -12,6 +12,8 @@ export type PaletteIntent =
   | { readonly type: "interrupt" }
   | { readonly type: "stopGoal" }
   | { readonly type: "yolo"; readonly level: 0 | 1 | 2 | 3 }
+  | { readonly type: "sleep"; readonly sleep: boolean }
+  | { readonly type: "keepAwake" }
   | { readonly type: "skill"; readonly skill: string }
   | { readonly type: "draft"; readonly text: string }
   | { readonly type: "go"; readonly view: "new" | "sessions" | "session" | "usage" | "settings" }
@@ -50,6 +52,7 @@ export type PaletteContext = {
     readonly managedChild: boolean
     readonly yolo: 0 | 1 | 2 | 3
     readonly goalActive: boolean
+    readonly asleep?: boolean
   }
   readonly commands: readonly { readonly name: string; readonly description?: string }[]
   readonly skills: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
@@ -69,7 +72,7 @@ export type PaletteContext = {
 const themePreferences = ["system", "light", "dark"] as const
 
 const yoloLabels = {
-  0: "YOLO off",
+  0: "Manual (YOLO off)",
   1: "YOLO level 1",
   2: "YOLO level 2",
   3: "YOLO level 3",
@@ -109,11 +112,15 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
       .map((level) => ({
         id: `session.yolo.${level}`,
         title: yoloLabels[level],
-        description: level === 0 ? "Review every ask" : level === 1 ? "Auto-approve tool permissions and ordinary guardrail reviews" : level === 2 ? "Also answer questions and forms" : "Same as YOLO 2: also answer questions and forms",
+        description: level === 0 ? "Review every ask" : level === 1 ? "Auto-approve tool permissions and ordinary guardrail reviews" : level === 2 ? "Answers questions and forms when automatic answers are enabled" : "Same as YOLO 2; keeps level 3",
         group: "Session" as const,
         keywords: "/yolo autonomy approval permissions",
         intent: { type: "yolo" as const, level },
       })),
+    ...(session.asleep === undefined ? [] : [session.asleep
+      ? { id: "session.wake", title: "Wake Session family", description: "End sleep; questions and reviews return to you", group: "Session" as const, keywords: "/wake sleep autonomy", intent: { type: "sleep" as const, sleep: false } }
+      : { id: "session.sleep", title: "Sleep Session family", description: "Unsettled questions and reviews wait for you in Review", group: "Session" as const, keywords: "/sleep autonomy away", intent: { type: "sleep" as const, sleep: true } }]),
+    { id: "machine.keepAwake", title: "Toggle keep machine awake", description: "Flip this machine's manual keep-awake preference", group: "Session" as const, keywords: "/keep-awake machine sleep lid", intent: { type: "keepAwake" as const } },
   ]
 }
 
@@ -121,7 +128,7 @@ function commandActions(context: PaletteContext): readonly PaletteAction[] {
   const session = context.session
   if (!session || !context.connected || session.managedChild) return []
   return context.commands
-    .filter((command) => command.name !== "compact" && command.name !== "goal" && command.name !== "yolo" && command.name !== "suggest" && command.name !== "prompt")
+    .filter((command) => !["compact", "goal", "yolo", "suggest", "prompt", "sleep", "wake", "keep-awake"].includes(command.name))
     .filter((command) => submission(`/${command.name}`, [], {
       status: "ready",
       agents: [],

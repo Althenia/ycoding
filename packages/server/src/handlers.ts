@@ -5,11 +5,13 @@ import { ModelHandler } from "./handlers/model"
 import { ProviderHandler } from "./handlers/provider"
 import { ProviderUsageHandler } from "./handlers/provider-usage"
 import { UsageHandler } from "./handlers/usage"
+import { IncidentHandler } from "./handlers/incident"
 import { SessionHandler } from "./handlers/session"
 import { PermissionHandler } from "./handlers/permission"
 import { FileSystemHandler } from "./handlers/fs"
 import { FormHandler } from "./handlers/form"
 import { GuardrailHandler } from "./handlers/guardrail"
+import { ReviewHandler } from "./handlers/review"
 import { CommandHandler } from "./handlers/command"
 import { SkillHandler } from "./handlers/skill"
 import { EventHandler } from "./handlers/event"
@@ -51,6 +53,7 @@ export const handlers = Layer.mergeAll(
   ProviderHandler,
   ProviderUsageHandler,
   UsageHandler,
+  IncidentHandler,
   IntegrationHandler,
   McpHandler,
   ConfigHandler,
@@ -58,6 +61,7 @@ export const handlers = Layer.mergeAll(
   ProjectHandler,
   FormHandler,
   GuardrailHandler,
+  ReviewHandler,
   PermissionHandler,
   FileSystemHandler,
   CommandHandler,

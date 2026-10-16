@@ -39,6 +39,7 @@ const anotherProfileTab: Browser.Tab = { ...tab, id: Browser.TabID.make("btab_pr
 const isolatedInstanceID = IsolatedBrowser.InstanceID.make("ibrowser_tool")
 
 const browser = Layer.mock(Browser.Service, {
+  actionIdentity: () => Effect.succeed({ digest: "a".repeat(64), reusable: true }),
   status: () => Effect.succeed({ state: "unavailable" }),
   list: () => Effect.succeed([tab, ownedTab, profileTab, anotherProfileTab]),
   observe: (input) => Effect.succeed({
@@ -67,6 +68,7 @@ const browser = Layer.mock(Browser.Service, {
     }),
 })
 const isolatedBrowser = Layer.mock(IsolatedBrowser.Service, {
+  actionIdentity: () => Effect.succeed({ digest: "b".repeat(64), reusable: true }),
   status: () => Effect.succeed({ mode: "isolated", state: "ready", instanceID: isolatedInstanceID, tab }),
   control: () => Effect.succeed({ mode: "isolated", state: "paused", instanceID: isolatedInstanceID, tab }),
   list: () => Effect.succeed([tab]),
@@ -184,6 +186,7 @@ describe("BrowserTool", () => {
   )
 
   const profileCapture = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    actionIdentity: () => Effect.succeed({ digest: "a".repeat(64), reusable: true }),
     list: () => Effect.succeed([profileTab]),
     action: (input) => Effect.sync(() => {
       sequence.push(`action:${input.callID}`)
@@ -606,6 +609,7 @@ describe("BrowserTool", () => {
       ])
       expect(guardrailRequests).toHaveLength(1)
       expect(guardrailRequests[0].skipReview).toBe(true)
+      expect(guardrailRequests[0].source).toEqual({ messageID: toolIdentity.messageID, callID: "call-browser-mutation" })
     }),
   )
 

@@ -16,3 +16,13 @@ export function shellStatusLabel(shell: Pick<ShellInfo, "status" | "queuePositio
   if (shell.status !== "queued") return shell.status
   return shell.queuePosition === undefined ? "queued" : `queued #${shell.queuePosition}`
 }
+
+export const SHELL_OUTPUT_TAIL_LIMIT = 256 * 1024
+
+export function appendShellOutputTail(current: string, page: string, limit: number = SHELL_OUTPUT_TAIL_LIMIT): string {
+  const text = current + page
+  if (text.length <= limit) return text
+  const tail = text.slice(-limit)
+  const newline = tail.indexOf("\n")
+  return newline > 0 && newline < limit / 2 ? tail.slice(newline + 1) : tail
+}

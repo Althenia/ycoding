@@ -17,6 +17,7 @@ import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigPlugin } from "../config/plugin"
 import { Credential } from "../credential"
 import { Decision } from "../decision"
+import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { httpClient } from "../effect/app-node-platform"
 import { EventRuntime } from "../event"
@@ -340,6 +341,7 @@ export const node = makeLocationNode({
     Config.node,
     Credential.node,
     Decision.node,
+    Database.node,
     EventRuntime.node,
     FileMutation.node,
     Git.node,

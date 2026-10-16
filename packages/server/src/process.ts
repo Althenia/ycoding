@@ -102,11 +102,9 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
     )
     const hostPlugins = Context.get(context, SdkPlugins.Service)
     yield* Effect.forEach(plugins, (plugin) => hostPlugins.register(plugin), { discard: true })
-    if (lifecycle) {
-      yield* installRestartContinuity(Context.get(context, SessionRestart.Service)).pipe(
-        Effect.provideService(Scope.Scope, applicationScope),
-      )
-    }
+    const restart = Context.get(context, SessionRestart.Service)
+    if (lifecycle) yield* installRestartContinuity(restart).pipe(Effect.provideService(Scope.Scope, applicationScope))
+    if (!lifecycle) yield* restart.loseStaleTasks
     yield* Ref.set(application, Option.some(Context.get(context, HttpRouter.HttpRouter).asHttpEffect()))
     yield* status.ready
     return { address: bound.http.address, shutdown: Deferred.await(shutdown) }
@@ -259,12 +257,13 @@ function unavailable(status: Status.State) {
 }
 
 /**
- * The managed server marks its active Sessions as suspended on graceful shutdown. Startup never
- * replays suspended provider work; that needs explicit crash-recovery design and admission rules.
- * It settles executions a dead process left unterminated before the server accepts work.
+ * The managed server marks its active Sessions as suspended on graceful shutdown. Before it accepts
+ * work, it settles executions a dead process left unterminated and recovers managed child tasks:
+ * one automatic recovery step without uncertain tool effects, otherwise a human-only decision.
  */
 const installRestartContinuity = Effect.fnUntraced(function* (restart: SessionRestart.Interface) {
   yield* restart.reconcileInterruptedExecutions
   yield* restart.reconcileShells
+  yield* restart.recoverTasks
   yield* Effect.addFinalizer(() => restart.suspendActiveSessions)
 })

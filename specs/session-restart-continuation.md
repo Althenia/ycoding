@@ -1,4 +1,4 @@
-# Decision: Suspend Sessions on Managed-Service Shutdown
+# Decision: Suspend Sessions on Managed-Service Shutdown and Recover Managed Child Tasks
 
 | Field             | Value                    |
 | ----------------- | ------------------------ |
@@ -9,11 +9,11 @@
 
 ## Summary
 
-When the managed YCoding server shuts down gracefully, it records each Session it was executing in one private nullable timestamp on the existing Session row: `time_suspended`. Startup never resumes a suspended Session; the user resumes it manually.
+When the managed YCoding server shuts down gracefully, it records each Session it was executing in one private nullable timestamp on the existing Session row: `time_suspended`. Startup never resumes a suspended root Session; the user resumes it manually.
 
-Suspension is an explicit action the managed server invokes during teardown. Automatic continuation would retry provider and tool work whose outcome is ambiguous, so no server schedules it; that requires an explicit durable crash-recovery design with admission rules.
+Suspension is an explicit action the managed server invokes during teardown. Managed startup settles interrupted execution history, reconciles durable background-shell notices, and then recovers managed child tasks whose owning process died (see [Managed child-task recovery](#managed-child-task-recovery)). Recovery never replays a provider attempt or a tool call: a child whose interrupted step left no executed tool call with an unknown effect resumes with one new step from its projected history, and a child with such a call waits for a human-only Continue or Stop decision.
 
-The field is not Session status. Live activity remains process-local. Managed startup settles interrupted execution history and reconciles durable background-shell notices, but does not replay provider or tool execution. Exactly-once provider or tool execution remains out of scope.
+The field is not Session status. Live activity remains process-local. Exactly-once provider or tool execution remains out of scope.
 
 ## Decision
 
@@ -50,14 +50,14 @@ A persisted status such as `idle / running / resumable` answers three different 
 
 ## The Managed Server Owns Suspension
 
-Suspension is not layer configuration. `SessionRestart` is an inert core service exposing `suspendActiveSessions`, `reconcileInterruptedExecutions`, and `reconcileShells`. Only the managed server (`ycoding serve --service`) invokes `suspendActiveSessions`:
+Suspension is not layer configuration. `SessionRestart` is an inert core service exposing `suspendActiveSessions`, `reconcileInterruptedExecutions`, `reconcileShells`, `recoverTasks`, and `loseStaleTasks`. Only the managed server (`ycoding serve --service`) invokes `suspendActiveSessions` and `recoverTasks`:
 
 ```typescript
 // ServerProcess, service mode only
 yield * Effect.addFinalizer(() => restart.suspendActiveSessions)
 ```
 
-Startup never resumes a suspended Session; the user resumes it manually. Default, embedded, and stdio servers build the same execution layer but never invoke `suspendActiveSessions`, so they never suspend.
+Startup never resumes a suspended root Session; the user resumes it manually. Default, embedded, and stdio servers build the same execution layer but never invoke `suspendActiveSessions` or `recoverTasks`, so they never suspend and never recover child tasks; at their startup, `loseStaleTasks` records each active child task whose owner died as `lost`.
 
 `ycoding update` restarts the managed server when `GET /api/session/outstanding` reports no running execution or background shell. `ycoding update --force` also restarts with running work or an unavailable outstanding-work read; an executing Session then records suspension and interruption.
 
@@ -69,7 +69,7 @@ Teardown ordering makes suspension observe exactly the work a restart interrupts
 2. `suspendActiveSessions` snapshots `SessionExecution.active` and sets `time_suspended` for each.
 3. Session execution teardown interrupts the still-running drains.
 
-A SIGKILL runs none of this: nothing is suspended, and the user resumes manually. That is deliberate — automatic post-crash continuation would retry ambiguous provider and tool work.
+A SIGKILL runs none of this: nothing is suspended. The next managed startup closes the open step and execution as interrupted and recovers managed child tasks by the same rules as after a graceful shutdown.
 
 ### Ordinary lifecycle clears stale suspension
 
@@ -99,18 +99,43 @@ RETURNING id;
 
 Only the caller receiving the returned row consumes the suspension. A second caller receives no row.
 
+## Managed Child-Task Recovery
+
+Managed startup runs `recoverTasks` after `reconcileInterruptedExecutions` and `reconcileShells` and before the server reports ready. `reconcileInterruptedExecutions` leaves the open execution of a managed child task untouched while its claiming process is alive or cannot be verified. `recoverTasks` considers each child task in `starting`, `running`, `waiting`, or `cancelling` whose owning process is not alive; tasks of a live owner, including another server, are unchanged, and a failed process-list read changes nothing.
+
+A child was interrupted by a restart when its latest execution lifecycle event is either the startup-recorded `session.execution.failed` with error type `interrupted` (crash), or `session.execution.interrupted` with reason `shutdown` while its `time_suspended` is set (graceful shutdown). An interrupted child's unsettled tool calls are the tool parts of its latest projected assistant message that the runtime dispatched (`time.ran` is set) and that are still `running` or failed as `aborted`. This includes read-only and provider-executed tools. Tool calls whose input never finished streaming were never dispatched and are not unsettled; when the child resumes or asks for a decision, each fails as `tool.input-json` with incomplete, unexecuted arguments, so the next step sends every interrupted call with a result and reruns none.
+
+| Task at startup                                                          | Result                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waiting` with a complete durable question                               | Unchanged                                                                                                                                                                                                                                            |
+| `waiting` without a complete question, or `cancelling`                   | `lost`; the notification waits until the parent next starts                                                                                                                                                                                         |
+| `starting` with admitted input                                           | `started`, claimed by this server, and woken                                                                                                                                                                                                         |
+| Interrupted, with unsettled tool calls                                   | Still-`running` calls fail with an unknown-effect error and are never retried; the task waits on a recovery question owned by a durable `recovery` review item; the parent is notified and woken                                                     |
+| Interrupted or with admitted input, after an automatic recovery whose step never completed | `lost`; no second automatic recovery until a step completes after the previous one                                                                                                               |
+| Interrupted, last step ended with non-whitespace text and no local tool continuation, no admitted input | `completed` with that text as the excerpt; no new step                                                                                                     |
+| Interrupted, or with admitted input, otherwise                           | `resumed`: claimed by this server, the parent is notified and woken, and one forced drain runs a new step from projected history with no synthetic prompt                                                                                            |
+| Anything else, including a user interruption                             | `lost`                                                                                                                                                                                                                                               |
+
+Every recovery transition commits in one transaction guarded by the task revision and owner claim, so repeated or concurrent startup passes record it once. Restart-loss events keep the fixed ID `evt_task_restart_lost_<child>_<revision>`, and automatic recoveries use `evt_task_restart_resumed_<child>_<revision>`.
+
+A drain runs a managed child only while this process holds its claim. A claim left by another process, live or dead, skips the drain until recovery or a parent or human transition claims the task.
+
+### Human-only recovery decision
+
+The `recovery` review item lists the interrupted calls by message ID, call ID, and tool name; it carries no tool input. Recovery records the failed calls, the question, and the item in one transaction while it holds the family review lock. Like sleep-entry conversions, recovery holds may exceed `max_pending_reviews`; every new deferral is still rejected while the family is at or above the cap. Only `session.review.decide` with `{ kind: "recovery", choice: "continue" | "stop" }` settles it. YOLO levels, goals, sleep, the decision model, question timeouts, and the parent's `subagent_control answer` cannot answer the question it owns, and the open item pauses goal continuation and blocks completion receipts like any open review item.
+
+- Continue admits a steer from the user stating that the interrupted calls' effects are unknown, answers the question, claims the task, records the decision, and wakes the child. The interrupted calls are excluded from later recovery questions.
+- Stop records the task as `lost`, notifies and wakes the parent, and records the decision. A stopped child exposes `stoppedRecovery.itemID` on task reads. While stopped, `subagent_control send`, plugin recovery, admitted inputs, and later startups cannot run it. The same item accepts exactly one later human `continue`, which admits the user's steer, restarts the task, and wakes it; every other repeated decision is a conflict.
+
 ## Failure Semantics
 
-The design schedules no automatic continuation; the user decides whether to resume interrupted work.
-
-| Event                                               | Result                                                                        |
-| --------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Graceful managed shutdown during execution          | Session is suspended and interrupted; the next server does not resume it      |
-| Managed server is killed before graceful closeout   | Nothing suspended; startup settles failed run and lost shell notices          |
-| Managed server dies between suspension and teardown | Session stays suspended; the next server does not resume it                   |
-| Interrupted tool has uncertain side effects         | Orphan reconciliation records interruption rather than replaying the old call |
-
-Leaving continuation to the user is safer than restarting ambiguous provider or tool work.
+| Event                                               | Result                                                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Graceful managed shutdown during execution          | Session is suspended and interrupted; root Sessions are not resumed; child tasks follow recovery rules   |
+| Managed server is killed before graceful closeout   | Startup settles the failed run and lost shell notices; child tasks follow recovery rules                 |
+| Managed server dies between suspension and teardown | Startup settles the failed run; child tasks follow recovery rules                                        |
+| Interrupted tool has uncertain side effects         | The call is never replayed; continuing its child requires a human Continue                              |
+| Restart again before a recovered step completes     | The child is lost rather than recovered automatically again                                            |
 
 ## Migration Does Not Infer Historical Intent
 
@@ -135,13 +160,17 @@ Regression coverage verifies:
 
 - A suspension can be consumed only once per Session.
 - Generic lifecycle publication and replay do not infer suspension.
-- Concurrent managed-service processes elect one server, and startup resumes no suspended Session.
+- Concurrent managed-service processes elect one server, and startup resumes no suspended root Session.
 - Teardown interruption preserves suspension; a drain finishing on its own clears it.
+- Crash and graceful restarts classify child tasks identically; unsettled executed calls, including reads and provider-executed calls, require a human decision; a final answer settles without a step.
+- Stop persists across restarts and blocks parent, plugin, and startup resumption until a human Continue.
+- A second restart before a recovered step completes records the child as lost; foreign live owners are unchanged; concurrent startup passes record one recovery.
+- Managed startup recovers child tasks and non-managed startup records them as lost.
 
 ## Non-Goals
 
-- Resuming suspended Sessions automatically at server startup.
-- Automatically resuming provider or tool execution after a hard process or machine crash.
+- Resuming suspended root Sessions automatically at server startup.
+- Replaying an interrupted provider attempt or tool call.
 - Persisting authoritative live Session status.
 - Coordinating Session execution across independent processes or a cluster.
 - Guaranteeing exactly-once provider requests or tool side effects.

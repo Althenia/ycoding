@@ -17,6 +17,7 @@ import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "edit"
 
@@ -117,7 +118,7 @@ export const Plugin = {
                             message: "File changed after permission approval. Read it again before editing.",
                             error,
                           })
-                        : new ToolFailure({ message: `Unable to edit ${input.path}`, error }),
+                        : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Unable to edit ${input.path}`, error }),
                     ),
                   )
 
@@ -144,6 +145,7 @@ export const Plugin = {
                     yield* unableToEdit(
                       permission.assert({
                         ...LocationMutation.externalDirectoryPermission(external),
+                        metadata: { operationDigest: Hash.json(input) },
                         sessionID: context.sessionID,
                         agent: context.agent,
                         source: permissionSource,
@@ -154,6 +156,7 @@ export const Plugin = {
                   yield* unableToEdit(
                     permission.assert({
                       action: "edit",
+                      metadata: { operationDigest: Hash.json(input) },
                       resources: [target.resource],
                       save: ["*"],
                       sessionID: context.sessionID,
@@ -192,11 +195,11 @@ export const Plugin = {
                   )
                   const next = splitBom(replaced)
                   const reservation = yield* unableToEdit(
-                    guardrail.assert({
+                    guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                       sessionID: context.sessionID,
                       action: "file_mutation",
                       resources: [target.canonical],
-                      metadata: { operation: "edit" },
+                      metadata: { operation: "edit", operationDigest: Hash.json(input) },
                     }),
                   )
                   const result = yield* unableToEdit(

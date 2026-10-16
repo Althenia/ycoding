@@ -13,6 +13,7 @@ type GroupSessionShells = (
   shells: readonly ShellInfo[],
   sessions: readonly SessionInfo[],
   currentSessionID: string,
+  options?: { includeSettled?: boolean },
 ) => SessionShellGroup[]
 
 function session(id: string, input: Partial<Pick<SessionInfo, "parentID" | "agent" | "title">> = {}): SessionInfo {
@@ -82,18 +83,78 @@ test("excludes shells owned by sessions outside the current subtree", () => {
   expect(groups.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["child"])
 })
 
-test("keeps unknown and unattributed shells under a neutral owner", () => {
+test("excludes unknown and unattributed shells instead of grouping them under an unknown owner", () => {
   expect(typeof groupSessionShellsCandidate).toBe("function")
   if (typeof groupSessionShellsCandidate !== "function") return
   const groupSessionShells = groupSessionShellsCandidate as GroupSessionShells
 
   const groups = groupSessionShells(
-    [shell("unknown", "ses_missing"), shell("unattributed")],
+    [shell("unknown", "ses_missing"), shell("unattributed"), shell("main", "ses_main")],
     [session("ses_main")],
     "ses_main",
   )
 
-  expect(groups).toEqual([{ owner: { label: "Unknown session" }, shells: [shell("unknown", "ses_missing"), shell("unattributed")] }])
+  expect(groups).toEqual([{ owner: { label: "Main chat" }, shells: [shell("main", "ses_main")] }])
+})
+
+test("groups shells of completed descendants and grandchildren under their owners", () => {
+  expect(typeof groupSessionShellsCandidate).toBe("function")
+  if (typeof groupSessionShellsCandidate !== "function") return
+  const groupSessionShells = groupSessionShellsCandidate as GroupSessionShells
+
+  const groups = groupSessionShells(
+    [shell("grandchild", "ses_grandchild"), shell("child", "ses_child")],
+    [
+      session("ses_main"),
+      session("ses_child", { parentID: "ses_main", agent: "builder", title: "Finished child" }),
+      session("ses_grandchild", { parentID: "ses_child", agent: "reviewer", title: "Nested review" }),
+    ],
+    "ses_main",
+  )
+
+  expect(groups).toEqual([
+    { owner: { label: "builder · Finished child" }, shells: [shell("child", "ses_child")] },
+    { owner: { label: "reviewer · Nested review" }, shells: [shell("grandchild", "ses_grandchild")] },
+  ])
+})
+
+test("resolves the family root when the current session is a child", () => {
+  expect(typeof groupSessionShellsCandidate).toBe("function")
+  if (typeof groupSessionShellsCandidate !== "function") return
+  const groupSessionShells = groupSessionShellsCandidate as GroupSessionShells
+
+  const groups = groupSessionShells(
+    [shell("main", "ses_main"), shell("sibling", "ses_sibling"), shell("external", "ses_external")],
+    [
+      session("ses_main"),
+      session("ses_child", { parentID: "ses_main", agent: "builder", title: "Current child" }),
+      session("ses_sibling", { parentID: "ses_main", agent: "reviewer", title: "Sibling" }),
+      session("ses_external", { agent: "builder", title: "Outside" }),
+    ],
+    "ses_child",
+  )
+
+  expect(groups.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["main", "sibling"])
+  expect(groups[0]?.owner.label).toBe("Main chat")
+})
+
+test("includeSettled keeps exited family shells and still excludes foreign shells", () => {
+  expect(typeof groupSessionShellsCandidate).toBe("function")
+  if (typeof groupSessionShellsCandidate !== "function") return
+  const groupSessionShells = groupSessionShellsCandidate as GroupSessionShells
+
+  const groups = groupSessionShells(
+    [shell("child-exited", "ses_child", "exited"), shell("external-exited", "ses_external", "exited")],
+    [
+      session("ses_main"),
+      session("ses_child", { parentID: "ses_main", agent: "reviewer", title: "Review" }),
+      session("ses_external", { agent: "builder", title: "Outside" }),
+    ],
+    "ses_main",
+    { includeSettled: true },
+  )
+
+  expect(groups.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["child-exited"])
 })
 
 test("returns only running rows so the badge count equals the tab row count", () => {

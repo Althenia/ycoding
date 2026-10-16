@@ -274,6 +274,14 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.profile.bound": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
       "session.guardrail.decided": () => Effect.void,
+      "session.review.deferred": () => Effect.void,
+      "session.review.decided": () => Effect.void,
+      "session.review.withdrawn": (event) => adapter.appendMessage(SessionMessage.System.make({
+        id: SessionMessage.ID.fromEvent(event.id), type: "system",
+        text: `Review item ${event.data.itemID} withdrawn: ${event.data.reason === "reverted" ? "its originating message was reverted" : "its subagent task closed"}. Any unused approval from this item is invalid.`,
+        time: { created: event.created },
+      })),
+      "session.review.consumed": () => Effect.void,
       "session.guardrail.escalated": (event) => adapter.appendMessage(SessionMessage.System.make({
         id: SessionMessage.ID.fromEvent(event.id), type: "system", text: `Decision model escalated this guardrail review · choice ${event.data.choice ?? "unreported"} · confidence ${event.data.confidence?.toString() ?? "unreported"}`, time: { created: event.created },
       })),
@@ -683,6 +691,17 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
             match.time = { created: match.time?.created ?? event.created, completed: event.created }
             if (event.data.state !== undefined) match.state = event.data.state
           }
+        })
+      },
+      "session.step.rerouted": (event) => {
+        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.reroutes = [
+            ...(draft.reroutes ?? []),
+            castDraft({ from: { ...draft.model }, model: event.data.model, error: event.data.error }),
+          ]
+          draft.model = castDraft(event.data.model)
+          draft.content = []
+          draft.retry = undefined
         })
       },
       "session.retry.scheduled": (event) => {

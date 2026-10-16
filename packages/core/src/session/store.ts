@@ -4,14 +4,11 @@ import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { EventRuntime } from "../event"
-import { AppProcess } from "../process"
 import { SessionHistory } from "./history"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessageTable, SessionTable } from "./sql"
-import { SessionTask } from "./task"
 import { SessionProjector } from "./projector"
 import { fromRow } from "./info"
 import type { Info } from "./skill-status"
@@ -42,8 +39,6 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    const appProcess = yield* AppProcess.Service
-    yield* SessionTask.reconcileStaleTasks(db, appProcess)
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
 
     return Service.of({
@@ -102,5 +97,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, SessionProjector.node, AppProcess.node],
+  deps: [Database.node, SessionProjector.node],
 })

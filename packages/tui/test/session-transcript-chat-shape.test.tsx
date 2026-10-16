@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { SessionMessageInfo, SessionPromptCostsOutput } from "@ycoding-ai/client"
-import type { useData } from "../src/context/data"
+import type { SessionMessageInfo } from "@ycoding-ai/client"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
@@ -23,39 +22,39 @@ const session = {
   time: { created: 1, updated: 9 },
 }
 
-test.each(["known", "partial", "unreported", "fallback"] as const)("user message mounts its %s cost inside the transcript inset", async (state) => {
+test.each([60, 100, 140])("user messages mount no cost block and never read prompt costs at width %i", async (width) => {
   const messages: SessionMessageInfo[] = [
     { id: "msg_cost", type: "user", text: "Pricing scope", files: [], agents: [], time: { created: 1 } },
     { id: "msg_cost_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Cost anchor verified" }], finish: "stop", time: { created: 2, completed: 3 } },
   ]
-  const empty = { requests: 0, tokens: session.tokens, cost: { pricedRequests: 0, unpricedRequests: 0 } }
-  const cost = state === "known" ? { known: 1.25, total: 1.25, pricedRequests: 1, unpricedRequests: 0 }
-    : state === "partial" ? { known: 2, pricedRequests: 1, unpricedRequests: 1 } : { pricedRequests: 0, unpricedRequests: 1 }
-  const total = { requests: cost.pricedRequests + cost.unpricedRequests, tokens: { ...session.tokens, input: 10 }, cost }
-  const response: SessionPromptCostsOutput = { units: state === "fallback" ? [] : [{ anchor: { sessionID, inputID: "msg_cost" }, status: state === "partial" ? "so-far" : "settled", attribution: "complete", history: "retained", total, main: total, children: empty, helpers: [] }], unattributed: empty, history: "retained" }
-  const pruned = { ...total, requests: 1, cost: { known: 999, total: 999, pricedRequests: 1, unpricedRequests: 0 } }
-  response.units.unshift({ anchor: { sessionID, inputID: "msg_pruned" }, status: "settled", attribution: "complete", history: "retained", total: pruned, main: pruned, children: empty, helpers: [] })
-  const expected = state === "known" ? "Prompt cost $1.25" : state === "partial" ? "Prompt cost Known $2.00 + unreported" : "Prompt cost unreported"
-  let data: ReturnType<typeof useData> | undefined
-  const screen = await renderScreen({ width: 100, height: 44, args: { sessionID }, data: (value) => { data = value },
-    route: (url) => url.pathname.endsWith("/usage/prompts") ? json({ data: response }) : routeFor(messages)(url),
-    settle: (view) => data?.session.promptCosts.state(sessionID) === "ready" && view.captureCharFrame().includes(expected),
-  })
+  const paths: string[] = []
+  const screen = await renderScreen({ width, height: 44, args: { sessionID }, route: (url) => { paths.push(url.pathname); return routeFor(messages)(url) }, settle: "Cost anchor verified" })
   try {
     const frame = screen.frame()
     expect(frame).toContain("Pricing scope")
-    expect(frame).not.toContain("Prompt cost $999")
-    expect(frame.split(expected)).toHaveLength(2)
-    const line = screen.lines().find((line) => line.includes(expected))!
-    expect(line.indexOf("Prompt cost") - screen.scrollbox()!.x).toBe(3)
-    if (state === "partial") expect(frame).toContain("so far · incomplete")
-    if (state === "unreported") { expect(frame).toContain("Prompt cost unreported · incomplete"); expect(frame).not.toContain("Prompt cost $0.00") }
-    if (state === "known") expect(frame).toContain("Main $1.25")
-    if (state === "fallback") expect(frame).not.toContain("0 priced")
+    for (const hidden of ["Prompt cost", "Main $", "Children", "priced"]) expect(frame).not.toContain(hidden)
+    expect(paths.filter((path) => path.includes("/usage/prompts"))).toEqual([])
+    const lines = screen.lines().map((line) => transcriptSlice(line, width))
+    const bubble = bubbleBounds(lines, "Pricing scope")
+    expect(lines[bubble.bottom + 1]).toContain("✓")
+    expect(lines[bubble.bottom + 2]?.trim() ?? "").toBe("")
   } finally { await screen.dispose() }
 })
 
-test("a user message without text or files mounts no orphan cost line", async () => {
+test("a user message with a file mounts no cost line and keeps the file chip", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_file_cost", type: "user", text: "Attached scope", files: [{ name: "notes.md", mime: "text/markdown", content: { digest: "d41d8cd98f00b204e9800998ecf8427e" } }], agents: [], time: { created: 1 } },
+    { id: "msg_file_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "File prompt verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ] as SessionMessageInfo[]
+  const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "File prompt verified" })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("notes.md")
+    expect(frame).not.toContain("Prompt cost")
+  } finally { await screen.dispose() }
+})
+
+test("a user message without text or files mounts no line", async () => {
   const messages: SessionMessageInfo[] = [
     { id: "msg_empty_cost", type: "user", text: "", files: [], agents: [], time: { created: 1 } },
     { id: "msg_empty_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Empty prompt boundary verified" }], finish: "stop", time: { created: 2, completed: 3 } },
@@ -63,6 +62,7 @@ test("a user message without text or files mounts no orphan cost line", async ()
   const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "Empty prompt boundary verified" })
   try { expect(screen.frame()).not.toContain("Prompt cost") } finally { await screen.dispose() }
 })
+
 
 const usagePatch = [
   "--- a/packages/core/src/provider/usage.ts",
@@ -160,6 +160,45 @@ const toolOnlyTranscript = [
     ],
     finish: "tool-calls",
     time: { created: 2_000, completed: 3_000 },
+  },
+] as SessionMessageInfo[]
+
+const reroutedTranscript = [
+  { id: "msg_user_rerouted", type: "user", text: "Answer even if the quota runs out", time: { created: 1 } },
+  {
+    id: "msg_assistant_rerouted",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-6-sol" },
+    reroutes: [
+      {
+        from: model,
+        model: { providerID: "openai", id: "gpt-6-sol" },
+        error: { type: "provider.quota", message: "Quota exhausted for this billing period" },
+      },
+    ],
+    content: [{ type: "text", text: "Answered after the switch." }],
+    finish: "stop",
+    time: { created: 2_000, completed: 4_000 },
+  },
+] as SessionMessageInfo[]
+
+const runningReroutedTranscript = [
+  { id: "msg_user_running_rerouted", type: "user", text: "Keep going after the switch", time: { created: 1 } },
+  {
+    id: "msg_assistant_running_rerouted",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-6-sol" },
+    reroutes: [
+      {
+        from: model,
+        model: { providerID: "openai", id: "gpt-6-sol" },
+        error: { type: "provider.quota", message: "Quota exhausted while running" },
+      },
+    ],
+    content: [],
+    time: { created: 2_000 },
   },
 ] as SessionMessageInfo[]
 
@@ -268,8 +307,9 @@ const editTranscript = [
   },
 ] as SessionMessageInfo[]
 
-function routeFor(messages: SessionMessageInfo[]) {
+function routeFor(messages: SessionMessageInfo[], active = false) {
   return (url: URL) => {
+    if (active && url.pathname === "/api/session/active") return json({ data: { [sessionID]: {} } })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -461,6 +501,39 @@ test("ends a completed idle exchange with the assistant block", async () => {
     // The model label resolves to its catalogue name only once /api/model has loaded, so the
     // assertion pins the assistant footer's shape rather than that race.
     expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · .+ · 2s$/)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("names the model a Step switched from, the model it switched to, and why", async () => {
+  const screen = await transcriptScreen(reroutedTranscript, "Answered after the switch.")
+
+  try {
+    const lines = transcriptLines(screen.lines())
+    const notice = lines.findIndex((line) => line.includes("↪ Switched from"))
+    expect(lines[notice]?.trim()).toMatch(
+      /^↪ Switched from (Claude Opus 5|anthropic\/claude-opus-5) to openai\/gpt-6-sol: Quota exhausted for this billing period$/,
+    )
+    expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · openai\/gpt-6-sol · 2s$/)
+    expect(notice).toBeLessThan(lines.findIndex((line) => line.includes("Build · openai/gpt-6-sol")))
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps a running Step's switch notice after reconnecting before any answer text", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(runningReroutedTranscript, true),
+    settle: "Keep going after the switch",
+  })
+
+  try {
+    expect(screen.frame()).toMatch(
+      /↪ Switched from (Claude Opus 5|anthropic\/claude-opus-5) to openai\/gpt-6-sol: Quota exhausted while running/,
+    )
   } finally {
     await screen.dispose()
   }

@@ -2,9 +2,11 @@ export * as QuestionTool from "./question"
 
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
+import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { Effect, Schema } from "effect"
 import { Form } from "../form"
 import { Permission } from "../permission"
+import { Hash } from "../util/hash"
 import { Question } from "../question"
 import { Tool } from "./tool"
 
@@ -33,6 +35,8 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   answers: Schema.Array(Question.Answer),
   timedOutAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.optional),
+  deferredItemID: SessionReview.ID.pipe(Schema.optional),
+  reviewFull: Schema.Literal(true).pipe(Schema.optional),
 })
 export type Output = typeof Output.Type
 
@@ -46,7 +50,13 @@ export const toModelOutput = (
   questions: ReadonlyArray<Question.Prompt>,
   answers: ReadonlyArray<Question.Answer>,
   timedOutAfterSeconds?: number,
+  deferredItemID?: string,
+  reviewFull?: boolean,
 ) => {
+  if (reviewFull)
+    return "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains."
+  if (deferredItemID !== undefined)
+    return `The user is asleep. These questions were added to the user's review box as item ${deferredItemID}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.`
   if (timedOutAfterSeconds !== undefined)
     return `No answer arrived within ${timedOutAfterSeconds} seconds, so the questions were closed without a user answer. Proceed using your own best judgment.`
   const formatted = questions.map((question, index) =>
@@ -64,9 +74,10 @@ export const Plugin = {
       description,
       input: Input,
       output: Output,
-      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers, output.timedOutAfterSeconds) }],
+      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers, output.timedOutAfterSeconds, output.deferredItemID, output.reviewFull) }],
       execute: (input, context) => permission.assert({
         action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent,
+        metadata: { operationDigest: Hash.json(input) },
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
       }).pipe(
         Effect.mapError((error) => new ToolFailure({ message: "Permission denied: question", error })),
@@ -76,8 +87,15 @@ export const Plugin = {
           metadata: { kind: "question", tool: { messageID: context.messageID, callID: context.callID } },
           fields: [toField(input.questions[0], 0), ...input.questions.slice(1).map((question, index) => toField(question, index + 1))],
         }).pipe(
+          Effect.catchTag("SessionReview.FullError", () =>
+            Effect.succeed({ status: "full" as const }),
+          ),
           Effect.orDie,
           Effect.flatMap((state) => {
+            if (state.status === "full")
+              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), reviewFull: true as const })
+            if (state.status === "deferred")
+              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), deferredItemID: state.itemID })
             if (state.status === "cancelled") return Effect.die(new CancelledError())
             if (state.status === "timed_out")
               return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), timedOutAfterSeconds: state.seconds })
@@ -100,5 +118,6 @@ function toField(question: Question.Prompt, index: number): Form.Field {
     type: question.multiple === true ? "multiselect" : "string",
     options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })),
     custom: true,
+    ...(question.options.length === 0 ? { required: true } : {}),
   }
 }

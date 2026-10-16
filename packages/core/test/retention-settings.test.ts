@@ -18,6 +18,7 @@ test("retention fields accept positive integers and reject zero, negative, fract
     [ConfigSessionRetention.Info, "records_days"],
     [ConfigAnalyticsRetention.Info, "usage_days"],
     [ConfigAnalyticsRetention.Info, "latency_days"],
+    [ConfigAnalyticsRetention.Info, "incident_days"],
   ] as const) {
     const decode = Schema.decodeUnknownSync(schema)
     expect<unknown>(decode({ [key]: 1 })).toEqual({ [key]: 1 })
@@ -39,7 +40,7 @@ for (const configured of [false, true])
       join(project, "ycoding.json"),
       JSON.stringify({
         session_retention: { records_days: 1 },
-        analytics_retention: { usage_days: 1, latency_days: 1 },
+        analytics_retention: { usage_days: 1, latency_days: 1, incident_days: 1 },
       }),
     )
     if (configured)
@@ -47,7 +48,7 @@ for (const configured of [false, true])
         join(global, "ycoding.json"),
         JSON.stringify({
           session_retention: { days: 11, records_days: 2 },
-          analytics_retention: { usage_days: 4, latency_days: 5 },
+          analytics_retention: { usage_days: 4, latency_days: 5, incident_days: 6 },
         }),
       )
     const file = join(directory, "explicit.json")
@@ -58,7 +59,7 @@ for (const configured of [false, true])
             file,
             content: JSON.stringify({
               session_retention: { records_days: 3 },
-              analytics_retention: { latency_days: 8 },
+              analytics_retention: { latency_days: 8, incident_days: 12 },
             }),
           })
         : RetentionSettings.node
@@ -81,8 +82,8 @@ for (const configured of [false, true])
       )
       expect(values).toEqual(
         configured
-          ? { recordsDays: 3, usageDays: 9, latencyDays: 8 }
-          : { recordsDays: 7, usageDays: 30, latencyDays: 30 },
+          ? { recordsDays: 3, usageDays: 9, latencyDays: 8, incidentDays: 12 }
+          : { recordsDays: 7, usageDays: 30, latencyDays: 30, incidentDays: 30 },
       )
     } finally {
       await rm(directory, { recursive: true, force: true })

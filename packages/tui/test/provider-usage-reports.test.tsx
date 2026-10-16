@@ -248,7 +248,7 @@ test("sorts every report metric from its column header and keyboard bindings", a
     const headerY = lines.findIndex((line) => line.includes("CACHE READ") && line.includes("TOTAL"))
     const inputX = lines[headerY].indexOf("INPUT") + 2
     await app.mockMouse.click(inputX, headerY)
-    await waitFor(app, () => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "desc", "click sort")
+    await waitFor(app, (value) => calls.at(-1)?.sort === "input" && calls.at(-1)?.order === "desc" && value.split("\n")[headerY]?.includes("INPUT ▼") === true, "click sort header")
     expect(app.captureCharFrame().split("\n")[headerY]).toContain("INPUT ▼")
 
     for (const [bind, sort] of [["s", "steps"], ["o", "output"], ["g", "reasoning"], ["a", "cacheRead"], ["w", "cacheWrite"]] as const) {

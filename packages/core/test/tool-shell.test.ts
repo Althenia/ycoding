@@ -30,7 +30,7 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
+import { SessionPendingTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Permission } from "@ycoding-ai/core/permission"
@@ -67,6 +67,7 @@ const configDocument = (
   })
 const assertions: Permission.AssertInput[] = []
 const wakes: string[] = []
+let onWake = (_id: string): Effect.Effect<void> => Effect.void
 const data = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-shell-worktree-data-"))
 let configEntries: Config.Entry[] = [configDocument()]
 let denyAction: string | undefined
@@ -143,6 +144,7 @@ const config = Layer.succeed(
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
@@ -174,6 +176,7 @@ const reset = () => {
   assertions.length = 0
   denyAction = undefined
   afterPermission = () => Effect.void
+  onWake = () => Effect.void
   configEntries = [configDocument()]
   sandboxPrepare = () => Effect.fail(new ShellSandbox.Unavailable({ message: "No enforceable shell sandbox backend" }))
   fakeShellState.creates = 0
@@ -364,7 +367,7 @@ const executionNode = makeGlobalNode({
       return SessionExecution.Service.of({
         active: Effect.succeed(new Set()),
         resume: complete,
-        wake: (id) => Effect.sync(() => wakes.push(id)),
+        wake: (id) => Effect.sync(() => wakes.push(id)).pipe(Effect.andThen(Effect.suspend(() => onWake(id)))),
         interrupt: () => Effect.void,
         awaitIdle: (id) => complete(id).pipe(Effect.exit, Effect.asVoid),
         withTransition: (_sessionID, effect) => effect,
@@ -1269,6 +1272,69 @@ describe("ShellTool", () => {
               })
             }),
           ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("runs a completed child's background shell once and reactivates the child through its notice", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        wakes.length = 0
+        const counter = path.join(tmp.path, "counter")
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const sessions = yield* Session.Service
+            const db = (yield* Database.Service).db
+            const events = yield* EventRuntime.Service
+            const parent = yield* sessions.create({
+              title: "parent",
+              location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+              model: sessionModel,
+            })
+            yield* db
+              .insert(SessionTaskTable)
+              .values({
+                session_id: sessionID,
+                parent_id: parent.id,
+                parent_assistant_message_id: SessionMessage.ID.make("msg_shell_parent"),
+                tool_call_id: "call_shell_parent",
+                input_id: SessionMessage.ID.make("msg_shell_input"),
+                description: "background shell child",
+                agent: Agent.ID.make("code"),
+                model: sessionModel,
+                prompt_digest: "digest",
+                background: true,
+                delivery: "steer",
+                state: "completed",
+              })
+              .run()
+              .pipe(Effect.orDie)
+            const woken = yield* Deferred.make<void>()
+            onWake = (id) => (id === sessionID ? Deferred.succeed(woken, undefined).pipe(Effect.asVoid) : Effect.void)
+            const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
+              Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
+              Stream.runHead,
+              Effect.forkScoped({ startImmediately: true }),
+            )
+            const settled = yield* settleTool(
+              registry,
+              call({ command: `printf x >> ${counter}; printf done`, background: true }, "call-child-shell"),
+            )
+            const shellID = requiredShellID(settled)
+            yield* Deferred.await(woken)
+            const notice = (yield* Fiber.join(admitted)).valueOrUndefined
+            expect(notice?.data.inputID).toMatch(/^msg_shell_notice_[0-9a-f]{24}$/)
+            expect(JSON.stringify(notice?.data.input)).toContain("done")
+            expect(yield* Effect.promise(() => fs.readFile(counter, "utf8"))).toBe("x")
+            expect(wakes.filter((id) => id === sessionID)).toHaveLength(1)
+            const task = yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie)
+            expect(task.find((row) => row.session_id === sessionID)?.state).toBe("running")
+            expect((yield* (yield* Shell.Service).get(shellID)).id).toBe(shellID)
+          }),
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),

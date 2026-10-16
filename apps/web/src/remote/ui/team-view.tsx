@@ -1,9 +1,9 @@
-import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
-import { canCancelSubagent, formatElapsed, isActiveSubagent, pinAction, teamActivityLabel, shellRows, shellStatusLabel, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, shellStatusLabel, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
 type Tab = "subagents" | "shell" | "side-chats"
@@ -52,6 +52,7 @@ export function TeamView(props: {
   readonly onCancel: (childID: string) => Promise<TeamActionOutcome>
   readonly onAnswer: (childID: string, questionID: string, text: string) => Promise<TeamActionOutcome>
   readonly onPin: (childID: string, pinned: boolean) => Promise<TeamActionOutcome>
+  readonly onContinueRecovery: (childID: string) => Promise<TeamActionOutcome>
   readonly onLoadOlder: () => Promise<void>
   readonly onViewShell: (ownerID: string, shellID: string, cursor?: number) => Promise<TeamShellOutput>
   readonly onKillShell: (shellID: string) => Promise<TeamActionOutcome>
@@ -64,7 +65,8 @@ export function TeamView(props: {
   const [working, setWorking] = createSignal<string>()
   const [error, setError] = createSignal<string>()
   const [answerID, setAnswerID] = createSignal<string>()
-  const [output, setOutput] = createSignal<{ readonly ownerID: string; readonly shellID: string; readonly page?: TeamShellOutput; readonly loading: boolean }>()
+  const [continuing, setContinuing] = createSignal<string>()
+  const [output, setOutput] = createSignal<{ readonly ownerID: string; readonly shellID: string; readonly page?: TeamShellOutput; readonly loading: boolean; readonly error?: string }>()
   let familyID = props.data().rootID
   createEffect(() => {
     const current = props.data().rootID
@@ -85,11 +87,9 @@ export function TeamView(props: {
   const shell = (id: string) => props.data().shells.find((entry) => entry.id === id)!
   const sideChat = (id: string) => props.data().sideChats.find((entry) => entry.id === id)!
   const ownerLabel = (id: string) => {
-    if (id === props.data().rootID) return "Main session"
-    const owner = props.data().tasks.find((task) => task.sessionID === id)
-    if (owner) return `${owner.agent ?? "Subagent"} · ${owner.description}`
-    const chat = props.data().sideChats.find((item) => item.id === id)
-    return chat ? `Side chat · ${chat.title}` : "Unknown session"
+    const item = props.data().shells.find((entry) => entry.ownerID === id)
+    if (!item) return "Subagent"
+    return shellOwnerLabel(item, { rootID: props.data().rootID, tasks: props.data().tasks, sideChats: props.data().sideChats })
   }
   const controlsAvailable = () => props.data().shellStatus === "ready" || props.data().sideChatStatus === "ready" || props.data().tasks.some((entry) => entry.tokens !== undefined)
   const canConfirm = () => {
@@ -130,13 +130,26 @@ export function TeamView(props: {
     void props.onViewShell(ownerID, shellID, cursor).then((page) => {
       if (rootID !== props.data().rootID || output()?.shellID !== shellID) return
       setOutput({ ownerID, shellID, page: previous && cursor !== undefined
-        ? { ...page, text: previous.text + page.text } : page, loading: false })
+        ? { ...page, text: appendTeamShellOutput(previous.text, page.text) } : { ...page, text: appendTeamShellOutput("", page.text) }, loading: false })
     }, (cause: unknown) => {
       if (rootID !== props.data().rootID || output()?.shellID !== shellID) return
-      setOutput({ ownerID, shellID, page: previous, loading: false })
-      setError(cause instanceof Error ? cause.message : "Shell output is unavailable.")
+      setOutput({ ownerID, shellID, page: previous, loading: false, error: cause instanceof Error ? cause.message : "Shell output is unavailable." })
     })
   }
+  createEffect(() => {
+    const current = output()
+    if (!current || current.loading || current.error || tab() !== "shell") return
+    const item = props.data().shells.find((entry) => entry.id === current.shellID)
+    const status = current.page?.status ?? item?.status
+    const live = status === "running" || status === "queued"
+    const more = current.page !== undefined && current.page.cursor < current.page.size
+    if (!live && !more) return
+    const interval = setInterval(() => {
+      const open = output()
+      if (open) readOutput(open.ownerID, open.shellID, open.page?.cursor)
+    }, 1_000)
+    onCleanup(() => clearInterval(interval))
+  })
   const runRead = (action: () => Promise<void>) => {
     const rootID = props.data().rootID
     setError(undefined)
@@ -169,7 +182,7 @@ export function TeamView(props: {
             ? <li class="team-view__section"><h3>{id === "section:pinned" ? "Pinned" : id === "section:active" ? "ACTIVE" : "INACTIVE"}</h3><span class="team-view__count">{id === "section:pinned" ? props.data().tasks.filter((entry) => entry.pinnedAt !== undefined).length : sectionCount(id)}</span></li>
             : <li class="team-view__task" data-session-id={id} data-state={task(id).state} data-attached={id === props.currentSessionID ? "true" : undefined}>
               <div class="team-view__row">
-                <span class="team-view__state"><StateMark state={task(id).state} /><span>{working() === id ? "cancelling…" : task(id).state}</span></span>
+                <span class="team-view__state"><StateMark state={task(id).state} /><span>{working() === id ? "cancelling…" : taskStateLabel(task(id))}</span></span>
                 <strong class="team-view__title" title={`${task(id).agent ?? "Agent unreported"} · ${task(id).description}`}>{task(id).agent ?? "Agent unreported"} · {task(id).description}</strong>
                 <div class="team-view__actions">
                   <button type="button" class="team-view__icon" data-action="open" aria-label={`Open ${task(id).description}`} title="Open" onClick={() => props.onOpen(id)}><Icon name="external" size={16} /></button>
@@ -183,12 +196,20 @@ export function TeamView(props: {
                   }}><Icon name="pin" size={16} /></button>
                   <Show when={!controlsUnsupported() && canCancelSubagent(task(id).state)}><button type="button" class="team-view__icon team-view__icon--danger" data-action="cancel" aria-label={`Cancel ${task(id).description}`} title={controlsChecking() ? "Checking Team controls…" : "Cancel"}
                     disabled={!canControl() || working() !== undefined} onClick={(event) => setConfirm({ kind: "cancel", id, label: task(id).description, trigger: event.currentTarget })}><Icon name="stop" size={16} /></button></Show>
-                  <Show when={!controlsUnsupported() && task(id).question && task(id).state === "waiting"}><button type="button" class="team-view__answer" data-action="answer" aria-expanded={answerID() === id} disabled={!canControl()} onClick={() => setAnswerID(answerID() === id ? undefined : id)}><Icon name="chat" size={14} /><span>Answer</span></button></Show>
+                  <Show when={!controlsUnsupported() && canContinueRecovery(task(id))}><button type="button" class="team-view__answer" data-action="continue-recovery" disabled={!canControl() || working() !== undefined || continuing() === id} onClick={() => {
+                    const rootID = props.data().rootID
+                    setContinuing(id)
+                    setError(undefined)
+                    void props.onContinueRecovery(id).then((result) => { if (rootID === props.data().rootID && result.status !== "ok") setError(result.message) },
+                      (cause: unknown) => { if (rootID === props.data().rootID) setError(cause instanceof Error ? cause.message : "The subagent could not be continued.") }).finally(() => { if (rootID === props.data().rootID) setContinuing(undefined) })
+                  }}><Icon name="arrow-right" size={14} /><span>{continuing() === id ? "Continuing…" : "Continue"}</span></button></Show>
+                  <Show when={!controlsUnsupported() && canAnswerSubagent(task(id))}><button type="button" class="team-view__answer" data-action="answer" aria-expanded={answerID() === id} disabled={!canControl()} onClick={() => setAnswerID(answerID() === id ? undefined : id)}><Icon name="chat" size={14} /><span>Answer</span></button></Show>
                 </div>
               </div>
               <p class="team-view__meta">{[task(id).modelLabel, id === props.currentSessionID ? "attached" : undefined,
                 formatElapsed(task(id).startedAt, isActiveSubagent(task(id).state) ? props.now() : task(id).updatedAt)].filter((item) => item !== undefined).join(" · ")}</p>
               <TaskUsage task={() => task(id)} loading={() => props.data().economicsLoading === true} accountingUnsupported={() => props.data().accountingUnsupported === true} />
+              <Show when={!controlsUnsupported() && isDeferredQuestion(task(id))}><p class="team-view__note" role="status" data-deferred-question={task(id).question?.id}>This question is waiting in Review.</p></Show>
               <Show when={!controlsUnsupported() && answerID() === id ? task(id).question?.id : undefined} keyed><TeamAnswerForm question={task(id).question!} onAnswer={(questionID, text) => props.onAnswer(id, questionID, text)} /></Show>
             </li>}</For></ul>
           <Show when={props.data().next}><button type="button" class="team-view__more" disabled={props.data().pageLoading} onClick={() => runRead(props.onLoadOlder)}>
@@ -207,9 +228,10 @@ export function TeamView(props: {
             <div class="team-view__actions"><button type="button" class="team-view__button" data-action="output" onClick={() => readOutput(shell(id).ownerID, id)}>View output</button>
               <Show when={shell(id).status === "running" || shell(id).status === "queued"}><button type="button" class="team-view__button team-view__button--danger" data-action="kill" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "kill", id, label: shell(id).command, trigger: event.currentTarget })}>Kill</button></Show></div>
           </li>}</For></ul>
-          <Show when={props.data().shellTruncated}><p role="status">Showing the first 50 family shells. More are running on this machine.</p></Show>
-          <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><Show when={current().page?.text} fallback={current().loading ? <LoadingPlaceholder kind="output" label="Loading output…" /> : <pre tabindex="0">No output reported.</pre>}>{(text) => <pre tabindex="0">{text()}</pre>}</Show>
+          <Show when={props.data().shellTruncated}><p role="status">Showing a limited family shell list. More shells are available on this machine.</p></Show>
+          <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><p class="team-view__command"><span>Command</span><code>{teamShellCommand({ command: props.data().shells.find((entry) => entry.id === current().shellID)?.command ?? "" }, current().page)}</code></p><Show when={current().page?.text} fallback={current().loading ? <LoadingPlaceholder kind="output" label="Loading output…" /> : <pre tabindex="0">No output reported.</pre>}>{(text) => <pre tabindex="0">{text()}</pre>}</Show>
             <Show when={current().page && current().loading}><LoadingPlaceholder kind="history" label="Loading more output…" /></Show>
+            <Show when={current().error}>{(error) => <><p role="status">{error()}</p><button type="button" class="team-view__button" data-action="retry-output" onClick={() => readOutput(current().ownerID, current().shellID, current().page?.cursor)}>Retry output</button></>}</Show>
             <Show when={current().page && current().page!.cursor < current().page!.size}><button type="button" disabled={current().loading} onClick={() => readOutput(current().ownerID, current().shellID, current().page?.cursor)}>Load more output</button></Show>
             <Show when={current().page?.truncated}><p>Output was truncated on the device.</p></Show></section>}</Show>
         </Show>

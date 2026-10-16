@@ -488,9 +488,9 @@ test("main team surface reopens a BTW chat and returns without submitting or int
   try {
     await screen.input.pressKey("x", { ctrl: true })
     await screen.input.pressKey("ARROW_DOWN")
-    await waitFor(() => screen.frame().includes("Side chats"), "side chats tab")
-    const tabRow = screen.lines().findIndex((line) => line.includes("Side chats"))
+    await waitFor(() => /Subagents\s+1\b/.test(screen.frame()), "loaded subagent list that settles the composer layout")
     await screen.renderer.idle()
+    const tabRow = screen.lines().findIndex((line) => line.includes("Side chats"))
     await screen.mouse.click(screen.lines()[tabRow]!.indexOf("Side chats") + 1, tabRow)
     await waitFor(() => screen.frame().includes("Investigate the side issue"), "existing BTW entry")
     expect(screen.frame()).toContain("+ New side chat")
@@ -604,7 +604,7 @@ test("subagent chat hydrates its todos and renders live status changes without t
     settle: "REVIEWER SUBAGENT",
   })
   try {
-    expect(screen.frame()).toContain("TODO LIST")
+    await waitFor(() => screen.frame().includes("TODO LIST"), "child todos")
     for (const todo of todos) expect(screen.frame()).toContain(todo.content)
     expect(screen.frame()).toContain("2/3 open")
     await screen.waitForEventStream()

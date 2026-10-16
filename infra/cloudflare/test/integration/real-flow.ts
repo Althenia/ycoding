@@ -1398,20 +1398,23 @@ try {
   checks.push("a Session-scoped managed PNG read returned exact bytes and refused an unreferenced digest")
 
   const windowIDs: string[] = []
+  const entryIDs: string[] = []
   let before: string | undefined
   let reachedOldest = false
   for (let page = 0; page < 100; page++) {
     const outcome = await probeRequest("session.snapshot", { sessionID, input: { limit: 1, ...(before === undefined ? {} : { before }) } })
     if (outcome.status !== "ok" || !isRecord(outcome.value) || !Array.isArray(outcome.value.messages))
       throw new Error(`windowed snapshot page failed: ${JSON.stringify(outcome)}`)
-    const messages = outcome.value.messages
-    if (messages.length !== 1 || !isRecord(messages[0]) || typeof messages[0].id !== "string")
-      throw new Error("windowed snapshot omitted its message")
-    windowIDs.push(messages[0].id)
+    const messages: unknown[] = outcome.value.messages
+    const persisted = messages.filter((message) => !(isRecord(message) && message.type === "system" && typeof message.text === "string" && message.text.startsWith("Instructions updated: ")))
+    if (persisted.length !== 1 || !isRecord(persisted[0]) || typeof persisted[0].id !== "string")
+      throw new Error(`windowed snapshot did not return exactly one persisted message: ${JSON.stringify(messages.map((message) => isRecord(message) ? { id: message.id, type: message.type } : message))}`)
+    windowIDs.push(persisted[0].id)
+    entryIDs.push(...messages.flatMap((message) => isRecord(message) && typeof message.id === "string" ? [message.id] : []))
     if (typeof outcome.value.before !== "string") { reachedOldest = true; break }
     before = outcome.value.before
   }
-  expect(reachedOldest && windowIDs.length >= 3 && new Set(windowIDs).size === windowIDs.length && windowIDs.includes(imageMessage.id),
+  expect(reachedOldest && windowIDs.length >= 3 && new Set(windowIDs).size === windowIDs.length && new Set(entryIDs).size === entryIDs.length && windowIDs.includes(imageMessage.id),
     "windowed first/middle/last pages lost, duplicated, or skipped the admitted image")
   checks.push("windowed snapshot pages chained from newest to oldest through the real relay")
 

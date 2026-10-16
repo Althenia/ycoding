@@ -261,7 +261,7 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
   expectAt(rows, choose.row + 3, title.column + 3, "Allow once")
   expectAt(rows, choose.row + 5, title.column + 3, "Allow for this session")
   expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
-  expectAt(rows, choose.row + 9, title.column + 3, "ordinary reviews auto-approve")
+  expectAt(rows, choose.row + 9, title.column + 3, "ordinary reviews auto-approve from YOLO 1")
   expect(choose.row + 9).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.guardrail.action.reject")
 }

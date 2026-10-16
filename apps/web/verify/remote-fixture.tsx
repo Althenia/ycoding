@@ -58,6 +58,12 @@ let devices: readonly RemoteDeviceInfo[] = [
 const accountParams = new URLSearchParams(window.location.search)
 let telemetryConsentEnabled = accountParams.get("telemetryConsent") !== "undecided"
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
+const fixtureGrades = [
+  { choice: "approve_all", confidence: 0.934567, evidence: "All targets were checked; <img src=x onerror=alert(1)> is literal evidence." },
+  { choice: "approve", confidence: 0.81, evidence: "This action has bounded scope." },
+  { choice: "reject", confidence: 0.07, evidence: "No blocking evidence was found." },
+  { choice: "escalate", confidence: 0.61, evidence: "Confirm the remaining scope. " + "x".repeat(471) },
+]
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
 const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string }[] = []
@@ -170,6 +176,8 @@ const inventoryPageRows = Math.min(400, Math.max(0, Number(accountParams.get("pa
 const sessionListDelayMs = Number(accountParams.get("sessionListDelay") ?? 0)
 let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessions.filter((session) => session.running).map((session) =>
   "parentID" in session && typeof session.parentID === "string" ? session.parentID : session.id))
+let statusAttention = remoteScenarioData?.attention === undefined ? undefined : new Set(remoteScenarioData.attention)
+let statusFailed = new Set<string>()
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -231,7 +239,7 @@ const defaultMessages = [
           status: "completed",
           input: { command: "bun test --watch", background: true },
           content: [{ type: "text", text: "The command was moved to the background." }],
-          structured: { shellID: "sh_bg", truncated: false, status: "running" },
+          structured: { shellID: "sh_bg", truncated: false, status: accountParams.has("backgroundShellLifecycle") ? "queued" : "running" },
           time: { created: ago(35), ran: ago(35), completed: ago(34) },
         },
       },
@@ -385,7 +393,7 @@ let messages: readonly unknown[] = transcriptProbe ? [...Array.from({ length: 12
     { id: "probe_tool_only", type: "assistant", agent: "god", model, content: [{ type: "tool", id: "call_heading", name: "read", state: { status: "completed", content: [] } }], time: { created: 25, completed: 26 } },
     { id: "probe_thought_only", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "A private planning note" }], time: { created: 27, completed: 28 } },
     { id: "probe_mixed_reply", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "Planning" }, { type: "text", text: "A real assistant reply" }], time: { created: 29, completed: 30 } },
-  ] : responseProbe ? [] : remoteScenarioData?.messages ?? defaultMessages
+  ] : responseProbe ? [] : accountParams.has("backgroundShellLifecycle") ? defaultMessages.filter((message) => message.id === "msg_assistant") : remoteScenarioData?.messages ?? defaultMessages
 
 const permission = { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
 const guardrail = {
@@ -584,11 +592,41 @@ function createFixtureStore(): Fixture {
   let teamShellKilled = false
   let createdSideChatID: string | undefined
   let liveReads = 0
+  let backgroundReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
   let currentYolo = remoteScenarioData?.autonomy.yolo ?? 2
+  let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
+  let keepAwakeManual = accountParams.get("keepAwake") === "on"
+  let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; sleepHold?: boolean; manual?: boolean; message?: string } | undefined
+  Object.assign(window, { remoteSetKeepAwake: (status: typeof keepAwakeOverride) => { keepAwakeOverride = status } })
+  const reviewBase = { rootSessionID: sessionID, created: 1_000 }
+  let reviewItems: Record<string, unknown>[] = accountParams.get("review") === "1" ? [
+    { ...reviewBase, itemID: "rvw_question", sessionID, sessionTitle: "Stream remote output safely", kind: "question", reason: "free_text", origin: { messageID: "msg_review", callID: "call_review" },
+      payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?", options: [{ value: "main", label: "main" }, { value: "next", label: "next" }], custom: true }] } },
+    { ...reviewBase, itemID: "rvw_child", sessionID: "ses_child", sessionTitle: "Child", kind: "subagent_question", reason: "low_confidence", choice: "main", confidence: 0.4237, origin: { questionID: "qst_review" },
+      child: { agent: "general", description: "Prepare the release" }, payload: { type: "subagent_question", text: "Which changelog section?" } },
+    { ...reviewBase, itemID: "rvw_hard", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "escalated", choice: "escalate", confidence: 0.61, ...(accountParams.get("grades") === "1" ? { grades: fixtureGrades } : {}), origin: { requestID: "grq_review" },
+      payload: { type: "guardrail", action: "shell", resources: ["rm -rf <build>"], ruleIDs: ["standard.hard.delete"], reason: "Deletes a project directory", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_review" } },
+    { ...reviewBase, itemID: "rvw_outside", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "sleep_entry", origin: { requestID: "grq_outside" },
+      payload: { type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "b".repeat(64), requestID: "grq_outside" } },
+    { ...reviewBase, itemID: "rvw_permission", sessionID, sessionTitle: "Stream remote output safely", kind: "permission", reason: "refused", origin: { requestID: "per_review" },
+      payload: { type: "permission", action: "edit", resources: ["src/remote.ts"], fingerprint: "c".repeat(64), requestID: "per_review" } },
+  ] : accountParams.get("review") === "disabled" ? [
+    { ...reviewBase, itemID: "rvw_off_question", sessionID, sessionTitle: "Stream remote output safely", kind: "question", reason: "disabled", origin: { messageID: "msg_review", callID: "call_review" },
+      payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?" }] } },
+    { ...reviewBase, itemID: "rvw_off_child", sessionID: "ses_child", sessionTitle: "Child", kind: "subagent_question", reason: "disabled", origin: { questionID: "qst_review" },
+      child: { agent: "general", description: "Prepare the release" }, payload: { type: "subagent_question", text: "Which changelog section?" } },
+    { ...reviewBase, itemID: "rvw_off_guardrail", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "disabled", origin: { requestID: "grq_off" },
+      payload: { type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "d".repeat(64), requestID: "grq_off" } },
+  ] : accountParams.get("review") === "recovery" ? [
+    { ...reviewBase, itemID: "rvw_recovery", sessionID: "ses_child", sessionTitle: "Child", kind: "recovery", reason: "restart", origin: { messageID: "msg_restart", callID: "call_1" },
+      child: { agent: "general", description: "Prepare the release" },
+      payload: { type: "recovery", tools: [{ messageID: "msg_restart", callID: "call_<img src=x onerror=window.recoveryEscape=1>", name: "shell<b>" }, { messageID: "msg_restart", callID: "call_2", name: "edit" }] } },
+  ] : []
+  const autonomyExtras = () => sleep === undefined ? {} : { sleep }
   const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
@@ -624,6 +662,12 @@ function createFixtureStore(): Fixture {
     const shellID = typeof input?.shellID === "string" ? input.shellID : ""
     const cursor = typeof input?.cursor === "number" ? input.cursor : 0
     if (shellID === "sh_bg") {
+      if (accountParams.has("backgroundShellLifecycle")) {
+        const index = Math.min(backgroundReads++, 2)
+        const lines = ["queued-output\n", "running-output\n", "final-output\n"]
+        const cursor = byteLength(lines.slice(0, index + 1).join(""))
+        return { status: "ok", value: { status: ["queued", "running", "exited"][index], data: { output: lines[index], cursor, size: cursor, truncated: false } } }
+      }
       return {
         status: "ok",
         value: { data: { output: backgroundCapture, cursor: byteLength(backgroundCapture), size: byteLength(backgroundCapture), truncated: false } },
@@ -717,7 +761,7 @@ function createFixtureStore(): Fixture {
     if (accountParams.get("teamControls") === "unsupported" && ["session.taskCosts", "session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([
-      "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.create",
+      "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.create", "machine.keepAwake.set", "session.review.decide",
       "session.command", "session.skill", "session.switchModel", "session.switchAgent",
       "session.subagent.cancel", "session.subagent.answer", "session.team.shell.kill", "session.side-chat.create",
     ].includes(operation)) {
@@ -731,7 +775,8 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.status") return { status: "ok", value: {
       running: emptyBackend ? [] : [...statusRunning],
-      attention: unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [],
+      attention: [...(statusAttention ?? new Set(unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : []))],
+      failed: [...statusFailed],
     } }
     if (operation === "usage.providers") return { status: "ok", value: { data: fixtureUsageProviders(Date.now()) } }
     if (operation === "usage.summary") return { status: "ok", value: { data: usageMetrics(10, 26.3) } }
@@ -781,9 +826,22 @@ function createFixtureStore(): Fixture {
     if (operation === "session.list") {
       inventoryInputs.push(input ?? {})
       if (inventoryCount > 0) {
-        const offset = Number(input?.cursor ?? 0)
+        if (input?.status === "waiting") {
+          const attention = statusAttention ?? new Set(unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [])
+          const data = [...attention].filter((id) => !statusFailed.has(id)).flatMap((id) => {
+            const stored = sessions.find((session) => session.id === id)
+            if (stored !== undefined) return [stored]
+            const number = Number(id.match(/^ses_inventory_(\d+)$/)?.[1])
+            if (!Number.isInteger(number) || number < 0 || number >= inventoryCount) return []
+            return [{ id, title: `Inventory Session ${number}`, projectID: number % 2 === 1 ? "prj_other" : "prj_remote",
+              location: { directory: number % 2 === 1 ? "/workspace/other" : "/workspace/ycoding" }, time: { created: number, updated: inventoryCount - number } }]
+          }).filter((session) => input.workspace === undefined || groupOf(session).id === input.workspace)
+          return { status: "ok", value: { data: data.slice(0, Number(input.limit ?? 50)), cursor: {} } }
+        }
         const limit = inventoryPageRows > 0 ? inventoryPageRows : Math.min(50, Number(input?.limit ?? 50))
         const odd = input?.workspace === "workspace_other"
+        const anchor = typeof input?.around === "string" ? Number(input.around.match(/^ses_inventory_(\d+)$/)?.[1]) : NaN
+        const offset = Number.isInteger(anchor) ? Math.max(0, (input?.workspace === undefined ? anchor : Math.floor(anchor / 2)) - Number(input?.before ?? 0)) : Number(input?.cursor ?? 0)
         const sought = typeof input?.search === "string" ? Number(input.search.match(/\d+$/)?.[0]) : NaN
         const ids = input?.status === "running" ? [14_000] : typeof input?.search === "string"
           ? Number.isInteger(sought) && sought >= 0 && sought < inventoryCount && (input.status !== "idle" || sought !== 14_000) ? [sought] : []
@@ -806,9 +864,17 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { data: [...createdSessions.values(), ...(emptyBackend ? [] : sessions)]
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
         .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined)
-        .filter((session) => input?.status === "running" ? statusRunning.has(session.id)
-          : input?.status === "idle" ? !statusRunning.has(session.id) && Reflect.get(session.time, "archived") === undefined : true)
-        .sort((left, right) => input?.order === "desc" ? right.time.updated - left.time.updated : 0)
+        .filter((session) => {
+          const waiting = (statusAttention?.has(session.id) ?? (session.id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(session.id)
+          return input?.status === "waiting" ? waiting : input?.status === "running" ? statusRunning.has(session.id) && !waiting
+            : input?.status === "idle" ? !waiting && !statusRunning.has(session.id) && Reflect.get(session.time, "archived") === undefined : true
+        })
+        .sort((left, right) => {
+          if (input?.order === "desc") return right.time.updated - left.time.updated
+          if (input?.order !== "active") return 0
+          const group = (id: string) => (statusAttention?.has(id) ?? (id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(id) ? 0 : statusRunning.has(id) ? 1 : 2
+          return group(left.id) - group(right.id) || (Reflect.get(right.time, "active") ?? right.time.updated) - (Reflect.get(left.time, "active") ?? left.time.updated) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+        })
         .slice(0, typeof input?.limit === "number" ? input.limit : undefined) } }
     }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
@@ -849,7 +915,7 @@ function createFixtureStore(): Fixture {
       teamCancelState = "cancelling"
       return { status: "ok", value: { data: { sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true, state: "cancelling", revision: 2, time: { created: ago(30), updated: ago(1) } } } }
     }
-    if (operation === "session.team.shell.list") return { status: "ok", value: { data: [{ id: "sh_team", ownerID: "ses_child", command: "bun test", status: teamShellKilled ? "killed" : "running", startedAt: ago(10) }] } }
+    if (operation === "session.team.shell.list") return { status: "ok", value: { data: teamShellKilled ? [] : [{ id: "sh_team", ownerID: "ses_child", command: "bun test", status: accountParams.has("queuedTeamShell") ? "queued" : "running", ...(accountParams.has("queuedTeamShell") ? { queuePosition: 2 } : {}), startedAt: ago(10) }] } }
     if (operation === "session.team.shell.kill") {
       if (targetSessionID !== sessionID || input?.shellID !== "sh_team") return { status: "failed", error: { code: "forbidden", message: "Shell is outside this family" } }
       teamShellKilled = true
@@ -890,14 +956,22 @@ function createFixtureStore(): Fixture {
         value: {
           data: remoteScenarioData?.autonomy ?? {
             mode: "normal",
-            yolo: 2,
+            yolo: currentYolo,
             ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
+            ...autonomyExtras(),
           },
         },
       }
     }
     if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions) : [] } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails) : [] } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails).map((item) => accountParams.get("grades") === "1" ? { ...item, escalation: { choice: "escalate", confidence: 0.61, grades: fixtureGrades } } : item) : [] } }
+    if (operation === "session.guardrail.status") return { status: "ok", value: { data: {
+      rootSessionID: sessionID, profile: "default", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],
+      decisions: accountParams.get("grades") === "1" ? [
+        { sessionID, requestID: "grq_graded", created: 4, reply: "always", choice: "approve_all", confidence: 0.934567, grades: fixtureGrades },
+        { sessionID, requestID: "grq_legacy", created: 5, reply: "reject", choice: "reject", confidence: 0.71 },
+      ] : [],
+    } } }
     if (operation === "session.form.list" && readingDecision && targetSessionID === sessionID) return { status: "ok", value: [readingForm] }
     if (operation === "session.form.list") return {
       status: "ok",
@@ -942,7 +1016,26 @@ function createFixtureStore(): Fixture {
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.autonomy.set") {
       if (typeof input?.yolo === "number") currentYolo = input.yolo
-      return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo } } }
+      if (input?.sleep === true) sleep = {}
+      if (input?.sleep === false) sleep = undefined
+      return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo, ...autonomyExtras() } } }
+    }
+    if (operation === "session.review.list") {
+      if (accountParams.get("reviewList") === "error" && operationCounts.get(operation) === 1) return { status: "failed", error: { code: "internal_error", message: "Review list unavailable" } }
+      return { status: "ok", value: { data: structuredClone(reviewItems) } }
+    }
+    if (operation === "session.review.decide") {
+      if (accountParams.get("reviewDecide") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown review outcome" } }
+      if (accountParams.get("reviewDecide") === "failed") return { status: "failed", error: { code: "invalid_message", message: "Decision was not accepted" } }
+      reviewItems = reviewItems.filter((item) => item.itemID !== input?.itemID)
+      return { status: "ok", value: null }
+    }
+    if (operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set") {
+      if (operation === "machine.keepAwake.set" && typeof input?.enabled === "boolean") keepAwakeManual = input.enabled
+      if (keepAwakeOverride) return { status: "ok", value: { data: keepAwakeOverride } }
+      if (accountParams.get("keepAwake") === "error" || accountParams.get("keepAwake") === "unsupported") return { status: "ok", value: { data: { state: accountParams.get("keepAwake"), message: "Machine keep-awake is unavailable" } } }
+      const held = sleep !== undefined && accountParams.get("sleepHold") !== "failed"
+      return { status: "ok", value: { data: { state: keepAwakeManual || held ? "on" : "off", lid: keepAwakeManual || held ? accountParams.get("lid") ?? "on" : "off", sleepHold: held, manual: keepAwakeManual } } }
     }
     if (operation === "session.goal.set") {
       if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }
@@ -992,6 +1085,10 @@ function createFixtureStore(): Fixture {
         return {
           ...wire,
           request: async (operation, request) => {
+            if (accountParams.has("relaySessions") && ["workspace.list", "session.list", "session.status"].includes(operation)) {
+              if (operation === "session.list") inventoryInputs.push(request?.input ?? {})
+              return wire.request(operation, request)
+            }
             if (operation !== "session.guardrail.reply" && operation !== "session.shell.output") return outcome(operation, request?.input, request?.sessionID)
             const result = await wire.request(operation, request)
             if (result.status === "ok" && typeof request?.input?.requestID === "string") answered.add(request.input.requestID)
@@ -1069,6 +1166,8 @@ function createFixtureStore(): Fixture {
 
   const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => {
     statusRunning = new Set(running)
+    statusAttention = new Set(attention)
+    statusFailed = new Set(failed ?? [])
     const next = { running: new Set(running), attention: new Set(attention) }
     const added = [
       ...attention.filter((id) => !previousStatus.attention.has(id)).map((sessionID) => ({ category: "approval-requested" as const, sessionID })),
@@ -1151,6 +1250,15 @@ function createFixtureStore(): Fixture {
     operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
   }
 }
+
+if (accountParams.get("grades") === "1") messages = [...messages, {
+  id: "msg_decision_grades", type: "assistant", time: { created: 6, completed: 7 },
+  content: [{ type: "tool", id: "call_decision_grades", name: "decision", state: {
+    status: "completed", input: { provider: "agent" },
+    structured: { response: { answers: [{ name: "action", type: "choice", choice: null, grades: fixtureGrades }] } },
+    content: [{ type: "text", text: "The helper completed its judgments." }],
+  } }],
+}]
 
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })

@@ -498,14 +498,17 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line) throw new Error("Runtime smoke server produced no readiness line")
   const ready = JSON.parse(line) as { url?: unknown }
   if (typeof ready.url !== "string") throw new Error(`Invalid readiness payload: ${line}`)
+  const serverURL = ready.url
 
   const clientHeaders = {
     authorization: `Basic ${Buffer.from(`ycoding:${PASSWORD}`).toString("base64")}`,
     "x-ycoding-directory": project,
   }
-  const client = YCoding.make({ baseUrl: ready.url, headers: clientHeaders })
+  const client = YCoding.make({ baseUrl: serverURL, headers: clientHeaders })
 
   let phase = "integration readiness"
+  let lastDiagnostics: unknown
+  let evidenceSessionID: string | undefined
   let summary: string | undefined
   try {
     await eventually(async () => {
@@ -570,11 +573,17 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })
-    await eventually(async () => ((await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined))
+    await eventually(async () => {
+      if ((await client.session.diagnostics({ sessionID: session.id }))?.requests?.logical !== 1) return undefined
+      const outstanding = await client.session.outstanding({})
+      return outstanding.data.includes(session.id) || outstanding.running.includes(session.id) ? undefined : true
+    })
     phase = "second prompt"
+    evidenceSessionID = session.id
     await client.session.prompt({ sessionID: session.id, text: "Second turn" })
     const diagnostics = await eventually(async () => {
       const value = await client.session.diagnostics({ sessionID: session.id })
+      lastDiagnostics = value
       return value?.tokens.cacheRead === 900 ? value : undefined
     })
 
@@ -798,7 +807,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    const oversizedSubagent = await fetch(new URL(`/api/session/${subagentParent.id}/subagent`, ready.url), {
+    const oversizedSubagent = await fetch(new URL(`/api/session/${subagentParent.id}/subagent`, serverURL), {
       method: "POST",
       headers: { ...clientHeaders, "content-type": "application/json" },
       body: JSON.stringify({
@@ -850,6 +859,26 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     summary = `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
   } catch (error) {
+    const probe = async (read: () => Promise<unknown>) =>
+      read().then(
+        (value) => JSON.stringify(value)?.slice(0, 1500),
+        (failure) => `unavailable: ${failure instanceof Error ? failure.message : String(failure)}`.slice(0, 300),
+      )
+    if (evidenceSessionID !== undefined)
+      console.error(
+        `Runtime smoke session evidence: pending=${await probe(() => client.session.pending.list({ sessionID: evidenceSessionID! }))} active=${await probe(() => client.session.active())} outstanding=${await probe(() => client.session.outstanding({}))} review=${await probe(() => fetch(new URL(`/api/session/${evidenceSessionID}/review`, serverURL), { headers: clientHeaders }).then((response) => response.text()))} log=${await probe(() => fetch(new URL(`/api/experimental/session/${evidenceSessionID}/log`, serverURL), { headers: clientHeaders }).then(async (response) => (await response.text()).match(/"type":"session\.[a-z.]+"/g)?.map((match) => match.slice(15, -1))))}`,
+      )
+    console.error(
+      `Runtime smoke failure evidence during ${phase}: diagnostics=${JSON.stringify(lastDiagnostics)?.slice(0, 2000)} requests=${JSON.stringify(
+        requests.slice(0, 40).map((request, index) => ({
+          index: index + 1,
+          path: request.pathname,
+          model: request.model,
+          maxTokens: request.maxTokens,
+          text: request.text.slice(0, 400),
+        })),
+      )}`,
+    )
     throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })
   } finally {
     await cleanupRuntimeSmoke(provider, server, root)

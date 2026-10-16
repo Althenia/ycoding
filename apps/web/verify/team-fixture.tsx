@@ -15,14 +15,20 @@ const initialTasks: readonly TeamSubagent[] = [
   { sessionID: "ses_waiting", parentID: "ses_root", description: "Investigate deployment", agent: "researcher", modelLabel: "anthropic/opus#high", state: "waiting", revision: 1, startedAt: 1_000, updatedAt: 3_000, question: { id: "qst_1", text: "Which environment?" } },
   { sessionID: "ses_done", parentID: "ses_root", description: "Run focused tests", agent: "tester", state: "completed", revision: 1, startedAt: 1_000, updatedAt: 4_000 },
 ]
+const recoveryTasks: readonly TeamSubagent[] = params.has("recovery") ? [
+  { sessionID: "ses_stopped", parentID: "ses_root", description: "Stopped after restart", agent: "builder", state: "cancelled", revision: 2, startedAt: 1_000, updatedAt: 5_000, stoppedRecovery: { itemID: "rvw_stopped" } },
+  { sessionID: "ses_deferred", parentID: "ses_root", description: "Deferred question", agent: "researcher", state: "waiting", revision: 1, startedAt: 1_000, updatedAt: 3_500, question: { id: "qst_deferred", text: "Which region?", deferred: true } },
+] : []
 const crowdedTasks: readonly TeamSubagent[] = params.has("crowded") ? [
   ...initialTasks,
   ...[1, 2, 3].map((index) => ({ sessionID: `ses_extra_${index}`, parentID: "ses_root", description: `Review additional task ${index}`, agent: "reviewer", state: "running" as const, revision: 1, startedAt: 1_000, updatedAt: 2_000 })),
-] : initialTasks
+] : [...initialTasks, ...recoveryTasks]
 const [tasks, setTasks] = createSignal(crowdedTasks)
+let releaseContinue: ((outcome: TeamActionOutcome) => void) | undefined
 const [usageLoading, setUsageLoading] = createSignal(params.get("usage") === "loading")
 const [rootID, setRootID] = createSignal("ses_root")
-const [shells, setShells] = createSignal<TeamPanelData["shells"]>([{ id: "sh_1", ownerID: "ses_root", command: "bun test", status: "running", startedAt: 1_000 },
+const shellCommand = params.has("longShell") ? `cat <<'EOF'\n${"command content ".repeat(100)}\nEOF` : "bun test"
+const [shells, setShells] = createSignal<TeamPanelData["shells"]>([{ id: "sh_1", ownerID: "ses_root", command: shellCommand.length > 256 ? `${shellCommand.slice(0, 255)}…` : shellCommand, status: "running", startedAt: 1_000 },
   ...(params.has("sideShell") ? [{ id: "sh_btw", ownerID: "ses_btw", command: "bun lint", status: "running" as const, startedAt: 2_000 }] : [])])
 const [sideChats, setSideChats] = createSignal<TeamPanelData["sideChats"]>([{ id: "ses_btw", title: "Quick question", updatedAt: 5_000 }])
 const [selectedID, setSelectedID] = createSignal(params.get("mode") === "btw" ? "ses_btw" : params.get("mode") === "team" ? "ses_root" : "ses_child")
@@ -31,6 +37,9 @@ const [open, setOpen] = createSignal(params.get("mode") === "team")
 const [next, setNext] = createSignal<string | undefined>("older")
 const [sideNext, setSideNext] = createSignal<string | undefined>("older")
 const events: string[] = []
+let shellDropped = false
+let shellReads = 0
+const removedShells = new Set<string>()
 let releaseCancel: ((outcome: TeamActionOutcome) => void) | undefined
 const panel = (): TeamPanelData => ({ rootID: rootID(), economicsLoading: usageLoading(), accountingUnsupported: params.get("accounting") === "unsupported", status: params.has("unsupported") ? "unsupported" : "ready", tasks: tasks(), total: params.has("crowded") ? 53 : 4, activeTotal: tasks().filter((task) => task.state === "running" || task.state === "waiting" || task.state === "starting" || task.state === "cancelling").length, next: next(), pageLoading: false,
   shells: shells(), shellStatus: params.has("unsupported") ? "unsupported" : "ready", sideChats: sideChats(), sideChatStatus: params.has("unsupported") ? "unsupported" : "ready", sideChatNext: sideNext(), sideChatLoading: false })
@@ -50,7 +59,9 @@ Object.assign(window, {
   teamRefresh: () => setTasks((items) => items.map((item) => ({ ...item }))),
   teamComplete: (id: string) => setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, state: "cancelled", updatedAt: 6_000 } : item)),
   teamShellExit: (id: string) => setShells((items) => items.map((item) => item.id === id ? { ...item, status: "exited", completedAt: 37_021_000 } : item)),
+  teamDropShell: () => { shellDropped = true; setShells([]) },
   teamSwitchRoot: () => { setRootID("ses_other"); setTasks([{ sessionID: "ses_other_child", parentID: "ses_other", description: "Different family", agent: "researcher", state: "running", revision: 1, updatedAt: 7_000 }]); setShells([]); setSideChats([]) },
+  teamReleaseContinue: () => releaseContinue?.({ status: "ok" }),
   teamReleaseCancel: () => releaseCancel?.({ status: "unknown", message: "Old family outcome unknown" }),
 })
 const root = document.getElementById("app")
@@ -63,8 +74,15 @@ const teamContent = (sheet: boolean) => <TeamView data={panel} currentSessionID=
     if (params.get("cancelOutcome") === "unknown") return { status: "unknown", message: "Outcome unknown; check the task before retrying." }
     setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, state: "cancelling" } : item))
     return success
-  }} onAnswer={answer} onPin={async (id, pinned) => { setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, pinnedAt: pinned ? 40_000 : undefined } : item)); events.push(`${pinned ? "pin" : "unpin"}:${id}`); return success }} onLoadOlder={async () => { events.push("older:subagents"); setTasks((items) => [...items, { sessionID: "ses_old", parentID: "ses_root", description: "Older task", agent: "general", state: "failed", revision: 1, updatedAt: 1_000 }]); setNext(undefined) }}
-  onViewShell={async (ownerID, id) => { events.push(`output:${ownerID}:${id}`); return { text: "Tests passed\n", cursor: 13, size: 13, truncated: false } }} onKillShell={async (id) => { events.push(`kill:${id}`); setShells((items) => items.map((item) => item.id === id ? { ...item, status: "killed", completedAt: 37_021_000 } : item)); return success }}
+  }} onAnswer={answer} onContinueRecovery={async (id) => {
+    events.push(`continue:${id}`)
+    if (params.get("continueOutcome") === "deferred") return new Promise<TeamActionOutcome>((resolve) => { releaseContinue = resolve })
+    if (params.get("continueOutcome") === "unknown") return { status: "unknown", message: "Outcome unknown; check the subagent before retrying." }
+    if (params.get("continueOutcome") === "failed") return { status: "failed", message: "The local server refused a conflicting request; do not replay it automatically" }
+    setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, state: "running", stoppedRecovery: undefined } : item))
+    return success
+  }} onPin={async (id, pinned) => { setTasks((items) => items.map((item) => item.sessionID === id ? { ...item, pinnedAt: pinned ? 40_000 : undefined } : item)); events.push(`${pinned ? "pin" : "unpin"}:${id}`); return success }} onLoadOlder={async () => { events.push("older:subagents"); setTasks((items) => [...items, { sessionID: "ses_old", parentID: "ses_root", description: "Older task", agent: "general", state: "failed", revision: 1, updatedAt: 1_000 }]); setNext(undefined) }}
+  onViewShell={async (ownerID, id) => { events.push(`output:${ownerID}:${id}`); shellReads++; if (removedShells.has(id)) throw new Error("Shell is not available."); if (params.has("shellReadFailure") && shellReads === 2) throw new Error("Shell output is unavailable."); return { command: id === "sh_1" ? shellCommand : "bun lint", status: shellDropped ? "exited" : "running", text: shellDropped ? "Final bytes before exit\n" : "Tests passed\n", cursor: shellDropped ? 36 : 13, size: shellDropped ? 36 : 13, truncated: false } }} onKillShell={async (id) => { events.push(`kill:${id}`); removedShells.add(id); setShells((items) => items.filter((item) => item.id !== id)); return success }}
   onOpenSideChat={select} onCreateSideChat={async () => { events.push("new:sidechat"); setSideChats((items) => [...items, { id: "ses_btw_new", title: "New side chat", updatedAt: 6_000 }]); return { status: "ok", sessionID: "ses_btw_new" } }}
   onLoadOlderSideChats={async () => { events.push("older:sidechats"); setSideChats((items) => [...items, { id: "ses_btw_old", title: "Older side chat", updatedAt: 1_000 }]); setSideNext(undefined) }} />
 render(() => <main class="team-fixture">

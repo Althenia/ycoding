@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { AssistantPart, PendingRequestView, SessionView } from "../projection"
+import { readReviewItems, type AssistantPart, type PendingRequestView, type SessionView } from "../projection"
 import { parseSessionStatus, readSessionInfo, type SessionInfoView } from "../store"
 import { sessionStateChips } from "../view-model"
 import { partKey, toolPartExpanded } from "./conversation"
@@ -180,10 +180,25 @@ describe("resident session filter", () => {
     expect(filterSessions(classified, "", "idle").map((entry) => entry.id)).toEqual(["ses_idle"])
     expect(filterSessions(classified, "", "all")).toHaveLength(3)
   })
+
+  test("waiting, running and idle filters are exclusive and retain activity order over pins", () => {
+    const rows = [
+      session({ id: "ses_wait", running: true, attention: true }),
+      session({ id: "ses_running", running: true }),
+      session({ id: "ses_lost", attention: true }),
+      session({ id: "ses_failed", attention: true, failed: true }),
+      session({ id: "ses_idle", pinnedAt: 1 }),
+      session({ id: "ses_archived", archived: true }),
+    ]
+    expect(filterSessions(rows, "", "waiting").map((row) => row.id)).toEqual(["ses_wait", "ses_lost"])
+    expect(filterSessions(rows, "", "running").map((row) => row.id)).toEqual(["ses_running"])
+    expect(filterSessions(rows, "", "idle").map((row) => row.id)).toEqual(["ses_failed", "ses_idle"])
+    expect(filterSessions(rows, "").map((row) => row.id)).toEqual(rows.map((row) => row.id))
+  })
 })
 
 describe("pinned sessions", () => {
-  test("lists pinned sessions first in pin order and keeps the rest in their order", () => {
+  test("keeps pinned sessions in the reported activity order", () => {
     const listed = [
       session({ id: "ses_recent" }),
       session({ id: "ses_pinned_late", pinnedAt: 2_000 }),
@@ -191,10 +206,10 @@ describe("pinned sessions", () => {
       session({ id: "ses_pinned_early", pinnedAt: 1_000 }),
     ]
     expect(filterSessions(listed, "").map((entry) => entry.id)).toEqual([
-      "ses_pinned_early",
-      "ses_pinned_late",
       "ses_recent",
+      "ses_pinned_late",
       "ses_older",
+      "ses_pinned_early",
     ])
   })
 
@@ -265,6 +280,16 @@ describe("waiting for a decision", () => {
     expect(awaitsApproval(view({ requests: [form] }), "ses_a")).toBe(false)
   })
 
+  test("badges the open family's root and the item's member Session with its review count", () => {
+    const items = readReviewItems({ data: ["ses_a", "ses_child"].map((sessionID, index) => ({ itemID: `rvw_${index}`, sessionID, rootSessionID: "ses_a", sessionTitle: "T", created: 1, reason: "free_text",
+      kind: "subagent_question", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "?" } })) })!
+    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", yolo: 0 } })
+    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "Manual", "Guardrails enforced"])
+    expect(sessionChips(session({ id: "ses_child" }), loaded)[0]).toEqual({ label: "review 1", tone: "attention" })
+    expect(sessionChips(session({ id: "ses_b" }), loaded).map((chip) => chip.label)).not.toContain("review 2")
+    expect(sessionChips(session({}), { ...loaded, requests: [permission] })[0]?.label).toBe("Waiting for approval")
+  })
+
   test("reports nothing for a session this client has not loaded", () => {
     expect(awaitsApproval(undefined, "ses_a")).toBe(false)
     expect(awaitsApproval(view({ id: "ses_other", requests: [permission] }), "ses_a")).toBe(false)
@@ -275,7 +300,7 @@ describe("waiting for a decision", () => {
       session({ running: true }),
       view({ requests: [permission], autonomy: { mode: "normal", yolo: 2 } }),
     )
-    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Standard", "Guardrails enforced"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "YOLO 2", "Guardrails enforced"])
     expect(chips[0]?.tone).toBe("attention")
   })
 

@@ -12,7 +12,7 @@ import {
   autonomyDecision,
   autonomyDecisionLabel,
   autonomyModeLabel,
-  guardrailDecisionEnabled,
+  isAsleep,
   yoloLevel,
 } from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
@@ -70,7 +70,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
                   <SessionRailIdentity title={session().title} />
                 </pluginRuntime.Slot>
               </SessionRailContent>
-              <AutonomyRailContent autonomy={props.autonomy} />
+              <AutonomyRailContent autonomy={props.autonomy} reviewCount={data.session.review.list(props.sessionID).length} />
               <PluginSlot
                 name="sidebar.content"
                 input={{ sessionID: props.sessionID }}
@@ -131,7 +131,7 @@ function SessionRailIdentity(props: { title: string }) {
   )
 }
 
-export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
+export function AutonomyRailContent(props: { autonomy: SessionAutonomyState; reviewCount?: number }) {
   const { theme } = useTheme().contextual("elevated")
   const level = createMemo(() => yoloLevel(props.autonomy))
 
@@ -156,7 +156,7 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
           title="AUTONOMY"
           summary={autonomyModeLabel(props.autonomy)}
           attention={
-            level() > 0 || props.autonomy.goal?.status === "active" || guardrailDecisionEnabled(props.autonomy)
+            level() > 0 || props.autonomy.goal?.status === "active" || isAsleep(props.autonomy)
           }
         >
           <For each={[
@@ -165,16 +165,25 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
             ["Questions", "questions"],
           ] as const}>
             {([label, action]) => {
-              const decision = autonomyDecision(props.autonomy, action)
+              const decision = () => autonomyDecision(props.autonomy, action)
               return (
                 <RailRow
                   label={label}
                   value={autonomyDecisionLabel(props.autonomy, action)}
-                  valueColor={decision === "you" ? theme.text.feedback.success.default : theme.text.feedback.warning.default}
+                  valueColor={decision() === "you" ? theme.text.feedback.success.default : theme.text.feedback.warning.default}
                 />
               )
             }}
           </For>
+          <Show when={props.reviewCount}>
+            {(count) => (
+              <RailRow
+                label="Review"
+                value={`${count()} waiting`}
+                valueColor={theme.text.feedback.warning.default}
+              />
+            )}
+          </Show>
         </RailSection>
       </Show>
     </>

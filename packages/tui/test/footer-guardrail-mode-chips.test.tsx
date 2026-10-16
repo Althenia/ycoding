@@ -9,6 +9,53 @@ import { ThemeProvider } from "../src/context/theme"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
+test("sleep chips wait for the machine read", () => {
+  const autonomy = { mode: "normal" as const, yolo: 0 as const, sleep: {} }
+  for (const machineAwake of [undefined, true, false]) {
+    const chips = modeChips({ autonomy, machineAwake })
+    expect(chips.find((chip) => chip.key === "yolo")).toEqual({ key: "yolo", label: "Manual", tone: "off" })
+    expect(chips.find((chip) => chip.key === "sleep")).toEqual({
+      key: "sleep",
+      label: machineAwake === false ? "asleep · machine may sleep" : "asleep",
+      tone: machineAwake === false ? "warning" : "on",
+    })
+  }
+})
+
+for (const mode of ["dark", "light"] as const) {
+  test(`renders sleep mode chips in ${mode}`, async () => {
+    const [asleep, setAsleep] = createSignal(true)
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
+              <box flexDirection="row" gap={2}>
+                <ModeChips autonomy={{ mode: "normal", yolo: 0, sleep: asleep() ? {} : undefined }} />
+              </box>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 80, height: 3 },
+    )
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("asleep"))
+      expect(app.captureCharFrame()).toContain("Manual")
+      expect(app.captureCharFrame()).not.toContain("machine may sleep")
+      const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+      const manual = spans.find((span) => span.text.includes("Manual"))
+      const sleep = spans.find((span) => span.text.includes("asleep"))
+      expect(manual?.bg.toInts()).not.toEqual(sleep?.bg.toInts())
+      setAsleep(false)
+      await app.waitForFrame((frame) => frame.includes("Manual") && !frame.includes("asleep"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+}
+
 test("derives the goal chip from the active goal status and labels YOLO by level", () => {
   const active = modeChips({
     autonomy: {
@@ -23,8 +70,7 @@ test("derives the goal chip from the active goal status and labels YOLO by level
   const completed = { text: "ship", status: "completed" as const, iteration: 3, noProgress: 0, maxNoProgress: 5 }
   expect(modeChips({ autonomy: { mode: "normal", yolo: false, goal: completed } })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
-    { key: "yolo", label: "YOLO off", tone: "off" },
-    { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
+    { key: "yolo", label: "Manual", tone: "off" },
   ])
 
   // A retained active goal keeps the goal chip on; `yolo: true` decodes to level 2.
@@ -32,7 +78,6 @@ test("derives the goal chip from the active goal status and labels YOLO by level
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained } })).toEqual([
     { key: "goal", label: "goal", tone: "on" },
     { key: "yolo", label: "YOLO 2", tone: "danger" },
-    { key: "guardrailDecision", label: "guardrail decision off", tone: "off" },
   ])
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained }, guardrailPending: true })[0]).toEqual({
     key: "goal",
@@ -102,7 +147,7 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("YOLO off")
+    expect(frame).toContain("Manual")
     expect(frame).toContain("goal")
     expect(frame).not.toContain("goal 3/5")
     expect(frame).toContain("guardrail blocked")

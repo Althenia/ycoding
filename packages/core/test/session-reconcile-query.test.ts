@@ -4,7 +4,9 @@ import { Effect } from "effect"
 import { Database } from "../src/database/database"
 import { DatabaseMigration } from "../src/database/migration"
 import { sqliteLayer } from "../src/database/sqlite.bun"
+import { LayerNode } from "../src/effect/layer-node"
 import { EventRuntime } from "../src/event"
+import { AppProcess } from "../src/process"
 import { SessionInterruptedExecution } from "../src/session/execution/interrupted"
 
 test("startup execution reconciliation probes lifecycle indexes without scanning the event history", () =>
@@ -22,8 +24,9 @@ test("startup execution reconciliation probes lifecycle indexes without scanning
         Effect.provide(EventRuntime.layerWith()),
         Effect.provideService(Database.Service, { db }),
       )
+      const appProcess = yield* AppProcess.Service.pipe(Effect.provide(LayerNode.compile(AppProcess.node)))
       queries.length = 0
-      yield* SessionInterruptedExecution.reconcile(db, events)
+      yield* SessionInterruptedExecution.reconcile(db, events, appProcess)
       const query = queries.find((entry) => entry.query.startsWith("select"))
       expect(query).toBeDefined()
       const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query!.query}`, query!.params)

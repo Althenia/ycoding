@@ -319,6 +319,27 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     return failed
   })
 
+  const failIncompleteToolInputs = Effect.fnUntraced(function* () {
+    yield* flush()
+    const names: string[] = []
+    for (const [callID, tool] of tools) {
+      if (tool.called || tool.settled) continue
+      tool.settled = true
+      names.push(tool.name)
+      yield* events.publish(SessionEvent.Tool.Failed, {
+        sessionID: input.sessionID,
+        assistantMessageID: tool.assistantMessageID,
+        callID,
+        error: {
+          type: "tool.input-json",
+          message: "Tool call arguments were incomplete when the provider ended the step and were not executed. Retry the call.",
+        },
+        executed: false,
+      })
+    }
+    return names
+  })
+
   const failAssistant = Effect.fnUntraced(function* (error: SessionError.Error) {
     yield* flush()
     yield* failTools(error, "uncalled")
@@ -599,6 +620,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     failAssistant,
     publishStepFailure,
     failUnsettledTools,
+    failIncompleteToolInputs,
     hasProviderError: () => providerFailed,
     hasRetryEvidence: () => retryEvidence,
     hasAssistantText: () => assistantText,

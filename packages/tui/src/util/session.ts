@@ -79,31 +79,45 @@ export function groupSessionShells(
   shells: readonly ShellInfo[],
   sessions: readonly SessionInfo[],
   currentSessionID: string,
+  options?: { includeSettled?: boolean },
 ): SessionShellGroup[] {
-  const descendantIDs = childSessionIDs(sessions, currentSessionID)
-  const ownerIDs = new Set([currentSessionID, ...descendantIDs])
+  const rootID = familyRootID(sessions, currentSessionID)
+  if (rootID === undefined) return []
+  const descendantIDs = childSessionIDs(sessions, rootID)
+  const ownerIDs = new Set([rootID, ...descendantIDs])
   const visible = shells.filter((shell) => {
-    if (shell.status !== "running" && shell.status !== "queued") return false
+    if (!options?.includeSettled && shell.status !== "running" && shell.status !== "queued") return false
     const sessionID = shell.metadata.sessionID
-    if (typeof sessionID !== "string") return true
-    const owner = sessions.find((session) => session.id === sessionID)
-    if (!owner) return true
-    return ownerIDs.has(owner.id)
+    return typeof sessionID === "string" && ownerIDs.has(sessionID)
   })
-  const groups = [currentSessionID, ...descendantIDs].flatMap((sessionID) => {
+  return [rootID, ...descendantIDs].flatMap((sessionID) => {
     const owned = visible.filter((shell) => shell.metadata.sessionID === sessionID)
     if (!owned.length) return []
     const owner = sessions.find((session) => session.id === sessionID)
-    const label = sessionID === currentSessionID ? "Main chat" : `${owner?.agent === "btw" ? "BTW" : owner?.agent ?? "Subagent"} · ${owner?.title ?? ""}`
+    const label = sessionID === rootID ? "Main chat" : `${owner?.agent === "btw" ? "BTW" : owner?.agent ?? "Subagent"} · ${owner?.title ?? ""}`
     return [{ owner: { label }, shells: owned }]
   })
-  const unknown = visible.filter((shell) => {
-    const sessionID = shell.metadata.sessionID
-    if (typeof sessionID !== "string") return true
-    return !sessions.some((session) => session.id === sessionID)
-  })
-  if (!unknown.length) return groups
-  return [...groups, { owner: { label: "Unknown session" }, shells: unknown }]
+}
+
+export function sessionShellFamily(sessions: readonly SessionInfo[], sessionID: string): SessionInfo[] {
+  const rootID = familyRootID(sessions, sessionID)
+  if (rootID === undefined) return []
+  const ids = new Set([rootID, ...childSessionIDs(sessions, rootID)])
+  return sessions.filter((session) => ids.has(session.id))
+}
+
+function familyRootID(sessions: readonly SessionInfo[], sessionID: string): string | undefined {
+  if (!sessions.some((session) => session.id === sessionID)) return undefined
+  let rootID = sessionID
+  const seen = new Set([sessionID])
+  let parentID = sessions.find((session) => session.id === rootID)?.parentID
+  while (parentID) {
+    if (seen.has(parentID) || !sessions.some((session) => session.id === parentID)) return undefined
+    seen.add(parentID)
+    rootID = parentID
+    parentID = sessions.find((session) => session.id === rootID)?.parentID
+  }
+  return rootID
 }
 
 function childSessionIDs(sessions: readonly SessionInfo[], parentID: string): string[] {

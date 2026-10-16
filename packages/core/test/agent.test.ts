@@ -310,12 +310,15 @@ describe("Agent", () => {
       ) {
         throw new Error("expected maintained built-in prompts")
       }
-      expect(god.system).toContain("Explicit permission denies remain denied.")
-      expect(god.system).toContain("1 auto-approves ask permissions and ordinary guardrail reviews")
+      expect(god.system).toContain("Denies remain denied.")
+      expect(god.system).toContain("Awake YOLO 1–3 auto-approves ask permissions and ordinary guardrail reviews")
       expect(god.system).toContain(
-        "Surviving hard reviews require a human decision unless the user enabled /guardrail-decision or /sleep",
+        "Model guardrail verification and grading require guardrails.decide_reviews, default false",
       )
-      expect(god.system).toContain("only an explicit false predicate at confidence ≥0.9 dismisses that matched rule")
+      expect(god.system).toContain(
+        "awake, questions, forms, and guardrail reviews ask the user and child questions go to the parent Session's subagent controls",
+      )
+      expect(god.system).toContain("Enabled standard verification dismisses only false at confidence ≥0.9")
       expect(god.system).toContain("uncertainty preserves review, and denies and custom rules are never verified")
       expect(god.system).toContain("Orchestrate; do not implement.")
       expect(god.system).toContain("launch every ready independent task in parallel")

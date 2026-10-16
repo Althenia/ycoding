@@ -82,9 +82,11 @@ let allow = true
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => {
+        expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
         assertions.push(input)
       }).pipe(
         Effect.andThen(

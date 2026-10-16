@@ -24,8 +24,11 @@ import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "../shell"
 import { SessionGoal } from "./goal"
+import { SessionReviewFold } from "./review-fold"
 import { SessionCompletion } from "./completion"
 import { Job } from "../job"
+import { AppProcess } from "../process"
+import { ShellLedger } from "../shell/ledger"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -74,6 +77,8 @@ export const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const compactionExecution = yield* SessionCompactionExecution.Service
     const jobs = yield* Job.Service
+    const appProcess = yield* AppProcess.Service
+    const owner = yield* ShellLedger.identify(appProcess, process.pid)
     const completion = SessionCompletion.make({ db, events, jobs })
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
@@ -104,6 +109,7 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (activeChild) return undefined
+      if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return undefined
       const session = yield* store.get(sessionID)
       if (!session) return undefined
       const activeShell = yield* Effect.gen(function* () {
@@ -160,6 +166,9 @@ export const layer = Layer.effect(
     const clearSuspensionOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => Effect.asVoid(store.consumeSuspended(sessionID)),
     })
+    // Sessions woken since their last drain began. A wake rung after the final drain's promotion
+    // starts a successor drain, which a completed task would gate out, so completion defers to it.
+    const woken = new Set<SessionSchema.ID>()
     const settleTask = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, outcome: ReturnType<typeof terminal>) {
       const task = yield* db
         .select({ state: SessionTaskTable.state })
@@ -185,10 +194,20 @@ export const layer = Layer.effect(
         .map((part) => part.text)
         .join("")
       const excerpt = text === undefined ? undefined : SessionOrchestration.truncateUtf8(text, 16 * 1024)
-      yield* events.publish(SessionEvent.Task.Updated, {
-        sessionID,
-        change: { type: "completed", excerpt },
-      })
+      yield* events.publishBatch(
+        [{ definition: SessionEvent.Task.Updated, data: { sessionID, change: { type: "completed", excerpt } } }],
+        {
+          when: Effect.gen(function* () {
+            const current = yield* db
+              .select({ state: SessionTaskTable.state })
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.session_id, sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            return current?.state === "running" && !woken.has(sessionID)
+          }),
+        },
+      )
     })
     let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError, InterruptReason>({
@@ -198,10 +217,15 @@ export const layer = Layer.effect(
           events.publish(SessionEvent.Execution.Started, { sessionID }, clearSuspensionOnCommit(sessionID)),
         ),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
+        woken.delete(sessionID)
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
         const task = yield* db
-          .select({ state: SessionTaskTable.state })
+          .select({
+            state: SessionTaskTable.state,
+            ownerPid: SessionTaskTable.owner_pid,
+            ownerStarted: SessionTaskTable.owner_started,
+          })
           .from(SessionTaskTable)
           .where(eq(SessionTaskTable.session_id, sessionID))
           .get()
@@ -211,6 +235,16 @@ export const layer = Layer.effect(
           // trace; name the gate so "pending but idle" is diagnosable.
           yield* Effect.logWarning("Session drain skipped for non-running managed task", {
             state: task.state,
+          }).pipe(Effect.annotateLogs({ sessionID }))
+          return
+        }
+        if (
+          task &&
+          task.ownerPid !== null &&
+          (task.ownerPid !== process.pid || (owner !== undefined && task.ownerStarted !== owner.started))
+        ) {
+          yield* Effect.logWarning("Session drain skipped for a managed task claimed by another process", {
+            ownerPid: task.ownerPid,
           }).pipe(Effect.annotateLogs({ sessionID }))
           return
         }
@@ -303,12 +337,12 @@ export const layer = Layer.effect(
         }),
     })
 
-    wake = coordinator.wake
+    wake = (sessionID) => Effect.sync(() => woken.add(sessionID)).pipe(Effect.andThen(coordinator.wake(sessionID)))
     return Service.of({
       active: coordinator.active,
       interrupt: (sessionID) => coordinator.interrupt(sessionID, "user"),
       resume: coordinator.run,
-      wake: coordinator.wake,
+      wake,
       awaitIdle: coordinator.awaitIdle,
       withTransition: coordinator.withTransition,
     })
@@ -326,6 +360,7 @@ export const node = makeGlobalNode({
     LocationServiceMap.node,
     EventRuntime.node,
     Job.node,
+    AppProcess.node,
   ],
 })
 

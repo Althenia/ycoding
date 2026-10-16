@@ -87,6 +87,7 @@ const permission = Layer.mock(Permission.Service, {
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) => {
+    expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
     calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)
     if ((denyBrowser && input.resources.some((resource) => resource.includes("/webbrowser."))) || (denyStage && input.resources.some((resource) => resource.endsWith("/stage"))))
       return Effect.fail(new SessionGuardrail.BlockedError({ rootSessionID: sessionID, sessionID, action: "computer", ruleIDs: ["deny-computer"], reason: "blocked" }))

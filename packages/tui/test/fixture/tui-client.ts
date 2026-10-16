@@ -161,6 +161,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ data: { rootSessionID: url.pathname.split("/")[3], profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
     if (/^\/api\/session\/[^/]+\/subagent$/.test(url.pathname))
       return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (/^\/api\/session\/[^/]+\/review$/.test(url.pathname)) return json({ data: [] })
     if (/^\/api\/session\/[^/]+\/compaction$/.test(url.pathname))
       return json({ data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 })
     if (/^\/api\/session\/[^/]+\/diagnostics$/.test(url.pathname)) return json({ data: null })
@@ -172,6 +173,9 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
     // fixture returns no payload rather than zeroed quota values.
     if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
+    if (url.pathname === "/api/incident/report") return json({ data: { rows: [], groups: 0 } })
+    if (url.pathname === "/api/incident/recent") return json({ data: { items: [] } })
+    if (url.pathname === "/api/incident/guidance") return json({ data: { enabled: true } })
     if (url.pathname === "/api/provider/usage/forecast") return json({ data: { asOf: 0, localScope: "backend" } })
     if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal", yolo: 0 } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })

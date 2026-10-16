@@ -24,6 +24,21 @@ test("slash goal and YOLO use autonomy actions, server commands run, slash skill
   expect(submission("/editor", [], catalog, "steer")).toMatchObject({ kind: "invalid" })
 })
 
+test("sleep, wake, and keep-awake are Session actions that never become prompts", () => {
+  for (const [command, kind] of [["sleep", "sleep"], ["wake", "wake"], ["keep-awake", "keepAwake"]] as const) {
+    expect(optionsForTrigger("/", command, catalog, []).map((option) => option.label)).toContain(`/${command}`)
+    expect(optionsForTrigger("/", command, catalog, [], false).map((option) => option.label)).not.toContain(`/${command}`)
+    expect(submission(`/${command}`, [], catalog, "steer")).toEqual({ kind })
+    expect(submission(`  /${command}  `, [], catalog, "queue")).toEqual({ kind })
+    expect(submission(`/${command} now`, [], catalog, "steer")).toEqual({ kind: "invalid", message: `Use /${command} without arguments.` })
+    const configured = { ...catalog, commands: [...catalog.commands, { name: command }] }
+    expect(submission(`/${command}`, [], configured, "steer")).toEqual({ kind })
+    expect(optionsForTrigger("/", command, configured, []).filter((option) => option.label === `/${command}`)).toHaveLength(1)
+  }
+  expect(submission("/sleepy", [], catalog, "steer")).toMatchObject({ kind: "prompt" })
+  expect(optionsForTrigger("/", "guardrail-decision", catalog, [])).toEqual([])
+})
+
 test("unmatched slash heads, including paths, remain complete ordinary prompts", () => {
   for (const text of ["/Users/me/file.ts explain", "/notacommand hi", "/"])
     expect(submission(text, [], catalog, "steer")).toEqual({ kind: "prompt", input: { text, delivery: "steer" } })

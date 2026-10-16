@@ -1,4 +1,6 @@
 export * as Browser from "./browser"
+import { BrowserOperation } from "./browser/operation"
+import { Hash } from "./util/hash"
 
 import { Browser } from "@ycoding-ai/schema/browser"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -69,6 +71,7 @@ export interface Attachment {
 }
 
 export interface Interface {
+  readonly actionIdentity: (input: Omit<ActionInput, "callID">) => Effect.Effect<BrowserOperation.Identity, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly status: (sessionID: Browser.Tab["sessionID"]) => Effect.Effect<Status, SessionErrors.NotFoundError>
   readonly list: (sessionID: Browser.Tab["sessionID"]) => Effect.Effect<ReadonlyArray<Tab>, SessionErrors.NotFoundError>
   readonly start: (
@@ -127,7 +130,8 @@ const SETTLEMENT_LIMIT = 64
 const LEASE_HELD = "Chrome tab is controlled by another Session; wait for it to release control"
 
 type MutableTab = Types.DeepMutable<Tab> & {
-  elements: Map<string, Browser.Element>
+  pageIdentity: string
+  elements: Map<string, BrowserOperation.Element>
   allowedOrigins?: Set<string>
   leaseSessionID?: Browser.Tab["sessionID"]
 }
@@ -237,7 +241,7 @@ export const layer = (options: Options = {}) =>
       })
 
       function publicTab(tab: MutableTab, sessionID: Browser.Tab["sessionID"]): Tab {
-        const { elements: _elements, allowedOrigins: _allowedOrigins, leaseSessionID, ...info } = tab
+        const { elements: _elements, pageIdentity: _pageIdentity, allowedOrigins: _allowedOrigins, leaseSessionID, ...info } = tab
         return {
           ...info,
           sessionID: tab.mode === "owned" ? tab.sessionID : sessionID,
@@ -617,6 +621,16 @@ export const layer = (options: Options = {}) =>
         return element.destination
       })
 
+      const actionIdentity: Interface["actionIdentity"] = Effect.fn("Browser.actionIdentity")(function* (input) {
+        const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (current.paused || tab.status !== "shared" || tab.generation !== input.generation ||
+          tab.documentGeneration !== input.documentGeneration || tab.observationRevision !== input.observationRevision)
+          return yield* new FenceError({ message: "Chrome tab observation is stale or paused; observe again" })
+        const identity = BrowserOperation.actionIdentity(tab, input.action, tab.elements)
+        if (identity === undefined) return yield* new FenceError({ message: "Semantic target is stale or disabled; observe again" })
+        return identity
+      })
+
       const action = Effect.fn("Browser.action")(function* (input: ActionInput) {
         const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
         if (input.action.type === "group" || input.action.type === "ungroup") {
@@ -845,7 +859,7 @@ export const layer = (options: Options = {}) =>
               id: message.tabID,
               sessionID: current.sessionID,
               title: bounded(message.title, Browser.MAX_TITLE_LENGTH),
-              page,
+              page, pageIdentity: Hash.sha256(message.url),
               status: current.paused ? "paused" : "shared",
               generation: current.generation,
               documentGeneration: message.documentGeneration,
@@ -876,7 +890,7 @@ export const layer = (options: Options = {}) =>
             }
             const owned: MutableTab = {
               id: message.tabID, sessionID: pending.sessionID, mode: "owned",
-              title: bounded(message.title, Browser.MAX_TITLE_LENGTH), page,
+              title: bounded(message.title, Browser.MAX_TITLE_LENGTH), page, pageIdentity: Hash.sha256(message.url),
               status: current.paused ? "paused" : "shared", generation: current.generation,
               documentGeneration: message.documentGeneration, observationRevision: 0,
               ...(current.paused ? { pauseReason: "requested" as const } : {}),
@@ -931,6 +945,7 @@ export const layer = (options: Options = {}) =>
             }
             tab.title = bounded(message.title, Browser.MAX_TITLE_LENGTH)
             tab.page = page
+            tab.pageIdentity = Hash.sha256(message.url)
             tab.documentGeneration = message.documentGeneration
             tab.observationRevision = 0
             tab.elements.clear()
@@ -992,9 +1007,11 @@ export const layer = (options: Options = {}) =>
             }
             tab.title = observation.title
             tab.page = observation.page
+            tab.pageIdentity = Hash.sha256(message.url)
             tab.documentGeneration = observation.documentGeneration
             tab.observationRevision = observation.revision
-            tab.elements = new Map(observation.elements.map((element) => [element.ref, element]))
+            tab.elements = new Map(observation.elements.map((element) => [element.ref, { ...element,
+              identity: BrowserOperation.elementIdentity(message.url, element, message.elements.find((raw) => raw.ref === element.ref)?.destination) }]))
             Deferred.doneUnsafe(pending.deferred, Effect.succeed(observation))
             current.pending = undefined
             return
@@ -1011,6 +1028,7 @@ export const layer = (options: Options = {}) =>
           }
           tab.title = bounded(message.title, Browser.MAX_TITLE_LENGTH)
           tab.page = page
+          tab.pageIdentity = Hash.sha256(message.url)
           tab.documentGeneration = message.documentGeneration
           tab.observationRevision = message.observationRevision
           tab.elements.clear()
@@ -1129,7 +1147,7 @@ export const layer = (options: Options = {}) =>
         return { sessionID: trust.sessionID, serverID: trust.serverID, secret: undefined }
       })
 
-      return Service.of({ status, list, start, open, close, release, observe, clickDestination, action, control, stop, forget, attach })
+      return Service.of({ status, list, start, open, close, release, observe, clickDestination, actionIdentity, action, control, stop, forget, attach })
     }),
   )
 

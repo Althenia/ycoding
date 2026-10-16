@@ -30,6 +30,7 @@ import { ConfigImageAnalyzer } from "./config/image-analyzer"
 import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
+import { ConfigModelFallback } from "./config/model-fallback"
 import { ConfigMemory } from "./config/memory"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
@@ -65,6 +66,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   model: ConfigModel.Selection.pipe(Schema.optional).annotate({
     description: "Default model to use when no session or agent model is selected",
+  }),
+  model_fallbacks: ConfigModelFallback.Info.pipe(Schema.optional).annotate({
+    description:
+      "Up to three models, keyed by provider/model, that rerun a Step in order when that model is unavailable, out of quota, or still failing after its retries",
   }),
   default_agent: Schema.String.pipe(Schema.optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
@@ -127,6 +132,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   question_timeout_seconds: ConfigQuestionTimeout.Seconds.pipe(Schema.optional).annotate({
     description:
       "Seconds an unanswered question, form, or subagent question stays open before it times out (default: 300, 0 disables, max: 86400)",
+  }),
+  auto_answer: Schema.Boolean.pipe(Schema.optional).annotate({
+    description: "Allow automatic question, form and subagent answers in eligible autonomy modes (default: false)",
   }),
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",

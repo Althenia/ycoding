@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { Effect, Schema } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
@@ -105,16 +106,18 @@ it.effect("renders terminal goals as visible Session-state reminders", () =>
   }),
 )
 
-it.effect("reminds an active goal's agent to decide on the user's behalf until the goal is satisfied", () =>
+it.effect("reminds an active goal's agent that automatic answers and model guardrail judgments stay opt-in", () =>
   Effect.sync(() => {
     const reminder = goalReminder({
       mode: "normal",
       yolo: 0,
       goal: { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
     })
-    expect(reminder?.split("\n")).toContain(
-      "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user unless guardrail-decision or sleep is on for this Session family.",
-    )
+    expect(reminder).toContain("Required answers remain manual unless auto_answer is enabled.")
+    expect(reminder).toContain("Model guardrail judgments require guardrails.decide_reviews")
+    expect(reminder).toContain("Both automatic answers and model guardrail judgments default off.")
+    expect(reminder).toContain("a child Session's questions go to its parent Session.")
+    expect(reminder).toContain("Goals do not override these gates.")
   }),
 )
 
@@ -426,51 +429,53 @@ it.effect("does not spend or reset the no-progress budget when ordinary progress
   }),
 )
 
-it.effect("persists the guardrail-decision toggle across goal and YOLO updates", () =>
+it.effect("stored autonomy ignores removed review fields and preserves sleep across goal and YOLO updates", () =>
   Effect.gen(function* () {
     const service = yield* setup
-    expect((yield* service.set({ sessionID, guardrailDecision: true })).guardrailDecision).toBe(true)
-    expect(SessionAutonomy.guardrailDecisionEnabled(yield* service.get(sessionID))).toBe(true)
-    expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(true)
+    const database = yield* Database.Service
+    yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "normal", yolo: 0, guardrailDecision: true,
+      sleep: { priorGuardrailDecision: false } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", yolo: 0, sleep: {} })
     yield* service.setYolo({ sessionID, yolo: 2 })
-    yield* service.setGoal({ sessionID, text: "Keep the toggle" })
-    expect((yield* service.get(sessionID)).guardrailDecision).toBe(true)
-    expect((yield* service.set({ sessionID, guardrailDecision: false })).guardrailDecision).toBe(false)
-    expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(false)
+    yield* service.setGoal({ sessionID, text: "Verify the stored state" })
+    expect(yield* service.get(sessionID)).toMatchObject({ yolo: 2, sleep: {} })
+    expect(yield* service.set({ sessionID, sleep: false })).not.toHaveProperty("guardrailDecision")
+    yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "yolo", yolo: true, guardrailDecision: true,
+      sleep: { priorGuardrailDecision: true } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", yolo: 2, sleep: {} })
   }),
 )
 
 for (const prior of [true, false] as const) {
-  it.effect(`sleep enables guardrail decisions and wake restores prior toggle ${prior}`, () =>
+  it.effect(`stored legacy sleep ${prior} decodes as a presence marker and wake clears it`, () =>
     Effect.gen(function* () {
       const service = yield* setup
-      yield* service.set({ sessionID, guardrailDecision: prior })
+      const database = yield* Database.Service
+      yield* database.db.update(SessionTable).set({ autonomy: sql`${JSON.stringify({ mode: "normal", yolo: 0, guardrailDecision: prior,
+        sleep: { priorGuardrailDecision: prior } })}` }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
       const asleep = yield* service.set({ sessionID, sleep: true })
-      expect(asleep.sleep).toEqual({ priorGuardrailDecision: prior })
+      expect(asleep.sleep).toEqual({})
       expect(SessionAutonomy.isAsleep(asleep)).toBe(true)
-      expect(SessionAutonomy.guardrailDecisionEnabled(asleep)).toBe(true)
       expect(yield* service.isAsleep(sessionID)).toBe(true)
-      expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(true)
       const woken = yield* service.set({ sessionID, sleep: false })
       expect(woken.sleep).toBeUndefined()
-      expect(woken.guardrailDecision).toBe(prior)
+      expect(woken).not.toHaveProperty("guardrailDecision")
       expect(yield* service.isAsleep(sessionID)).toBe(false)
-      expect(yield* service.guardrailDecisionEnabled(sessionID)).toBe(prior)
     }),
   )
 }
 
-it.effect("wake restores the pre-sleep setting even if the toggle changes while asleep", () =>
+it.effect("sleep and wake preserve the existing YOLO level", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.set({ sessionID, sleep: true })
-    yield* service.set({ sessionID, guardrailDecision: true })
+    yield* service.set({ sessionID, yolo: 3 })
     const woken = yield* service.set({ sessionID, sleep: false })
-    expect(woken.guardrailDecision).toBe(false)
+    expect(woken.yolo).toBe(3)
   }),
 )
 
-it.effect("child Sessions inherit guardrail-decision and sleep from the root family", () =>
+it.effect("child Sessions inherit sleep from the root family", () =>
   Effect.gen(function* () {
     const service = yield* setup
     const { db } = yield* Database.Service
@@ -516,10 +521,8 @@ it.effect("child Sessions inherit guardrail-decision and sleep from the root fam
     expect(yield* service.isAsleep(childID)).toBe(false)
     yield* service.set({ sessionID, sleep: true })
     expect(yield* service.isAsleep(childID)).toBe(true)
-    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
     yield* service.set({ sessionID, sleep: false })
-    yield* service.set({ sessionID, guardrailDecision: true })
-    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
+    expect(yield* service.isAsleep(childID)).toBe(false)
   }),
 )
 
@@ -545,7 +548,6 @@ it.effect("taskless family members inherit sleep without widening the existing Y
     expect(yield* service.canAutoAnswer(childID)).toBe(false)
     yield* service.set({ sessionID, sleep: true })
     expect(yield* service.isAsleep(childID)).toBe(true)
-    expect(yield* service.guardrailDecisionEnabled(childID)).toBe(true)
     expect(yield* service.canAutoPermission(childID)).toBe(false)
   }),
 )

@@ -2,6 +2,7 @@ export * as SessionOrchestration from "./orchestration"
 import { SessionUsageAttribution } from "./usage-attribution"
 
 import type { Model } from "@ycoding-ai/schema/model"
+import { SessionReview } from "@ycoding-ai/schema/session-review"
 import {
   Question,
   QuestionID,
@@ -39,7 +40,9 @@ import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
-import { isTerminal, readTeamView, renderTeamView, taskFromRow } from "./orchestration-view"
+import { isTerminal, readTeamView, renderTeamView, taskFromRow, withReviewState } from "./orchestration-view"
+import { SessionReviewFold } from "./review-fold"
+import { SessionPending } from "./pending"
 
 export { isTerminal, readTeamView, renderTeamView }
 const PageSize = 10
@@ -140,7 +143,9 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
           .all()
           .pipe(Effect.orDie)
         const hasMore = rows.length > limit
-        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map((row) => ({ ...taskFromRow(row.task), pinnedAt: row.pinnedAt ?? undefined }))
+        const selected = previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)
+        const tasks = yield* withReviewState(db, selected.map((row) => taskFromRow(row.task)))
+        const data = tasks.map((task, index) => ({ ...task, pinnedAt: selected[index]?.pinnedAt ?? undefined }))
         const first = data[0]
         const last = data.at(-1)
         const previousCursor =
@@ -289,12 +294,14 @@ export const authorize = Effect.fn("SessionOrchestration.authorize")(function* (
   parentID: SessionSchema.ID,
   target: Agent.ID,
   source: ModelSource,
+  operationDigest: string,
 ) {
   const permission = yield* Permission.Service
   yield* permission.assert({
     action: "subagent",
     resources: [target],
     save: [target],
+    metadata: { operationDigest },
     sessionID: parentID,
     agent: source.agent,
     source: { type: "tool", messageID: source.messageID, callID: source.callID },
@@ -327,11 +334,21 @@ export interface Interface {
     readonly questionID: QuestionID
     readonly text?: string
     readonly data?: Schema.Json
+    readonly origin?: "human-review"
+    readonly reviewDecision?: { readonly itemID: SessionReview.ID; readonly decision: SessionReview.Decision }
   }) => Effect.Effect<Task, AnswerError>
   readonly cancel: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
   }) => Effect.Effect<Task, ControlError>
+  readonly notice: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly shellID: string
+    readonly text: string
+    readonly description?: string
+    readonly metadata?: Record<string, unknown>
+    readonly resume: boolean
+  }) => ReturnType<Session.Interface["synthetic"]>
   readonly resume: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
@@ -354,6 +371,11 @@ export interface Interface {
     parentID: SessionSchema.ID,
   ) => Effect.Effect<ReturnType<typeof renderTeamView>, Session.NotFoundError>
   readonly recover: Effect.Effect<void>
+  readonly resolveRecovery: (input: {
+    readonly childID: SessionSchema.ID
+    readonly itemID: SessionReview.ID
+    readonly choice: "continue" | "stop"
+  }) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
 }
 
 export type Error =
@@ -397,6 +419,13 @@ const layer = Layer.effect(
       yield* Fiber.interrupt(timer)
     })
 
+    const stopDeferredTimer = yield* events.listen((event) => {
+      if (event.type !== SessionEvent.Review.Deferred.type) return Effect.void
+      const data = Schema.decodeUnknownSync(SessionEvent.Review.Deferred.data)(event.data)
+      return data.kind === "subagent_question" ? disarmQuestionTimer(data.sessionID) : Effect.void
+    })
+    yield* Effect.addFinalizer(() => stopDeferredTimer)
+
     const questionTimeoutSeconds = Effect.fn("SessionOrchestration.questionTimeoutSeconds")(function* (
       childID: SessionSchema.ID,
     ) {
@@ -409,28 +438,43 @@ const layer = Layer.effect(
       return ConfigQuestionTimeout.seconds(Config.latest(yield* config.value.entries(), "question_timeout_seconds"))
     })
 
+    type SleepAnswerOutcome =
+      | { readonly type: "answer"; readonly text: string }
+      | {
+          readonly type: "defer"
+          readonly reason: "disabled" | "free_text" | "refused" | "low_confidence" | "error" | "timeout"
+          readonly choice?: string
+          readonly confidence?: number
+        }
+
     const sleepAnswer = Effect.fn("SessionOrchestration.sleepAnswer")(function* (input: {
       childID: SessionSchema.ID
       text: string
       data?: Schema.Json
-    }) {
+    }): Effect.fn.Return<SleepAnswerOutcome> {
       const options = questionOptions(input.data)
-      if (options.length === 0) return SessionAutonomy.AutomaticAnswer
+      if (options.length === 0) return { type: "defer", reason: "free_text" }
       const child = yield* sessions
         .get(input.childID)
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
-      if (!child) return SessionAutonomy.AutomaticAnswer
+      if (!child) return { type: "defer", reason: "error" }
       const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
-      if (decision._tag === "Failure") return SessionAutonomy.AutomaticAnswer
-      const judgment = yield* DecisionChoice.choose(decision.value, {
+      if (decision._tag === "Failure") return { type: "defer", reason: "error" }
+      const outcome = yield* DecisionChoice.chooseDetailed(decision.value, {
         sessionID: input.childID,
         name: "subagent_question",
         instructions:
-          "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal falls back to the safest reasonable default.",
+          "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user's review box.",
         state: { question: input.text, options },
         choices: options.map((value) => ({ value })),
       })
-      return judgment?.value ?? SessionAutonomy.AutomaticAnswer
+      if (outcome.type === "judgment") return { type: "answer", text: outcome.value }
+      return {
+        type: "defer",
+        reason: outcome.reason,
+        ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+      }
     })
 
     const task = Effect.fn("SessionOrchestration.task")(function* (childID: SessionSchema.ID) {
@@ -469,7 +513,7 @@ const layer = Layer.effect(
     const current = Effect.fn("SessionOrchestration.current")(function* (childID: SessionSchema.ID) {
       const row = yield* task(childID)
       if (!row) return yield* Effect.die(new Error(`Projected task missing: ${childID}`))
-      return taskFromRow(row)
+      return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
     })
 
     const expireQuestion = Effect.fn("SessionOrchestration.expireQuestion")((
@@ -482,6 +526,7 @@ const layer = Layer.effect(
           timers.delete(childID)
           const row = yield* task(childID)
           if (!row || row.state !== "waiting" || row.question_id !== questionID) return
+          if (yield* SessionReviewFold.ownsQuestion(db, childID, questionID)) return
           yield* sessions
             .synthetic({
               id: SessionOrchestrationIdentity.launch(
@@ -553,6 +598,7 @@ const layer = Layer.effect(
             Effect.gen(function* () {
               const latest = yield* task(row.session_id)
               if (!latest || latest.state !== "waiting" || latest.question_id === null) return
+              if (yield* SessionReviewFold.ownsQuestion(db, latest.session_id, latest.question_id)) return
               if (latest.owner_pid !== process.pid && ShellLedger.alive(processes.value, latest.owner_pid, latest.owner_started)) return
               yield* armQuestionTimer(
                 latest.session_id,
@@ -570,7 +616,7 @@ const layer = Layer.effect(
         return (yield* task(childID)) !== undefined
       }),
       get: Effect.fn("SessionOrchestration.get")(function* (parentID, childID) {
-        return taskFromRow(yield* owned(parentID, childID))
+        return (yield* withReviewState(db, [taskFromRow(yield* owned(parentID, childID))]))[0]!
       }),
       launch: Effect.fn("SessionOrchestration.launch")((input) => {
         const ids = SessionOrchestrationIdentity.launch(
@@ -621,7 +667,7 @@ const layer = Layer.effect(
                 existing.delivery === "steer"
               ) {
                 if (existing.state === "starting") return yield* start
-                return taskFromRow(existing)
+                return (yield* withReviewState(db, [taskFromRow(existing)]))[0]!
               }
               return yield* new ConflictError({ message: `Conflicting launch retry for ${ids.childID}` })
             }
@@ -670,7 +716,7 @@ const layer = Layer.effect(
           .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.session_id))
           .all()
           .pipe(Effect.orDie)
-        return rows.map(taskFromRow)
+        return yield* withReviewState(db, rows.map(taskFromRow))
       }),
       page: Effect.fn("SessionOrchestration.page")((input) => page(db, input)),
       send: Effect.fn("SessionOrchestration.send")((input) =>
@@ -679,6 +725,10 @@ const layer = Layer.effect(
             const row = yield* owned(input.parentID, input.childID)
             if (row.state !== "running" && !isTerminal(row.state))
               return yield* new ConflictError({ message: `Cannot send to task in ${row.state}` })
+            if ((yield* SessionReviewFold.stoppedRecovery(db, input.childID)) !== undefined)
+              return yield* new ConflictError({
+                message: `Subagent ${input.childID} was stopped after a service restart; only the user can continue it`,
+              })
             yield* sessions
               .synthetic({
                 id: input.messageID,
@@ -702,7 +752,7 @@ const layer = Layer.effect(
                     : new ConflictError({ message: `Conflicting parent message for ${input.childID}` }),
                 ),
               )
-            const pending = yield* db
+            const pending = db
               .select({ id: SessionPendingTable.id })
               .from(SessionPendingTable)
               .where(
@@ -710,10 +760,13 @@ const layer = Layer.effect(
               )
               .get()
               .pipe(Effect.orDie)
-            if (isTerminal(row.state)) {
-              if (!pending) return taskFromRow(row)
-              yield* publish(input.childID, { type: "started" })
+            if (!isTerminal(row.state)) {
+              yield* execution.wake(input.childID)
+              const latest = yield* task(input.childID)
+              if (!latest || !isTerminal(latest.state)) return yield* current(input.childID)
             }
+            if (!(yield* pending)) return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
+            yield* publish(input.childID, { type: "started" })
             yield* execution.wake(input.childID)
             return yield* current(input.childID)
           }),
@@ -727,6 +780,13 @@ const layer = Layer.effect(
               return yield* new QuestionNotFoundError({ childID: input.childID, questionID: input.questionID })
             if (row.state !== "waiting")
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
+            if (input.origin === "human-review" && input.reviewDecision === undefined)
+              return yield* new InvalidRequestError({ message: "A human-review delivery requires a review decision" })
+            if (
+              input.origin !== "human-review" &&
+              (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID))
+            )
+              return yield* new ConflictError({ message: `question ${input.questionID} awaits the user's review` })
             if (input.text === undefined && input.data === undefined)
               return yield* new InvalidRequestError({ message: "An answer requires text or data" })
             const id = SessionOrchestrationIdentity.launch(
@@ -734,23 +794,58 @@ const layer = Layer.effect(
               row.parent_assistant_message_id,
               row.tool_call_id,
             ).answer(input.questionID)
+            const causedBy = yield* SessionUsageAttribution.dispatch(db, input.parentID)
+            const data = {
+              text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: input.text, data: input.data })}`,
+              description: "Parent subagent answer",
+              metadata: {
+                source: "subagent_parent",
+                parentID: input.parentID,
+                childID: input.childID,
+                kind: "answer",
+                questionID: input.questionID,
+              },
+            }
+            const change = { type: "question_answered" as const, answer: { questionID: input.questionID, text: input.text, data: input.data } }
+            const review = input.reviewDecision
+            if (review) {
+              if (input.origin !== "human-review") return yield* new InvalidRequestError({ message: "A review decision requires human-review delivery" })
+              const item = (yield* SessionReviewFold.fold(db, [input.childID])).find((item) => item.itemID === review.itemID)
+              const matches = (item: SessionReviewFold.Folded | undefined) => item?.kind === "subagent_question" && item.withdrawn === undefined &&
+                "questionID" in item.origin && item.origin.questionID === input.questionID &&
+                (item.decision === undefined || Hash.json(item.decision) === Hash.json(review.decision))
+              if (!matches(item)) return yield* new ConflictError({ message: "The child question is not owned by this review decision" })
+              const prior = yield* SessionPending.lookup(db, input.childID, id).pipe(
+                Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict
+                  ? Effect.fail(new ConflictError({ message: `Conflicting answer for ${input.questionID}` })) : Effect.die(defect)),
+              )
+              if (prior && (prior.type !== "synthetic" || Hash.json({ data: prior.data, delivery: prior.delivery }) !== Hash.json({ data, delivery: "steer" })))
+                return yield* new ConflictError({ message: `Conflicting answer for ${input.questionID}` })
+              const committed = yield* events.publishBatch([
+                ...(prior === undefined ? [{ definition: SessionEvent.InputAdmitted, data: { sessionID: input.childID, inputID: id, causedBy,
+                  input: SessionPending.Message.make({ type: "synthetic", data, delivery: "steer" }) } }] : []),
+                { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change } },
+                ...(item?.decision === undefined ? [{ definition: SessionEvent.Review.Decided,
+                  data: { sessionID: input.childID, itemID: review.itemID, decision: review.decision } }] : []),
+              ], { when: Effect.gen(function* () {
+                const latest = yield* task(input.childID)
+                if (latest?.state !== "waiting" || latest.question_id !== input.questionID) return false
+                const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
+                if (!owner || owner.archived !== null) return false
+                const current = (yield* SessionReviewFold.fold(db, [input.childID])).find((item) => item.itemID === review.itemID)
+                if (!matches(current) || (current?.decision === undefined) !== (item?.decision === undefined)) return false
+                const admitted = yield* SessionPending.lookup(db, input.childID, id).pipe(Effect.catchDefect((defect) =>
+                  defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false as const) : Effect.die(defect)))
+                if (admitted === false || (admitted === undefined) !== (prior === undefined)) return false
+                return admitted === undefined || (admitted.type === "synthetic" && Hash.json({ data: admitted.data, delivery: admitted.delivery }) === Hash.json({ data, delivery: "steer" }))
+              }) })
+              if (committed.length === 0) return yield* new ConflictError({ message: `Question ${input.questionID} changed before answer delivery` })
+              yield* disarmQuestionTimer(input.childID)
+              yield* execution.wake(input.childID)
+              return yield* current(input.childID)
+            }
             yield* sessions
-              .synthetic({
-                id,
-                sessionID: input.childID,
-                causedBy: yield* SessionUsageAttribution.dispatch(db, input.parentID),
-                text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: input.text, data: input.data })}`,
-                description: "Parent subagent answer",
-                metadata: {
-                  source: "subagent_parent",
-                  parentID: input.parentID,
-                  childID: input.childID,
-                  kind: "answer",
-                  questionID: input.questionID,
-                },
-                delivery: "steer",
-                resume: false,
-              })
+              .synthetic({ id, sessionID: input.childID, causedBy, ...data, delivery: "steer", resume: false })
               .pipe(
                 Effect.mapError((error) =>
                   error._tag === "Session.NotFoundError"
@@ -758,10 +853,7 @@ const layer = Layer.effect(
                     : new ConflictError({ message: `Conflicting answer for ${input.questionID}` }),
                 ),
               )
-            yield* publish(input.childID, {
-              type: "question_answered",
-              answer: { questionID: input.questionID, text: input.text, data: input.data },
-            })
+            yield* publish(input.childID, change)
             yield* disarmQuestionTimer(input.childID)
             yield* execution.wake(input.childID)
             return yield* current(input.childID)
@@ -772,14 +864,58 @@ const layer = Layer.effect(
         locks.withLock(input.childID)(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
-            if (row.state === "cancelled") return taskFromRow(row)
+            if (row.state === "cancelled") return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
             if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
             yield* disarmQuestionTimer(input.childID)
+            if (row.question_id) {
+              const folded = yield* SessionReviewFold.fold(db, [input.childID])
+              yield* Effect.forEach(
+                folded.filter(
+                  (item) => SessionReviewFold.isOpen(item) && "questionID" in item.origin && item.origin.questionID === row.question_id,
+                ),
+                (item) => SessionReviewFold.withdrawItem(events, input.childID, item.itemID, "task_closed"),
+                { discard: true },
+              )
+            }
             yield* publish(input.childID, { type: "cancel_requested" })
             yield* execution.interrupt(input.childID)
             yield* publish(input.childID, { type: "cancelled" })
             return yield* current(input.childID)
+          }),
+        ),
+      ),
+      notice: Effect.fn("SessionOrchestration.notice")((input) =>
+        locks.withLock(input.sessionID)(
+          Effect.gen(function* () {
+            const message = {
+              id: SessionMessage.ID.make(
+                `msg_shell_notice_${Hash.sha256(`${input.sessionID}\0${input.shellID}`).slice(0, 24)}`,
+              ),
+              sessionID: input.sessionID,
+              text: input.text,
+              description: input.description,
+              metadata: input.metadata,
+            }
+            const row = yield* task(input.sessionID)
+            const admitted = yield* sessions.synthetic({ ...message, resume: false })
+            if (!input.resume || (row && row.state !== "running" && row.state !== "completed")) return admitted
+            const pending = db
+              .select({ id: SessionPendingTable.id })
+              .from(SessionPendingTable)
+              .where(and(eq(SessionPendingTable.id, message.id), eq(SessionPendingTable.session_id, input.sessionID)))
+              .get()
+              .pipe(Effect.orDie)
+            if (!(yield* pending) || (yield* sessions.get(input.sessionID)).revert) return admitted
+            if (row?.state !== "completed") {
+              yield* execution.wake(input.sessionID)
+              if (!row) return admitted
+              if ((yield* task(input.sessionID))?.state !== "completed" || !(yield* pending)) return admitted
+            }
+            if ((yield* SessionReviewFold.fold(db, [input.sessionID])).some(SessionReviewFold.isOpen)) return admitted
+            yield* publish(input.sessionID, { type: "started" })
+            yield* execution.wake(input.sessionID)
+            return admitted
           }),
         ),
       ),
@@ -798,7 +934,7 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
             if (!pending) return yield* new ConflictError({ message: `No durable pending work for ${input.childID}` })
             yield* execution.wake(input.childID)
-            return taskFromRow(row)
+            return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
           }),
         ),
       ),
@@ -836,9 +972,39 @@ const layer = Layer.effect(
             const canAuto = yield* autonomy
               .canAutoAnswer(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            if (asleep || canAuto
-            ) {
-              const answerText = asleep ? yield* sleepAnswer({ childID, text, data }) : SessionAutonomy.AutomaticAnswer
+            const child = yield* sessions.get(childID).pipe(
+              Effect.mapError(() => new TaskNotFoundError({ childID })),
+            )
+            const entries = yield* Config.Service.pipe(
+              Effect.provide(locations.get(child.location)),
+              Effect.flatMap((config) => config.entries()),
+            )
+            const autoAnswer = Config.latest(entries, "auto_answer") === true
+            const sleepOutcome: SleepAnswerOutcome | undefined = !asleep ? undefined : autoAnswer
+              ? yield* sleepAnswer({ childID, text, data })
+              : { type: "defer" as const, reason: "disabled" as const }
+            if (sleepOutcome?.type === "defer") {
+              const limit = Config.latest(entries, "guardrails")?.max_pending_reviews ?? 16
+              yield* SessionReviewFold.open(db, events, {
+                sessionID: childID,
+                kind: "subagent_question",
+                reason: sleepOutcome.reason,
+                ...(sleepOutcome.choice === undefined ? {} : { choice: sleepOutcome.choice }),
+                ...(sleepOutcome.confidence === undefined ? {} : { confidence: sleepOutcome.confidence }),
+                origin: { questionID: question.id },
+                payload: { type: "subagent_question", text: question.text, ...(data === undefined ? {} : { data }) },
+                limit,
+              }).pipe(
+                Effect.catchTag("SessionReview.FullError", () =>
+                  Effect.fail(new ConflictError({ message: "the user's review box is full" })),
+                ),
+              )
+              const deferredQuestion = Question.make({ ...question, deferred: true })
+              yield* publish(childID, { type: "question_asked", question: deferredQuestion })
+              return { question: deferredQuestion, autoAnswered: false }
+            }
+            if (autoAnswer && (asleep || canAuto)) {
+              const answerText = sleepOutcome?.type === "answer" ? sleepOutcome.text : SessionAutonomy.AutomaticAnswer
               yield* sessions
                 .synthetic({
                   id: SessionOrchestrationIdentity.launch(
@@ -884,7 +1050,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const row = yield* task(childID)
             if (!row) return yield* new TaskNotFoundError({ childID })
-            if (["cancelled", "completed", "failed", "lost"].includes(row.state)) return taskFromRow(row)
+            if (["cancelled", "completed", "failed", "lost"].includes(row.state)) return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
             if (row.state !== "running")
               return yield* new ConflictError({ message: `Cannot settle task in ${row.state}` })
             yield* publish(
@@ -909,7 +1075,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const row = yield* task(childID)
             if (!row) return yield* new TaskNotFoundError({ childID })
-            if (row.background) return taskFromRow(row)
+            if (row.background) return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
             if (row.state !== "running")
               return yield* new ConflictError({ message: `Cannot background task in ${row.state}` })
             yield* publish(childID, { type: "backgrounded" })
@@ -971,7 +1137,7 @@ const layer = Layer.effect(
                   .get()
                   .pipe(Effect.orDie)
                 if (isTerminal(latest.state)) {
-                  if (!pending) return
+                  if (!pending || (yield* SessionReviewFold.stoppedRecovery(db, latest.session_id)) !== undefined) return
                   yield* publish(latest.session_id, { type: "started" })
                   yield* execution.wake(latest.session_id)
                   return
@@ -992,6 +1158,71 @@ const layer = Layer.effect(
           { concurrency: 4, discard: true },
         )
       }),
+      resolveRecovery: Effect.fn("SessionOrchestration.resolveRecovery")((input) =>
+        locks.withLock(input.childID)(
+          Effect.gen(function* () {
+            const row = yield* task(input.childID)
+            if (!row) return yield* new TaskNotFoundError({ childID: input.childID })
+            const item = (yield* SessionReviewFold.fold(db, [input.childID])).find((candidate) => candidate.itemID === input.itemID)
+            if (!item || item.kind !== "recovery" || item.payload.type !== "recovery" || item.withdrawn !== undefined || !("questionID" in item.origin))
+              return yield* new ConflictError({ message: `Review item ${input.itemID} is not an open restart recovery` })
+            const questionID = item.origin.questionID
+            const stopped = SessionReviewFold.isStoppedRecovery(item)
+            if (stopped ? input.choice !== "continue" || row.state !== "lost" : item.decision !== undefined || row.state !== "waiting" || row.question_id !== questionID)
+              return yield* new ConflictError({ message: `Restart recovery ${input.itemID} cannot be decided in ${row.state}` })
+            const tools = item.payload.tools.map((tool) => tool.name).join(", ")
+            const decided = {
+              definition: SessionEvent.Review.Decided,
+              data: { sessionID: input.childID, itemID: input.itemID, decision: { kind: "recovery" as const, choice: input.choice } },
+            }
+            const inputID = SessionReviewFold.promptID(input.itemID)
+            const unchanged = Effect.gen(function* () {
+              const latest = yield* task(input.childID)
+              if (latest?.revision !== row.revision || latest.state !== row.state) return false
+              const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
+              if (!owner || owner.archived !== null) return false
+              const current = (yield* SessionReviewFold.fold(db, [input.childID])).find((candidate) => candidate.itemID === input.itemID)
+              if (!current || current.withdrawn !== undefined || Hash.json(current.decision ?? null) !== Hash.json(item.decision ?? null)) return false
+              const admitted = yield* SessionPending.lookup(db, input.childID, inputID).pipe(
+                Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false as const) : Effect.die(defect)),
+              )
+              return admitted === undefined
+            })
+            const committed = input.choice === "stop"
+              ? yield* events.publishBatch([
+                  { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change: {
+                    type: "lost",
+                    excerpt: `The user stopped this subagent after a service restart interrupted ${tools}; their effects are unknown. Only the user can continue it.`,
+                  } } },
+                  decided,
+                ], { when: unchanged })
+              : yield* events.publishBatch([
+                  { definition: SessionEvent.InputAdmitted, data: {
+                    sessionID: input.childID,
+                    inputID,
+                    causedBy: yield* SessionUsageAttribution.dispatch(db, row.parent_id),
+                    input: SessionPending.Message.make({
+                      type: "synthetic",
+                      data: {
+                        text: `The user chose Continue after a service restart interrupted ${tools}. Their effects are unknown and they were not retried; check their results before repeating any of them.`,
+                        description: "Restart recovery · continue",
+                        metadata: { review: { itemID: input.itemID, kind: "recovery" } },
+                      },
+                      delivery: "steer",
+                    }),
+                  } },
+                  { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change: stopped
+                    ? { type: "started" as const }
+                    : { type: "question_answered" as const, answer: { questionID, text: "Continue" } } } },
+                  decided,
+                ], { when: unchanged })
+            if (committed.length === 0)
+              return yield* new ConflictError({ message: `Restart recovery ${input.itemID} changed before its decision` })
+            if (input.choice === "continue") yield* execution.wake(input.childID)
+            return yield* current(input.childID)
+          }),
+        ),
+      ),
     }
     // Started in the background because resolving each task's Location config builds Location
     // layers, which may depend on this service.

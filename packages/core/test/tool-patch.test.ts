@@ -34,12 +34,16 @@ let editApproved = false
 let afterEditApproval = (): Effect.Effect<void> => Effect.void
 
 const guardrail = Layer.mock(SessionGuardrail.Service, {
-  assert: () => Effect.succeed({ release: Effect.void }),
+  assert: (input) => Effect.sync(() => {
+    expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
+    return { release: Effect.void }
+  }),
 })
 
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => {

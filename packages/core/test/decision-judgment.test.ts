@@ -74,6 +74,25 @@ const wire = `decisions:
     unknown,refusal,null,null,null,0`
 const toon = (value: unknown) => Array.from(encodeLines(value)).join("\n")
 
+test("graded choices require exactly one bounded evidence grade per typed choice and no pick", () => {
+  const question = { type: "choice", name: "grade", instructions: "Grade each alternative", grade: true,
+    choices: [{ value: false }, { value: "false" }] } as const
+  const request = { state: null, questions: [question] }
+  const grades = [{ choice: false, confidence: 0, evidence: "Unsupported" }, { choice: "false", confidence: 1, evidence: "e".repeat(500) }]
+  const answer = { name: "grade", type: "choice", answer: null, choice: null, score: null, confidence: 0, grades } as const
+  const document = { decisions: { version: 1, answers: [answer] } } as const
+  expect(DecisionJudgment.parse(toon(document), request)).toEqual(Result.succeed(document))
+  for (const invalid of [
+    { ...answer, choice: false }, { ...answer, confidence: 0.8 }, { ...answer, grades: undefined },
+    { ...answer, grades: grades.slice(1) }, { ...answer, grades: [grades[0], grades[0]] },
+    { ...answer, grades: [...grades, { choice: "extra", confidence: 0.9, evidence: "Extra" }] },
+    ...[-0.01, 1.01, NaN, Infinity].map(confidence => ({ ...answer, grades: [{ ...grades[0], confidence }, grades[1]] })),
+    ...["", " ", "e".repeat(501)].map(evidence => ({ ...answer, grades: [{ ...grades[0], evidence }, grades[1]] })),
+  ]) expect(Result.isFailure(DecisionJudgment.parse(toon({ decisions: { version: 1, answers: [invalid] } }), request))).toBe(true)
+  expect(Result.isFailure(DecisionJudgment.parse(toon(document), { ...request, questions: [{ ...question, grade: false }] }))).toBe(true)
+  expect(Result.isSuccess(DecisionJudgment.parse(DecisionJudgment.template(request), request))).toBe(true)
+})
+
 test("parses literal TOON with Unicode, false, zero score, and explicit refusal", () => {
   const result = DecisionJudgment.parse(wire, input)
   expect(result).toEqual(Result.succeed(document))

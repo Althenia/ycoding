@@ -1,6 +1,7 @@
 import { Session } from "@ycoding-ai/core/session"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionReview } from "@ycoding-ai/core/session/review"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
@@ -10,6 +11,7 @@ import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../src/api"
 import { SessionHandler } from "../src/handlers/session"
 import { GuardrailHandler } from "../src/handlers/guardrail"
+import { ReviewHandler } from "../src/handlers/review"
 import { LocationMiddleware, type LocationServices } from "../src/location"
 import { SessionLocationMiddleware } from "../src/middleware/session-location"
 import { processIdentityLayer } from "../src/process-identity"
@@ -21,6 +23,7 @@ export function sessionHttp(
   options: {
     orchestration?: Partial<SessionOrchestration.Interface>
     guardrail?: Partial<SessionGuardrail.Interface>
+    review?: Partial<SessionReview.Interface>
     onLocation?: () => void
     location?: Pick<Context.Context<never>, "mapUnsafe">
   } = {},
@@ -39,6 +42,7 @@ export function sessionHttp(
     }),
     Layer.mock(SessionOrchestration.Service, options.orchestration ?? {}),
     Layer.mock(SessionGuardrail.Service, options.guardrail ?? {}),
+    Layer.mock(SessionReview.Service, options.review ?? {}),
     processIdentityLayer(sessionHttpEpoch),
     Layer.succeed(
       SessionLocationMiddleware,
@@ -52,9 +56,9 @@ export function sessionHttp(
   )
   const handler = HttpRouter.toWebHandler(
     HttpApiBuilder.layer(
-      HttpApi.make("server").add(Api.groups["server.session"]).add(Api.groups["server.guardrail"]),
+      HttpApi.make("server").add(Api.groups["server.session"]).add(Api.groups["server.guardrail"]).add(Api.groups["server.review"]),
     ).pipe(
-      Layer.provide(Layer.merge(SessionHandler, GuardrailHandler).pipe(Layer.provide(services))),
+      Layer.provide(Layer.mergeAll(SessionHandler, GuardrailHandler, ReviewHandler).pipe(Layer.provide(services))),
       Layer.provide(HttpServer.layerServices),
     ),
   )

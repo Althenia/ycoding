@@ -36,6 +36,7 @@ const permission = (assert: Permission.Interface["assert"] = () => Effect.void) 
   Layer.succeed(
     Permission.Service,
     Permission.Service.of({
+      deferPending: () => Effect.void,
       evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
       assert,
       ask: () => Effect.die("unused"),

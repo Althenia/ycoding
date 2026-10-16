@@ -117,7 +117,9 @@ for (const agent of ["god", "zeus", "btw"]) {
     const result = await run({ agent: Agent.ID.make(agent), child: agent !== "god" })
     expect(result.requests).toHaveLength(1)
     expect(result.requests[0].tools.map((tool) => tool.name)).toContain("decision")
-    expect(JSON.stringify([result.requests[0].system, result.requests[0].messages])).toContain("bounded typed judgment from a hidden helper model")
+    const instructions = JSON.stringify([result.requests[0].system, result.requests[0].messages])
+    expect(instructions).toContain("bounded typed judgments from the hidden helper")
+    expect(instructions).toContain("grade: true")
     expect(result.judgments).toEqual([])
   })
 }

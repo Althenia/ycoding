@@ -174,13 +174,16 @@ describe("structured decision documentation", () => {
     expect(JSON.stringify(findDocPage("configuration/agents")?.sections)).toContain("`decision`")
   })
 
-  test("documents explicit judgments and user-enabled runtime delegation with thresholds and fallback", () => {
+  test("documents explicit judgments and runtime grading with thresholds and fallback", () => {
     const tools = findDocPage("configuration/tools")
     const text = JSON.stringify(tools?.sections)
     expect(text).toContain("Agent judgments use `decision`")
-    expect(text).toContain("/guardrail-decision or /sleep")
+    expect(text).toContain("during /sleep")
+    expect(text).not.toContain("/guardrail-decision")
     expect(text).toContain("confidence 0.8 or higher")
-    expect(text).toContain("automatic fallback")
+    expect(text).toContain("auto_answer: true (default false)")
+    expect(text).toContain("guardrails.decide_reviews: true (default false)")
+    expect(text).not.toContain("automatic fallback")
     expect(text).toContain("permission ceilings")
     expect(text).toContain("owner choices")
     expect(text).toContain("insufficient evidence")
@@ -216,12 +219,47 @@ describe("structured decision documentation", () => {
     ]) expect(guardrails).toContain(rule)
     expect(guardrails).not.toContain("standard.review.broad-deletion")
     expect(guardrails).not.toContain("standard.review.publish")
-    expect(guardrails).toContain("Without guardrail-decision or sleep")
+    expect(guardrails).toContain("While awake")
+    expect(guardrails).not.toContain("guardrail-decision")
     expect(guardrails).toContain("case-sensitive")
     expect(guardrails).toContain("YOLO 1–3")
-    expect(guardrails).toContain("fresh human reply")
+    expect(guardrails).toContain("human handoff")
     expect(guardrails).toContain("decision model")
-    expect(guardrails).toContain("confidence 0.8 or higher")
+    expect(guardrails).toContain("one graded call")
+  })
+
+  test("guardrail documentation pins per-choice thresholds and the hard-review delegation setting", () => {
+    const blocks = findDocPage("configuration/guardrails")?.sections.flatMap((section) => section.blocks) ?? []
+    const thresholds = blocks.find((block) => block.kind === "table" && block.head[0] === "Choice")
+    expect(thresholds?.kind === "table" ? thresholds.rows : undefined).toEqual([
+      ["Approve all", "Ordinary reviews offering Always", "`0.9`", "Grant the offered Always approval."],
+      ["Approve", "Ordinary reviews", "`0.8`", "Approve once."],
+      ["Approve", "Hard reviews", "`0.95`", "Approve once."],
+      ["Reject", "Ordinary and hard reviews", "`0.8`", "Reject the action."],
+    ])
+    const settings = blocks.find((block) => block.kind === "table" && block.head[0] === "Field")
+    const hard = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_hard_reviews`") : undefined
+    expect(hard?.slice(0, 3)).toEqual(["`guardrails.decide_hard_reviews`", "boolean", "`true`"])
+    expect(hard?.[3]).toContain("humans while awake")
+    expect(hard?.[3]).toContain("review box while asleep")
+    const master = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_reviews`") : undefined
+    expect(master?.slice(0, 3)).toEqual(["`guardrails.decide_reviews`", "boolean", "`false`"])
+    expect(master?.[3]).toContain("review box while asleep")
+    const options = findDocPage("configuration")?.sections.flatMap((section) => section.blocks) ?? []
+    const answer = options.flatMap((block) => (block.kind === "table" ? block.rows : [])).find((row) => row[0] === "`auto_answer`")
+    expect(answer?.slice(0, 3)).toEqual(["`auto_answer`", "boolean", "`false`"])
+  })
+
+  test("current usage docs call level zero Manual and distinguish hard reviews from YOLO automation", () => {
+    const remote = findDocPage("usage/remote")
+    const control = remote?.sections.flatMap((section) => section.blocks).find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
+    expect(control?.kind === "table" ? control.rows[0]?.[0] : undefined).toBe("Manual")
+    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/yolo", "configuration/guardrails", "configuration/tools"]) {
+      const text = JSON.stringify(findDocPage(slug)?.sections)
+      expect(text).not.toMatch(/hard reviews (?:always |still )?require a (?:fresh )?human/i)
+      expect(text).not.toContain("unless /sleep delegates")
+      expect(text).not.toContain("when /sleep is on")
+    }
   })
 })
 

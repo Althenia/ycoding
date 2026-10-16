@@ -66,6 +66,7 @@ const projects = Layer.succeed(
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
+    deferPending: () => Effect.void,
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: () => Effect.void,
     ask: () => Effect.die("unused"),

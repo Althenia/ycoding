@@ -15,6 +15,7 @@ export const BuiltinInstruction = Schema.Literals([
   "decision-use",
   "task-completion",
   "memory",
+  "model-guidance",
 ])
 export type BuiltinInstruction = typeof BuiltinInstruction.Type
 

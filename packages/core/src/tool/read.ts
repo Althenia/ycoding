@@ -15,6 +15,7 @@ import { SessionInstructions } from "../session/instructions"
 import { AbsolutePath } from "../schema"
 import { ReadToolFileSystem } from "./read-filesystem"
 import { Tool } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "read"
 const FILENAME = "AGENTS.md"
@@ -44,12 +45,14 @@ export const authorize = Effect.fn("ReadTool.authorize")(function* (
     readonly messageID: string
     readonly callID: string
   },
+  operationDigest: string,
 ) {
   const source = { type: "tool" as const, messageID: context.messageID, callID: context.callID }
   const target = yield* services.mutation.resolve({ path: file, kind: "directory" })
   if (target.externalDirectory)
     yield* services.permission.assert({
       ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
+      metadata: { operationDigest },
       sessionID: context.sessionID,
       agent: context.agent,
       source,
@@ -58,6 +61,7 @@ export const authorize = Effect.fn("ReadTool.authorize")(function* (
   const type = yield* services.reader.inspect(absolute)
   yield* services.permission.assert({
     action: name,
+    metadata: { operationDigest },
     resources: [target.resource],
     save: ["*"],
     sessionID: context.sessionID,
@@ -103,7 +107,7 @@ export const Plugin = {
             },
             execute: (input, context) => {
               return Effect.gen(function* () {
-                const { target, absolute, type } = yield* authorize({ mutation, permission, reader }, input.path, context)
+                const { target, absolute, type } = yield* authorize({ mutation, permission, reader }, input.path, context, Hash.json(input))
                 const content =
                   type === "directory"
                     ? yield* reader.list(absolute, { offset: input.offset, limit: input.limit })

@@ -6,6 +6,7 @@ import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { SessionID } from "./session-id.js"
 import { statics } from "./schema.js"
+import { SessionReviewID } from "./session-review-id.js"
 
 export const ID = Schema.String.check(Schema.isStartsWith("que")).pipe(
   Schema.brand("Question.ID"),
@@ -90,4 +91,15 @@ const TimedOut = ephemeral({
     requestID: ID,
   },
 })
-export const Event = { Asked, Replied, Rejected, TimedOut, Definitions: inventory(Asked, Replied, Rejected, TimedOut) }
+const Deferred = ephemeral({
+  type: "question.deferred",
+  schema: { sessionID: SessionID, requestID: ID, itemID: SessionReviewID },
+})
+export const Event = {
+  Asked,
+  Replied,
+  Rejected,
+  TimedOut,
+  Deferred,
+  Definitions: inventory(Asked, Replied, Rejected, TimedOut, Deferred),
+}

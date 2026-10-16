@@ -20,6 +20,7 @@ import { resolveThemeFile } from "../src/theme/resolve"
 import { toolLifecyclePresentation } from "../src/routes/session/activity-row"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
 import { createEventStream, createFetch, json, type FetchHandler, sessionSnapshot } from "./fixture/tui-client"
+import { saveScreenCapture } from "./fixture/screen-capture"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
 
@@ -754,7 +755,7 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
     width: 200, height: 50, args: { sessionID }, settle: "asleep",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
     route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: { mode: "normal", yolo: 0, guardrailDecision: true, sleep: { priorGuardrailDecision: false } } })
+      ? Response.json({ data: { mode: "normal", yolo: 0, sleep: {} } })
       : base(url),
   })
   try {
@@ -842,8 +843,32 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
   let autonomy: SessionAutonomyState = { mode: "normal", yolo: 0 }
   const writes: unknown[] = []
   const awakeWrites: boolean[] = []
-  const dismissals = [{ sessionID, created: 2, eventID: "evt_dismissed_restored", ruleID: "standard.review.force-push", confidence: 0.95 }]
-  const base = routeFor([])
+  const dismissals: Array<{
+    sessionID: string
+    created: number
+    eventID: string
+    ruleID: string
+    confidence: number
+    source?: { messageID: string; callID: string }
+  }> = [{ sessionID, created: 2, eventID: "evt_dismissed_restored", ruleID: "standard.review.force-push", confidence: 0.95, source: { messageID: "msg_restored_tool", callID: "call_restored" } }]
+  const base = routeFor([
+    {
+      id: "msg_restored_tool",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "anthropic", id: "claude-opus-5" },
+      content: [
+        {
+          type: "tool",
+          id: "call_restored",
+          name: "shell",
+          state: { status: "completed", input: { command: "git push --force origin main" }, content: [], structured: {} },
+          time: { created: 1, ran: 1, completed: 2 },
+        },
+      ],
+      time: { created: 1 },
+    },
+  ])
   const screen = await renderScreen({
     width: 200,
     height: 50,
@@ -863,14 +888,12 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     route: async (url, request) => {
       if (url.pathname === `/api/session/${sessionID}/autonomy`) {
         if (request.method === "PUT") {
-          const value = (await request.json()) as { guardrailDecision?: boolean; sleep?: boolean }
+          const value = (await request.json()) as { sleep?: boolean }
           writes.push(value)
-          if (value.guardrailDecision !== undefined)
-            autonomy = { ...autonomy, guardrailDecision: value.guardrailDecision }
           if (value.sleep === true)
-            autonomy = { ...autonomy, sleep: { priorGuardrailDecision: autonomy.guardrailDecision === true } }
+            autonomy = { ...autonomy, sleep: {} }
           if (value.sleep === false && autonomy.sleep)
-            autonomy = { ...autonomy, guardrailDecision: autonomy.sleep?.priorGuardrailDecision, sleep: undefined }
+            autonomy = { ...autonomy, sleep: undefined }
         }
         return json({ data: autonomy })
       }
@@ -885,7 +908,10 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
             counters: [],
             invalidFiles: [],
             decisions: [
-              { sessionID, created: 3, requestID: "grq_restored", reply: "once", choice: "approve", confidence: 0.85 },
+              { sessionID, created: 3, requestID: "grq_restored", reply: "once", choice: "approve", confidence: 0.85,
+                grades: [{ choice: "approve", confidence: 0.85, evidence: "A scoped release operation" }, { choice: "reject", confidence: 0.01, evidence: "No destructive effect" }],
+                ruleIDs: ["custom.review.release", "standard.review.outside-repository"],
+                source: { messageID: "msg_restored_tool", callID: "call_restored" } },
               { sessionID, created: 4, requestID: "grq_low", reply: "reject", choice: "approve", confidence: 0.79 },
               { sessionID, created: 5, requestID: "grq_threshold", reply: "reject", choice: "approve", confidence: 0.799999 },
               { sessionID, created: 6, requestID: "grq_error", reply: "reject" },
@@ -912,6 +938,22 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     expect(screen.frame()).toContain("confidence unreported")
     expect(screen.frame()).toContain("match verifier · not a real match · 0.95")
     expect(screen.frame()).toContain("standard.review.force-push")
+    expect(screen.frame()).not.toContain("command git push --force origin main")
+    expect(screen.frame()).not.toContain("A scoped release operation")
+    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
+    await frame("rule custom.review.release")
+    expect(screen.frame()).toContain("rule standard.review.outside-repository")
+    expect(screen.frame()).toContain("command git push --force origin main")
+    expect(screen.frame()).toContain("grade approve (selected) 0.85 · A scoped release operation")
+    expect(screen.frame()).toContain("grade reject 0.01 · No destructive effect")
+    await saveScreenCapture("guardrail-provenance-200", screen)
+    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
+    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("match verifier · not a real match · 0.95")))
+    await frame("command git push --force origin main")
+    expect(screen.frame()).toContain("tool shell")
+    expect(screen.frame()).toContain("rule standard.review.force-push")
+    expect(screen.frame()).toContain("outcome match verifier · not a real match · 0.95")
+    await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
     await screen.waitForEventStream()
     const liveDismissal = { sessionID, created: 99, eventID: "evt_dismissed_live", ruleID: "standard.review.git-destructive", confidence: 0.91 }
     dismissals.push(liveDismissal)
@@ -919,12 +961,12 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     await frame("match verifier · not a real match · 0.91")
     expect(screen.colorOf("match verifier")).toBeDefined()
     expect(screen.colorOf("match verifier")).toEqual(screen.colorOf("decision model approved once"))
-    await slash("/guardrail-decision")
-    await frame("Guardrail decision on")
     await slash("/sleep")
     await frame("asleep")
+    await frame("Configured automation applies; rest go to review box.")
+    expect(screen.frame()).not.toContain("Decision model answers")
     await screen.waitForEventStream()
-    autonomy = { ...autonomy, guardrailDecision: true, sleep: undefined }
+    autonomy = { ...autonomy, sleep: undefined }
     screen.events.emit({
       id: "evt_family_wake",
       created: 100,
@@ -936,12 +978,11 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     while (screen.lines()[1]?.includes("asleep") && Date.now() < deadline) await Bun.sleep(10)
     expect(screen.lines()[1]).not.toContain("asleep")
     await slash("/wake")
-    await frame("Awake; pre-sleep autonomy restored")
+    await frame("Awake; sleep mode is off")
     expect(autonomy.sleep).toBeUndefined()
-    expect(autonomy.guardrailDecision).toBe(true)
     await slash("/keep-awake")
     await frame("Idle and lid-closed sleep held off")
-    expect(writes).toEqual([{ guardrailDecision: true }, { sleep: true }, { sleep: false }])
+    expect(writes).toEqual([{ sleep: true }, { sleep: false }])
     expect(awakeWrites).toEqual([true])
   } finally {
     await screen.dispose()
@@ -1665,7 +1706,7 @@ test("renders subagent notifications as compact safe activity rows", async () =>
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(subagentNotificationTranscript),
-    settle: "subagent",
+    settle: (screen) => screen.captureCharFrame().split("\n").some((line) => line.includes("subagent") && line.includes("completed")),
   })
 
   try {
@@ -1681,6 +1722,34 @@ test("renders subagent notifications as compact safe activity rows", async () =>
     expect(screen.frame()).not.toContain("Subagent notification")
     expect(screen.frame()).not.toContain("Child completed after reviewing provider usage.")
     expect(screen.frame()).not.toContain("ses_sensitive_child")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("renders a resumed subagent notification once with its own type, not a generic update", async () => {
+  const resumed = [
+    {
+      id: "msg_subagent_resumed",
+      type: "synthetic",
+      text: "Child resumed after restart.",
+      description: "Child resumed after restart.",
+      metadata: { source: "subagent_notification", childID: "ses_sensitive_child", type: "resumed", revision: 5 },
+      time: { created: 2 },
+    },
+  ] as SessionMessageInfo[]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(resumed),
+    settle: (screen) => screen.captureCharFrame().split("\n").some((line) => line.includes("subagent") && line.includes("resumed")),
+  })
+  try {
+    const rows = screen.lines().filter((line) => line.includes("subagent") && line.includes("resumed"))
+    expect(rows).toHaveLength(1)
+    expect(screen.frame()).not.toContain("updated")
+    expect(screen.frame()).not.toContain("ses_sensitive_child")
+    expect(screen.frame()).not.toContain("Child resumed after restart.")
   } finally {
     await screen.dispose()
   }

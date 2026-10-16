@@ -11,6 +11,7 @@ else test("the server-owned connector writes a bridge diagnostic to the server l
     const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-diagnostic-"))
     const env: Record<string, string | undefined> = { ...process.env,
       HOME: root,
+      YCODING_TEST_HOME: root,
       XDG_STATE_HOME: path.join(root, "state"),
       XDG_DATA_HOME: path.join(root, "data"),
       XDG_CONFIG_HOME: path.join(root, "config"),
@@ -91,16 +92,18 @@ async function runChild() {
   const fiber = Effect.runFork(ServerProcess.run({ mode, hostname: "127.0.0.1", port }).pipe(
     Effect.provide(Observability.layer({ client: "cli" })),
   ))
+  let settled: unknown
+  Effect.runFork(Fiber.await(fiber).pipe(Effect.tap((exit) => Effect.sync(() => { settled = exit }))))
   try {
     const ready = Date.now() + 10_000
     let status = ""
-    while (Date.now() < ready && !status.includes(`"state":"${expected}"`)) {
+    while (Date.now() < ready && settled === undefined && !status.includes(`"state":"${expected}"`)) {
       status = await fetch(`http://127.0.0.1:${port}/api/remote`, {
         headers: { authorization: `Basic ${Buffer.from("ycoding:test-password").toString("base64")}` },
       }).then((response) => response.text()).catch(() => "")
       if (!status.includes(`"state":"${expected}"`)) await Bun.sleep(25)
     }
-    if (!status.includes(`"state":"${expected}"`)) throw new Error(`isolated ${mode} remote connector did not settle: ${status.slice(0, 300)}`)
+    if (!status.includes(`"state":"${expected}"`)) throw new Error(`isolated ${mode} remote connector did not settle: ${status.slice(0, 300)}${settled === undefined ? "" : ` server fiber exited: ${JSON.stringify(settled).slice(0, 2000)}`}`)
     const deadline = Date.now() + 10_000
     let line = ""
     const wanted = expected === "error" ? "authorization_rejected" : "remote event authorization queue filled"

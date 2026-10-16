@@ -28,12 +28,10 @@ const questions = AppNodeBuilder.build(
       Layer.mock(Config.Service, {
         entries: () =>
           Effect.sync(() =>
-            configuredTimeout === undefined
-              ? []
-              : [
+            [
                   new Config.Document({
                     type: "document",
-                    info: new Config.Info({ question_timeout_seconds: configuredTimeout }),
+                    info: new Config.Info({ auto_answer: true, ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
                   }),
                 ],
           ),
@@ -253,7 +251,7 @@ describe("Question", () => {
     }),
   )
 
-  it.effect("sleep falls back to the first option when the decision model refuse or fails", () =>
+  it.effect("sleep defers to the review box when the decision model refuse or fails", () =>
     Effect.gen(function* () {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
@@ -274,7 +272,8 @@ describe("Question", () => {
           },
         ],
       })
-      expect(answers).toEqual({ status: "answered", answers: [["One"]] })
+      expect(answers.status).toBe("deferred")
+      expect(yield* service.list()).toEqual([])
     }),
   )
 

@@ -14,6 +14,7 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPClient } from "@ycoding-ai/core/mcp/client"
 import { MCPSkills } from "@ycoding-ai/core/mcp/skills"
 import { Permission } from "@ycoding-ai/core/permission"
+import { Hash } from "@ycoding-ai/core/util/hash"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
 import { Session } from "@ycoding-ai/core/session"
@@ -165,6 +166,7 @@ describe("MCP skill model-facing integration", () => {
           const permission = Layer.succeed(
             Permission.Service,
             Permission.Service.of({
+              deferPending: () => Effect.void,
               evaluateEffective: () => Effect.die("unused"),
               assert: (input) =>
                 Effect.sync(() => assertions.push(input)).pipe(
@@ -230,7 +232,9 @@ describe("MCP skill model-facing integration", () => {
                 settle: unavailable,
                 background: unavailable,
                 teamView: unavailable,
+                notice: unavailable,
                 recover: unavailable(),
+                resolveRecovery: unavailable,
               },
               location: { agent: { list: unavailable } },
             }),
@@ -273,6 +277,14 @@ describe("MCP skill model-facing integration", () => {
             })
             expect(Array.isArray(decodedOutput.entry?.resources)).toBe(true)
             expect(server.state.readCalls).toBe(1)
+
+            const metadata = assertions.at(-1)?.metadata
+            server.replaceSkills([{ ...skill, files: skill.files.toReversed() }])
+            yield* settleTool(registry, {
+              sessionID, ...toolIdentity,
+              call: { type: "tool-call", id: "call-reordered-load", name: SkillTool.name, input: { id } },
+            })
+            expect(assertions.at(-1)?.metadata).toEqual(metadata)
 
             messages.push(
               SessionMessage.Assistant.make({
@@ -325,6 +337,11 @@ describe("MCP skill model-facing integration", () => {
             })
             expect(server.state.getCalls).toBe(getCalls)
             expect(assertions.at(-1)?.resources).toEqual(approved)
+            const entry = decodedOutput.entry
+            if (!entry || entry.resources === "dynamic") throw new Error("expected static manifest")
+            const resources = entry.resources.toSorted((a, b) => a.uri.localeCompare(b.uri) || a.digest.localeCompare(b.digest) || a.size - b.size)
+            expect(assertions.at(-1)?.metadata).toMatchObject({ manifest: resources,
+              operationDigest: Hash.json({ action: "resource", id, entry: { ...entry, resources }, uri: "skill://git-workflow/references/GUIDE.md" }) })
 
             const reloaded = yield* settleTool(registry, {
               sessionID,

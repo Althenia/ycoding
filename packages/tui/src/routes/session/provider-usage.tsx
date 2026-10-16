@@ -23,6 +23,7 @@ import { BrandMark } from "../../component/logo"
 import { Locale } from "../../util/locale"
 import { QuotaForecastBlock } from "./usage-cost"
 import { matchingQuotaForecast } from "../../util/usage-accounting"
+import { ModelIncidents, type ModelIncidentLoaders } from "./model-incidents"
 import {
   PROVIDER_USAGE_VIEWS,
   ProviderUsageReports,
@@ -135,6 +136,12 @@ export function ProviderUsageScreen() {
       onBack={back}
       onRefresh={refresh}
       loadReport={(input) => client.api.usage.report(input)}
+      incidents={{
+        report: (input) => client.api.incident.report(input),
+        recent: (input) => client.api.incident.recent(input),
+        guidance: (input) => client.api.incident.guidance.get(input),
+        clear: (input) => client.api.incident.guidance.clear(input),
+      }}
     />
   )
 }
@@ -153,6 +160,7 @@ export function ProviderUsageScreenContent(props: {
   onRefresh?: () => void
   initialTab?: ProviderUsageView
   loadReport?: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>
+  incidents?: ModelIncidentLoaders
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -172,6 +180,10 @@ export function ProviderUsageScreenContent(props: {
     const current = view()
     if (current === "overview" || current === "usage") return undefined
     return current
+  })
+  const tableView = createMemo(() => {
+    const current = reportView()
+    return current === "incidents" ? undefined : current
   })
   const visibleViews = createMemo(() => usageNavigationWindow(view(), dimensions().width))
   let simpleScroll: ScrollBoxRenderable | undefined
@@ -301,7 +313,7 @@ export function ProviderUsageScreenContent(props: {
         </Show>
       </scrollbox>
       </Show>
-      <Show when={reportView()}>{(current) => (
+      <Show when={tableView()}>{(current) => (
         <ProviderUsageReports
           view={current()}
           refresh={reportRefresh()}
@@ -309,10 +321,13 @@ export function ProviderUsageScreenContent(props: {
           load={props.loadReport}
         />
       )}</Show>
+      <Show when={view() === "incidents"}>
+        <ModelIncidents refresh={reportRefresh()} now={props.now} load={props.incidents} />
+      </Show>
       </box>
       <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
         <text fg={theme.text.subdued}>
-          {reportView() ? "Retained analytics · not a bill" : view() === "overview" ? "Backend analytics · retained request history" : "Provider-reported quota windows"}
+          {view() === "incidents" ? "Retained model incidents · backend-wide" : reportView() ? "Retained analytics · not a bill" : view() === "overview" ? "Backend analytics · retained request history" : "Provider-reported quota windows"}
         </text>
         <box flexGrow={1} />
         <text fg={theme.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>

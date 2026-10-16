@@ -14,6 +14,7 @@ import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { ToolRegistry } from "./registry"
+import { Hash } from "../util/hash"
 
 /**
  * Registry namespace and permission action names for MCP tools.
@@ -72,11 +73,15 @@ export const layer = Layer.effectDiscard(
               outputSchema: tool.outputSchema as JsonSchema.JsonSchema | undefined,
               execute: (input, context) =>
                 Effect.gen(function* () {
+                  const requestedBackground = (input as Record<string, unknown> | undefined)?.background === true
+                  const args = Object.fromEntries(
+                    Object.entries((input ?? {}) as Record<string, unknown>).filter(([key]) => key !== "background"),
+                  )
                   yield* permission.assert({
                     action: name(tool.server, tool.name),
                     resources: ["*"],
                     save: ["*"],
-                    metadata: {},
+                    metadata: { operationDigest: Hash.json({ server: tool.server, tool: tool.name, arguments: args }) },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source: {
@@ -85,16 +90,12 @@ export const layer = Layer.effectDiscard(
                       callID: context.callID,
                     },
                   })
-                  const requestedBackground = (input as Record<string, unknown> | undefined)?.background === true
-                  const args = Object.fromEntries(
-                    Object.entries((input ?? {}) as Record<string, unknown>).filter(([key]) => key !== "background"),
-                  )
                   const reservation = backgroundable
-                    ? yield* guardrail.assert({
+                    ? yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                         sessionID: context.sessionID,
                         action: "mcp_execute",
                         resources: [`${tool.server}/${tool.name}`],
-                        metadata: { arguments: Object.keys(args) },
+                        metadata: { arguments: Object.keys(args).sort(), operationDigest: Hash.json({ server: tool.server, tool: tool.name, arguments: args }) },
                       })
                     : { release: Effect.void }
                   const resultRef = yield* Ref.make<MCP.ToolResult | undefined>(undefined)
@@ -186,11 +187,13 @@ export const layer = Layer.effectDiscard(
                     content,
                   }
                 }).pipe(
-                  Effect.mapError((error) =>
-                    error instanceof ToolFailure
-                      ? error
-                      : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
-                  ),
+                  Effect.mapError((error) => {
+                    if (error instanceof ToolFailure) return error
+                    const review = SessionGuardrail.reviewMessage(error)
+                    return new ToolFailure(review
+                      ? { message: review, error }
+                      : { message: `Unable to execute ${name(tool.server, tool.name)}` })
+                  }),
                 ),
             }),
             name(tool.server, tool.name),

@@ -9,6 +9,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Decision } from "@ycoding-ai/core/decision"
+import { Database } from "@ycoding-ai/core/database/database"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Location } from "@ycoding-ai/core/location"
@@ -306,6 +307,7 @@ export const skillsMcpLayer = (url: string) => {
     ),
     Layer.provide(
       Layer.mergeAll(
+        Database.layer({ path: ":memory:" }),
         Layer.succeed(
           Config.Service,
           Config.Service.of({ diagnostics: () => Effect.succeed([]),

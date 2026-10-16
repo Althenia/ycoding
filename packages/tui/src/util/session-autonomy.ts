@@ -13,14 +13,10 @@ export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
   return 0
 }
 
-export type AutonomyDecision = "you" | "yolo" | "goal" | "decision"
+export type AutonomyDecision = "you" | "yolo" | "goal" | "asleep"
 
-export function isAsleep(state: SessionAutonomyState): boolean {
+export function isAsleep(state: { sleep?: unknown }): boolean {
   return state.sleep !== undefined && state.sleep !== null
-}
-
-export function guardrailDecisionEnabled(state: SessionAutonomyState): boolean {
-  return state.guardrailDecision === true || isAsleep(state)
 }
 
 export function autonomyDecision(
@@ -29,12 +25,11 @@ export function autonomyDecision(
 ): AutonomyDecision {
   const level = yoloLevel(state)
   const activeGoal = state.goal?.status === "active"
-  const automatedByYolo =
-    action === "permissions" || action === "guardrails" ? level >= 1 : level >= 2
-  if (action === "guardrails" && guardrailDecisionEnabled(state)) return "decision"
-  if (action === "questions" && isAsleep(state)) return "decision"
+  const automatedByYolo = action === "permissions" || action === "guardrails" ? level >= 1 : level >= 2
+  if (action !== "permissions" && isAsleep(state)) return "asleep"
   if (automatedByYolo) return "yolo"
-  if (activeGoal && action !== "guardrails") return "goal"
+  if (action === "guardrails") return "you"
+  if (activeGoal) return "goal"
   return "you"
 }
 
@@ -42,25 +37,39 @@ export function autonomyLevelDescription(level: YoloLevel) {
   return [
     "manual",
     "permissions and ordinary guardrails",
-    "permissions, ordinary guardrails, and questions/forms",
-    "permissions, ordinary guardrails, and questions/forms (same as YOLO 2)",
+    "permissions, ordinary guardrails, and questions/forms when auto_answer is on",
+    "permissions, ordinary guardrails, and questions/forms when auto_answer is on (same as YOLO 2)",
   ][level]
 }
 
-export function autonomyDecisionLabel(
-  state: SessionAutonomyState,
-  action: "permissions" | "guardrails" | "questions",
-) {
+export function autonomyDecisionLabel(state: SessionAutonomyState, action: "permissions" | "guardrails" | "questions") {
   const decision = autonomyDecision(state, action)
-  if (decision === "you") return "ask you"
-  if (decision === "decision") return "auto · decision"
-  return decision === "goal" ? "auto · goal" : "auto"
+  if (action === "permissions") return decision === "goal" ? "auto · goal" : decision === "yolo" ? `auto · YOLO ${yoloLevel(state)}` : "you"
+  if (action === "guardrails")
+    return `ordinary · ${
+      decision === "asleep"
+        ? "review box · decision model if enabled"
+        : decision === "yolo"
+          ? `auto · YOLO ${yoloLevel(state)}`
+          : "you · decision model if enabled"
+    }`
+  if (decision === "asleep") return "review box · decision model if auto_answer on"
+  if (decision === "goal") return "auto · goal · if auto_answer on"
+  if (decision === "yolo") return `auto · YOLO ${yoloLevel(state)} · if auto_answer on`
+  return "you"
+}
+
+export function autonomyModeParts(state: { yolo?: unknown; goal?: { status?: unknown } | null; sleep?: unknown }) {
+  const level = yoloLevel(state)
+  return [
+    level === 0 ? "Manual" : `YOLO ${level}`,
+    ...(state.goal?.status === "active" ? ["goal"] : []),
+    ...(isAsleep(state) ? ["asleep"] : []),
+  ] as const
 }
 
 export function autonomyModeLabel(state: SessionAutonomyState) {
-  const level = yoloLevel(state)
-  const active = state.goal?.status === "active"
-  return `${level === 0 ? "Manual" : `YOLO ${level}`}${active ? " · goal" : ""}${guardrailDecisionEnabled(state) ? " · guardrail decision" : ""}${isAsleep(state) ? " · asleep" : ""}`
+  return autonomyModeParts(state).join(" · ")
 }
 
 export function autonomyProgressLabel(state: SessionAutonomyState) {

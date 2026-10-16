@@ -18,7 +18,7 @@ const it = testEffect(
         read: () =>
           Effect.sync(() => {
             sweeps++
-            return { recordsDays: 7, usageDays: 30, latencyDays: 30 }
+            return { recordsDays: 7, usageDays: 30, latencyDays: 30, incidentDays: 30 }
           }),
       }),
     ],

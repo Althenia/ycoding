@@ -13,6 +13,7 @@ import { Permission } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { Tool } from "./tool"
 import DESCRIPTION from "./patch.txt"
+import { Hash } from "../util/hash"
 
 export const name = "patch"
 
@@ -90,7 +91,7 @@ export const Plugin = {
                     applied.length === 0
                       ? `Unable to apply patch at ${path}`
                       : `Patch partially applied before failing at ${path}. Applied: ${applied.map((item) => item.resource).join(", ")}`
-                  return new ToolFailure({ message: prefix, error })
+                  return new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? prefix, error })
                 }
                 return Effect.gen(function* () {
                   const source = {
@@ -124,6 +125,7 @@ export const Plugin = {
                           metadata: {
                             filepath: target.canonical,
                             parentDir: target.externalDirectory.directory,
+                            operationDigest: Hash.json(input),
                           },
                           sessionID: context.sessionID,
                           agent: context.agent,
@@ -179,6 +181,7 @@ export const Plugin = {
                           save: [moveTarget.externalDirectory.resource],
                           metadata: {
                             filepath: moveTarget.canonical,
+                            operationDigest: Hash.json(input),
                             parentDir: moveTarget.externalDirectory.directory,
                           },
                           sessionID: context.sessionID,
@@ -206,17 +209,18 @@ export const Plugin = {
                       filepath: targets.map((target) => target.resource).join(", "),
                       diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
                       files: patchFiles,
+                      operationDigest: Hash.json(input),
                     },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
                   })
 
-                  const reservation = yield* guardrail.assert({
+                  const reservation = yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: "file_mutation",
                     resources: [...new Set(targets.map((target) => target.canonical))],
-                    metadata: { operation: "patch" },
+                    metadata: { operation: "patch", operationDigest: Hash.json(input) },
                   })
                   yield* Effect.forEach(
                     prepared,

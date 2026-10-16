@@ -10,6 +10,22 @@ const root = (id: string, updated: number, pinned?: number) => ({
   time: { created: updated, updated, ...(pinned === undefined ? {} : { pinned }) },
 })
 
+test("a failed Waiting read leaves Running and recent available and reports Waiting unavailable", async () => {
+  const relay = await startRelayDouble({ handler: (request) => {
+    if (request.operation === "session.status") return { ok: true, value: { running: ["ses_running"], attention: ["ses_waiting"] } }
+    if (request.operation !== "session.list" || request.input?.workspace !== undefined) return "default"
+    if (request.input?.status === "waiting") return { ok: false, code: "internal_error", message: "Waiting inventory unavailable" }
+    return { ok: true, value: { data: [root(request.input?.status === "running" ? "running" : "recent", 1)] } }
+  } })
+  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
+  try {
+    await store.load()
+    await waitFor(() => store.state().carouselStatus === "error")
+    expect(store.state().carouselSessions?.map((row) => row.id)).toEqual(["ses_running", "ses_recent"])
+    expect(store.state().notice).toContain("Waiting inventory unavailable")
+  } finally { store.dispose(); await relay.stop() }
+})
+
 test("carousel ranks every running family before recent roots regardless of pin and caps at ten", async () => {
   const running = [root("running_old", 10, 1), root("running_new", 300)]
   const recent = Array.from({ length: 12 }, (_, index) => root(`recent_${index}`, 290 - index * 10, index === 11 ? 1 : undefined))

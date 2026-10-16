@@ -185,6 +185,8 @@ Models, providers, provider usage, tools, permissions, Session guardrails, instr
 
 `SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects. `ProviderUsage` is Location-scoped and resolves credentials through the existing credential service; it returns normalized, cached snapshots without becoming part of model execution.
 
+`ModelIncident` is a process-global service over the global database: its facts, report, recent reads, per-model guidance watermark, and retention are backend-wide. Only guidance capability (`model-guidance` in `capabilities.builtin_instructions`) resolves through a Location, so the guidance routes carry Location middleware and the report and recent routes do not. Remote guidance operations resolve their Location from the verified Session, never from browser input.
+
 The Location-scoped Shell records process identity and owed completion notices in the global database. At managed startup, `SessionRestart` reconciles dead shell owners before Server readiness. Protocol reports lost Session notices separately from running and failed work; the CLI maps them to root-family attention without resuming a provider request.
 
 ## Event flow
@@ -199,6 +201,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | Process-global                      | execution coordinator, application service nodes                                                           | Core process runtime                    |
 | Process-global durable              | background shell process ownership and lost completion notices                                             | Core shell ledger in the local database |
+| Process-global durable              | model incidents and per-model guidance clear watermarks                                                    | Core `ModelIncident` service            |
 | Location                            | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services                  |
 | Session durable                     | messages, pending prompts, autonomy, orchestration, compaction                                             | Core database and event history         |
 | Project durable                     | project artifacts and project configuration                                                                | Core project-artifact store             |
@@ -217,7 +220,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 ## Constraints
 
 - The product includes only current runtime paths.
-- One logical model step has one explicit provider stream call except documented compaction recovery.
+- One logical model step has one explicit provider stream call per physical attempt; documented retries, compaction recovery, and configured model fallback add attempts within the same Step.
 - Session execution ownership is process-local.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
 - Durable state remains replayable, except message rows and message-only events below a valid local compaction checkpoint and message-only events of settled executions, which history pruning deletes; projected messages are the record for pruned history, and caches remain rebuildable.

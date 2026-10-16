@@ -71,10 +71,37 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
   if (deletion?.decision === "deny") return deletion
   if (deletion) return deletion
   const segments = shellSegments(resource).map((segment) => segment.rawTokens.join(" "))
-  const review =
-    segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment))) ??
-    (!dismissed?.has(databaseReview.id) && databaseReview.pattern.test(command) ? databaseReview : undefined)
-  return review ? { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment: segments.find((segment) => review.pattern.test(segment)) ?? command, resolvedTargets: [] } } : outside
+  const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment)))
+  if (review)
+    return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment: segments.find((segment) => review.pattern.test(segment)) ?? command, resolvedTargets: [] } }
+  const database = dismissed?.has(databaseReview.id) ? undefined : executableDatabaseMention(resource)
+  if (database === undefined) return outside
+  return { ...databaseReview, decision: "ask", hardReview: true, evidence: { matchedSegment: database, resolvedTargets: [] } }
+}
+
+const chainedSeparators = new Set(["; ", "\n ", " && ", " || "])
+
+function executableDatabaseMention(resource: string) {
+  const { segments, comments } = shellScan(resource)
+  const pipelines = segments.reduce<ShellSegment[][]>((groups, segment, index) => {
+    if (index === 0 || chainedSeparators.has(segment.separator)) groups.push([segment])
+    else groups.at(-1)!.push(segment)
+    return groups
+  }, [])
+  const inert = [
+    ...comments,
+    ...pipelines.flatMap((group) =>
+      group.every((segment) => readOnlyShell(resource.slice(segment.start, segment.end)))
+        ? group.map((segment) => [segment.start, segment.end] as const)
+        : [],
+    ),
+  ]
+  const mention = [...resource.matchAll(new RegExp(databaseReview.pattern.source, "gi"))].find(
+    (found) => !inert.some(([start, end]) => found.index >= start && found.index + found[0].length <= end),
+  )
+  if (!mention) return undefined
+  const segment = segments.find((item) => mention.index >= item.start && mention.index < item.end)
+  return segment ? segment.rawTokens.join(" ") : resource.replace(/\s+/g, " ").trim()
 }
 
 function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
@@ -468,6 +495,8 @@ interface ShellSegment {
   readonly connector: Connector
   readonly separator: string
   readonly ranges: ReadonlyArray<string>
+  readonly start: number
+  readonly end: number
 }
 
 function rmOperations(command: string, paths?: Paths): ReadonlyArray<RmOperation> {
@@ -569,7 +598,13 @@ function executable(tokens: ReadonlyArray<string>) {
 }
 
 function shellSegments(command: string): ReadonlyArray<ShellSegment> {
+  return shellScan(command).segments
+}
+
+function shellScan(command: string) {
   const segments: ShellSegment[] = []
+  const comments: Array<readonly [number, number]> = []
+  let segmentStart = 0
   let tokens: string[] = []
   let rawTokens: string[] = []
   let connector: Connector = "always"
@@ -584,6 +619,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
   let linePiped = false
   const pushToken = (end: number) => {
     if (!token) return
+    if (tokens.length === 0) segmentStart = tokenStart
     const operator = tokens.at(-1)?.match(/^\d*<<(-?)$/)
     const attached = token.match(/^\d*<<(-?)([^<].*)$/s)
     tokens.push(token)
@@ -613,7 +649,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
   const pushSegment = (next: Connector, nextSeparator: string, end: number) => {
     pushToken(end)
     if (tokens.length > 0) {
-      segments.push({ tokens, rawTokens, connector, separator, ranges })
+      segments.push({ tokens, rawTokens, connector, separator, ranges, start: segmentStart, end })
       tokens = []
       rawTokens = []
       ranges = []
@@ -647,6 +683,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
     }
     if (character === "#" && !token) {
       const newline = command.indexOf("\n", index)
+      comments.push([index, newline < 0 ? command.length : newline])
       index = newline < 0 ? command.length : newline - 1
       continue
     }
@@ -686,7 +723,7 @@ function shellSegments(command: string): ReadonlyArray<ShellSegment> {
     token += character
   }
   pushSegment("always", "", command.length)
-  return segments
+  return { segments, comments }
 }
 
 function classifyTarget(target: string, workdir: string, paths?: Paths) {

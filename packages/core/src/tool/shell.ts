@@ -17,6 +17,7 @@ import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
 import { Shell } from "../shell"
 import { Tool, type Content } from "./tool"
+import { Hash } from "../util/hash"
 
 export const name = "shell"
 export const AUTO_BACKGROUND_MS = 5 * 60 * 1_000
@@ -186,12 +187,13 @@ export const Plugin = {
               : state === "error"
                 ? (result.info!.error ?? "Command failed")
                 : "Command cancelled"
-          return runtime.session.synthetic({
+          return runtime.orchestration.notice({
             sessionID,
+            shellID,
             text: `<shell id="${callID}" state="${state}" command="${command}">\n${text}\n</shell>`,
             description: command,
             metadata: { source: "shell", state },
-            ...(quiet.delete(shellID) ? { resume: false } : {}),
+            resume: !quiet.delete(shellID),
           }).pipe(
             Effect.catchTag("Session.NotFoundError", () => Effect.void),
             Effect.andThen(runtime.job.noticeAdmitted(callID)),
@@ -255,6 +257,7 @@ export const Plugin = {
                 if (external)
                   yield* permission.assert({
                     ...LocationMutation.externalDirectoryPermission(external),
+                    metadata: { operationDigest: Hash.json(input) },
                     sessionID: context.sessionID,
                     agent: context.agent,
                     source,
@@ -269,6 +272,7 @@ export const Plugin = {
                 yield* permission.assert({
                   action: name,
                   resources: [input.command],
+                  metadata: { workdir: target.canonical, operationDigest: Hash.json(input) },
                   save: [input.command],
                   sessionID: context.sessionID,
                   agent: context.agent,
@@ -280,11 +284,11 @@ export const Plugin = {
 
                 const queued = input.channel === "queue"
                 const reservation = yield* guardrail
-                  .assert({
+                  .assert({ source: { messageID: context.messageID, callID: context.callID },
                     sessionID: context.sessionID,
                     action: name,
                     resources: [input.command],
-                    metadata: { workdir: target.canonical },
+                    metadata: { workdir: target.canonical, operationDigest: Hash.json(input) },
                     holder: context.callID,
                     deferShell: queued,
                   })
@@ -292,7 +296,7 @@ export const Plugin = {
                     Effect.mapError((error) =>
                       error._tag === "Guardrail.CapExceededError"
                         ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
-                        : new ToolFailure({ message: `Session guardrail rejected shell command: ${input.command}`, error }),
+                        : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Session guardrail rejected shell command: ${input.command}`, error }),
                     ),
                   )
                 const start: Effect.Effect<ShellSchema.Info, ToolFailure | Shell.SpawnError> = queued

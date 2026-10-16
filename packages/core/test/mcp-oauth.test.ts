@@ -14,6 +14,7 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { MCPOAuth } from "@ycoding-ai/core/mcp/oauth"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { Database } from "@ycoding-ai/core/database/database"
 import { Context, Deferred, Effect, Fiber, Layer } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -157,6 +158,7 @@ function locationMcp(
     ),
     Layer.provide(
       Layer.mergeAll(
+        Database.layer({ path: ":memory:" }),
         Layer.succeed(
           Config.Service,
           Config.Service.of({

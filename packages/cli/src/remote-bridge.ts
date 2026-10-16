@@ -409,6 +409,7 @@ export class RemoteAgent {
   }
 
   private scheduleStatus() {
+    this.cache.listStatus = undefined
     if (this.state !== "live" || this.statusOwner === undefined) return
     if (this.statusReading === this.connection) {
       this.statusDirty = true
@@ -660,6 +661,14 @@ export class RemoteAgent {
     if (connection === undefined || this.state !== "live") return
     if (typeof event === "object" && event !== null) {
       const type = Reflect.get(event, "type")
+      if (typeof type === "string" && type.startsWith("session.review.")) this.advertise()
+      if (type === "shell.deleted") {
+        if (this.eventStreamGeneration === streamGeneration) {
+          this.advertise()
+          this.scheduleStatus()
+        }
+        return
+      }
       if (type === "session.work.completed") void this.sendCompletion(event, streamGeneration)
       if (typeof type === "string" && (type.startsWith("session.step.") || type.startsWith("session.execution.") ||
         type.startsWith("session.task.") || type.startsWith("session.shell.") || type.startsWith("shell.") ||

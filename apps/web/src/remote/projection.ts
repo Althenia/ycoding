@@ -9,7 +9,7 @@
 import type { Form } from "../../../../packages/schema/src/form"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory, type RemoteUsagePromptCost } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
-import type { Guardrail } from "../../../../packages/schema/src/guardrail"
+import { readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -160,6 +160,7 @@ function readAttachments(value: unknown): readonly MessageAttachment[] {
  * collapsed view a display decision instead of a data-loss point.
  */
 export type ShellOutputView = {
+  readonly status?: string
   readonly text: string
   readonly cursor: number
   readonly size: number
@@ -230,7 +231,7 @@ export type RemoteMessageView =
       readonly error?: string
       readonly retry?: { readonly attempt: number; readonly at: number; readonly code: string }
     }
-  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly created: number }
+  | { readonly kind: "system"; readonly id: string; readonly text: string; readonly source?: string; readonly created: number; readonly guardrail?: DecisionProvenanceView }
   | {
       readonly kind: "synthetic"
       readonly id: string
@@ -297,7 +298,7 @@ export type PendingRequestView =
       readonly resources: readonly string[]
       readonly reason: string
       readonly hardReview: boolean
-      readonly escalation?: Guardrail.Escalation
+      readonly escalation?: DecisionProvenanceView
       readonly metadata?: Readonly<Record<string, unknown>>
       readonly askedAt: number
     }
@@ -307,6 +308,30 @@ export type PendingRequestView =
       readonly form: FormView
       readonly askedAt: number
     }
+
+export type ReviewItemView = {
+  readonly itemID: string
+  readonly sessionID: string
+  readonly rootSessionID: string
+  readonly sessionTitle: string
+  readonly created: number
+  readonly reason: ReviewReason
+  readonly choice?: string
+  readonly confidence?: number
+  readonly grades?: readonly GradeView[]
+  readonly child?: { readonly agent: string; readonly description: string }
+} & (
+  | { readonly kind: "question"; readonly form: FormView; readonly answers: "form" | "questions" }
+  | { readonly kind: "subagent_question"; readonly text: string }
+  | { readonly kind: "guardrail"; readonly action: string; readonly resources: readonly string[]; readonly ruleIDs: readonly string[]; readonly detail: string; readonly hardReview: boolean; readonly directories: readonly string[] }
+  | { readonly kind: "permission"; readonly action: string; readonly resources: readonly string[] }
+  | { readonly kind: "recovery"; readonly tools: readonly RecoveryToolView[] }
+)
+
+export type RecoveryToolView = { readonly messageID: string; readonly callID: string; readonly name: string }
+
+const reviewReasons = ["disabled", "free_text", "refused", "low_confidence", "escalated", "error", "timeout", "sleep_entry", "restart"] as const
+export type ReviewReason = (typeof reviewReasons)[number]
 
 export type SessionAutonomyView = {
   readonly mode: "normal" | "yolo" | "goal"
@@ -318,6 +343,15 @@ export type SessionAutonomyView = {
     readonly noProgress: number
     readonly maxNoProgress: number
   }
+  readonly sleep?: Readonly<Record<string, never>>
+}
+
+export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "yolo" | "goal" | "sleep">): readonly string[] {
+  return [
+    autonomy.yolo === 0 ? "Manual" : `YOLO ${autonomy.yolo}`,
+    ...(autonomy.goal?.status === "active" ? ["goal"] : []),
+    ...(autonomy.sleep === undefined ? [] : ["asleep"]),
+  ]
 }
 
 export type SessionView = {
@@ -339,6 +373,8 @@ export type SessionView = {
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
   readonly promptCosts?: readonly RemoteUsagePromptCost[]
   readonly promptCostState?: "loading" | "ready" | "unavailable"
+  readonly review?: { readonly status: "ready" | "unsupported" | "error"; readonly items: readonly ReviewItemView[] }
+  readonly guardrailDecisions?: readonly GuardrailDecisionView[]
   readonly unhandledEvents: number
   readonly updatedAt?: number
   readonly activeAt?: number
@@ -350,7 +386,7 @@ export type SessionView = {
 
 export type TeamCue =
   | { readonly id: string; readonly kind: "delegated"; readonly childID: string }
-  | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" }
+  | { readonly id: string; readonly kind: "reported"; readonly childID: string; readonly outcome: "completed" | "failed" | "cancelled" | "lost" | "resumed" }
 
 export function readTeamCue(payload: unknown): TeamCue | undefined {
   if (!isRecord(payload) || !isRecord(payload.durable) || !isRecord(payload.data)) return undefined
@@ -372,7 +408,7 @@ export function readTeamCue(payload: unknown): TeamCue | undefined {
   const childID = stringField(metadata.childID)
   const outcome = metadata.type
   const revision = metadata.revision
-  if (childID === undefined || (outcome !== "completed" && outcome !== "failed" && outcome !== "cancelled" && outcome !== "lost") ||
+  if (childID === undefined || (outcome !== "completed" && outcome !== "failed" && outcome !== "cancelled" && outcome !== "lost" && outcome !== "resumed") ||
     typeof revision !== "number" || !Number.isInteger(revision) || revision < 0) return undefined
   return { id: `${id}:${revision}:${childID}`, kind: "reported", childID, outcome }
 }
@@ -382,6 +418,16 @@ export function isGoalSteerAdmission(payload: unknown): boolean {
   const input = payload.data.input
   const autonomy = isRecord(input.data) ? recordField(recordField(input.data.metadata)?.autonomy) : undefined
   return input.type === "synthetic" && autonomy?.goal === true
+}
+
+export function changesReviewItems(payload: unknown): boolean {
+  if (!isRecord(payload) || typeof payload.type !== "string") return false
+  return payload.type.startsWith("session.review.") || payload.type === "session.task.updated" || isSessionStateNotice(payload) ||
+    ["form.deferred", "question.deferred", "guardrail.deferred", "permission.deferred"].includes(payload.type)
+}
+
+export function isSessionStateNotice(payload: unknown): boolean {
+  return isRecord(payload) && payload.type === "session.context.observed" && isRecord(payload.data) && payload.data.source === "session-state"
 }
 
 /** Caps a derived summary (compaction, non-text tool content) so it cannot dominate the page. */
@@ -429,9 +475,11 @@ export function formatPartDuration(ms: number): string {
 }
 
 export function sessionStatusLabel(view: SessionView, now: number, waiting = 0): string {
-  const goal = view.autonomy?.goal?.status === "active"
-  const level = view.autonomy?.yolo ?? 0
-  const prefix = level > 0 && goal ? `YOLO ${level} + Goal · autonomous` : level > 0 ? `YOLO ${level} · auto-approve` : goal ? "Goal · autonomous" : ""
+  const status = sessionExecutionLabel(view, now, waiting)
+  return view.autonomy === undefined ? status : [...autonomyModeParts(view.autonomy), status].join(" · ")
+}
+
+export function sessionExecutionLabel(view: SessionView, now: number, waiting = 0): string {
   const assistant = view.messages.findLast((message) => message.kind === "assistant")
   const retry = view.status === "running" && assistant?.kind === "assistant" && assistant.completed === undefined ? assistant.retry : undefined
   const retryProgress = assistant?.kind === "assistant" && assistant.parts.some((part) => part.kind === "text" && part.text.length > 0 || part.kind === "reasoning" || part.kind === "tool")
@@ -446,8 +494,9 @@ export function sessionStatusLabel(view: SessionView, now: number, waiting = 0):
     : view.status === "running" && activeReasoning ? `thinking${elapsed}`
     : view.status === "running" && waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}`
     : view.status === "running" ? `cooking${elapsed}`
+    : reviewItemsInScope(view).length ? "waiting for your review"
     : waiting ? `waiting · ${waiting} subagent${waiting === 1 ? "" : "s"}` : "ready"
-  return prefix ? `${prefix} · ${status}` : status
+  return status
 }
 
 export function sessionStatusTimed(view: SessionView, waiting = 0): boolean {
@@ -572,9 +621,9 @@ export function noticeSummary(source: string | undefined, text: string): string 
     const value: unknown = JSON.parse(text.slice(prefix.length).split("\n")[0] ?? "")
     if (!isRecord(value)) return unavailable
     if (source === "session-state") {
-      const autonomy = isRecord(value.autonomy) ? value.autonomy : {}
       const count = Array.isArray(value.todos) ? value.todos.length : 0
-      return `Session state · ${typeof autonomy.mode === "string" ? autonomy.mode : "unknown"} · YOLO ${typeof autonomy.yolo === "number" || typeof autonomy.yolo === "boolean" ? autonomy.yolo : 0} · ${count} ${count === 1 ? "task" : "tasks"}`
+      const autonomy = readAutonomy({ data: value.autonomy })
+      return ["Session state", ...(autonomy === undefined ? ["autonomy unreported"] : autonomyModeParts(autonomy)), `${count} ${count === 1 ? "task" : "tasks"}`].join(" · ")
     }
     const children = Array.isArray(value.children) ? value.children : []
     const states = children.flatMap((child) => isRecord(child) && typeof child.state === "string" ? [child.state] : [])
@@ -633,8 +682,11 @@ function readShellOutput(value: unknown): ShellOutputView | undefined {
 }
 
 /** Reads a `session.shell.output` response envelope: `{ data: Shell.Output }`. */
-export function readShellOutputPage(payload: unknown): ShellOutputView | undefined {
-  return readShellOutput(isRecord(payload) ? payload.data : undefined)
+export function readShellOutputPage(payload: unknown): (ShellOutputView & { readonly command?: string }) | undefined {
+  if (!isRecord(payload)) return undefined
+  const page = readShellOutput(payload.data)
+  if (!page) return undefined
+  return { ...page, ...(typeof payload.command === "string" ? { command: payload.command } : {}), ...(typeof payload.status === "string" ? { status: payload.status } : {}) }
 }
 
 /**
@@ -646,9 +698,10 @@ export function mergeShellOutputSnapshot(
   existing: ShellOutputView | undefined,
   page: ShellOutputView,
 ): ShellOutputView {
-  if (existing === undefined || existing.cursor < page.cursor) return page
+  if (existing === undefined || existing.cursor < page.cursor) return { ...page, text: shellOutputTail(page.text) }
   return {
     ...existing,
+    text: shellOutputTail(existing.text),
     size: Math.max(existing.size, page.size),
     truncated: existing.truncated || page.truncated,
   }
@@ -660,6 +713,15 @@ export function mergeShellOutputSnapshot(
  * device read clamps a cursor past its own capture to the captured size, so a reply can
  * name a smaller cursor than the client holds and must never rewind it.
  */
+export const SHELL_OUTPUT_TAIL_LIMIT = 256 * 1024
+
+function shellOutputTail(text: string): string {
+  if (text.length <= SHELL_OUTPUT_TAIL_LIMIT) return text
+  const tail = text.slice(-SHELL_OUTPUT_TAIL_LIMIT)
+  const newline = tail.indexOf("\n")
+  return newline > 0 && newline < SHELL_OUTPUT_TAIL_LIMIT / 2 ? tail.slice(newline + 1) : tail
+}
+
 export function appendShellOutputPage(
   existing: ShellOutputView | undefined,
   page: ShellOutputView,
@@ -668,12 +730,14 @@ export function appendShellOutputPage(
   if (existing !== undefined && existing.cursor > from) {
     return {
       ...existing,
+      text: shellOutputTail(existing.text),
       size: Math.max(existing.size, page.size),
       truncated: existing.truncated || page.truncated,
     }
   }
   return {
-    text: `${existing?.text ?? ""}${page.text}`,
+    text: shellOutputTail(`${existing?.text ?? ""}${page.text}`),
+    ...(page.status === undefined && existing?.status === undefined ? {} : { status: page.status ?? existing?.status }),
     cursor: Math.max(existing?.cursor ?? 0, page.cursor),
     size: Math.max(existing?.size ?? 0, page.size),
     truncated: (existing?.truncated ?? false) || page.truncated,
@@ -807,6 +871,7 @@ export function readAutonomy(payload: unknown): SessionAutonomyView | undefined 
     mode: goal?.status === "active" ? "goal" : mode,
     yolo: readYolo(data.yolo),
     ...(goal === undefined ? {} : { goal }),
+    ...(isRecord(data.sleep) ? { sleep: {} } : {}),
   }
 }
 
@@ -892,6 +957,13 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
           retry: undefined,
         }
       })
+    case "session.step.rerouted":
+      return withAssistant(view, data, now, (message) => ({
+        ...message,
+        model: readModelRef(data.model) ?? message.model,
+        parts: [],
+        retry: undefined,
+      }))
     case "session.step.ended":
       return { ...withAssistant(view, data, now, (message) => ({ ...message, completed: now, retry: undefined })), activeAt }
     case "session.step.failed":
@@ -1003,10 +1075,16 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       }
     case "session.compaction.failed":
       return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
-    case "session.guardrail.escalated": {
+    case "session.guardrail.decided":
+    case "session.guardrail.decided.1": {
+      const decisions = readGuardrailDecisions({ data: { decisions: [{ ...data, sessionID: data.reviewSessionID, created: event.created ?? now }] } }, view.id) ?? []
+      return { ...view, guardrailDecisions: mergeGuardrailDecisions(view.guardrailDecisions ?? [], decisions) }
+    }
+    case "session.guardrail.escalated":
+    case "session.guardrail.escalated.1": {
       if (stringField(data.sessionID) !== view.id) return view
-      const escalation = readEscalation(data) ?? {}
-      return replaceMessage(view, { kind: "system", id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"), text: `Decision model escalated this guardrail review · choice ${escalation.choice ?? "unreported"} · confidence ${escalation.confidence?.toString() ?? "unreported"}`, created: event.created ?? now })
+      const escalation = readGuardrailProvenance(data) ?? {}
+      return replaceMessage(view, { kind: "system", id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"), text: `Decision model escalated this guardrail review · choice ${escalation.choice ?? "unreported"} · confidence ${escalation.confidence?.toString() ?? "unreported"}`, guardrail: escalation, created: event.created ?? now })
     }
     case "session.synthetic":
       return pushMessage(view, {
@@ -1042,6 +1120,8 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         askedAt: now,
       })
     case "permission.replied":
+    case "permission.deferred":
+    case "guardrail.deferred":
       return removeRequest(view, stringField(data.requestID))
     case "guardrail.asked":
       return pushRequest(view, {
@@ -1053,12 +1133,14 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         resources: stringList(data.resources),
         reason: stringField(data.reason) ?? "Guardrail review required",
         hardReview: data.hardReview === true,
-        ...(readEscalation(data.escalation) === undefined ? {} : { escalation: readEscalation(data.escalation) }),
+        ...(readGuardrailProvenance(data.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(data.escalation) }),
         ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
         askedAt: now,
       })
     case "guardrail.replied":
-      return removeRequest(view, stringField(data.requestID))
+      return { ...removeRequest(view, stringField(data.requestID)), ...(data.decidedBy === "decision-model" ? {
+        guardrailDecisions: mergeGuardrailDecisions(view.guardrailDecisions ?? [], readGuardrailDecisions({ data: { decisions: [{ ...data, created: event.created ?? now }] } }, view.id) ?? []),
+      } : {}) }
     case "form.created": {
       const form = readForms([data.form])[0]
       if (form === undefined || form.sessionID !== view.id) return view
@@ -1067,6 +1149,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "form.replied":
     case "form.cancelled":
     case "form.timed_out":
+    case "form.deferred":
       return data.sessionID === view.id ? removeRequest(view, stringField(data.id)) : view
     default:
       return bump(view)
@@ -1142,6 +1225,67 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
       .join(", ")
     return [{ kind: "other" as const, type, summary }]
   })
+}
+
+export function readReviewItems(payload: unknown): readonly ReviewItemView[] | undefined {
+  const data = dataOf(payload)
+  if (!Array.isArray(data)) return undefined
+  return data.flatMap((value): readonly ReviewItemView[] => {
+    if (!isRecord(value) || !isRecord(value.payload)) return []
+    const itemID = stringField(value.itemID)
+    const sessionID = stringField(value.sessionID)
+    const rootSessionID = stringField(value.rootSessionID)
+    const sessionTitle = stringField(value.sessionTitle)
+    const created = numberField(value.created)
+    const reason = reviewReasons.find((entry) => entry === value.reason)
+    const child = isRecord(value.child) && typeof value.child.agent === "string" && typeof value.child.description === "string"
+      ? { agent: value.child.agent, description: value.child.description } : undefined
+    if (itemID === undefined || !itemID.startsWith("rvw_") || sessionID === undefined || rootSessionID === undefined || sessionTitle === undefined || created === undefined || reason === undefined) return []
+    const base = { itemID, sessionID, rootSessionID, sessionTitle, created, reason,
+      ...(typeof value.choice === "string" ? { choice: value.choice } : {}),
+      ...(typeof value.confidence === "number" && Number.isFinite(value.confidence) ? { confidence: value.confidence } : {}),
+      ...(value.kind === "guardrail" ? readGuardrailProvenance(value) : {}),
+      ...(child === undefined ? {} : { child }) }
+    const payload = value.payload
+    const strings = (list: unknown) => Array.isArray(list) && list.every((item) => typeof item === "string") ? list as readonly string[] : undefined
+    if (value.kind === "question" && payload.type === "form") {
+      const form = readForms([{ id: itemID, sessionID, title: payload.title, fields: payload.fields, ...(payload.questionTool === true ? { metadata: { kind: "question" } } : {}) }])[0]
+      return form === undefined ? [] : [{ ...base, kind: "question", form, answers: "form" }]
+    }
+    if (value.kind === "question" && payload.type === "question" && Array.isArray(payload.questions)) {
+      const fields = payload.questions.flatMap((question, index): readonly FormFieldView[] => {
+        if (!isRecord(question) || typeof question.question !== "string" || typeof question.header !== "string" || !Array.isArray(question.options)) return []
+        const options = question.options.flatMap((option) => isRecord(option) && typeof option.label === "string"
+          ? [{ value: option.label, label: option.label, ...(typeof option.description === "string" ? { description: option.description } : {}) }] : [])
+        if (options.length !== question.options.length) return []
+        const custom = question.custom !== false
+        return [question.multiple === true
+          ? { key: `q${index}`, type: "multiselect", title: question.header, description: question.question, options, custom }
+          : { key: `q${index}`, type: "string", title: question.header, description: question.question, ...(options.length ? { options, custom } : {}) }]
+      })
+      if (fields.length === 0 || fields.length !== payload.questions.length) return []
+      return [{ ...base, kind: "question", form: { id: itemID, sessionID, title: "Question", metadata: { kind: "question" }, fields }, answers: "questions" }]
+    }
+    if (value.kind === "subagent_question" && payload.type === "subagent_question" && typeof payload.text === "string") return [{ ...base, kind: "subagent_question", text: payload.text }]
+    if (value.kind === "recovery" && payload.type === "recovery" && Array.isArray(payload.tools) && payload.tools.length > 0) {
+      const tools = payload.tools.flatMap((tool): readonly RecoveryToolView[] => isRecord(tool) && typeof tool.messageID === "string" && typeof tool.callID === "string" && typeof tool.name === "string"
+        ? [{ messageID: tool.messageID, callID: tool.callID, name: tool.name }] : [])
+      return tools.length === payload.tools.length ? [{ ...base, kind: "recovery", tools }] : []
+    }
+    const resources = strings(payload.resources)
+    if (value.kind === "permission" && payload.type === "permission" && typeof payload.action === "string" && resources !== undefined)
+      return [{ ...base, kind: "permission", action: payload.action, resources }]
+    const ruleIDs = strings(payload.ruleIDs)
+    const directories = strings(payload.directories)
+    if (value.kind === "guardrail" && payload.type === "guardrail" && typeof payload.action === "string" && resources !== undefined && ruleIDs !== undefined &&
+      directories !== undefined && typeof payload.reason === "string" && typeof payload.hardReview === "boolean")
+      return [{ ...base, kind: "guardrail", action: payload.action, resources, ruleIDs, detail: payload.reason, hardReview: payload.hardReview, directories }]
+    return []
+  })
+}
+
+export function reviewItemsInScope(view: Pick<SessionView, "id" | "review">): readonly ReviewItemView[] {
+  return view.review?.items.filter((item) => item.rootSessionID === view.id || item.sessionID === view.id) ?? []
 }
 
 /** Reads the browser-safe structural projection of `Form.Info` without importing runtime code. */
@@ -1861,13 +2005,6 @@ export function readPermissionRequests(payload: unknown, now: number): readonly 
   })
 }
 
-function readEscalation(value: unknown): Guardrail.Escalation | undefined {
-  if (!isRecord(value)) return
-  if (value.choice !== undefined && value.choice !== "approve" && value.choice !== "reject" && value.choice !== "escalate") return
-  if (value.confidence !== undefined && (typeof value.confidence !== "number" || !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1)) return
-  return { ...(value.choice === undefined ? {} : { choice: value.choice }), ...(value.confidence === undefined ? {} : { confidence: value.confidence }) }
-}
-
 export function readGuardrailRequests(payload: unknown, now: number): readonly PendingRequestView[] {
   return readDataList(payload).flatMap((item) => {
     if (!isRecord(item)) return []
@@ -1884,7 +2021,7 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
         resources: stringList(item.resources),
         reason: stringField(item.reason) ?? "Guardrail review required",
         hardReview: item.hardReview === true,
-        ...(readEscalation(item.escalation) === undefined ? {} : { escalation: readEscalation(item.escalation) }),
+        ...(readGuardrailProvenance(item.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(item.escalation) }),
         ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
         askedAt: now,
       },

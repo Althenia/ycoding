@@ -15,6 +15,22 @@ function fixture(set: Session.Interface["autonomy"]["set"]) {
   }
 }
 
+test("autonomy HTTP contract accepts sleep booleans without a review toggle", async () => {
+  const received: unknown[] = []
+  await using f = fixture(input => Effect.sync(() => {
+    received.push(input)
+    return { mode: "normal", yolo: 0, ...(input.sleep ? { sleep: {} } : {}) }
+  }))
+  for (const sleep of [true, false]) {
+    const response = await f.request({ sleep })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ data: { mode: "normal", yolo: 0, ...(sleep ? { sleep: {} } : {}) } })
+    expect(received.at(-1)).toEqual({ sessionID, sleep })
+  }
+  expect((await f.request({ guardrailDecision: true })).status).toBe(400)
+  expect(received).toHaveLength(2)
+})
+
 test("R7 goal route preserves explicit resume, replacement, and stop with YOLO", async () => {
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {

@@ -1,19 +1,31 @@
-import type { GuardrailRequestListOutput, GuardrailStatusOutput, SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
+import type {
+  GuardrailGrade,
+  GuardrailRequestListOutput,
+  GuardrailStatusOutput,
+  SessionMessageAssistant,
+  SessionMessageInfo,
+} from "@ycoding-ai/client"
 import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData } from "../../context/data"
 import { useClient } from "../../context/client"
 import { isCompactionCheckpoint } from "../../util/session"
+import { escapeTerminalText } from "../../util/terminal-text"
+import { guardrailGradeDetails } from "./guardrail-grades"
 
 export type PartRef = {
   messageID: string
   partID: string
 }
 
+export type GuardrailSourceRef = { messageID: string; callID: string }
+
+export type GuardrailRowDetail = { label: string; value: string }
+
 export type SessionRow =
   | { type: "message"; messageID: string }
   | { type: "compaction"; jobID: string }
-  | { type: "guardrail"; requestID: string; reason: string; decided?: string }
+  | { type: "guardrail"; requestID: string; reason: string; decided?: string; detail?: GuardrailRowDetail[] }
   | { type: "subagent"; sessionID: string; agent: string; created: number }
   | { type: "task"; content: string; status: "completed" | "in_progress" }
   | { type: "part"; ref: PartRef }
@@ -79,8 +91,10 @@ export function createSessionRows(sessionID: Accessor<string>) {
       (message) => message.type !== "compaction" || (!showLifecycle && message.id === latestLegacy?.id),
     )
     const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle", {
-      sessionID: sessionID(), decisions: data.session.guardrail.decided(sessionID()),
-      dismissals: data.session.guardrail.dismissed(sessionID()), pending: data.session.guardrail.list(sessionID()),
+      sessionID: sessionID(),
+      decisions: data.session.guardrail.decided(sessionID()),
+      dismissals: data.session.guardrail.dismissed(sessionID()),
+      pending: data.session.guardrail.list(sessionID()),
     })
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
@@ -144,10 +158,17 @@ export function createSessionRows(sessionID: Accessor<string>) {
         // The closing assistant footer depends on execution state, so idling must re-reduce.
         data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
-        ...data.session.guardrail.dismissed(sessionID()).map((item) => `${item.eventID}:${item.confidence}`),
+        ...data.session.guardrail
+          .dismissed(sessionID())
+          .map(
+            (item) => `${item.eventID}:${item.confidence}:${item.source?.messageID ?? ""}:${item.source?.callID ?? ""}`,
+          ),
         ...data.session.guardrail
           .decided(sessionID())
-          .map((item) => `${item.requestID}:${item.reply}:${item.confidence}`),
+          .map(
+            (item) =>
+              `${item.requestID}:${item.reply}:${item.choice}:${item.confidence}:${item.source?.messageID ?? ""}:${item.source?.callID ?? ""}:${item.ruleIDs?.join(",") ?? ""}:${JSON.stringify(item.grades)}`,
+          ),
       ],
       () => setRows(reconcile(reduce(), { key: "key" })),
     ),
@@ -192,7 +213,11 @@ export function createSessionRows(sessionID: Accessor<string>) {
         const pending = isPending(messageID)
         const message = data.session.message.get(sessionID(), messageID)
         const index =
-          message?.type === "compaction" && pending ? queuedStart(draft) : pending ? reviewStart(draft) : queuedStart(draft)
+          message?.type === "compaction" && pending
+            ? queuedStart(draft)
+            : pending
+              ? reviewStart(draft)
+              : queuedStart(draft)
         if (!pending) completePrevious(draft, index)
         const row: SessionRow = { type: "message", messageID }
         Object.assign(row, { key: rowKey(row, message) })
@@ -235,7 +260,9 @@ export function createSessionRows(sessionID: Accessor<string>) {
   }
 
   const queuedStart = (rows: SessionRow[]) => {
-    const index = rows.findIndex((row) => (row.type === "message" && isPending(row.messageID)) || (row.type === "guardrail" && !row.decided))
+    const index = rows.findIndex(
+      (row) => (row.type === "message" && isPending(row.messageID)) || (row.type === "guardrail" && !row.decided),
+    )
     return index === -1 ? rows.length : index
   }
   const reviewStart = (rows: SessionRow[]) => {
@@ -309,6 +336,9 @@ export function createSessionRows(sessionID: Accessor<string>) {
     data.on("session.retry.scheduled", (event) => {
       if (event.data.sessionID === sessionID()) appendFooter(event.data.assistantMessageID)
     }),
+    data.on("session.step.rerouted", (event) => {
+      if (event.data.sessionID === sessionID()) appendFooter(event.data.assistantMessageID)
+    }),
     data.on("session.step.started", (event) => {
       if (event.data.sessionID === sessionID()) removeFooter(event.data.assistantMessageID)
     }),
@@ -328,23 +358,66 @@ export function createSessionRows(sessionID: Accessor<string>) {
   return rows
 }
 
-export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false, guardrails?: {
-  sessionID: string
-  decisions: ReadonlyArray<NonNullable<GuardrailStatusOutput["decisions"]>[number] & { action?: string }>
-  dismissals: NonNullable<GuardrailStatusOutput["dismissals"]>
-  pending: GuardrailRequestListOutput
-}) {
+export function reduceSessionRows(
+  messages: SessionMessageInfo[],
+  inputs = new Set<string>(),
+  idle = false,
+  guardrails?: {
+    sessionID: string
+    decisions: ReadonlyArray<
+      NonNullable<GuardrailStatusOutput["decisions"]>[number] & {
+        action?: string
+        source?: GuardrailSourceRef
+        ruleIDs?: readonly string[]
+      }
+    >
+    dismissals: ReadonlyArray<
+      NonNullable<GuardrailStatusOutput["dismissals"]>[number] & { source?: GuardrailSourceRef }
+    >
+    pending: GuardrailRequestListOutput
+  },
+) {
   const provenance = [
-    ...(guardrails?.decisions ?? []).filter((item) => item.sessionID === guardrails?.sessionID).map((item) => ({
-      created: item.created,
-      row: { type: "guardrail", requestID: item.requestID, reason: item.action ?? "guardrail review", decided:
-        item.choice === "approve" && item.reply === "reject" ? `decision model approve · ${item.confidence?.toString() ?? "unreported"} · rejected`
-          : `decision model ${item.reply === "reject" ? "rejected" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}` } satisfies SessionRow,
-    })),
-    ...(guardrails?.dismissals ?? []).filter((item) => item.sessionID === guardrails?.sessionID).map((item) => ({
-      created: item.created,
-      row: { type: "guardrail", requestID: item.eventID, reason: item.ruleID, decided: `match verifier · not a real match · ${item.confidence.toString()}` } satisfies SessionRow,
-    })),
+    ...(guardrails?.decisions ?? [])
+      .filter((item) => item.sessionID === guardrails?.sessionID)
+      .map((item) => {
+        const decided =
+          item.choice === "approve" && item.reply === "reject"
+            ? `decision model approve · ${item.confidence?.toString() ?? "unreported"} · rejected`
+            : `decision model ${item.reply === "reject" ? "rejected" : item.reply === "always" ? "approved for this session" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}`
+        return {
+          created: item.created,
+          row: {
+            type: "guardrail",
+            requestID: item.requestID,
+            reason: item.action ?? "guardrail review",
+            decided,
+            detail: guardrailRowDetail(messages, {
+              source: item.source,
+              rules: item.ruleIDs ?? [],
+              outcome: decided,
+              action: item.action,
+              grades: item.grades,
+              choice: item.choice,
+            }),
+          } satisfies SessionRow,
+        }
+      }),
+    ...(guardrails?.dismissals ?? [])
+      .filter((item) => item.sessionID === guardrails?.sessionID)
+      .map((item) => {
+        const decided = `match verifier · not a real match · ${item.confidence.toString()}`
+        return {
+          created: item.created,
+          row: {
+            type: "guardrail",
+            requestID: item.eventID,
+            reason: item.ruleID,
+            decided,
+            detail: guardrailRowDetail(messages, { source: item.source, rules: [item.ruleID], outcome: decided }),
+          } satisfies SessionRow,
+        }
+      }),
   ].sort((left, right) => left.created - right.created || left.row.requestID.localeCompare(right.row.requestID))
   let nextProvenance = 0
   const insertThrough = (rows: SessionRow[], created: number) => {
@@ -384,7 +457,7 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
     }
     const ordinals = { text: 0, reasoning: 0 }
     message.content.forEach((part) => {
-      insertThrough(rows, "time" in part ? part.time?.created ?? message.time.created : message.time.created)
+      insertThrough(rows, "time" in part ? (part.time?.created ?? message.time.created) : message.time.created)
       const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID }, part)
@@ -393,6 +466,7 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
       (message.finish && !["tool-calls", "unknown"].includes(message.finish)) ||
       message.error ||
       message.retry ||
+      (message.reroutes?.length ?? 0) > 0 ||
       message.id === closing
     ) {
       completePrevious(rows)
@@ -402,7 +476,11 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
     return rows
   }, [])
   insertThrough(rows, Infinity)
-  rows.push(...(guardrails?.pending ?? []).map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })))
+  rows.push(
+    ...(guardrails?.pending ?? []).map(
+      (request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason }),
+    ),
+  )
   return rows
 }
 
@@ -551,7 +629,81 @@ function compactionRowIndex(lifecycle: { messageID?: string }, messages: Session
 export function sessionRowMessageID(row: SessionRow) {
   if (row.type === "message" || row.type === "assistant-footer") return row.messageID
   if (row.type === "part") return row.ref.messageID
-  if (row.type === "group") return row.refs[0]?.messageID ?? (row.kind === "exploration" ? row.pending[0]?.messageID : undefined)
+  if (row.type === "group")
+    return row.refs[0]?.messageID ?? (row.kind === "exploration" ? row.pending[0]?.messageID : undefined)
+}
+
+function guardrailRowDetail(
+  messages: SessionMessageInfo[],
+  input: {
+    source?: GuardrailSourceRef
+    rules: readonly string[]
+    outcome: string
+    action?: string
+    grades?: readonly GuardrailGrade[]
+    choice?: GuardrailGrade["choice"]
+  },
+): GuardrailRowDetail[] {
+  const tool = input.source ? guardrailToolDetail(messages, input.source) : []
+  return [
+    ...tool,
+    ...(tool.length === 0 && input.action ? [{ label: "action", value: input.action }] : []),
+    ...input.rules.map((rule) => ({ label: "rule", value: rule })),
+    { label: "outcome", value: input.outcome },
+    ...guardrailGradeDetails(input.grades, input.choice),
+  ]
+}
+
+function guardrailToolDetail(messages: SessionMessageInfo[], source: GuardrailSourceRef): GuardrailRowDetail[] {
+  const message = messages.find(
+    (item): item is SessionMessageAssistant => item.type === "assistant" && item.id === source.messageID,
+  )
+  const part = message?.content.find((item) => item.type === "tool" && item.id === source.callID)
+  if (!part || part.type !== "tool") return []
+  const input = "input" in part.state ? part.state.input : undefined
+  return [{ label: "tool", value: part.name }, ...guardrailInputDetail(input)]
+}
+
+const guardrailInputPriority = ["command", "path", "filePath", "file", "pattern", "url", "query"]
+
+function guardrailInputDetail(input: unknown): GuardrailRowDetail[] {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return []
+  const entries = Object.entries(input).flatMap(([key, value]) => {
+    if (guardrailSensitiveField(key)) return []
+    const text = guardrailInputText(value)
+    return text ? [{ label: key, value: text }] : []
+  })
+  return entries.sort((left, right) => guardrailInputRank(left.label) - guardrailInputRank(right.label)).slice(0, 6)
+}
+
+function guardrailInputRank(key: string) {
+  const index = guardrailInputPriority.indexOf(key)
+  return index === -1 ? guardrailInputPriority.length : index
+}
+
+function guardrailInputText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const text = escapeTerminalText(value.replace(/\s+/g, " ").trim())
+    if (!text) return undefined
+    return text.length > 160 ? `${text.slice(0, 159)}…` : text
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (Array.isArray(value)) {
+    const items = value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
+    return items.length > 0 ? guardrailInputText(items.join(", ")) : undefined
+  }
+  return undefined
+}
+
+function guardrailSensitiveField(key: string) {
+  const words = key
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+  return ["key", "token", "secret", "password", "authorization", "cookie", "credential", "header", "headers"].some(
+    (word) => words.includes(word),
+  )
 }
 
 function hasPart(rows: SessionRow[], ref: PartRef) {

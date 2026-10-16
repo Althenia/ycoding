@@ -88,7 +88,7 @@ function fixtureRuntime(options: {
     url: "https://example.test/form?secret=not-projected",
     documentGeneration: 1,
     revision: 1,
-    elements: [{ ref: "b1", role: "button", name: "Submit" }],
+    elements: [{ ref: "b1", role: "button", name: "Submit", identity: "a".repeat(64) }],
     truncated: false,
   }
   return {
@@ -362,6 +362,7 @@ describe("isolated browser service", () => {
         const isolated = yield* IsolatedBrowser.Service
         const started = yield* isolated.start(sessionID, { url: "https://example.test/form" })
         const tab = started.tab!
+        expect(tab).not.toHaveProperty("pageIdentity")
         const stale = yield* isolated
           .observe({
             sessionID,
@@ -394,6 +395,15 @@ describe("isolated browser service", () => {
           instanceID: started.instanceID,
           page: { origin: "https://example.test", path: "/form" },
         })
+        expect(observation.elements[0]).not.toHaveProperty("identity")
+        const identityInput = { sessionID, instanceID: started.instanceID!, tabID: tab.id, generation: tab.generation,
+          documentGeneration: observation.documentGeneration, observationRevision: observation.revision,
+          action: { type: "click" as const, ref: "b1" } }
+        expect((yield* isolated.actionIdentity(identityInput)).digest).toMatch(/^[a-f0-9]{64}$/)
+        expect(Exit.isFailure(yield* isolated.actionIdentity({ ...identityInput, observationRevision: 0 }).pipe(Effect.exit))).toBe(true)
+        const unavailable = yield* isolated.actionIdentity({ ...identityInput, sessionID: otherSessionID }).pipe(Effect.exit)
+        expect(Exit.isFailure(unavailable)).toBe(true)
+        if (Exit.isFailure(unavailable)) expect(Cause.squash(unavailable.cause)).toMatchObject({ _tag: "IsolatedBrowser.UnavailableError" })
       }),
     )
   })

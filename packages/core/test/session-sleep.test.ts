@@ -24,6 +24,7 @@ import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionPendingTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -101,9 +102,12 @@ const build = (database?: Layer.Layer<never>, projectLayer = projects) =>
                         name: input.request.questions[0]!.name,
                         type: input.request.questions[0]!.type,
                         answer: input.request.questions[0]!.type === "predicate" ? true : null,
-                        choice: input.request.questions[0]!.type === "predicate" ? null : input.request.questions[0]!.name === "guardrail" ? "escalate" : "Careful",
+                        choice: input.request.questions[0]!.type === "predicate" || input.request.questions[0]!.name === "guardrail" ? null : "Careful",
                         score: null,
-                        confidence: decisionConfidence,
+                        confidence: input.request.questions[0]!.name === "guardrail" ? 0 : decisionConfidence,
+                        ...(input.request.questions[0]!.type === "choice" && input.request.questions[0]!.grade ? { grades: input.request.questions[0]!.choices.map((choice) => ({
+                          choice: choice.value, confidence: choice.value === "escalate" ? decisionConfidence : 0, evidence: "Needs human review",
+                        })) } : {}),
                       },
                     ],
                   },
@@ -126,6 +130,7 @@ const locationFor = (directory: string) => Location.Ref.make({ directory: Absolu
 const tmpLocation = Effect.gen(function* () {
   const directory = yield* Effect.promise(() => tmpdir("ycoding-sleep-"))
   yield* Effect.addFinalizer(() => Effect.promise(() => directory[Symbol.asyncDispose]()))
+  yield* Effect.promise(() => Bun.write(`${directory.path}/ycoding.json`, JSON.stringify({ auto_answer: true, guardrails: { decide_reviews: true } })))
   return locationFor(directory.path)
 })
 
@@ -155,7 +160,7 @@ const requestReview = Effect.fnUntraced(function* (guardrail: SessionGuardrail.I
 })
 
 describe("Session sleep", () => {
-  it.effect("sleep rejects escalated reviews across family Locations and preserves plain human reviews", () => Effect.gen(function* () {
+  it.effect("sleep defers pending reviews across family Locations into the review box", () => Effect.gen(function* () {
     const session = yield* Session.Service
     const root = yield* session.create({ location: yield* tmpLocation })
     const child = yield* session.create({ parentID: root.id })
@@ -168,26 +173,26 @@ describe("Session sleep", () => {
     const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
     const plain = yield* requestReview(rootGuardrail, root.id)
     const unrelated = yield* requestReview(rootGuardrail, other.id)
-    yield* session.autonomy.set({ sessionID: root.id, guardrailDecision: true })
     const escalatedRoot = yield* requestReview(rootGuardrail, root.id)
     const escalatedChild = yield* requestReview(childGuardrail, child.id)
     expect(escalatedRoot.request.escalation).toBeDefined()
     expect(escalatedChild.request.escalation).toBeDefined()
     yield* session.autonomy.set({ sessionID: child.id, sleep: true })
-    expect((yield* rootGuardrail.forSession(root.id)).map((request) => request.id)).toEqual([plain.request.id])
+    expect(yield* rootGuardrail.forSession(root.id)).toEqual([])
     expect(yield* childGuardrail.forSession(child.id)).toEqual([])
-    expect(Exit.isFailure(yield* Fiber.await(escalatedRoot.fiber))).toBe(true)
-    expect(Exit.isFailure(yield* Fiber.await(escalatedChild.fiber))).toBe(true)
+    for (const fiber of [plain.fiber, escalatedRoot.fiber, escalatedChild.fiber]) {
+      const exited = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exited)).toBe(true)
+      if (Exit.isFailure(exited))
+        expect(exited.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error instanceof SessionGuardrail.DeferredError)).toBe(true)
+    }
     expect((yield* rootGuardrail.forSession(other.id)).map((request) => request.id)).toEqual([unrelated.request.id])
-    expect(plain.fiber.pollUnsafe()).toBeUndefined()
     expect(unrelated.fiber.pollUnsafe()).toBeUndefined()
-    const decisions = (yield* rootGuardrail.status(root.id)).decisions ?? []
-    expect(decisions.map((item) => ({ sessionID: item.sessionID, requestID: item.requestID, reply: item.reply, choice: item.choice, confidence: item.confidence }))).toEqual([
-      { sessionID: root.id, requestID: escalatedRoot.request.id, reply: "reject", choice: escalatedRoot.request.escalation?.choice, confidence: escalatedRoot.request.escalation?.confidence },
-      { sessionID: child.id, requestID: escalatedChild.request.id, reply: "reject", choice: escalatedChild.request.escalation?.choice, confidence: escalatedChild.request.escalation?.confidence },
-    ])
+    expect((yield* rootGuardrail.status(root.id)).decisions ?? []).toEqual([])
+    expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, root.id)).toBe(3)
+    expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, other.id)).toBe(0)
   }))
-  unavailableLocation.effect("a failed family Location does not skip later rejections or sleep notices", () => Effect.gen(function* () {
+  unavailableLocation.effect("a failed family Location does not skip later deferrals or sleep notices", () => Effect.gen(function* () {
     const session = yield* Session.Service
     const root = yield* session.create({ location: yield* tmpLocation })
     const unavailable = yield* session.create({ parentID: root.id })
@@ -199,7 +204,6 @@ describe("Session sleep", () => {
     const locations = yield* LocationServiceMap.Service
     const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
     const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
-    yield* session.autonomy.set({ sessionID: root.id, guardrailDecision: true })
     const waitingRoot = yield* requestReview(rootGuardrail, root.id)
     const waitingChild = yield* requestReview(childGuardrail, child.id)
     expect((yield* session.autonomy.set({ sessionID: root.id, sleep: true })).sleep).toBeDefined()
@@ -212,7 +216,8 @@ describe("Session sleep", () => {
       const notice = (yield* store.context(member.id)).at(-1)
       expect(notice?.type === "system" && notice.text).toContain("user is asleep")
     }
-    expect((yield* rootGuardrail.status(root.id)).decisions).toHaveLength(2)
+    expect((yield* rootGuardrail.status(root.id)).decisions ?? []).toEqual([])
+    expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, root.id)).toBe(2)
   }))
   it.live("archiving a sleeping root wakes it and releases its hold without rearming on unarchive", () => Effect.gen(function* () {
     const session = yield* Session.Service
@@ -221,13 +226,13 @@ describe("Session sleep", () => {
     yield* session.autonomy.set({ sessionID: root.id, sleep: true })
     yield* session.archive(root.id)
     expect((yield* session.autonomy.get(root.id)).sleep).toBeUndefined()
-    expect((yield* session.autonomy.get(root.id)).guardrailDecision).toBe(false)
+    expect(yield* session.autonomy.get(root.id)).not.toHaveProperty("guardrailDecision")
     expect(released.slice(before)).toEqual([root.id])
     yield* session.unarchive(root.id)
     expect((yield* session.autonomy.get(root.id)).sleep).toBeUndefined()
     expect(released.slice(before)).toEqual([root.id])
   }))
-  it.effect("sleep answers orchestration options and falls back on low confidence", () =>
+  it.effect("sleep answers orchestration options and defers on low confidence", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const root = yield* sessions.create({ location: yield* tmpLocation })
@@ -261,24 +266,24 @@ describe("Session sleep", () => {
       ).toBe(true)
       expect((yield* pendingTexts(child.id)).join("\n")).toContain("Careful")
       decisionConfidence = 0.79
-      expect(
-        (yield* orchestration.question(child.id, "Choose another plan", { options: ["Fast", "Careful"] })).autoAnswered,
-      ).toBe(true)
-      expect((yield* pendingTexts(child.id)).join("\n")).toContain("Continue with the safest reasonable default")
+      const deferred = yield* orchestration.question(child.id, "Choose another plan", { options: ["Fast", "Careful"] })
+      expect(deferred.autoAnswered).toBe(false)
+      expect(deferred.question.deferred).toBe(true)
+      expect((yield* pendingTexts(child.id)).join("\n")).not.toContain("Continue with the safest reasonable default")
+      expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, root.id)).toBe(1)
     }),
   )
   it.effect(
-    "sleep holds keep-awake, admits a sleep notice, and wake restores the prior guardrail-decision toggle",
+    "sleep holds keep-awake and admits a notice; wake clears the presence marker",
     () =>
       Effect.gen(function* () {
         held.length = 0
         released.length = 0
         const session = yield* Session.Service
         const created = yield* session.create({ location: yield* tmpLocation })
-        yield* session.autonomy.set({ sessionID: created.id, guardrailDecision: true })
 
         const asleep = yield* session.autonomy.set({ sessionID: created.id, sleep: true })
-        expect(asleep.sleep).toEqual({ priorGuardrailDecision: true })
+        expect(asleep.sleep).toEqual({})
         expect(held).toEqual([created.id])
         const store = yield* SessionStore.Service
         const notice = (yield* store.context(created.id)).find((message) => message.type === "system")
@@ -288,7 +293,7 @@ describe("Session sleep", () => {
 
         const woken = yield* session.autonomy.set({ sessionID: created.id, sleep: false })
         expect(woken.sleep).toBeUndefined()
-        expect(woken.guardrailDecision).toBe(true)
+        expect(woken).not.toHaveProperty("guardrailDecision")
         expect(released).toEqual([created.id])
         expect((yield* store.context(created.id)).at(-1)).toMatchObject({
           type: "system",
@@ -310,7 +315,7 @@ describe("Session sleep", () => {
 
       const state = yield* session.autonomy.get(created.id)
       expect(state.sleep).toBeUndefined()
-      expect(state.guardrailDecision).toBe(false)
+      expect(state).not.toHaveProperty("guardrailDecision")
       expect(released).toEqual([created.id])
       const texts = (yield* pendingTexts(created.id)).join("\n")
       const store = yield* SessionStore.Service
@@ -330,11 +335,10 @@ describe("Session sleep", () => {
       const root = yield* session.create({ location: yield* tmpLocation })
       const child = yield* session.create({ parentID: root.id })
       yield* session.autonomy.set({ sessionID: child.id, yolo: 2 })
-      expect((yield* session.autonomy.set({ sessionID: child.id, guardrailDecision: true })).yolo).toBe(2)
-      expect((yield* session.autonomy.get(root.id)).guardrailDecision).toBe(true)
+      expect((yield* session.autonomy.get(child.id)).yolo).toBe(2)
       yield* session.autonomy.set({ sessionID: child.id, sleep: true })
       expect(held).toEqual([root.id])
-      expect((yield* session.autonomy.get(child.id)).sleep).toEqual({ priorGuardrailDecision: true })
+      expect((yield* session.autonomy.get(child.id)).sleep).toEqual({})
       const store = yield* SessionStore.Service
       expect((yield* store.context(child.id)).at(-1)).toMatchObject({
         type: "system",
@@ -346,7 +350,7 @@ describe("Session sleep", () => {
       expect((yield* session.autonomy.get(root.id)).sleep).toBeDefined()
       yield* session.prompt({ sessionID: child.id, text: "Back", metadata: { origin: "subagent" }, resume: false })
       expect((yield* session.autonomy.get(root.id)).sleep).toBeUndefined()
-      expect((yield* session.autonomy.get(child.id)).guardrailDecision).toBe(true)
+      expect(yield* session.autonomy.get(child.id)).not.toHaveProperty("guardrailDecision")
       expect(released).toEqual([root.id])
     }),
   )
@@ -470,7 +474,7 @@ describe("Session sleep", () => {
           Session.Service,
         )
         expect(yield* Deferred.await(secondHeld)).toBe(created.id)
-        expect((yield* second.autonomy.get(created.id)).sleep).toEqual({ priorGuardrailDecision: false })
+        expect((yield* second.autonomy.get(created.id)).sleep).toEqual({})
       }),
     60_000,
   )
