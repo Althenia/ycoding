@@ -426,6 +426,7 @@ async fn scenarios(harness: Arc<Harness>) {
 }
 
 #[tokio::test]
+#[ignore = "requires YCODING_TEST_ISOLATED_BROWSER_CHROME and installed Google Chrome >= 152"]
 async fn real_chrome_lifetime_semantics_restrictions_and_uncertain_settlement() {
     let selected = std::env::var_os("YCODING_TEST_ISOLATED_BROWSER_CHROME")
         .expect("browser_native_integration requires YCODING_TEST_ISOLATED_BROWSER_CHROME set to the installed Google Chrome executable (>=152)");
