@@ -40,8 +40,8 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
     screen.input.pressEnter()
     await until(() => writes.length === 1)
     expect(writes).toEqual([true])
-    await until(() => screen.frame().includes("Idle sleep only"))
-    expect(screen.frame()).toContain("Idle sleep only; manual sleep and lid still apply.")
+    await until(() => screen.frame().includes("closing the lid may still sleep"))
+    expect(screen.frame()).toContain("closing the lid may still sleep")
 
     status = { state: "error", message: "synthetic inhibitor failure" }
     screen.input.pressKey("p", { ctrl: true })

@@ -8,7 +8,7 @@ use ycoding_core::{
         keep_awake::{Service, macos_inhibitor},
         process::{Command, Input, Output, is_alive},
     },
-    ycoding_schema::keep_awake::State,
+    ycoding_schema::keep_awake::{LidState, State},
 };
 
 fn child() -> Command {
@@ -294,4 +294,231 @@ async fn owner_close_waiting_for_startup_retains_cleanup_when_cancelled() {
     let _ = startup.await;
     drop(service);
     eventually(|| !is_alive(pid).unwrap()).await;
+}
+
+#[tokio::test]
+async fn independent_root_holds_preserve_manual_preference_until_the_last_release() {
+    let (service, count) = counted();
+    assert_eq!(service.hold("ses_first").await.state, State::On);
+    assert_eq!(service.hold("ses_first").await.manual, Some(false));
+    assert_eq!(service.hold("ses_second").await.sleep_hold, Some(true));
+    assert_eq!(service.set(false).await.state, State::On);
+    assert_eq!(service.release("ses_first").await.state, State::On);
+    assert_eq!(service.release("ses_missing").await.state, State::On);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(service.release("ses_second").await.state, State::Off);
+    assert_eq!(service.get().sleep_hold, Some(false));
+    service.set(true).await;
+    service.hold("ses_third").await;
+    assert_eq!(service.get().manual, Some(true));
+    assert_eq!(service.release("ses_third").await.state, State::On);
+    assert_eq!(service.set(false).await.state, State::Off);
+    service.close().await;
+}
+
+#[tokio::test]
+async fn unsupported_platform_reports_holds_without_claiming_inhibition() {
+    let service = Service::with_command(false, Arc::new(|| panic!("unsupported spawned")));
+    let held = service.hold("ses_root").await;
+    assert_eq!(held.state, State::Unsupported);
+    assert_eq!(held.lid, Some(LidState::Unsupported));
+    assert_eq!(held.sleep_hold, Some(true));
+    assert_eq!(held.manual, Some(false));
+    assert_eq!(service.release("ses_root").await.sleep_hold, Some(false));
+    service.close().await;
+    let fixture = LidFixture::new();
+    let service = Service::with_lid(
+        false,
+        Arc::new(|| panic!("unsupported spawned")),
+        fixture.file(),
+        Box::new(|_| panic!("unsupported native call")),
+        Duration::from_secs(30),
+    );
+    assert_eq!(service.recover().await.lid, Some(LidState::Unsupported));
+    service.close().await;
+}
+
+struct LidFixture {
+    directory: std::path::PathBuf,
+}
+impl LidFixture {
+    fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "ycoding-keep-awake-lid-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        Self { directory }
+    }
+    fn file(&self) -> std::path::PathBuf {
+        self.directory.join("lid.json")
+    }
+    fn service(&self, apply: impl FnMut(bool) -> LidState + Send + 'static) -> Service {
+        Service::with_lid(
+            true,
+            Arc::new(child),
+            self.file(),
+            Box::new(apply),
+            Duration::from_millis(10),
+        )
+    }
+    fn armed(&self) -> bool {
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(self.file()).unwrap()).unwrap();
+        value["armed"].as_bool().unwrap()
+    }
+}
+impl Drop for LidFixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn lid_marker_precedes_native_apply_reapplies_and_clears_on_close() {
+    let fixture = LidFixture::new();
+    let marker = fixture.file();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let service = fixture.service(move |enabled| {
+        if enabled {
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+            assert_eq!(value["armed"], true);
+        }
+        sent.send(enabled).unwrap();
+        if enabled { LidState::On } else { LidState::Off }
+    });
+    assert_eq!(service.set(true).await.lid, Some(LidState::On));
+    assert!(fixture.armed());
+    for _ in 0..2 {
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), received.recv())
+                .await
+                .unwrap(),
+            Some(true)
+        );
+    }
+    service.close().await;
+    assert_eq!(service.get().lid, Some(LidState::Off));
+    assert_eq!(service.get().state, State::Off);
+    assert!(!fixture.armed());
+}
+
+#[tokio::test]
+async fn startup_recovers_an_armed_marker_and_preserves_failed_recovery() {
+    for failed in [false, true] {
+        let fixture = LidFixture::new();
+        std::fs::write(fixture.file(), r#"{"armed":true}"#).unwrap();
+        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let service = fixture.service(move |enabled| {
+            assert!(!enabled);
+            sent.send(()).unwrap();
+            if failed {
+                LidState::Error
+            } else {
+                LidState::Off
+            }
+        });
+        service.recover().await;
+        assert_eq!(received.try_recv(), Ok(()));
+        assert_eq!(service.get().state, State::Off);
+        assert_eq!(
+            service.get().lid,
+            Some(if failed {
+                LidState::Error
+            } else {
+                LidState::Off
+            })
+        );
+        assert_eq!(fixture.armed(), failed);
+        service.close().await;
+    }
+}
+
+#[tokio::test]
+async fn lid_errors_and_unsupported_do_not_claim_lid_control_or_hide_idle_success() {
+    for lid in [LidState::Error, LidState::Unsupported] {
+        let fixture = LidFixture::new();
+        let service = fixture.service(move |enabled| if enabled { lid } else { LidState::Off });
+        let status = service.set(true).await;
+        assert_eq!(status.state, State::On);
+        assert_eq!(status.lid, Some(lid));
+        if lid == LidState::Error {
+            assert!(
+                status
+                    .message
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains("closing the lid may sleep")
+            );
+            assert!(fixture.armed());
+        }
+        service.close().await;
+        assert!(!fixture.armed());
+    }
+    let fixture = LidFixture::new();
+    std::fs::create_dir(fixture.file()).unwrap();
+    let service = fixture.service(|_| panic!("native call without recovery marker"));
+    assert_eq!(service.set(true).await.lid, Some(LidState::Error));
+    assert_eq!(service.get().state, State::On);
+    service.close().await;
+}
+
+#[test]
+#[ignore = "subprocess lock probe"]
+fn lid_lock_process_probe() {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(std::env::var_os("YCODING_LID_TEST_LOCK").unwrap())
+        .unwrap();
+    assert_eq!(
+        file.try_lock().is_ok(),
+        std::env::var("YCODING_LID_TEST_AVAILABLE").unwrap() == "true"
+    );
+}
+
+#[tokio::test]
+async fn lid_ownership_is_exclusive_across_processes_and_transfers_after_release() {
+    let fixture = LidFixture::new();
+    let owner = fixture.service(|enabled| if enabled { LidState::On } else { LidState::Off });
+    let contender = fixture.service(|enabled| if enabled { LidState::On } else { LidState::Off });
+    assert_eq!(owner.set(true).await.lid, Some(LidState::On));
+    let probe = |available: bool| {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "lid_lock_process_probe"])
+            .env(
+                "YCODING_LID_TEST_LOCK",
+                fixture.file().with_extension("lock"),
+            )
+            .env("YCODING_LID_TEST_AVAILABLE", available.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    };
+    probe(false);
+    let held = contender.set(true).await;
+    assert_eq!(held.state, State::On);
+    assert_eq!(held.lid, Some(LidState::Held));
+    assert!(
+        held.message
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("another YCoding process")
+    );
+    contender.set(false).await;
+    owner.set(false).await;
+    probe(true);
+    assert_eq!(contender.set(true).await.lid, Some(LidState::On));
+    contender.close().await;
+    owner.close().await;
+    assert!(!fixture.armed());
 }

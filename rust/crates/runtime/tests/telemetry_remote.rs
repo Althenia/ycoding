@@ -8,6 +8,91 @@ use ycoding_protocol::v5;
 use ycoding_runtime::{LocalAuth, standard};
 
 #[tokio::test]
+async fn bridged_keep_awake_get_and_disable_preserve_the_local_status_body() {
+    use ycoding_runtime::{
+        Environment, Settled, Subscriptions,
+        connector::{Credential, Enrolled, Peer},
+    };
+    let environment = Arc::new(Environment {
+        services: services(LocalAuth::disabled(), true),
+        urls: vec![],
+        subscriptions: Subscriptions::default(),
+        uploads: Default::default(),
+    });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let peer = Peer::authenticate(
+        &Enrolled::new("https://relay.invalid", "device-a".into()).unwrap(),
+        &Credential::new(
+            "stand-in-token".into(),
+            now + 60_000,
+            "https://relay.invalid".into(),
+            "device-a".into(),
+        ),
+        now,
+    )
+    .unwrap();
+    let dispatcher = standard().unwrap();
+    let request = |name: &str, payload| v5::Request {
+        request_id: name.into(),
+        operation_id: operation(name).operation_id,
+        scope: machine(),
+        payload,
+    };
+    let Some(Settled::Result(local)) = dispatcher
+        .invoke(
+            environment.clone(),
+            "local-awake".into(),
+            request("keepAwake.get", vec![]),
+        )
+        .await
+    else {
+        panic!("local keep-awake read not admitted")
+    };
+    let Some(v5::result::Outcome::Success(local)) = local.outcome else {
+        panic!("local keep-awake read failed")
+    };
+    let local = v5::KeepAwakeGetResult::decode(local.payload.as_slice())
+        .unwrap()
+        .data;
+    assert_eq!(local.sleep_hold, Some(false));
+    assert!(local.lid.is_some());
+    for (name, payload) in [
+        ("keepAwake.get", vec![]),
+        (
+            "keepAwake.set",
+            v5::KeepAwakeSetRequest {
+                payload: v5::KeepAwakeSetRequestPayload { enabled: false },
+            }
+            .encode_to_vec(),
+        ),
+    ] {
+        let Some(Settled::Result(remote)) = dispatcher
+            .invoke_remote(
+                environment.clone(),
+                "remote-awake".into(),
+                &peer,
+                request(name, payload),
+            )
+            .await
+        else {
+            panic!("remote keep-awake operation not admitted")
+        };
+        let Some(v5::result::Outcome::Success(remote)) = remote.outcome else {
+            panic!("remote keep-awake operation failed")
+        };
+        assert_eq!(
+            v5::KeepAwakeGetResult::decode(remote.payload.as_slice())
+                .unwrap()
+                .data,
+            local
+        );
+    }
+}
+
+#[tokio::test]
 async fn remote_client_append_requires_consent_and_preserves_bounded_web_samples() {
     use ycoding_runtime::{
         Environment, Settled, Subscriptions,

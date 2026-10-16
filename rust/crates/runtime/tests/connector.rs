@@ -786,6 +786,7 @@ async fn established_disconnect_reconnects_and_unknown_mutations_are_never_repla
                     data: v5::KeepAwakeStatus {
                         state: 3,
                         message: None,
+                        ..Default::default()
                     },
                 })
             }
@@ -896,6 +897,7 @@ async fn queued_cancel_does_not_start_a_mutation_or_block_independent_reads() {
                     data: v5::KeepAwakeStatus {
                         state: 3,
                         message: None,
+                        ..Default::default()
                     },
                 })
             }

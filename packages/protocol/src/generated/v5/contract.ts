@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "21b9db68353a2a1b4e7d814af8f43211a1d3774fbb28c0f9492fe03fea6b916d"
+export const CONTRACT_DIGEST = "87870fe7de81dc3bc8f693602ef8acce1966cc1c2f76725030ec09981e30ffd2"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -43826,6 +43826,30 @@ export const messages = {
           domainObligations: ["packages/schema/src/keep-awake.ts#KeepAwake.Status"],
         },
       },
+      {
+        tag: 3,
+        name: "manual",
+        type: 8,
+        required: false,
+        repeated: false,
+        target: "",
+      },
+      {
+        tag: 4,
+        name: "lid",
+        type: 14,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.KeepAwake_Status_lid",
+      },
+      {
+        tag: 5,
+        name: "sleepHold",
+        type: 8,
+        required: false,
+        repeated: false,
+        target: "",
+      },
     ],
   },
   "ycoding.v5.keepAwake_set_Request_payload": {
@@ -57494,6 +57518,7 @@ export const enums = {
   "ycoding.v5.IsolatedBrowser_Status_state": [1, 2, 3, 4, 5],
   "ycoding.v5.IsolatedBrowser_Observation_mode": [1],
   "ycoding.v5.KeepAwake_State": [1, 2, 3, 4],
+  "ycoding.v5.KeepAwake_Status_lid": [1, 2, 3, 4, 5],
   "ycoding.v5.ProjectCopyError_name": [1],
   "ycoding.v5.pty_connectToken_Request_headers_x_ycoding_ticket": [1],
   "ycoding.v5.pty_connectToken_Request_payload_access": [1, 2],

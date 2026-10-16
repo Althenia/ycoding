@@ -2,7 +2,7 @@ use crate::{
     convert,
     dispatch::{Failure, Invocation},
 };
-use ycoding_core::ycoding_schema::keep_awake::{State, Status};
+use ycoding_core::ycoding_schema::keep_awake::{LidState, State, Status};
 use ycoding_protocol::v5;
 
 pub async fn get(
@@ -36,5 +36,14 @@ fn wire(status: Status) -> v5::KeepAwakeStatus {
             State::Error => 4,
         },
         message: status.message.as_ref().map(convert::wire),
+        manual: status.manual,
+        lid: status.lid.map(|state| match state {
+            LidState::Off => v5::KeepAwakeStatusLid::KeepawakeStatusLidOff as i32,
+            LidState::On => v5::KeepAwakeStatusLid::KeepawakeStatusLidOn as i32,
+            LidState::Held => v5::KeepAwakeStatusLid::KeepawakeStatusLidHeld as i32,
+            LidState::Unsupported => v5::KeepAwakeStatusLid::KeepawakeStatusLidUnsupported as i32,
+            LidState::Error => v5::KeepAwakeStatusLid::KeepawakeStatusLidError as i32,
+        }),
+        sleep_hold: status.sleep_hold,
     }
 }

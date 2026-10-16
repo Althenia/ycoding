@@ -11,5 +11,8 @@ export const maxMessageLength = 200
 export const Status = Schema.Struct({
   state: State,
   message: Schema.String.check(Schema.isMaxLength(maxMessageLength)).pipe(optional),
+  manual: Schema.Boolean.pipe(optional),
+  lid: Schema.Literals(["off", "on", "held", "unsupported", "error"]).pipe(optional),
+  sleepHold: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "KeepAwake.Status" })
 export type Status = typeof Status.Type

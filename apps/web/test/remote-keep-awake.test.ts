@@ -176,6 +176,30 @@ test("an unsupported machine cannot be changed", async () => {
   }
 })
 
+test("manual changes settle from the reported preference while a family holds effective On", async () => {
+  const test = machine((operation) =>
+    operation === "keepAwake.get" || operation === "keepAwake.set"
+      ? { status: "ok", value: { data: { state: "on", manual: false, lid: "on", sleepHold: true } } }
+      : undefined,
+  )
+  try {
+    test.store.connect("dev_1")
+    await load(test)
+    expect(await change(test, false)).toEqual({ reached: true, reload: false })
+    expect(keepAwake(test)).toEqual({
+      read: "ready", status: { state: "on", manual: false, lid: "on", sleepHold: true },
+    })
+    expect(await change(test, true)).toEqual({ reached: false, reload: false })
+    expect(keepAwake(test).change).toMatchObject({ state: "failed", enabled: true })
+    expect(keepAwake(test).change?.message).toContain("manual preference is Off")
+    expect(test.count("keepAwake.get")).toBe(1)
+    expect(test.calls.filter((call) => call.operation === "keepAwake.set").map((call) => call.request?.input))
+      .toEqual([{ enabled: false }, { enabled: true }])
+  } finally {
+    test.store.dispose()
+  }
+})
+
 test("a refused change keeps the machine's state and shows the failure; a mismatched answer reports what the machine says", async () => {
   let outcome: RemoteRequestOutcome = failed("unauthorized", "Not allowed on this machine")
   const test = machine((operation) =>

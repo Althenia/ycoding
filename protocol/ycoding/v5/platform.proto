@@ -156,6 +156,14 @@ enum KeepAwake_State {
   KEEPAWAKE_STATE_ERROR = 4;
 }
 
+enum KeepAwake_Status_lid {
+  KEEPAWAKE_STATUS_LID_OFF = 1;
+  KEEPAWAKE_STATUS_LID_ON = 2;
+  KEEPAWAKE_STATUS_LID_HELD = 3;
+  KEEPAWAKE_STATUS_LID_UNSUPPORTED = 4;
+  KEEPAWAKE_STATUS_LID_ERROR = 5;
+}
+
 enum ProjectCopyError_name {
   PROJECTCOPYERROR_NAME_PROJECTCOPYERROR = 1;
 }
@@ -985,6 +993,9 @@ message keepAwake_get_Result {
 message KeepAwake_Status {
   required KeepAwake_State state = 1;
   optional LosslessString message = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/keep-awake.ts#KeepAwake.Status" utf16_max: 200 }];
+  optional bool manual = 3;
+  optional KeepAwake_Status_lid lid = 4;
+  optional bool sleepHold = 5;
 }
 
 message keepAwake_set_Request_payload {

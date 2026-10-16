@@ -48,7 +48,7 @@ export const configurationPages: readonly DocPage[] = [
           },
           {
             kind: "paragraph",
-            text: "Keep machine awake is a process-local machine control, not a configuration-file preference. Use the TUI status dialog or remote Settings → Machine. It defaults to Off and on macOS prevents idle sleep only; manual sleep and closing the lid remain possible. Linux and Windows report Unsupported. Stopping or restarting the backend ends the assertion, and no client remembers or re-enables it automatically.",
+            text: "Keep machine awake controls the backend machine through /keep-awake, the command palette, or Settings → Machine. The manual preference starts Off and resets when the backend stops. Family holds are independent and can keep effective On while the switch is unchecked. On macOS, Status reports idle inhibition and native lid control separately; held, unsupported, error and unreported lid states do not confirm lid inhibition. Choosing Sleep still sleeps. Keep-awake drains the battery and a closed lid traps heat; verify lid behavior on the target Mac. Linux and Windows report Unsupported.",
           },
           surfaces,
         ],

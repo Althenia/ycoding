@@ -8,6 +8,12 @@ import type { PaletteStatusCommand } from "./component/command-palette"
 
 export type KeepAwakeStatus = KeepAwake.Status
 
+export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): string {
+  if (!status) return "Checking"
+  const lid = status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"
+  return `${status.state} · ${status.state === "on" ? "idle + " : ""}lid ${lid}${status.sleepHold ? " + sleep-held" : ""}`
+}
+
 type KeepAwakeServer = {
   get: () => Promise<KeepAwakeStatus>
   set: (enabled: boolean) => Promise<KeepAwakeStatus>
@@ -61,13 +67,17 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
       return
     }
     const cycle = ++generation
-    const enabled = current.state !== "on"
+    const enabled = !(current.manual ?? current.state === "on")
     try {
       const next = await server.set(enabled)
       if (disposed || cycle !== generation) return
       setStatus(next)
-      if (next.state === "on")
-        toast.show({ variant: "info", title: "Keep machine awake", message: "Idle sleep only; manual sleep and lid still apply.", duration: 6000 })
+      if (next.state === "on" && !enabled && next.sleepHold)
+        toast.show({ variant: "info", title: "Keep machine awake", message: "Held on by a sleeping session; your manual preference is off until the last family hold is released.", duration: 6000 })
+      if (next.state === "on" && enabled)
+        toast.show({ variant: "info", title: "Keep machine awake", message: next.lid === "on"
+          ? "Idle and lid-closed sleep held off; on battery this drains the battery and a closed lid traps heat. Choosing Sleep still sleeps."
+          : "Idle sleep held off; closing the lid may still sleep this machine. Keep-awake drains the battery and a closed lid traps heat.", duration: 6000 })
       if (next.state === "error" || next.state === "unsupported")
         toast.show({ variant: "error", title: "Keep machine awake", message: next.message ?? "Keep machine awake is unavailable.", duration: 6000 })
     } catch (error) {
@@ -97,6 +107,7 @@ function KeepAwakeCommands() {
     title: "Keep machine awake",
     group: "Machine",
     palette: true,
+    slash: { name: "keep-awake" },
     paletteStatus: () => <KeepAwakePaletteStatus status={awake.status} />,
     run: () => { void awake.toggle() },
   } satisfies PaletteStatusCommand
@@ -112,5 +123,5 @@ function KeepAwakePaletteStatus(props: { status: () => KeepAwakeStatus | undefin
       : props.status()?.state === "error"
         ? theme.text.feedback.error.default
         : theme.text.subdued
-  return <span style={{ fg: color() }}>● {props.status()?.state ?? "Checking"}</span>
+  return <span style={{ fg: color() }}>● {keepAwakeStatusLabel(props.status())}</span>
 }

@@ -59,6 +59,47 @@ async function open(read = "held", theme = "light", width = 1440) {
 }
 
 describe("Settings Keep machine awake", () => {
+  test("confirms manual Off while a family retains effective On without reporting a failed change", async () => {
+    const page = await open("manual-held", "dark", 320)
+    try {
+      await until(page, `${control}.checked && !${control}.disabled`)
+      await page.evaluate(`window.keepAwakeFixture.mutation('sleep-held'); ${control}.focus()`)
+      await page.pressKey(" ", "Space", 32)
+      await until(page, `${count("set")} === 1 && !${control}.checked && !${control}.disabled`)
+      expect(await page.evaluate<string>(label)).toBe("On")
+      expect(await page.evaluate<string>(detail)).toContain("sleeping session")
+      expect(await page.evaluate<string>(detail)).toContain("manual preference")
+      expect(await page.evaluate<number>(count("set"))).toBe(1)
+      expect(await page.evaluate<number>(count("get"))).toBe(1)
+    } finally {
+      await page.close()
+    }
+  })
+
+  test("reports effective holds and lid failures without selecting the manual preference or claiming lid control", async () => {
+    for (const width of [320, 390, 1440])
+      for (const theme of ["light", "dark"]) {
+        const page = await open("sleep-held", theme, width)
+        try {
+          await until(page, `${label} === 'On' && !${control}.disabled`)
+          expect(await page.evaluate<boolean>(`${control}.checked`)).toBe(false)
+          expect(await page.evaluate<string>(detail)).toContain("another YCoding process")
+          expect(await page.evaluate<string>(detail)).toContain("sleeping session")
+          expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        } finally {
+          await page.close()
+        }
+        const failed = await open("lid-error", theme, width)
+        try {
+          await until(failed, `${label} === 'On' && !${control}.disabled`)
+          expect(await failed.evaluate<string>(detail)).toContain("closing the lid may sleep")
+          expect(await failed.evaluate<string>(`document.getElementById('machine-awake-status').dataset.tone`)).toBe("attention")
+        } finally {
+          await failed.close()
+        }
+      }
+  }, 30_000)
+
   test("shows the backend state, reserves geometry, and changes it only from a keyboard action without browser persistence", async () => {
     for (const width of [320, 390, 1440])
       for (const theme of ["light", "dark"]) {
@@ -73,7 +114,7 @@ describe("Settings Keep machine awake", () => {
             `({ top: document.getElementById('following-settings').getBoundingClientRect().top, storage: JSON.stringify(localStorage) })`,
           )
           expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
-            /macOS.*idle sleep only.*manual sleep or closing the lid.*stops or restarts/,
+            /macOS.*idle sleep and lid-closed sleep.*Choosing Sleep still sleeps.*battery.*heat.*stops or restarts/,
           )
           await page.evaluate(`window.keepAwakeFixture.releaseRead('off')`)
           await until(page, `${label} === 'Off' && !${control}.disabled`)

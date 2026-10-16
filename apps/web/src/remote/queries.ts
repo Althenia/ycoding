@@ -245,7 +245,9 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
             )
             return { reached: false, reload: true }
           }
-          const reached = answered.state === (enabled ? "on" : "off")
+          const reached = answered.manual === undefined
+            ? (!enabled && answered.state === "on" && answered.sleepHold === true) || answered.state === (enabled ? "on" : "off")
+            : answered.manual === enabled
           const mismatch = (answered.state === "on" || answered.state === "off") && !reached
           write({
             read: "ready",
@@ -255,7 +257,9 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
                   change: {
                     state: "failed" as const,
                     enabled,
-                    message: `The machine reports it is ${answered.state === "on" ? "On" : "Off"}.`,
+                    message: answered.manual === undefined
+                      ? `The machine reports it is ${answered.state === "on" ? "On" : "Off"}.`
+                      : `The machine reports its manual preference is ${answered.manual ? "On" : "Off"}.`,
                   },
                 }
               : {}),

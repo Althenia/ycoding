@@ -119,10 +119,27 @@ test("palette selection turns the backend switch on and off and explains what it
     }
     await select("off")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: on"))
-    await until(() => view.toast() === "Idle sleep only; manual sleep and lid still apply.")
+    await until(() => view.toast()?.includes("closing the lid may still sleep") === true)
+    expect(view.toast()).toMatch(/battery.*heat/)
     await select("on")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: off"))
     expect(server.writes).toEqual([true, false])
+  } finally {
+    view.app.renderer.destroy()
+  }
+}, 20_000)
+
+test("manual toggles remain independent from a sleeping-family hold and show lid ownership", async () => {
+  const server = fakeServer({ state: "on", manual: false, sleepHold: true, lid: "held" })
+  const view = await renderKeepAwake(server)
+  try {
+    view.dispatch("command.palette.show")
+    await view.app.waitForFrame((frame) => frame.includes("Keep machine awake"))
+    await view.app.mockInput.typeText("Keep machine awake")
+    await view.app.waitForFrame((frame) => frame.includes("lid held elsewhere") && frame.includes("sleep-held"))
+    view.dispatch("keepAwake.toggle")
+    await until(() => server.writes.length === 1)
+    expect(server.writes).toEqual([true])
   } finally {
     view.app.renderer.destroy()
   }

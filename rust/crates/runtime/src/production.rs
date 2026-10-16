@@ -536,6 +536,7 @@ impl Core {
         let remote = crate::connector::Control::open(&factory.options.roots.state)
             .await
             .map_err(|_| unavailable("remote control"))?;
+        let lid_file = factory.options.roots.state.join("keep-awake-lid.json");
         let maintenance = Arc::new(Maintenance::new(&factory));
         started.maintenance = Some(maintenance.clone());
         maintenance
@@ -560,7 +561,7 @@ impl Core {
             platform: Some(platform),
             platform_default_location: None,
             telemetry: ycoding_core::telemetry::Service::new(client),
-            keep_awake: ycoding_core::platform::keep_awake::Service::new(),
+            keep_awake: ycoding_core::platform::keep_awake::Service::open(lid_file).await,
             provider_usage: Some(provider_usage),
             usage_pricer: Some(Arc::new(move |reference| {
                 pricing_locations.pricing(reference)

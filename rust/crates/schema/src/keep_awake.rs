@@ -4,10 +4,14 @@ use crate::{
 };
 pub const MAX_MESSAGE_LENGTH: usize = 200;
 crate::schema::literal_enum_type!(State,{Off=>"off",On=>"on",Unsupported=>"unsupported",Error=>"error"});
+crate::schema::literal_enum_type!(LidState,{Off=>"off",On=>"on",Held=>"held",Unsupported=>"unsupported",Error=>"error"});
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub state: State,
     pub message: Option<LosslessString>,
+    pub manual: Option<bool>,
+    pub lid: Option<LidState>,
+    pub sleep_hold: Option<bool>,
 }
 impl DomainDecode for Status {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
@@ -22,6 +26,9 @@ impl DomainDecode for Status {
         Ok(Self {
             state: o.field("state")?,
             message: m,
+            manual: o.optional("manual")?,
+            lid: o.optional("lid")?,
+            sleep_hold: o.optional("sleepHold")?,
         })
     }
 }
@@ -30,6 +37,9 @@ impl DomainEncode for Status {
         ObjectEncoder::new()
             .field("state", &self.state)
             .optional("message", &self.message)
+            .optional("manual", &self.manual)
+            .optional("lid", &self.lid)
+            .optional("sleepHold", &self.sleep_hold)
             .finish()
     }
 }

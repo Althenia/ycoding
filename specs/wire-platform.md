@@ -50,6 +50,12 @@ These exceptions do not approve arbitrary HTTP/SSE application RPC, broaden remo
 
 ## Typed platform delivery
 
+### Keep-awake status
+
+`keepAwake.get` (3025) and `keepAwake.set` (3026) return the same backend-owned `KeepAwake_Status`. Existing `state` and `message` retain tags 1 and 2. Optional `manual` uses tag 3, `lid` tag 4, and `sleepHold` tag 5. Lid values are off=1, on=2, held=3, unsupported=4 and error=5. Absent fields remain absent rather than becoming false or off. `manual` is reported while family holds distinguish the manual preference from effective state; `sleepHold` reports whether any root-family hold remains. Idle state and lid state are independent.
+
+Local and relay get/set responses preserve the same complete status body. Hardware-dependent lid states must be compared with the local backend's actual answer, not a fixed platform assumption. A relay can change only the existing manual preference; it cannot submit hold identities, state paths, or native control settings.
+
 `fs.read` has STREAM disposition with `ASSET_BULK` delivery. Its explicit `params.path` comes from the `/api/fs/read/*` wildcard and names the Protocol source owner as a domain obligation. The Location query remains explicit. Its canonical typed result contains `mime` and `byteCount`. Nonterminal `Result.asset_metadata` declares that metadata Result plus matching MIME and exact length before a correlated raw BulkStart/BulkPiece/BulkEnd body. Only exact BulkEnd settles success, including zero bytes with zero pieces.
 
 `ycoding-protocol::Asset<FsReadResult>` owns the validated metadata and bounded exact bytes. The runtime's typed asset registration is:

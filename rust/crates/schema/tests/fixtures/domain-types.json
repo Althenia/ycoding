@@ -11221,6 +11221,42 @@
   },
   {
     "name": "KeepAwake.Status",
+    "input": "{\"state\":\"on\",\"manual\":false,\"lid\":\"held\",\"sleepHold\":true}",
+    "output": "{\"state\":\"on\",\"manual\":false,\"lid\":\"held\",\"sleepHold\":true}",
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
+    "input": "{\"state\":\"on\",\"lid\":\"sleep\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
+    "input": "{\"state\":\"off\",\"lid\":\"off\",\"sleepHold\":false}",
+    "output": "{\"state\":\"off\",\"lid\":\"off\",\"sleepHold\":false}",
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
+    "input": "{\"state\":\"off\",\"manual\":null}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
+    "input": "{\"state\":\"on\",\"lid\":\"error\"}",
+    "output": "{\"state\":\"on\",\"lid\":\"error\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
+    "input": "{\"state\":\"off\",\"sleepHold\":\"false\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "KeepAwake.Status",
     "input": "{\"state\":\"off\"}",
     "output": "{\"state\":\"off\"}",
     "negativeZeros": []

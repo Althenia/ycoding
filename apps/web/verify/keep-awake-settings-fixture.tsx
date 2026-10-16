@@ -31,6 +31,9 @@ const answer = (mode: string): RemoteRequestOutcome => {
     return { status: "failed", error: { code: "internal_error", message: "Machine request failed" } }
   if (mode === "unsupported") return status("unsupported", "Keep machine awake is supported only on macOS.")
   if (mode === "error") return status("error", "The idle-sleep assertion ended unexpectedly.")
+  if (mode === "sleep-held") return { status: "ok", value: { data: { state: "on", manual: false, lid: "held", sleepHold: true } } }
+  if (mode === "manual-held") return { status: "ok", value: { data: { state: "on", manual: true, lid: "held", sleepHold: true } } }
+  if (mode === "lid-error") return { status: "ok", value: { data: { state: "on", lid: "error" } } }
   return status(mode === "on" ? "on" : "off")
 }
 const devices = [

@@ -47,6 +47,22 @@ test("a machine that is not reachable or not read yet never shows Off", () => {
   })
 })
 
+test("manual preference and effective idle, lid and sleeping-family holds remain distinct", () => {
+  const status = { state: "on", manual: false, lid: "held", sleepHold: true } as const
+  expect(readKeepAwakeStatus({ data: status })).toEqual(status)
+  const held = keepAwakeView({ keepAwake: { read: "ready", status }, reachable: true })
+  expect(held).toMatchObject({ checked: false, disabled: false, label: "On", tone: "attention" })
+  expect(held.detail).toContain("another YCoding process")
+  expect(held.detail).toContain("sleeping session")
+  expect(held.caveat).toMatch(/battery.*heat/)
+  const failed = keepAwakeView({
+    keepAwake: { read: "ready", status: { state: "on", lid: "error" } }, reachable: true,
+  })
+  expect(failed).toMatchObject({ label: "On", tone: "attention", alert: true })
+  expect(failed.detail).toContain("closing the lid may sleep")
+  expect(keepAwakeView({ keepAwake: ready("on"), reachable: true }).detail).toContain("lid unreported")
+})
+
 test("a ready machine reports its own state with the idle-sleep caveat and enables the switch", () => {
   const off = keepAwakeView({ keepAwake: ready("off"), reachable: true })
   expect(off).toMatchObject({ checked: false, disabled: false, busy: false, label: "Off", tone: "neutral" })
@@ -84,8 +100,8 @@ test("every machine state keeps the macOS and lifetime caveats visible", () => {
     for (const reachable of [false, true]) {
       const view = keepAwakeView({ keepAwake, reachable })
       expect(view.caveat).toMatch(/macOS/)
-      expect(view.caveat).toMatch(/idle sleep only/)
-      expect(view.caveat).toMatch(/manual sleep or closing the lid/)
+      expect(view.caveat).toMatch(/idle sleep and lid-closed sleep/)
+      expect(view.caveat).toMatch(/Choosing Sleep still sleeps/)
       expect(view.caveat).toMatch(/stops or restarts/)
     }
   }

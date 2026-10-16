@@ -974,6 +974,13 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "unsupported",
     "4": "error",
   },
+  "ycoding.v5.KeepAwake_Status_lid": {
+    "1": "off",
+    "2": "on",
+    "3": "held",
+    "4": "unsupported",
+    "5": "error",
+  },
   "ycoding.v5.Config_DiagnosticReason": {
     "1": "invalid-json",
     "2": "invalid-values",

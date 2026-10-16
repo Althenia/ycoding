@@ -2202,6 +2202,25 @@ body:has(.app) {
   min-inline-size: 0;
 }
 
+.machine-awake__status,
+.machine-awake__caveat {
+  flex-basis: 100%;
+}
+
+.machine-awake__status {
+  min-block-size: calc(var(--yc-leading-xs) * 6);
+  line-height: var(--yc-leading-xs);
+  overflow-wrap: anywhere;
+}
+
+.machine-awake__status[data-tone="danger"] {
+  color: var(--yc-danger);
+}
+
+.machine-awake__status[data-tone="attention"] {
+  color: var(--yc-yellow-strong);
+}
+
 .device {
   display: flex;
   align-items: center;

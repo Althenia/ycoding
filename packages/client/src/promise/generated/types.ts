@@ -2248,7 +2248,13 @@ export type BrowserElement = {
   destination?: BrowserPage
 }
 
-export type KeepAwakeStatus = { state: KeepAwakeState; message?: string }
+export type KeepAwakeStatus = {
+  state: KeepAwakeState
+  message?: string
+  manual?: boolean
+  lid?: "off" | "on" | "held" | "unsupported" | "error"
+  sleepHold?: boolean
+}
 
 export type ConfigDiagnostic = {
   path: string
