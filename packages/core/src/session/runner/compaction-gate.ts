@@ -246,7 +246,7 @@ function isComplete(type: SessionMessage.Type, data: unknown) {
   if (type === "assistant" || type === "shell") return hasTime(data, "completed")
   if (type !== "compaction") return true
   if (!isRecord(data)) return false
-  return data.status === "completed" || data.status === "failed"
+  return data.status === "completed"
 }
 
 function hasTime(data: unknown, key: string) {

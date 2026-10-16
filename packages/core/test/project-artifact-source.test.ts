@@ -582,14 +582,24 @@ describe("ProjectArtifactSource", () => {
           for (const [index, profile] of profiles.entries()) {
             const sessionID = Session.ID.make(`ses_${profile.id}`)
             yield* seedTerminalSession(db, sessionID, 20 + index, undefined, profile.tools)
-            for (const tool of profile.tools)
-              yield* events.publish(SessionEvent.Tool.Called, {
+            for (const tool of profile.tools) {
+              const call = {
                 sessionID,
                 assistantMessageID: SessionMessage.ID.make(`msg_terminal_latest_${20 + index}`),
                 callID: `call-${tool}-${20 + index}`,
+              }
+              yield* events.publish(SessionEvent.Tool.Called, {
+                ...call,
                 input: {},
                 executed: false,
               })
+              yield* events.publish(SessionEvent.Tool.Success, {
+                ...call,
+                structured: {},
+                content: [],
+                executed: false,
+              })
+            }
             if (profile.managed === "skill")
               yield* source.activate({
                 kind: "skill",
@@ -914,6 +924,7 @@ function seedTerminalSession(
       },
       { discard: true },
     )
+    yield* EventRuntime.reserveSequence(db, sessionID, messages.length)
   })
 }
 

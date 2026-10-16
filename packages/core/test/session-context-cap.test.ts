@@ -19,6 +19,7 @@ import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
 import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
 import { hardInputCapTokens } from "@ycoding-ai/core/session/context-pressure"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
@@ -97,6 +98,49 @@ const it = testEffect(
 )
 
 describe("Session hard context gate", () => {
+  it.effect("projects a pending compaction at admission and preserves its identity when the worker claims it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("admission_projection")
+      const db = (yield* Database.Service).db
+      const jobs = yield* SessionCompactionJob.Service
+      const admitted = yield* jobs.admit(admission(fixture))
+      const pending = yield* db.select().from(SessionMessageTable).where(and(
+        eq(SessionMessageTable.session_id, fixture.sessionID), eq(SessionMessageTable.type, "compaction"),
+      )).all()
+      expect(pending).toHaveLength(1)
+      expect(pending[0]?.seq).toBeGreaterThan(fixture.boundary.seq)
+      expect(Schema.decodeUnknownSync(SessionMessage.Info)({ ...pending[0].data, id: pending[0].id, type: pending[0].type }))
+        .toMatchObject({ type: "compaction", jobID: admitted.id, trigger: "mandatory", status: "pending" })
+      yield* jobs.claim({ jobID: admitted.id, owner: "admission-test", now: 1, expiresAt: 30_001 })
+      const running = yield* db.select().from(SessionMessageTable).where(and(
+        eq(SessionMessageTable.session_id, fixture.sessionID), eq(SessionMessageTable.type, "compaction"),
+      )).all()
+      expect(running).toHaveLength(1)
+      expect(running[0]?.id).toBe(pending[0]?.id)
+      expect(running[0]?.seq).toBe(pending[0]?.seq)
+      expect(Schema.decodeUnknownSync(SessionMessage.Info)({ ...running[0].data, id: running[0].id, type: running[0].type }))
+        .toMatchObject({ type: "compaction", jobID: admitted.id, status: "running" })
+    }),
+  )
+
+  it.effect("rolls back the compaction job and marker when admission projection fails", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("admission_rollback")
+      const db = (yield* Database.Service).db
+      const jobs = yield* SessionCompactionJob.Service
+      const events = yield* EventRuntime.Service
+      const sequence = yield* EventRuntime.latestSequence(db, fixture.sessionID)
+      yield* events.project(SessionEvent.Compaction.Admitted, () => Effect.die("admission projection failed"))
+      const exit = yield* jobs.admit(admission(fixture)).pipe(Effect.exit)
+      expect(String(exit)).toContain("admission projection failed")
+      expect(yield* db.select().from(SessionCompactionJobTable).where(eq(SessionCompactionJobTable.session_id, fixture.sessionID)).all()).toEqual([])
+      expect(yield* db.select().from(SessionMessageTable).where(and(
+        eq(SessionMessageTable.session_id, fixture.sessionID), eq(SessionMessageTable.type, "compaction"),
+      )).all()).toEqual([])
+      expect(yield* EventRuntime.latestSequence(db, fixture.sessionID)).toBe(sequence)
+    }),
+  )
+
   test("calculates the exact absolute input cap", () => {
     expect(
       hardInputCapTokens({
@@ -686,6 +730,7 @@ const setup = Effect.fnUntraced(function* (name: string, complete = true) {
     })
     .run()
     .pipe(Effect.orDie)
+  yield* EventRuntime.reserveSequence(db, sessionID, boundary.seq)
   return { sessionID, boundary }
 })
 

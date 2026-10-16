@@ -689,6 +689,7 @@ describe("Session.switchModel context validation", () => {
         .values({ id: onlyID, session_id: sessionID, type: onlyType, seq: 1, time_created: 1_000, data: onlyData })
         .run()
         .pipe(Effect.orDie)
+      yield* EventRuntime.reserveSequence(db, sessionID, 1)
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
 

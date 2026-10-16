@@ -10,6 +10,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
+import { Location } from "@ycoding-ai/core/location"
 import { Permission } from "@ycoding-ai/core/permission"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectArtifactAdapterRegistry } from "@ycoding-ai/core/project-artifact/adapter/index"
@@ -19,6 +20,7 @@ import { Skill } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { emptyMcpLayer } from "./fixture/mcp"
+import { tempLocationLayer } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -33,6 +35,7 @@ const it = testEffect(
     [
       [SkillDiscovery.node, discovery],
       [MCP.node, emptyMcpLayer],
+      [Location.node, tempLocationLayer],
     ],
   ),
 )

@@ -241,38 +241,36 @@ const publishAdmission = Effect.fnUntraced(function* (
 ): Effect.fn.Return<SessionCompaction.Admission, Conflict> {
   const id = input.id ?? SessionCompaction.ID.create()
   const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.sessionID)
-  yield* events
-    .publish(
-      SessionEvent.Compaction.Admitted,
-      {
-        sessionID: input.sessionID,
-        jobID: id,
-        usageAnchor,
-        ...(input.pressure === undefined ? {} : { pressure: input.pressure }),
-      },
-      {
-        commit: () =>
-          db
-            .insert(SessionCompactionJobTable)
-            .values({
-              id,
-              session_id: input.sessionID,
-              usage_anchor: usageAnchor,
-              trigger: input.trigger,
-              requested_through_message_id: input.requestedThrough.messageID,
-              requested_through_seq: input.requestedThrough.seq,
-              base_context_revision: input.baseContextRevision,
-              target_max_input_tokens: input.targetMaxInputTokens,
-              config_digest: input.configDigest,
-              status: "pending",
-              attempts: 0,
-              time_created: now,
-            })
-            .run()
-            .pipe(Effect.orDie),
-      },
+  yield* db
+    .transaction(() =>
+      Effect.gen(function* () {
+        yield* db
+          .insert(SessionCompactionJobTable)
+          .values({
+            id,
+            session_id: input.sessionID,
+            usage_anchor: usageAnchor,
+            trigger: input.trigger,
+            requested_through_message_id: input.requestedThrough.messageID,
+            requested_through_seq: input.requestedThrough.seq,
+            base_context_revision: input.baseContextRevision,
+            target_max_input_tokens: input.targetMaxInputTokens,
+            config_digest: input.configDigest,
+            status: "pending",
+            attempts: 0,
+            time_created: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* events.publish(SessionEvent.Compaction.Admitted, {
+          sessionID: input.sessionID,
+          jobID: id,
+          usageAnchor,
+          ...(input.pressure === undefined ? {} : { pressure: input.pressure }),
+        })
+      }),
     )
-    .pipe(Effect.catchDefect(defectToConflict))
+    .pipe(Effect.orDie, Effect.catchDefect(defectToConflict))
   const stored = yield* findRow(db, id)
   if (!stored) return yield* conflict(id, "Compaction admission did not create its durable row")
   return admissionFromRow(stored)

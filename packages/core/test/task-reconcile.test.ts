@@ -261,7 +261,8 @@ describe("SessionTask.reconcileStaleTasks", () => {
       }).pipe(Effect.provide(firstLayer), Effect.scoped)
 
       const secondLayer = AppNodeBuilder.build(
-        LayerNode.group([Database.configured({ path: tmpPath }), EventRuntime.node, SessionProjector.node, SessionStore.node]),
+        LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
+        [[Database.node, Database.layer({ path: tmpPath })]],
       )
       yield* Effect.gen(function* () {
         const db = (yield* Database.Service).db
@@ -270,7 +271,7 @@ describe("SessionTask.reconcileStaleTasks", () => {
         expect(row?.revision).toBe(1)
         const parent = yield* db.select({ rev: SessionTable.orchestration_revision }).from(SessionTable).where(eq(SessionTable.id, parentID)).get().pipe(Effect.orDie)
         expect(parent?.rev).toBe(1)
-      }).pipe(Effect.provide(secondLayer), Effect.scoped)
+      }).pipe(Effect.provide(secondLayer.pipe(Layer.fresh)), Effect.scoped)
 
       try {
         rmSync(tmpPath)
@@ -398,7 +399,8 @@ describe("SessionTask owner fence", () => {
         }).pipe(
           Effect.provide(
             AppNodeBuilder.build(
-              LayerNode.group([Database.configured({ path: file }), EventRuntime.node, SessionProjector.node, SessionStore.node]),
+              LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node, SessionStore.node]),
+              [[Database.node, Database.layer({ path: file })]],
             ),
           ),
           Effect.scoped,

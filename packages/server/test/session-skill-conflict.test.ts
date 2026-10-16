@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Agent } from "@ycoding-ai/core/agent"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -30,6 +31,22 @@ const instructionDiscovery = Layer.succeed(
   InstructionDiscovery.Service,
   InstructionDiscovery.Service.of({ load: () => Effect.succeed([]) }),
 )
+const catalog = Layer.mock(Catalog.Service, {
+  provider: {
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+  },
+  model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+    default: () => Effect.succeed(undefined),
+    small: () => Effect.succeed(undefined),
+  },
+})
 const sessionContext = Layer.mock(SessionContext.Service, {
   select: (sessionID) =>
     Effect.succeed({
@@ -55,13 +72,13 @@ const locations = Layer.effect(
   LocationServiceMap.Service,
   LayerMap.make(
     () =>
-      // The operation only needs the location-scoped Skill, instruction, and Session context services.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(
         Layer.mock(Skill.Service, {
           list: () => Effect.succeed([]),
         }),
         instructionDiscovery,
+        catalog,
         sessionContext,
       ) as unknown as Layer.Layer<LocationServices>,
   ),

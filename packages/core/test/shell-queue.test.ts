@@ -110,6 +110,10 @@ const evaluations = Effect.gen(function* () {
           Effect.runSync(Deferred.succeed(pending.active, undefined))
           pending.active = undefined
         }
+        if (event === "wait-idle" && pending.requested) {
+          Effect.runSync(Deferred.succeed(pending.requested, undefined))
+          pending.requested = undefined
+        }
       },
     },
     flush: Effect.gen(function* () {
@@ -1205,8 +1209,8 @@ describe("ShellQueue", () => {
               yield* memory.release
               resources.current = { availableMb: 0, load: 99 }
               yield* idle.release
-              yield* evaluation.flush
               yield* Deferred.await(same.admitted).pipe(Effect.timeout(2_000))
+              yield* evaluation.flush
             }),
           { ...evaluation.options, parallelism: 64, now: () => 0 },
         )

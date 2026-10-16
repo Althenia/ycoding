@@ -14,8 +14,6 @@ import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
-import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
-import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
@@ -45,7 +43,7 @@ import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { SystemPromptPlugin } from "@ycoding-ai/core/plugin/system-prompt"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
@@ -54,12 +52,12 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
 const sessionID = Session.ID.make("ses_runner_recorded")
-// provider-native/v8 owns this stable namespace for the recorded prompt; the
-// wire key is scoped to the recorded Session.
 const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
   sessionID,
-  "2b63e4f5188e14c7cc338f931b964c57aff442c57b2b7bc67b67a84b21fa9ea3",
+  "aaf9a4bf74314f22822545b25934ea6633f4c10836af73197864fa4b24c12410",
 )
+const wireRequest = Promise.withResolvers<{ incoming: HttpRecorder.RequestSnapshot; recorded: HttpRecorder.RequestSnapshot }>()
+const sent: HttpRecorder.RequestSnapshot[] = []
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
   HttpRecorder.removeCassetteSync(cassetteName, { directory: cassetteDirectory })
@@ -67,20 +65,8 @@ if (process.env.RECORD === "true") {
 const cassette = HttpRecorder.layer(cassetteName, {
   directory: cassetteDirectory,
   match: (incoming, recorded) => {
-    const expected = JSON.parse(recorded.body)
-    expected.messages[0].content = [
-      expected.messages[0].content.trimEnd(),
-      ProjectArtifactInstructions.content,
-      MemoryInstructions.content,
-    ].join("\n\n")
-    expected.prompt_cache_key = expectedPromptCacheKey
-    // Current requests append trusted Session state after the admitted user text.
-    expected.messages[1].content +=
-      '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}\n</system-update>'
-    const incomingBody = JSON.parse(incoming.body)
-    expect(incoming.headers).toEqual(recorded.headers)
-    expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
-    expect(incomingBody).toEqual(expected)
+    sent.push(incoming)
+    wireRequest.resolve({ incoming, recorded })
     return incoming.method === recorded.method && incoming.url === recorded.url
   },
 }).pipe(
@@ -262,7 +248,18 @@ describe("SessionRunnerLLM recorded", () => {
         resume: false,
       })
 
-      yield* session.resume(sessionID)
+      const execution = yield* session.resume(sessionID).pipe(Effect.forkChild({ startImmediately: true }))
+      const wire = yield* Effect.promise(() => wireRequest.promise)
+      const expected = JSON.parse(wire.recorded.body)
+      expected.prompt_cache_key = expectedPromptCacheKey
+      expected.messages[1].content +=
+        '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}\n</system-update>'
+      const incomingBody = JSON.parse(wire.incoming.body)
+      expect(wire.incoming.headers).toEqual(wire.recorded.headers)
+      expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
+      expect(incomingBody).toEqual(expected)
+      yield* Fiber.join(execution)
+      expect(sent).toHaveLength(1)
 
       const messages = yield* session.context(sessionID)
       expect(messages).toHaveLength(3)

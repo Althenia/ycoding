@@ -11,11 +11,11 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Skill } from "@ycoding-ai/core/skill"
 import { emptyMcpLayer } from "../fixture/mcp"
-import { location } from "../fixture/location"
+import { location, tempLocationLayer } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { host } from "./host"
 
-const it = testEffect(AppNodeBuilder.build(Skill.node, [[MCP.node, emptyMcpLayer]]))
+const it = testEffect(AppNodeBuilder.build(Skill.node, [[MCP.node, emptyMcpLayer], [Location.node, tempLocationLayer]]))
 
 describe("SkillPlugin.Plugin", () => {
   it.effect("registers built-in skills", () =>

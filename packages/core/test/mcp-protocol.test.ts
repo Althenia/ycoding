@@ -213,7 +213,7 @@ describe("MCP protocol negotiation", () => {
   test("bounds the probe of a silent stdio process and starts a fresh legacy process", async () => {
     await withLog(async (log, lines) => {
       const started = performance.now()
-      expect(await connectStdio("silent", log)).toEqual([LEGACY])
+      expect(await connectStdio("silent", log, 1_000)).toEqual([LEGACY])
       expect(performance.now() - started).toBeLessThan(15_000)
       expect(await lines()).toMatchObject({ spawn: 2, "server/discover": 1, initialize: 1 })
     })

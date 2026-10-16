@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Model } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Config } from "@ycoding-ai/core/config"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -52,6 +53,22 @@ const projects = Layer.succeed(
   }),
 )
 const config = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
+const catalog = Layer.mock(Catalog.Service, {
+  provider: {
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+  },
+  model: {
+    defaultSelection: () => Effect.succeed(undefined),
+    forConnection: (model) => Effect.succeed(model),
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+    default: () => Effect.succeed(undefined),
+    small: () => Effect.succeed(undefined),
+  },
+})
 const models = SessionRunnerModel.layerWith(() => Effect.succeed(SessionRunnerModel.resolved(model)))
 const execution = Layer.succeed(
   SessionExecution.Service,
@@ -91,7 +108,7 @@ const integratedLocations = Layer.effect(
   LayerMap.make(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-      Layer.mergeAll(config, models, worker) as unknown as Layer.Layer<LocationServices>,
+      Layer.mergeAll(config, catalog, models, worker) as unknown as Layer.Layer<LocationServices>,
   ),
 )
 const it = testEffect(

@@ -421,6 +421,8 @@ For an active local rolling summary, model-history assembly validates the checkp
 
 Historical destructive summary replacement is decode-only and migration-only: valid historical replacement events may establish a revision-zero baseline and historical markers may render. Selective compaction never creates replacement events or deletes history itself; no runtime source or tool creates destructive summary replacement.
 
+Compaction admission commits the job and its pending transcript message in one database transaction before a worker can claim it. The projected message retains its identity and transcript position as the job starts and settles. Failed compaction messages do not advance the next admission's complete-message boundary, so an unchanged deterministic failure remains deduplicated.
+
 ### Session-owned terminals
 
 The Session command palette opens a terminal picker restricted to the active Session's PTYs. Deliberate selection opens the native embedded terminal inspector without interrupting Session execution. Inspection is read-only until explicit user control acquisition; generation and writer fences prevent concurrent or stale writers. Returning control pauses input, and resuming agent control is a separate action. Closing the view detaches without terminating the PTY.
@@ -909,6 +911,8 @@ Versions preserve content digests, provenance, parent versions, state transition
 Automatic creation is governed by per-kind and accounting caps. Plugin automatic creation is currently disabled by a zero automatic cap.
 
 Artifact learning is non-punitive: after the primary task is complete and validated, an artifact may capture a safer reusable rule from a validated repeated mistake, failed approach, or repository gotcha. One-off failures and transient task state are not artifact material.
+
+Terminal artifact observations capture goal participation when an execution starts. Completing or stopping that goal before terminal accounting does not change its starting classification.
 
 ### Integration
 

@@ -228,9 +228,32 @@ const layer = Layer.effect(
         ),
       )
 
+    yield* Effect.acquireRelease(
+      events.listen((event) =>
+        Effect.gen(function* () {
+          if (event.type !== SessionEvent.Execution.Started.type) return
+          const sessionID = Schema.decodeUnknownSync(SessionEvent.Execution.Started.data)(event.data).sessionID
+          const session = yield* sessions.get(sessionID)
+          if (
+            !session ||
+            session.location.directory !== location.directory ||
+            session.location.workspaceID !== location.workspaceID
+          )
+            return
+          const state = yield* autonomy
+            .get(sessionID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
+          executions.set(sessionID, {
+            goalMode: state.goal?.status === "active",
+            startedAt: DateTime.toEpochMillis(event.created),
+          })
+        }),
+      ),
+      (unsubscribe) => unsubscribe,
+    )
+
     yield* events
       .subscribe([
-        SessionEvent.Execution.Started,
         SessionEvent.Execution.Succeeded,
         SessionEvent.Execution.Failed,
         SessionEvent.Execution.Interrupted,
@@ -238,20 +261,6 @@ const layer = Layer.effect(
       .pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
-            if (event.type === "session.execution.started") {
-              const session = yield* sessions.get(event.data.sessionID)
-              if (
-                !session ||
-                session.location.directory !== location.directory ||
-                session.location.workspaceID !== location.workspaceID
-              )
-                return
-              const state = yield* autonomy
-                .get(event.data.sessionID)
-                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-              executions.set(event.data.sessionID, { goalMode: state.goal?.status === "active", startedAt: DateTime.toEpochMillis(event.created) })
-              return
-            }
             const session = yield* sessions.get(event.data.sessionID)
             if (
               !session ||
