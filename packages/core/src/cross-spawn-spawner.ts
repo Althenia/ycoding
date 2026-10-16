@@ -1,6 +1,19 @@
 import type { NonEmptyReadonlyArray } from "effect/Array"
 import { NodeFileSystem, NodePath, NodeSink, NodeStream } from "@effect/platform-node"
-import { Deferred, Effect, Exit, FileSystem, Layer, Path, PlatformError, Predicate, Sink, Stream } from "effect"
+import {
+  Deferred,
+  Clock,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Path,
+  PlatformError,
+  Predicate,
+  Sink,
+  Stream,
+} from "effect"
 import type { Scope } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import {
@@ -17,6 +30,7 @@ import { PassThrough, pipeline, type Readable } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
+import { ProcessGroup } from "./shell/process-group"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -86,15 +100,26 @@ const toPlatformError = (
 }
 
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
+type Capture = {
+  stdout?: PassThrough
+  stderr?: PassThrough
+  prefix: { channel: "stdout" | "stderr"; chunk: Buffer }[]
+  collecting: boolean
+  claimed: boolean
+}
 
 const makeCrossSpawnSpawner = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const buffered = new WeakMap<NodeChildProcess.ChildProcess, { stdout?: PassThrough; stderr?: PassThrough }>()
-  const buffer = (source: Readable | null) => {
+  const processSystem = yield* ProcessGroup.System
+  const buffered = new WeakMap<NodeChildProcess.ChildProcess, Capture>()
+  const buffer = (source: Readable | null, channel: "stdout" | "stderr", capture: Capture) => {
     if (!source) return undefined
     const stream = new PassThrough()
     pipeline(source, stream, () => {})
+    source.on("data", (chunk: Buffer) => {
+      if (capture.collecting) capture.prefix.push({ channel, chunk })
+    })
     return stream
   }
 
@@ -247,18 +272,21 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     err: ChildProcess.StderrConfig,
   ) => {
     const captured = buffered.get(proc)!
+    captured.collecting = false
     const readable = (stream: PassThrough | undefined, method: string) =>
       !stream
         ? Stream.empty
         : Stream.unwrap(
-            Effect.sync(() =>
-              stream.errored
+            Effect.sync(() => {
+              captured.claimed = true
+              captured.prefix.length = 0
+              return stream.errored
                 ? Stream.fail(toPlatformError(method, stream.errored, command))
                 : NodeStream.fromReadable({
                     evaluate: () => stream,
                     onError: (cause) => toPlatformError(method, toError(cause), command),
-                  }),
-            ),
+                  })
+            }),
           )
     let stdout = readable(captured.stdout, "fromReadable(stdout)")
     let stderr = readable(captured.stderr, "fromReadable(stderr)")
@@ -266,14 +294,27 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     if (Sink.isSink(out.stream)) stdout = Stream.transduce(stdout, out.stream)
     if (Sink.isSink(err.stream)) stderr = Stream.transduce(stderr, err.stream)
 
-    return { stdout, stderr, all: Stream.merge(stdout, stderr) }
+    const all = Stream.suspend(() => {
+      if (captured.claimed || Sink.isSink(out.stream) || Sink.isSink(err.stream)) return Stream.merge(stdout, stderr)
+      captured.claimed = true
+      const prefix = captured.prefix.splice(0)
+      for (const channel of ["stdout", "stderr"] as const) {
+        const bytes = prefix.reduce((size, item) => size + (item.channel === channel ? item.chunk.length : 0), 0)
+        if (bytes > 0) captured[channel]?.read(bytes)
+      }
+      return Stream.concat(Stream.fromIterable(prefix.map((item) => item.chunk)), Stream.merge(stdout, stderr))
+    })
+    return { stdout, stderr, all }
   }
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
-      buffered.set(proc, { stdout: buffer(proc.stdout), stderr: buffer(proc.stderr) })
+      const captured: Capture = { prefix: [], collecting: true, claimed: false }
+      captured.stdout = buffer(proc.stdout, "stdout", captured)
+      captured.stderr = buffer(proc.stderr, "stderr", captured)
+      buffered.set(proc, captured)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
       proc.on("error", (err) => {
@@ -281,6 +322,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
       })
       proc.on("exit", (...args) => {
         exit = args
+        if (process.platform !== "win32") Deferred.doneUnsafe(signal, Exit.succeed(args))
       })
       proc.on("close", (...args) => {
         if (end) return
@@ -313,40 +355,60 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
       try: () => {
         globalThis.process.kill(-proc.pid!, signal)
       },
-      catch: (err) => toPlatformError("kill", toError(err), command),
-    })
+      catch: toError,
+    }).pipe(
+      Effect.catch((error) =>
+        "code" in error && error.code === "ESRCH" ? Effect.void : Effect.fail(toPlatformError("kill", error, command)),
+      ),
+    )
   }
 
-  const killOne = (
-    command: ChildProcess.StandardCommand,
-    proc: NodeChildProcess.ChildProcess,
-    signal: NodeJS.Signals,
-  ) =>
-    Effect.suspend(() => {
-      if (proc.kill(signal)) return Effect.void
-      return Effect.fail(toPlatformError("kill", new Error("Failed to kill child process"), command))
-    })
-
-  const timeout =
-    (
-      proc: NodeChildProcess.ChildProcess,
+  const terminate = Effect.fnUntraced(
+    function* (
       command: ChildProcess.StandardCommand,
-      opts: ChildProcess.KillOptions | undefined,
-    ) =>
-    <A, E, R>(
-      f: (
-        command: ChildProcess.StandardCommand,
-        proc: NodeChildProcess.ChildProcess,
-        signal: NodeJS.Signals,
-      ) => Effect.Effect<A, E, R>,
-    ) => {
-      const signal = opts?.killSignal ?? "SIGTERM"
-      if (Predicate.isUndefined(opts?.forceKillAfter)) return f(command, proc, signal)
-      return Effect.timeoutOrElse(f(command, proc, signal), {
-        duration: opts.forceKillAfter,
-        orElse: () => f(command, proc, "SIGKILL"),
+      proc: NodeChildProcess.ChildProcess,
+      signal: ExitSignal,
+      group: Effect.Success<ReturnType<typeof ProcessGroup.make>> | undefined,
+      opts?: ChildProcess.KillOptions,
+    ) {
+      if (process.platform === "win32") {
+        if (!(yield* Deferred.isDone(signal))) yield* killGroup(command, proc, "SIGKILL")
+        yield* Deferred.await(signal)
+        return
+      }
+      if (!group)
+        return yield* Effect.fail(toPlatformError("kill", new Error("Missing process-group identity"), command))
+      const gone = Effect.gen(function* () {
+        while (true) {
+          const members = yield* group.members
+          if (members.length === 0) return
+          yield* Effect.sleep(25)
+        }
       })
-    }
+      yield* group
+        .signal(opts?.killSignal ?? command.options.killSignal ?? "SIGTERM")
+        .pipe(Effect.mapError((error) => toPlatformError("kill", error, command)))
+      yield* gone.pipe(
+        Effect.timeoutOrElse({
+          duration: opts?.forceKillAfter ?? command.options.forceKillAfter ?? Duration.seconds(3),
+          orElse: () => group.signal("SIGKILL").pipe(Effect.andThen(gone), Effect.timeout(1_000)),
+        }),
+        Effect.mapError((error) => toPlatformError("kill", toError(error), command)),
+      )
+    },
+    Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+  )
+
+  const closeOutput = (proc: NodeChildProcess.ChildProcess) =>
+    Effect.sync(() => {
+      for (const key of ["stdout", "stderr"] as const) {
+        const captured = buffered.get(proc)?.[key]
+        proc[key]?.unpipe(captured)
+        proc[key]?.destroy()
+        captured?.end()
+      }
+      proc.stdin?.destroy()
+    })
 
   const source = (handle: ChildProcessHandle, from: ChildProcess.PipeFromOption | undefined) => {
     const opt = from ?? "stdout"
@@ -376,7 +438,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
           const extra = fds(command.options)
           const dir = yield* cwd(command.options)
 
-          const [proc, signal] = yield* Effect.acquireRelease(
+          const [proc, signal, group] = yield* Effect.acquireRelease(
             spawn(command, {
               cwd: dir,
               env: env(command.options),
@@ -384,27 +446,19 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
               detached: command.options.detached ?? process.platform !== "win32",
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
-            }),
-            Effect.fnUntraced(function* ([proc, signal]) {
-              const done = yield* Deferred.isDone(signal)
-              const kill = timeout(proc, command, command.options)
-              if (done) {
-                const [code] = yield* Deferred.await(signal)
-                if (process.platform === "win32") return yield* Effect.void
-                if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
-                return yield* Effect.void
-              }
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              const sig = command.options.killSignal ?? "SIGTERM"
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              const escalated = command.options.forceKillAfter
-                ? Effect.timeoutOrElse(attempt, {
-                    duration: command.options.forceKillAfter,
-                    orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-                  })
-                : attempt
-              return yield* Effect.ignore(escalated)
+            }).pipe(
+              Effect.flatMap(([proc, signal]) =>
+                Effect.gen(function* () {
+                  const group =
+                    process.platform === "win32"
+                      ? undefined
+                      : yield* ProcessGroup.make(proc.pid!, command.options.detached ?? true, processSystem)
+                  return [proc, signal, group] as const
+                }),
+              ),
+            ),
+            Effect.fnUntraced(function* ([proc, signal, group]) {
+              yield* terminate(command, proc, signal, group).pipe(Effect.ensuring(closeOutput(proc)), Effect.orDie)
             }),
           )
 
@@ -430,17 +484,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
                 ),
               )
             }),
-            kill: (opts?: ChildProcess.KillOptions) => {
-              const sig = opts?.killSignal ?? "SIGTERM"
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              if (!opts?.forceKillAfter) return attempt
-              return Effect.timeoutOrElse(attempt, {
-                duration: opts.forceKillAfter,
-                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-              })
-            },
+            kill: (opts) => terminate(command, proc, signal, group, opts),
             unref: Effect.sync(() => {
               if (ref) {
                 proc.unref()
@@ -503,7 +547,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
   return make(spawnCommand)
 })
 
-const layer: Layer.Layer<ChildProcessSpawner, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
+export const layer: Layer.Layer<ChildProcessSpawner, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
   ChildProcessSpawner,
   makeCrossSpawnSpawner,
 )

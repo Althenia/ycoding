@@ -3,11 +3,16 @@ import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Effect, Exit, Fiber, Stream } from "effect"
+import { Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { CrossSpawnSpawner } from "@ycoding-ai/core/cross-spawn-spawner"
+import { ProcessGroup } from "@ycoding-ai/core/shell/process-group"
 import { testEffect } from "../lib/effect"
+import { cleanGroup, fileReady, groupAlive, shellProcess } from "../fixture/shell-process"
 
 const it = testEffect(LayerNode.compile(AppProcess.node))
 
@@ -28,6 +33,50 @@ const waitForFile = (file: string) =>
 
 describe("AppProcess", () => {
   describe("run", () => {
+    it.live("preserves combined capture order while spawn identity observation is delayed", () =>
+      Effect.gen(function* () {
+        const directory = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(tmpdir(), "ycoding-capture-order-"))),
+          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+        )
+        const emitted = path.join(directory, "emitted")
+        const delayed = Layer.fresh(
+          AppNodeBuilder.build(AppProcess.node, [
+            [
+              CrossSpawnSpawner.node,
+              Layer.fresh(CrossSpawnSpawner.layer).pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    NodeFileSystem.layer,
+                    NodePath.layer,
+                    Layer.succeed(ProcessGroup.System, {
+                      ...ProcessGroup.native,
+                      read: fileReady(emitted).pipe(Effect.andThen(ProcessGroup.native.read)),
+                    }),
+                  ),
+                ),
+              ),
+            ],
+          ]),
+        )
+        const result = yield* Effect.gen(function* () {
+          const svc = yield* AppProcess.Service
+          return yield* svc.run(
+            cmd(
+              "-e",
+              [
+                'process.stdout.write("out 1\\n")',
+                'setTimeout(() => process.stderr.write("err 1\\n"), 10)',
+                `setTimeout(() => { process.stdout.write("out 2\\n"); require("node:fs").writeFileSync(${JSON.stringify(emitted)}, "emitted") }, 20)`,
+              ].join(";"),
+            ),
+            { combineOutput: true },
+          )
+        }).pipe(Effect.provide(delayed))
+        expect(result.output?.toString("utf8")).toBe("out 1\nerr 1\nout 2\n")
+      }),
+    )
+
     it.effect(
       "captures stdout and exit code zero",
       Effect.gen(function* () {
@@ -152,6 +201,43 @@ describe("AppProcess", () => {
     )
 
     if (process.platform !== "win32") {
+      for (const reason of ["timeout", "abort"] as const) {
+        it.live(
+          `run ${reason} cleans a resistant process group`,
+          () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => fs.mkdtemp(path.join(tmpdir(), "ycoding-process-group-"))),
+              (directory) =>
+                Effect.gen(function* () {
+                  const svc = yield* AppProcess.Service
+                  const command = shellProcess(directory, true)
+                  const controller = new AbortController()
+                  const running = yield* svc
+                    .run(ChildProcess.make("node", ["-e", command.script]), { signal: controller.signal })
+                    .pipe(Effect.exit, Effect.forkScoped({ startImmediately: true }))
+                  const pid = Number(yield* fileReady(command.ready))
+                  yield* Effect.addFinalizer(() => cleanGroup(pid))
+                  if (reason === "abort") controller.abort()
+                  if (reason === "timeout") {
+                    const timed = yield* Fiber.join(running).pipe(
+                      Effect.timeout(500),
+                      Effect.onError(() => Fiber.interrupt(running)),
+                      Effect.exit,
+                    )
+                    expect(Exit.isFailure(timed)).toBe(true)
+                  }
+                  if (reason === "abort")
+                    expect(Exit.isFailure(yield* Fiber.join(running).pipe(Effect.timeout(6_000)))).toBe(true)
+                  expect(groupAlive(pid)).toBe(false)
+                  expect(yield* fileReady(command.term)).toBe("term")
+                  expect(yield* fileReady(command.childTerm)).toBe("term")
+                }),
+              (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+            ),
+          12_000,
+        )
+      }
+
       it.live(
         "timeout cleans up the scoped child process",
         Effect.acquireUseRelease(

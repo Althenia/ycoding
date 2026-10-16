@@ -14,14 +14,17 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
+import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { ShellTable } from "@ycoding-ai/core/shell/sql"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { cleanGroup, fileReady, groupAlive, groupGone, shellProcess } from "./fixture/shell-process"
 
 const workspace = await mkdtemp(join(tmpdir(), "ycoding-shell-ledger-"))
 afterAll(() => rm(workspace, { recursive: true, force: true }))
@@ -65,6 +68,16 @@ const it = testEffect(
 )
 
 const posix = process.platform === "win32" ? it.live.skip : it.live
+const noticeSession = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+  const db = (yield* Database.Service).db
+  const placement = yield* Location.Service
+  yield* db.insert(ProjectTable).values({
+    id: placement.project.id, worktree: placement.directory, sandboxes: [], time_created: 1, time_updated: 1,
+  }).onConflictDoNothing().run()
+  yield* db.insert(SessionTable).values({
+    id: sessionID, project_id: placement.project.id, directory: placement.directory, title: "Shell owner", time_created: 1, time_updated: 1,
+  }).run()
+})
 const spawned: ChildProcess[] = []
 afterEach(() => {
   for (const child of spawned.splice(0)) {
@@ -104,8 +117,9 @@ posix("keeps caller-supplied shell metadata out of the durable Session owner", (
     yield* shell.noticeOwed(info.id, trusted)
     expect((yield* row())?.session_id).toBe(trusted)
     yield* shell.noticeAdmitted(info.id)
-    expect(yield* row()).toBeUndefined()
+    expect(yield* row()).toMatchObject({ session_id: trusted, notice_pending: false })
     yield* shell.remove(info.id)
+    expect(yield* row()).toBeUndefined()
   }),
 )
 
@@ -118,6 +132,7 @@ posix("reconciles a dead owner's surviving shell group and retains only its owed
     expect(identity?.pgid).toBe(child.pid)
     const id = ShellSchema.ID.create()
     const sessionID = SessionSchema.ID.make("ses_owed_shell")
+    yield* noticeSession(sessionID)
     yield* ShellLedger.record(db, {
       id,
       pid: child.pid!,
@@ -141,6 +156,7 @@ posix("records a queued shell without a process and marks its owed notice lost w
     const appProcess = yield* AppProcess.Service
     const db = (yield* Database.Service).db
     const sessionID = SessionSchema.ID.make("ses_queued_owed")
+    yield* noticeSession(sessionID)
     const owner = yield* ShellLedger.identify(appProcess, process.pid)
     const started = ShellSchema.ID.create()
     yield* ShellLedger.record(db, { id: started, pid: 0, owner: owner! })
@@ -216,6 +232,32 @@ posix("escalates an orphaned group that ignores SIGTERM to SIGKILL", () =>
     yield* ShellLedger.reconcile(db, appProcess, 100)
     yield* exited(child)
     expect(child.signalCode).toBe("SIGKILL")
+    expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, id)).get()).toBeUndefined()
+  }),
+)
+
+posix("reconciliation escalates after the orphaned leader exits but its descendant ignores SIGTERM", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(
+      Effect.promise(() => mkdtemp(join(workspace, "orphan-"))),
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    )
+    const command = shellProcess(directory)
+    const child = spawn("node", ["-e", command.script], { detached: true, stdio: "ignore" })
+    spawned.push(child)
+    yield* Effect.addFinalizer(() => cleanGroup(child.pid!))
+    yield* fileReady(command.ready)
+    const appProcess = yield* AppProcess.Service
+    const db = (yield* Database.Service).db
+    const id = ShellSchema.ID.create()
+    yield* ShellLedger.record(db, {
+      id, pid: child.pid!, started: (yield* ShellLedger.identify(appProcess, child.pid!))?.started,
+      owner: { pid: 2_000_000_000, pgid: 2_000_000_000, started: "Thu Jan 1 00:00:00 1970" },
+    })
+    yield* ShellLedger.reconcile(db, appProcess, 100)
+    yield* groupGone(child.pid!)
+    expect(groupAlive(child.pid!)).toBe(false)
+    expect(yield* fileReady(command.childTerm)).toBe("term")
     expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, id)).get()).toBeUndefined()
   }),
 )

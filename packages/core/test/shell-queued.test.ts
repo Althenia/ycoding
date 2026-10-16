@@ -22,12 +22,13 @@ import { eq, sql } from "drizzle-orm"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { groupGone } from "./fixture/shell-process"
 
 class QueuedFixture extends Context.Service<
   QueuedFixture,
   {
     readonly workspace: string
-    readonly spawnHook: { current?: Effect.Effect<void> }
+    readonly spawnHook: { current?: (pid: number) => Effect.Effect<void> }
     readonly history: { started?: Deferred.Deferred<void>; finished?: Deferred.Deferred<void> }
     readonly processTree: {
       enabled: boolean
@@ -80,7 +81,7 @@ const appProcess = Layer.effect(
           ),
           Effect.tap((handle) => (processTree.awaitExit ? handle.exitCode.pipe(Effect.asVoid) : Effect.void)),
         )
-        return hook ? Effect.uninterruptible(spawned.pipe(Effect.tap(() => hook))) : spawned
+        return hook ? Effect.uninterruptible(spawned.pipe(Effect.tap((handle) => hook(Number(handle.pid))))) : spawned
       },
       run: (command, options) => {
         if (
@@ -286,11 +287,14 @@ describe("queued shell commands", () => {
           memoryLimitMb: 128,
         })
         fixture.history.finished = yield* Deferred.make<void>()
+        const sampled = yield* Deferred.make<void>()
+        fixture.processTree.sampled = () => Deferred.succeed(sampled, undefined).pipe(Effect.asVoid)
         const info = yield* shell.enqueue(
           yield* shell.prepare({ command, timeout: outcome === "timeout-low" ? 50 : 0, memoryLimitMb: 128 }),
           sessionA,
         )
         yield* running(shell, info.id)
+        yield* Deferred.await(sampled).pipe(Effect.timeout(5_000))
         if (outcome === "timeout-low") expect((yield* shell.wait(info.id)).status).toBe("timeout")
         if (outcome !== "timeout-low") yield* shell.remove(info.id)
         yield* Deferred.await(fixture.history.finished).pipe(Effect.timeout(2_000))
@@ -475,17 +479,46 @@ describe("queued shell commands", () => {
   posixIt("cancel when removed, without starting, and release their queue entry first", () =>
     Effect.gen(function* () {
       const shell = yield* Service
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      const fixture = yield* QueuedFixture
       const marker = join((yield* QueuedFixture).workspace, "must-not-exist")
       const holder = yield* shell.enqueue(yield* shell.prepare({ command: "sleep 30", timeout: 0 }), sessionA)
       yield* running(shell, holder.id)
       const removed = yield* shell.enqueue(yield* shell.prepare({ command: `touch ${marker}`, timeout: 0 }), sessionB)
       const other = yield* shell.enqueue(yield* shell.prepare({ command: "printf other", timeout: 0 }), sessionC)
+      expect(other.queuePosition).toBe(2)
+      const updated = yield* Deferred.make<void>()
+      const deleted = yield* Deferred.make<void>()
+      yield* events.listen((event) => {
+        const data = event.data
+        if (typeof data !== "object" || data === null) return Effect.void
+        if (
+          event.type === "shell.updated" &&
+          "info" in data &&
+          Schema.is(Shell.Info)(data.info) &&
+          data.info.id === other.id &&
+          data.info.queuePosition === 1
+        )
+          return Deferred.succeed(updated, undefined).pipe(Effect.asVoid)
+        if (event.type === "shell.deleted" && "id" in data && data.id === removed.id)
+          return Deferred.succeed(deleted, undefined).pipe(Effect.asVoid)
+        return Effect.void
+      })
+      const slots = () => Effect.promise(() => readdir(join(fixture.workspace, "state", "shell-queue", "slots")))
+      const before = (yield* slots()).length
 
       const removedWait = yield* shell.wait(removed.id).pipe(Effect.forkScoped({ startImmediately: true }))
       yield* shell.remove(removed.id)
       expect(yield* Fiber.join(removedWait)).toMatchObject({ status: "killed" })
       expect(yield* shell.get(removed.id).pipe(Effect.flip)).toBeInstanceOf(NotFoundError)
       expect((yield* entries).toSorted()).toEqual([`${holder.id}.json`, `${other.id}.json`].toSorted())
+      expect((yield* slots()).length).toBe(before - 1)
+      expect(yield* Effect.promise(() => Bun.file(removed.file).exists())).toBe(false)
+      expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, removed.id)).get()).toBeUndefined()
+      yield* Deferred.await(deleted).pipe(Effect.timeout(2_000))
+      yield* Deferred.await(updated).pipe(Effect.timeout(2_000))
+      expect((yield* shell.get(other.id)).queuePosition).toBe(1)
 
       yield* shell.remove(holder.id)
       expect((yield* shell.wait(other.id)).status).toBe("exited")
@@ -562,10 +595,14 @@ describe("queued shell commands", () => {
       const events = yield* EventRuntime.Service
       const marker = join((yield* QueuedFixture).workspace, "after-shutdown")
       const started: string[] = []
+      const announced = yield* Deferred.make<void>()
       yield* events.listen((event) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           const data = event.data as { info?: Shell.Info }
-          if (event.type === "shell.updated" && data.info?.status === "running") started.push(data.info.id)
+          if (event.type === "shell.updated" && data.info?.status === "running") {
+            started.push(data.info.id)
+            yield* Deferred.succeed(announced, undefined)
+          }
         }),
       )
       const scope = yield* Scope.make()
@@ -576,11 +613,10 @@ describe("queued shell commands", () => {
       )
       const shell = Context.get(context, Service)
       const holder = yield* shell.enqueue(yield* shell.prepare({ command: "sleep 30", timeout: 0 }), sessionA)
-      yield* running(shell, holder.id)
+      yield* Deferred.await(announced).pipe(Effect.timeout(5_000))
       const queued = yield* shell.enqueue(yield* shell.prepare({ command: `touch ${marker}`, timeout: 0 }), sessionB)
       yield* Scope.close(scope, Exit.void)
       yield* drained
-      yield* Effect.sleep(300)
       expect(started).toEqual([holder.id])
       expect(started).not.toContain(queued.id)
       expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
@@ -594,10 +630,14 @@ describe("queued shell commands", () => {
       const db = (yield* Database.Service).db
       const { workspace, spawnHook } = yield* QueuedFixture
       const marker = join(workspace, "cancelled-during-spawn")
+      const release = join(workspace, "release-cancelled-spawn")
       const holder = yield* shell.enqueue(yield* shell.prepare({ command: "sleep 30", timeout: 0 }), sessionA)
       yield* running(shell, holder.id)
       const target = yield* shell.enqueue(
-        yield* shell.prepare({ command: `sleep 0.3; touch '${marker}'`, timeout: 0 }),
+        yield* shell.prepare({
+          command: `while [ ! -e '${release}' ]; do sleep 0.02; done; touch '${marker}'`,
+          timeout: 0,
+        }),
         sessionB,
       )
       const updates: string[] = []
@@ -608,23 +648,31 @@ describe("queued shell commands", () => {
         }),
       )
       const waited = yield* shell.wait(target.id).pipe(Effect.forkScoped({ startImmediately: true }))
-      spawnHook.current = Effect.gen(function* () {
-        yield* shell.remove(target.id).pipe(Effect.forkDetach({ startImmediately: true }))
-        for (let attempt = 0; attempt < 250; attempt++) {
-          if (
-            yield* shell.get(target.id).pipe(
-              Effect.as(false),
-              Effect.catch(() => Effect.succeed(true)),
+      const spawned = yield* Deferred.make<number>()
+      const removed = yield* Deferred.make<void>()
+      spawnHook.current = (pid) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(spawned, pid)
+          yield* shell
+            .remove(target.id)
+            .pipe(Effect.andThen(Deferred.succeed(removed, undefined)), Effect.forkDetach({ startImmediately: true }))
+          for (let attempt = 0; attempt < 250; attempt++) {
+            if (
+              yield* shell.get(target.id).pipe(
+                Effect.as(false),
+                Effect.catch(() => Effect.succeed(true)),
+              )
             )
-          )
-            return
-          yield* Effect.sleep(5)
-        }
-      })
+              return
+            yield* Effect.sleep(5)
+          }
+        })
       yield* shell.remove(holder.id)
       expect(yield* Fiber.join(waited)).toMatchObject({ status: "killed" })
       yield* drained
-      yield* Effect.sleep(600)
+      yield* Deferred.await(removed).pipe(Effect.timeout(5_000))
+      yield* groupGone(yield* Deferred.await(spawned).pipe(Effect.timeout(5_000)))
+      yield* Effect.promise(() => Bun.write(release, "release"))
       expect(updates).not.toContain("running")
       expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
       expect(
@@ -649,7 +697,12 @@ describe("queued shell commands", () => {
         return yield* shell.enqueue(yield* shell.prepare({ command: "true", timeout: 0 }), sessionB)
       }).pipe(Effect.flip)
       expect(error).toBeInstanceOf(ShellQueue.FullError)
-      yield* Effect.forEach([holder, ...waiting], (info) => shell.remove(info.id), { discard: true })
+      yield* shell.remove(waiting[0].id)
+      const replacement = yield* shell.enqueue(yield* shell.prepare({ command: "true", timeout: 0 }), sessionB)
+      expect(replacement.status).toBe("queued")
+      yield* Effect.forEach([holder, ...waiting.slice(1), replacement], (info) => shell.remove(info.id), {
+        discard: true,
+      })
       yield* drained
     }),
   )

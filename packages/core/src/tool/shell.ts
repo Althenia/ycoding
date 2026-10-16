@@ -192,7 +192,11 @@ export const Plugin = {
             description: command,
             metadata: { source: "shell", state },
             ...(quiet.delete(shellID) ? { resume: false } : {}),
-          }).pipe(Effect.andThen(runtime.job.noticeAdmitted(callID)), Effect.andThen(shell.noticeAdmitted(shellID)))
+          }).pipe(
+            Effect.catchTag("Session.NotFoundError", () => Effect.void),
+            Effect.andThen(runtime.job.noticeAdmitted(callID)),
+            Effect.andThen(shell.noticeAdmitted(shellID)),
+          )
         }),
         Effect.forkIn(scope, { startImmediately: true }),
       )

@@ -1,6 +1,6 @@
 export * as ShellLedger from "./ledger"
 
-import { and, eq, exists, gt, isNotNull, isNull, notExists, notInArray, sql } from "drizzle-orm"
+import { and, eq, exists, gt, inArray, isNotNull, isNull, notExists, notInArray, sql } from "drizzle-orm"
 import { Clock, Effect } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import type { Shell } from "@ycoding-ai/schema/shell"
@@ -10,7 +10,7 @@ import { EventTable } from "../event/sql"
 import { AppProcess } from "../process"
 import { SessionEvent } from "../session/event"
 import type { SessionSchema } from "../session/schema"
-import { SessionTable } from "../session/sql"
+import { SessionTable, SessionTaskTable } from "../session/sql"
 import { ShellTable } from "./sql"
 
 type Db = Database.Interface["db"]
@@ -94,13 +94,27 @@ export const noticeOwed = (db: Db, id: Shell.ID, sessionID: SessionSchema.ID) =>
     .run()
     .pipe(Effect.orDie)
 
-export const noticeAdmitted = (db: Db, id: Shell.ID) =>
-  db.delete(ShellTable).where(eq(ShellTable.id, id)).run().pipe(Effect.orDie)
+export const noticeAdmitted = (db: Db, id: Shell.ID, running = false) =>
+  (running
+    ? db.update(ShellTable).set({ notice_pending: false }).where(eq(ShellTable.id, id)).run()
+    : db.delete(ShellTable).where(eq(ShellTable.id, id)).run()
+  ).pipe(Effect.orDie)
 
 const unacknowledged = (db: Db) =>
   and(
     isNotNull(ShellTable.time_lost),
     exists(db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, ShellTable.session_id))),
+    notExists(
+      db
+        .select({ id: SessionTaskTable.session_id })
+        .from(SessionTaskTable)
+        .where(
+          and(
+            eq(SessionTaskTable.session_id, ShellTable.session_id),
+            inArray(SessionTaskTable.state, ["completed", "failed", "cancelled", "lost"]),
+          ),
+        ),
+    ),
     notExists(
       db
         .select({ id: EventTable.id })
@@ -130,7 +144,7 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
   appProcess: AppProcess.Interface,
   graceMs = TERMINATE_GRACE_MS,
 ) {
-  yield* db
+  const discardAcknowledged = db
     .delete(ShellTable)
     .where(
       and(
@@ -141,11 +155,11 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
     .run()
     .pipe(Effect.orDie)
   const rows = yield* db.select().from(ShellTable).where(isNull(ShellTable.time_lost)).all().pipe(Effect.orDie)
-  if (rows.length === 0) return
+  if (rows.length === 0) return yield* discardAcknowledged
   const snapshot = yield* processes(appProcess).pipe(Effect.option)
   if (snapshot._tag === "None") {
     yield* Effect.logWarning("could not list processes; background shell state was not reconciled")
-    return
+    return yield* discardAcknowledged
   }
   yield* Effect.forEach(
     rows.filter((row) => !alive(snapshot.value, row.owner_pid, row.owner_started)),
@@ -168,6 +182,7 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
       }),
     { concurrency: "unbounded", discard: true },
   )
+  yield* discardAcknowledged
 })
 
 function survivors(row: Row, snapshot: readonly Process[]) {

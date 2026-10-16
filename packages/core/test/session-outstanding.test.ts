@@ -10,6 +10,7 @@ import { sqliteLayer } from "@ycoding-ai/core/database/sqlite.bun"
 import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
+import { ShellTable } from "@ycoding-ai/core/shell/sql"
 import { Shell as ShellSchema } from "@ycoding-ai/schema/shell"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -27,7 +28,7 @@ import { SessionInterruptedExecution } from "@ycoding-ai/core/session/execution/
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
+import { SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { testEffect } from "./lib/effect"
 
@@ -132,6 +133,54 @@ it.effect("a lost notice is cleared by the next execution even in the same milli
     yield* events.publish(SessionEvent.Execution.Started, { sessionID })
     expect([...(yield* sessions.outstanding()).lost]).toEqual([])
     expect([...(yield* sessions.outstanding(true)).failed]).toEqual([])
+  }),
+)
+
+it.effect("lost shell attention excludes terminal subagents and reconciliation discards acknowledged rows", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const appProcess = yield* AppProcess.Service
+    const db = (yield* Database.Service).db
+    const parent = Session.ID.make("ses_lost_shell_parent")
+    const root = Session.ID.make("ses_lost_shell_root")
+    yield* sessions.create({ id: parent, location })
+    yield* sessions.create({ id: root, location })
+    const children = (["completed", "failed", "cancelled", "lost", "running", "waiting", "starting", "cancelling"] as const).map((state) => ({
+      state,
+      id: Session.ID.make(`ses_lost_shell_${state}`),
+    }))
+    for (const child of children) {
+      yield* sessions.create({ id: child.id, parentID: parent })
+      yield* db.insert(SessionTaskTable).values({
+        session_id: child.id, parent_id: parent,
+        parent_assistant_message_id: SessionMessage.ID.make(`msg_parent_${child.state}`),
+        tool_call_id: `call_${child.state}`, input_id: SessionMessage.ID.make(`msg_input_${child.state}`),
+        description: child.state, agent: Agent.defaultID,
+        model: CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("test") }),
+        prompt_digest: "digest", background: true, delivery: "steer", state: child.state,
+        time_created: 1, time_updated: 1,
+      }).run()
+    }
+    for (const id of [root, ...children.map((child) => child.id)]) {
+      yield* db.insert(ShellTable).values({
+        id: ShellSchema.ID.make(`sh_lost_${id}`), session_id: id, pid: 0,
+        owner_pid: 2_000_000_000, owner_started: "Thu Jan 1 00:00:00 1970",
+        time_created: 1, time_lost: 1, start_seq: -1, notice_pending: true,
+      }).run()
+    }
+    const expected = [root, ...children.slice(4).map((child) => child.id)].toSorted()
+    expect((yield* ShellLedger.lostSessions(db)).toSorted()).toEqual(expected)
+    expect([...(yield* sessions.outstanding()).lost].toSorted()).toEqual(expected)
+    for (const sessionID of [root, children[4].id]) yield* events.publish(SessionEvent.Execution.Started, { sessionID })
+    const retained = children.slice(5).map((child) => child.id).toSorted()
+    expect([...(yield* sessions.outstanding()).lost].toSorted()).toEqual(retained)
+    yield* db.insert(ShellTable).values({
+      id: ShellSchema.ID.make("sh_terminal_newly_orphaned"), session_id: children[0].id, pid: 0,
+      owner_pid: 2_000_000_000, owner_started: "Thu Jan 1 00:00:00 1970", time_created: 1, notice_pending: true,
+    }).run()
+    yield* ShellLedger.reconcile(db, appProcess)
+    expect((yield* db.select({ sessionID: ShellTable.session_id }).from(ShellTable).all()).map((row) => row.sessionID).toSorted()).toEqual(retained)
   }),
 )
 

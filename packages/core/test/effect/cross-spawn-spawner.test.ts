@@ -2,12 +2,15 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Exit, Stream } from "effect"
+import { Effect, Exit, Layer, Stream } from "effect"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import type * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@ycoding-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { testEffect } from "../lib/effect"
+import { cleanGroup, fileReady, groupAlive, shellProcess } from "../fixture/shell-process"
+import { ProcessGroup } from "@ycoding-ai/core/shell/process-group"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
 const fx = testEffect(live)
@@ -268,6 +271,226 @@ describe("cross-spawn spawner", () => {
   })
 
   describe("process control", () => {
+    fx.live(
+      "signals the original group when its leader exits before its descendants are observed",
+      () =>
+        Effect.gen(function* () {
+          if (process.platform === "win32") return
+          const tmp = yield* Effect.acquireRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          )
+          const original = ProcessGroup.native
+          const state = { pid: 0, hideLeader: false }
+          const targets: number[] = []
+          const scoped = Layer.fresh(CrossSpawnSpawner.layer).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                NodeFileSystem.layer,
+                NodePath.layer,
+                Layer.succeed(ProcessGroup.System, {
+                  read: original.read.pipe(
+                    Effect.map((rows) => (state.hideLeader ? rows.filter((row) => row.pid !== state.pid) : rows)),
+                  ),
+                  signal: (pid, signal) => {
+                    targets.push(pid)
+                    return original.signal(pid, signal)
+                  },
+                }),
+              ),
+            ),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const command = shellProcess(tmp.path, true)
+              const handle = yield* ChildProcess.make("node", ["-e", command.script], { forceKillAfter: 100 })
+              state.pid = Number(handle.pid)
+              yield* Effect.addFinalizer(() => cleanGroup(state.pid))
+              yield* fileReady(command.ready)
+              state.hideLeader = true
+              yield* handle.kill().pipe(Effect.timeout(2_500))
+              expect(targets).toEqual([-state.pid, -state.pid])
+            }).pipe(Effect.provide(scoped)),
+          )
+        }),
+      10_000,
+    )
+
+    fx.live(
+      "bounds confirmation when original members remain after SIGKILL",
+      () =>
+        Effect.gen(function* () {
+          if (process.platform === "win32") return
+          const tmp = yield* Effect.acquireRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          )
+          const original = ProcessGroup.native
+          const scoped = Layer.fresh(CrossSpawnSpawner.layer).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                NodeFileSystem.layer,
+                NodePath.layer,
+                Layer.succeed(ProcessGroup.System, { ...original, signal: () => Effect.void }),
+              ),
+            ),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const command = shellProcess(tmp.path, true)
+              const handle = yield* ChildProcess.make("node", ["-e", command.script], { forceKillAfter: 100 })
+              yield* Effect.addFinalizer(() => cleanGroup(Number(handle.pid)))
+              yield* fileReady(command.ready)
+              const result = yield* handle.kill().pipe(Effect.exit, Effect.timeout(2_500))
+              expect(Exit.isFailure(result)).toBe(true)
+              expect(groupAlive(Number(handle.pid))).toBe(true)
+            }).pipe(Effect.provide(scoped)),
+          )
+        }),
+      10_000,
+    )
+
+    for (const mode of ["escaped", "drain"] as const)
+      fx.live(
+        mode === "escaped"
+          ? "Node cleanup settles while an escaped descendant keeps inherited pipes open"
+          : "Node drains every byte written before leader exit while capture is held",
+        () =>
+          Effect.gen(function* () {
+            if (process.platform === "win32") return
+            const tmp = yield* Effect.acquireRelease(
+              Effect.promise(() => tmpdir()),
+              (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+            )
+            const built = yield* Effect.promise(() =>
+              Bun.build({
+                entrypoints: [path.join(import.meta.dir, "../fixture/spawner-pipe.ts")],
+                outdir: tmp.path,
+                target: "node",
+                naming: "runner.mjs",
+              }),
+            )
+            expect(built.success).toBe(true)
+            const runner = Bun.spawn(
+              ["node", path.join(tmp.path, "runner.mjs"), ...(mode === "drain" ? ["drain"] : []), tmp.path],
+              {
+                stdout: "ignore",
+                stderr: "pipe",
+                detached: true,
+              },
+            )
+            const leader = Number(yield* fileReady(path.join(tmp.path, "leader")))
+            yield* Effect.addFinalizer(() => cleanGroup(leader).pipe(Effect.andThen(cleanGroup(runner.pid))))
+            if (mode === "drain") {
+              const code = yield* Effect.promise(() => runner.exited).pipe(Effect.timeout(3_000))
+              expect(code, yield* Effect.promise(() => new Response(runner.stderr).text())).toBe(0)
+              expect(
+                (yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "output")))).equals(
+                  Buffer.alloc(256 * 1024, 97),
+                ),
+              ).toBe(true)
+              return
+            }
+            const escaped = Number(yield* fileReady(path.join(tmp.path, "escaped-ready")))
+            yield* Effect.addFinalizer(() => cleanGroup(escaped))
+            yield* fileReady(path.join(tmp.path, "settled"))
+            expect(groupAlive(escaped)).toBe(true)
+          }),
+        15_000,
+      )
+
+    for (const replacement of ["stale", "replaced", "disappeared"] as const) {
+      fx.live(
+        `does not signal ${replacement} process-group ownership`,
+        () =>
+          Effect.gen(function* () {
+            if (process.platform === "win32") return
+            const tmp = yield* Effect.acquireRelease(
+              Effect.promise(() => tmpdir()),
+              (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+            )
+            const original = ProcessGroup.native
+            const state = { pid: 0, changed: false }
+            const sent: NodeJS.Signals[] = []
+            const system = {
+              read: original.read.pipe(
+                Effect.map((rows) =>
+                  state.changed
+                    ? replacement === "disappeared"
+                      ? rows.filter((row) => row.pgid !== state.pid)
+                      : [
+                          ...rows.filter((row) => row.pid !== state.pid),
+                          { pid: state.pid, pgid: state.pid, started: "replacement" },
+                        ]
+                    : rows,
+                ),
+              ),
+              signal: (pid: number, signal: NodeJS.Signals) => {
+                sent.push(signal)
+                if (signal === "SIGTERM") state.changed = true
+                return original.signal(pid, signal)
+              },
+            }
+            const scoped = Layer.fresh(CrossSpawnSpawner.layer).pipe(
+              Layer.provide(
+                Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, Layer.succeed(ProcessGroup.System, system)),
+              ),
+            )
+            const command = shellProcess(tmp.path, true)
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const handle = yield* ChildProcess.make("node", ["-e", command.script], { forceKillAfter: 100 })
+                state.pid = Number(handle.pid)
+                yield* Effect.addFinalizer(() => cleanGroup(state.pid))
+                yield* fileReady(command.ready)
+                if (replacement === "stale") state.changed = true
+                yield* handle.kill().pipe(Effect.timeout(2_000))
+                expect(groupAlive(state.pid)).toBe(true)
+                const count = sent.length
+                state.changed = false
+                yield* handle.kill().pipe(Effect.timeout(2_000))
+                expect(sent.length).toBe(count)
+                expect(sent).not.toContain("SIGKILL")
+                if (replacement === "stale") expect(sent).toEqual([])
+              }).pipe(Effect.provide(scoped)),
+            )
+          }),
+        10_000,
+      )
+    }
+
+    for (const mode of ["kill", "release", "exited-release"] as const) {
+      fx.live(
+        `cleans surviving group members after leader exit on ${mode}`,
+        () =>
+          Effect.gen(function* () {
+            if (process.platform === "win32") return
+            const tmp = yield* Effect.acquireRelease(
+              Effect.promise(() => tmpdir()),
+              (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+            )
+            const command = shellProcess(tmp.path)
+            const pid = { value: 0 }
+            yield* Effect.addFinalizer(() => (pid.value ? cleanGroup(pid.value) : Effect.void))
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const handle = yield* ChildProcess.make("node", ["-e", command.script], { forceKillAfter: 100 })
+                pid.value = Number(handle.pid)
+                yield* fileReady(command.ready)
+                if (mode === "kill") yield* handle.kill().pipe(Effect.timeout(2_000))
+                if (mode === "exited-release") {
+                  process.kill(Number(yield* fileReady(command.ready)), "SIGTERM")
+                  expect(yield* handle.exitCode.pipe(Effect.timeout(2_000))).toBe(ChildProcessSpawner.ExitCode(0))
+                }
+              }),
+            )
+            expect(groupAlive(pid.value)).toBe(false)
+            expect(yield* fileReady(command.childTerm)).toBe("term")
+          }),
+        10_000,
+      )
+    }
+
     fx.effect(
       "kills a running process",
       Effect.gen(function* () {
@@ -301,14 +524,12 @@ describe("cross-spawn spawner", () => {
       Effect.gen(function* () {
         if (process.platform === "win32") return
 
-        const started = Date.now()
-        const exit = yield* Effect.exit(
-          Effect.gen(function* () {
-            const handle = yield* js('process.on("SIGTERM", () => {}); setInterval(() => {}, 10_000)')
-            yield* handle.kill({ forceKillAfter: 100 })
-            return yield* handle.exitCode
-          }),
+        const handle = yield* js(
+          'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 10_000)',
         )
+        expect((yield* Stream.runHead(handle.stdout))._tag).toBe("Some")
+        const started = Date.now()
+        const exit = yield* handle.kill({ forceKillAfter: 100 }).pipe(Effect.andThen(handle.exitCode), Effect.exit)
 
         expect(Date.now() - started).toBeLessThan(1_000)
         expect(Exit.isFailure(exit) ? true : exit.value !== ChildProcessSpawner.ExitCode(0)).toBe(true)
