@@ -321,6 +321,17 @@ describe("Agent", () => {
       expect(god.system).toContain("launch every ready independent task in parallel")
       expect(god.system).toContain("score size, difficulty, complexity, and risk against a rubric")
       expect(god.system).toContain("never leave the variant blank")
+      for (const id of ["GSD", "architech", "god", "yangi"]) {
+        const primary = yield* agent.get(Agent.ID.make(id))
+        expect(primary?.system).toContain("Honor explicit user selections of subagent profile, provider, and model.")
+        expect(primary?.system).toContain("Otherwise choose among configured available models for the task")
+        expect(primary?.system).toContain("the child provider may differ from the parent's")
+        expect(primary?.system).toContain("Verify model availability")
+        expect(primary?.system).toContain("set model.variant to an exact advertised variant")
+        expect(primary?.system).toContain("Preserve permission ceilings")
+        expect(primary?.system).toContain("never silently substitute a different profile or provider")
+        expect(primary?.system).not.toContain("choose a model from the provider of this session's active model")
+      }
       expect(god.system).toContain("Use the decision tool")
       expect(god.system).toContain("Default to parallel execution to maximize development speed.")
       expect(god.system).toContain("start it now unless it consumes a running task's output or edits its files; name that dependency for each task you hold back.")

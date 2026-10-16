@@ -35,6 +35,7 @@ import { eq } from "drizzle-orm"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
@@ -42,7 +43,7 @@ import { Agent } from "@ycoding-ai/core/agent"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([SessionRunnerModel.node, Credential.node, Integration.node, Catalog.node]), [
+  AppNodeBuilder.build(LayerNode.group([SessionRunnerModel.node, Credential.node, Integration.node, Catalog.node, Agent.node]), [
     [Location.node, Location.boundNode({ directory: AbsolutePath.make("/fixture") })],
   ]),
 )
@@ -178,6 +179,51 @@ const namespace = (resolved: SessionRunnerModel.Resolved) =>
   })
 
 describe("per-session profiles", () => {
+  for (const profile of ["Work", undefined]) {
+    it.effect(`preflights a different child provider with ${profile ?? "the default"} profile`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        const agents = yield* Agent.Service
+        const catalog = yield* Catalog.Service
+        yield* agents.transform((draft) => {
+          draft.update(Agent.defaultID, (agent) => { agent.mode = "primary" })
+          draft.update(Agent.ID.make("reviewer"), (agent) => { agent.mode = "subagent" })
+        })
+        yield* catalog.transform((draft) => {
+          draft.model.update(providerID, modelID, (model) => {
+            model.variants.push({ id: CatalogModel.VariantID.make("high") })
+          })
+        })
+        const parent = {
+          ...session(),
+          model: CatalogModel.Ref.make({
+            providerID: Provider.ID.make("parent-provider"),
+            id: CatalogModel.ID.make("parent-model"),
+            profile: "Parent",
+          }),
+        }
+        const model = CatalogModel.Ref.make({
+          providerID, id: modelID, variant: CatalogModel.VariantID.make("high"),
+          ...(profile === undefined ? {} : { profile }),
+        })
+        const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), model })
+        expect(prepared.resolved.ref).toEqual(model)
+        expect(prepared.resolved.accountIdentityDigest).toBe(
+          SessionRunnerModel.accountIdentityDigest(fixture.profiles[profile === "Work" ? 0 : 1]!),
+        )
+        expect(parent.model).toEqual(CatalogModel.Ref.make({
+          providerID: Provider.ID.make("parent-provider"),
+          id: CatalogModel.ID.make("parent-model"),
+          profile: "Parent",
+        }))
+        const unavailable = yield* SessionOrchestration.preflight(parent, {
+          agent: Agent.ID.make("reviewer"), model: { ...model, profile: "Missing" },
+        }).pipe(Effect.flip)
+        expect(unavailable.message).toContain("Profile unavailable")
+      }),
+    )
+  }
+
   it.effect("resolves account-exclusive models and keeps implicit defaults on the active account", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
