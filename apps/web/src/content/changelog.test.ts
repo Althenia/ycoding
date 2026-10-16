@@ -8,7 +8,7 @@ describe("release entries", () => {
     const release = RELEASES[0]
     expect(release).toMatchObject({
       version: "0.10.11",
-      date: "2026-10-16",
+      date: "2026-10-17",
       tags: ["Added", "Changed", "Fixed"],
     })
     const text = release?.changes.map((change) => change.text).join("\n") ?? ""

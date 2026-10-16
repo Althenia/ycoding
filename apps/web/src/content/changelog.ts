@@ -23,7 +23,7 @@ export type ReleaseEntry = {
 export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.10.11",
-    date: "2026-10-16",
+    date: "2026-10-17",
     title: "Fallback models, model incidents, restart recovery, and opt-in automation",
     tags: ["Added", "Changed", "Fixed"],
     changes: [
