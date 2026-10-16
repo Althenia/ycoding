@@ -112,6 +112,8 @@ function fixture(input?: {
                 ]
               : [],
         })
+      if (url.pathname.endsWith("/guardrail"))
+        return json({ data: { rootSessionID: parentID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
       if (url.pathname.endsWith("/permission"))
         return json({
           data:

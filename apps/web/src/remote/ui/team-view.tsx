@@ -24,13 +24,13 @@ function StateMark(props: { readonly state: TeamSubagent["state"] }): JSX.Elemen
 const shellMark: Readonly<Record<TeamPanelData["shells"][number]["status"], TeamSubagent["state"]>> = { queued: "waiting", running: "running", exited: "completed", timeout: "failed", "memory-limit": "failed", killed: "cancelled" }
 const usageKeys = ["tokens", "cost", "context", "cache"] as const
 
-function TaskUsage(props: { readonly task: () => TeamSubagent; readonly loading: () => boolean }): JSX.Element {
-  const slots = createMemo(() => usageSlots(props.task(), { loading: props.loading() }))
+function TaskUsage(props: { readonly task: () => TeamSubagent; readonly loading: () => boolean; readonly accountingUnsupported: () => boolean }): JSX.Element {
+  const slots = createMemo(() => usageSlots(props.task(), { loading: props.loading(), accountingUnsupported: props.accountingUnsupported() }))
   return <dl class="team-view__usage" aria-busy={props.loading()}>
     <For each={usageKeys}>{(key) => {
       const slot = () => slots().find((entry) => entry.key === key)!
       return <div class="team-view__usage-cell" data-slot={key} data-state={slot().state}>
-        <dt>{slot().label}</dt>
+        <dt title={slot().label}>{slot().label}</dt>
         <dd><Show when={slot().state === "loading"} fallback={slot().value}><span class="team-view__skeleton" aria-hidden="true" /><span class="visually-hidden">Loading</span></Show>
           <Show when={slot().meter !== undefined}><span class="team-view__meter" role="img" aria-label={`${Math.round((slot().meter ?? 0) * 100)}% of context used`}><span style={{ "inline-size": `${Math.round((slot().meter ?? 0) * 100)}%` }} /></span></Show></dd>
       </div>
@@ -188,7 +188,7 @@ export function TeamView(props: {
               </div>
               <p class="team-view__meta">{[task(id).modelLabel, id === props.currentSessionID ? "attached" : undefined,
                 formatElapsed(task(id).startedAt, isActiveSubagent(task(id).state) ? props.now() : task(id).updatedAt)].filter((item) => item !== undefined).join(" · ")}</p>
-              <TaskUsage task={() => task(id)} loading={() => props.data().economicsLoading === true} />
+              <TaskUsage task={() => task(id)} loading={() => props.data().economicsLoading === true} accountingUnsupported={() => props.data().accountingUnsupported === true} />
               <Show when={!controlsUnsupported() && answerID() === id ? task(id).question?.id : undefined} keyed><TeamAnswerForm question={task(id).question!} onAnswer={(questionID, text) => props.onAnswer(id, questionID, text)} /></Show>
             </li>}</For></ul>
           <Show when={props.data().next}><button type="button" class="team-view__more" disabled={props.data().pageLoading} onClick={() => runRead(props.onLoadOlder)}>

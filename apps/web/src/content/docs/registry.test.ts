@@ -45,6 +45,14 @@ const INTERNAL_DOC_SLUGS = [
 ] as const
 
 describe("public docs allowlist", () => {
+  test("usage guidance distinguishes measured rates, causal costs, retained coverage and quota warm-up", () => {
+    const section = findDocPage("usage/sessions")?.sections.find((section) => section.heading === "Usage, prompt costs, and forecasts")
+    const text = section?.blocks.flatMap((block) => block.kind === "paragraph" || block.kind === "callout" ? [block.text] : []).join(" ") ?? ""
+    for (const required of ["provider default at request time", "selected effort", "median and p90", "Weighted throughput", "≈", "already-started requests keep their owner", "inclusive rows overlap", "Missing prices", "one-hour horizon", "15-minute half-life", "No increase observed does not mean unlimited"])
+      expect(text).toContain(required)
+    expect(text).not.toMatch(/usage_anchor|usageAnchor|session_provider_request|credential IDs|CREATE TABLE/)
+  })
+
   test("documents Muse account and key setup with current authentication limits", () => {
     const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""

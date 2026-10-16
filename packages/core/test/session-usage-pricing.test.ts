@@ -19,6 +19,7 @@ import { SessionExecution } from "../src/session/execution"
 import { SessionUsagePricing } from "../src/session/usage-pricing"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
+import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
@@ -125,12 +126,14 @@ function harness() {
           })),
         )
         .run()
+      yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
       return database
     }),
   ).pipe(Layer.provide(Database.layer({ path: ":memory:" })))
   const runtime = AppNodeBuilder.build(
     LayerNode.group([Database.node, Session.node, LocationServiceMap.node, EventRuntime.node]),
     [
+      [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})],
       [Database.node, database],
       [SessionExecution.node, SessionExecution.noopLayer],
       [LocationServiceMap.node, locations],

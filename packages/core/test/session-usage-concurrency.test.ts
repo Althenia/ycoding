@@ -20,6 +20,7 @@ import { Session } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
+import { UsageAnalytics } from "../src/usage-analytics"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
 const sessionID = SessionSchema.ID.make("ses_usage_concurrency")
@@ -77,7 +78,7 @@ async function fileDatabase(gate: Effect.Effect<void>) {
               expect((yield* Effect.serviceOption(reader.$client.transactionService))._tag).toBe("Some")
               expect(
                 (yield* reader.$client
-                  .unsafe<{ count: number }>("SELECT count(*) AS count FROM session_provider_request")
+                  .unsafe<{ count: number }>("SELECT count(*) AS count FROM usage_analytics_request")
                   .pipe(Effect.orDie))[0]?.count,
               ).toBe(requests)
               yield* gate
@@ -93,6 +94,7 @@ async function fileDatabase(gate: Effect.Effect<void>) {
 
 function runtime(database: Layer.Layer<Database.Service>) {
   return AppNodeBuilder.build(LayerNode.group([Database.node, Session.node, LocationServiceMap.node]), [
+    [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})],
     [Database.node, database],
     [SessionExecution.node, SessionExecution.noopLayer],
   ])
@@ -113,6 +115,7 @@ const seed = Effect.gen(function* () {
       .insert(SessionProviderRequestTable)
       .values(Array.from({ length: 500 }, (_, offset) => row(start + offset)))
       .run()
+  yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
   return database
 }).pipe(Effect.orDie)
 
@@ -183,6 +186,7 @@ test("a write committed while a usage report reads is excluded from that report 
         .values(row(requests))
         .run()
         .pipe(
+          Effect.andThen(database.db.transaction(() => UsageAnalytics.backfill(database.db))),
           Effect.tap(() => Effect.sync(() => written.push(requests))),
           Effect.andThen(Deferred.succeed(proceed, undefined)),
         )

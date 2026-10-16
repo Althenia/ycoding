@@ -10,6 +10,7 @@ import { LocationProvider } from "../../../src/context/location"
 import { RouteProvider, useRoute } from "../../../src/context/route"
 import { Composer } from "../../../src/routes/session/composer"
 import { ToastProvider } from "../../../src/ui/toast"
+import { DialogProvider } from "../../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -276,6 +277,11 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
   const pinRequests: Array<{ pathname: string; method: string }> = []
   let pinnedAt: number | undefined
   const calls = createFetch((url, request) => {
+    if (url.pathname === "/api/session/ses_parent/usage/tasks") {
+      const breakdown = (amount: number, requests: number) => ({ requests, tokens: { input: requests * 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { known: amount, total: amount, pricedRequests: requests, unpricedRequests: 0 } })
+      const total = breakdown(23, 6)
+      return json({ data: { tasks: [{ sessionID: task.sessionID, status: "so-far", attribution: "complete", history: "retained", total, main: breakdown(13, 4), children: breakdown(10, 2), helpers: [] }], total, history: "retained" } })
+    }
     if (url.pathname === "/api/session/ses_parent/subagent")
       return json({ data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
     if (url.pathname === "/api/session/ses_child/pin") {
@@ -305,7 +311,7 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
                       <LeaderProbe />
-                      <ToastProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></ToastProvider>
+                      <ToastProvider><DialogProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -321,6 +327,13 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
 
   try {
     await app.waitForFrame((frame) => frame.includes("starting") && frame.includes("Start review"))
+    expect(app.captureCharFrame()).toContain("c inclusive task cost details")
+    app.mockInput.pressKey("c")
+    await app.waitForFrame((frame) => frame.includes("Recursive task cost (inclusive)") && frame.includes("Task cost (inclusive) $23.00"))
+    expect(app.captureCharFrame()).toContain("Main $13.00 · Children $10.00")
+    expect(app.captureCharFrame()).toContain("r refresh")
+    app.mockInput.pressKey("ESCAPE")
+    await app.waitForFrame((frame) => !frame.includes("Recursive task cost (inclusive)"))
     app.mockInput.pressKey("p")
     await app.waitForFrame((frame) => frame.includes("PINNED"))
     expect(pinRequests).toEqual([{ pathname: "/api/session/ses_child/pin", method: "POST" }])
@@ -496,9 +509,9 @@ test("renders section headings while keyboard navigation selects only task rows 
                       }}
                     >
                       <RouteProbe />
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID="ses_parent" open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>

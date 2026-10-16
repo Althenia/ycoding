@@ -7,6 +7,7 @@
  * synthetic, so browser checks of layout, streaming, requests, and reconnect can
  * run without a hosted relay or credentials.
  */
+import { accountedTask } from "../test/usage-fixture"
 import { render } from "solid-js/web"
 import { onMount } from "solid-js"
 import { ThemeProvider } from "../src/theme/theme-store"
@@ -31,6 +32,14 @@ import "../src/styles/site.css"
 import "../src/styles/docs.css"
 import "../src/styles/remote.css"
 import "./remote-fixture.css"
+
+function fixtureTaskCost(sessionID: string, variant: string) {
+  const task = accountedTask(sessionID, 0.25, 20)
+  if (variant === "partial") return { ...task, status: "so-far" as const, attribution: "partial" as const, total: { ...task.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" as const } } }
+  if (variant === "unreported") return { ...task, total: { ...task.total, cost: { pricedRequests: 0, unpricedRequests: 1 } } }
+  return task
+}
+
 
 const model = { id: "gpt-6", providerID: "openai" } as const
 const sessionID = "ses_fixture"
@@ -705,7 +714,7 @@ function createFixtureStore(): Fixture {
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
-    if (accountParams.get("teamControls") === "unsupported" && ["session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
+    if (accountParams.get("teamControls") === "unsupported" && ["session.taskCosts", "session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([
       "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.create",
@@ -818,6 +827,12 @@ function createFixtureStore(): Fixture {
       })) : []
       tasks.push(...officeTasks)
       return { status: "ok", value: { data: tasks, summary: { total: tasks.length }, cursor: {} } }
+    }
+    if (operation === "session.taskCosts") {
+      const variant = accountParams.get("taskCosts") ?? "known"
+      if (variant === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
+      const tasks = Array.isArray(input?.sessionIDs) ? input.sessionIDs.flatMap((id) => typeof id === "string" ? [fixtureTaskCost(id, variant)] : []) : []
+      return { status: "ok", value: { data: { tasks, total: accountedTask("ses_fixture", 0.25, 20).total, history: "retained" } } }
     }
     if (operation === "session.team.economics") return { status: "ok", value: { data: Array.isArray(input?.sessionIDs) ? input.sessionIDs.map((id) => ({ sessionID: id, cost: 0.25, tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 })) : [] } }
     if (operation === "session.subagent.answer" && childQuestion) {

@@ -12,6 +12,17 @@ Compatibility:
 
 - These fields, literal, and event are additive, preserve existing payloads, and require no stored-data migration. Clients are regenerated from the owning command.
 
+## 2026-10-15: Add Causal Usage Attribution
+
+- Add trusted optional `{ sessionID, inputID }` references: `causedBy` on `session.input.admitted`, and `usageAnchor` on `session.provider.request.recorded`, the launched variant of `session.task.updated`, and `session.compaction.admitted`.
+- Add nullable JSON-text `usage_anchor` columns to `session_provider_request`, `session_task`, and `session_compaction_job` in one additive migration. The migration also creates and backfills `usage_analytics_request` from retained ledger records with their Session's current historical Location and adds the private nullable Session `usage_pruned_through` cutoff for permanent accounting gaps. References have no dependency on a surviving transcript message.
+- Extend usage report dimensions and measured generation-rate populations, cost completeness, bounded prompt/task reads, and read-only local consumption/quota forecasts. See [provider usage](./provider-usage.md).
+
+Compatibility:
+
+- Existing payloads remain decodable with unchanged event types and versions. Historical attribution is evidence-only: no rewrite, backfill, new cost/token rollup, or quota-history table. Attribution references never enter model-visible content or cache namespaces. Existing `group=model` keys and meanings are preserved.
+- Analytics have no Session foreign key and retain request-date facts independently of Session deletion or movement. Global-only positive-integer settings control Session records (`session_retention.records_days`, default 7), usage facts (`analytics_retention.usage_days`, default 30) and latency (`analytics_retention.latency_days`, default 30); sweeps read current values and retain the exact boundary. Record cleanup skips executing Sessions. Reads select exactly one source by scope.
+
 ## 2026-10-15: Make Tool Progress Live-Only
 
 - `session.tool.progress` (`SessionEvent.Tool.Progress`) changes from durable version 1 to an ephemeral event with the same `{ sessionID, assistantMessageID, callID, structured, content }` data. It is published on the live stream only, carries no `durable` envelope, leaves the durable manifest and `Session.Event.PublicDurable` union, and no longer appears in `session.log`.

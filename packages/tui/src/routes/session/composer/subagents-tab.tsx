@@ -13,6 +13,9 @@ import { stringWidth } from "../../../util/string-width"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 import { useToast } from "../../../ui/toast"
+import { useDialog } from "../../../ui/dialog"
+import { TaskCostDialog } from "../usage-cost"
+import { accountingPresentation } from "../../../util/usage-accounting"
 import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
@@ -214,6 +217,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
   const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
   const toast = useToast()
+  const dialog = useDialog()
   const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -233,6 +237,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
   createEffect(() => {
     if (!composer.active("subagents")) return
     allEntries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
+    void data.session.taskCosts.sync(parentID(), allEntries().map((entry) => entry.sessionID)).catch(() => undefined)
   })
   createEffect(() => {
     if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
@@ -332,6 +337,12 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
     mode: "composer",
     enabled: () => composer.active("subagents"),
     commands: [
+      { id: "session.subagent.cost", title: "Recursive subagent task cost", group: "Subagents", bind: "c", run: () => {
+        const entry = selectedEntry()
+        if (!entry) return
+        dialog.replace(() => <TaskCostDialog unit={data.session.taskCosts.get(parentID(), entry.sessionID) ? accountingPresentation(data.session.taskCosts.get(parentID(), entry.sessionID)!, data.session.taskCosts.state(parentID()) === "unavailable") : undefined} loading={data.session.taskCosts.state(parentID()) === "loading"}
+          onRefresh={() => { data.session.taskCosts.invalidate(parentID()); void data.session.taskCosts.sync(parentID(), allEntries().map((task) => task.sessionID)).catch(() => undefined) }} />)
+      } },
       {
         id: "composer.subagent.up",
         title: "Previous subagent",
@@ -445,8 +456,8 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         scrollbarOptions={{ visible: false }}
         width="100%"
         maxWidth={dimensions().width}
-        maxHeight={16}
-        paddingTop={2}
+        maxHeight={Math.max(1, Math.min(16, dimensions().height - 16))}
+        paddingTop={dimensions().height <= 24 ? 1 : 2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
         <Show
@@ -553,6 +564,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
           </box>
         </Show>
       </scrollbox>
+      <text fg={theme.text.subdued}>c inclusive task cost details · totals include descendants</text>
     </Show>
   )
 }

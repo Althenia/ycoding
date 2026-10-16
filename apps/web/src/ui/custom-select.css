@@ -9,6 +9,7 @@
   gap: var(--yc-space-2);
   inline-size: 100%;
   min-block-size: var(--yc-control-h);
+  padding-block: 0;
   padding-inline: var(--yc-space-3);
   border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-md);

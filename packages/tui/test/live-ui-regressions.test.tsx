@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { testRender } from "@opentui/solid"
 import { Effect, FileSystem } from "effect"
@@ -207,8 +207,6 @@ test("keeps the header model readable while a toast is visible", async () => {
 
 async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
   const setup = await createTestRenderer({ ...dimensions, useThread: false, kittyKeyboard: true })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventStream()
   const session = {
     id: "ses_prompt_regression",
@@ -238,7 +236,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
     if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
     if (url.pathname === `/api/session/${session.id}/snapshot`) return sessionSnapshot(session.id, [], { session })
     if (
-      [`pending`, `permission`, `form`, `todo`, `skills`, `subagent`, `guardrail/request`].some((suffix) =>
+      [`pending`, `permission`, `form`, `todo`, `skills`, `guardrail/request`].some((suffix) =>
         url.pathname.endsWith(`/${suffix}`),
       )
     )
@@ -256,6 +254,7 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
       config: { get: async () => ({}), update: async () => ({}) },
       packages: { resolve: async () => undefined },
       args: { sessionID: session.id },
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
     }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
@@ -268,7 +267,6 @@ async function bootPromptRegression(dimensions = { width: 120, height: 56 }) {
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
       await task.catch(() => {})
       await server.stop()
-      mock.restore()
     },
   }
 }

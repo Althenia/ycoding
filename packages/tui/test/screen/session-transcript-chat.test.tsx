@@ -135,7 +135,6 @@ function route(url: URL) {
     [
       `/api/session/${sessionID}/pending`,
       `/api/session/${sessionID}/permission`,
-      `/api/session/${sessionID}/subagent`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
       `/api/session/${sessionID}/guardrail/request`,

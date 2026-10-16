@@ -1,13 +1,11 @@
 export * as SessionContextExclusionCleanup from "./context-exclusion-cleanup"
 
-import { inArray, lt } from "drizzle-orm"
 import { Context, Duration, Effect, Layer, Schedule } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { SessionExecution } from "./execution"
-import { SessionContextExclusionTable, SessionTable } from "./sql"
-
-const retention = Duration.days(30)
+import { SessionRecordCleanup } from "./record-cleanup"
+import { RetentionSettings } from "../retention-settings"
 
 export interface Interface {
   readonly cleanup: (now?: number) => Effect.Effect<number>
@@ -20,27 +18,11 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const execution = yield* SessionExecution.Service
+    const settings = yield* RetentionSettings.Service
     return Service.of({
       cleanup: Effect.fn("SessionContextExclusionCleanup.cleanup")(function* (now = Date.now()) {
-        const active = new Set(yield* execution.active)
-        const expired = (yield* db
-          .select({ id: SessionTable.id })
-          .from(SessionTable)
-          .where(lt(SessionTable.time_updated, now - Duration.toMillis(retention)))
-          .all()
-          .pipe(Effect.orDie))
-          .map((session) => session.id)
-          .filter((sessionID) => !active.has(sessionID))
-        if (expired.length === 0) return 0
-        return yield* db
-          .delete(SessionContextExclusionTable)
-          .where(inArray(SessionContextExclusionTable.session_id, expired))
-          .returning({ sessionID: SessionContextExclusionTable.session_id })
-          .all()
-          .pipe(
-            Effect.orDie,
-            Effect.map((rows) => rows.length),
-          )
+        const cutoff = now - Duration.toMillis(Duration.days((yield* settings.read()).recordsDays))
+        return yield* SessionRecordCleanup.cleanup(db, execution.active, "session_context_exclusion", cutoff)
       }),
     })
   }),
@@ -57,5 +39,5 @@ const cleanupLayer = Layer.effectDiscard(
 export const node = makeGlobalNode({
   service: Service,
   layer: Layer.merge(layer, cleanupLayer.pipe(Layer.provide(layer))),
-  deps: [Database.node, SessionExecution.node],
+  deps: [Database.node, SessionExecution.node, RetentionSettings.node],
 })

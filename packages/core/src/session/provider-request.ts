@@ -16,6 +16,9 @@ import { SessionEvent } from "./event"
 import { ProviderRequestObserver } from "./provider-request-observer"
 import { TelemetryConsent } from "../telemetry-consent"
 import { SessionCacheDiagnostics } from "./cache-diagnostics"
+import { SessionUsageAttribution } from "./usage-attribution"
+import { UsageAnalytics } from "../usage-analytics"
+import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
 import {
   SessionCompactionJobTable,
   SessionContextStateTable,
@@ -24,6 +27,7 @@ import {
 } from "./sql"
 
 export interface BeginInput {
+  readonly usageAnchor?: UsageAnchor.Ref | null
   readonly sessionID: ProviderRequest.Record["sessionID"]
   readonly expectedContextRevision?: number
   readonly inputID?: ProviderRequest.Record["inputID"]
@@ -55,6 +59,7 @@ export interface CompleteInput {
 }
 
 export interface Tracker {
+  readonly usageAnchor?: UsageAnchor.Ref
   readonly requestID: string
   readonly defaultInvalidation: ProviderRequest.Invalidation
   readonly observeAttempt: TransportAttempt.Observer
@@ -66,6 +71,9 @@ export interface Tracker {
 }
 
 export interface Interface {
+  readonly activeRequests: Effect.Effect<
+    ReadonlyArray<{ readonly sessionID: ProviderRequest.Record["sessionID"]; readonly usageAnchor?: UsageAnchor.Ref }>
+  >
   readonly next: {
     (input: BeginInput & { readonly expectedContextRevision: number }): Effect.Effect<Tracker, StaleContextRevision>
     (input: BeginInput): Effect.Effect<Tracker>
@@ -76,6 +84,7 @@ export interface Interface {
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly recentSteps: (
     sessionID: ProviderRequest.Record["sessionID"],
+    model?: ProviderRequest.Record["model"],
   ) => Effect.Effect<ReadonlyArray<ProviderRequest.Record>>
   readonly listAll: (range?: {
     readonly from?: number
@@ -87,6 +96,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionProviderRequest") {}
 
 type Pending = {
+  readonly usageAnchor?: UsageAnchor.Ref
   readonly input: BeginInput
   readonly request: number
   readonly defaultInvalidation: ProviderRequest.Invalidation
@@ -129,13 +139,27 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
     .flatMap((record) => (record.timing?.totalMs === undefined ? [] : [record.timing.totalMs]))
     .toSorted((a, b) => a - b)
   const generation = records.flatMap((record) => {
-    const sample = SessionCacheDiagnostics.generationSample(record.timing)
-    return sample === undefined || sample.estimated ? [] : [sample]
+    const duration = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
+    if (record.timing?.generationDurationNs === undefined && (duration ?? 0) < 1_000_000_000) return []
+    const sample = SessionCacheDiagnostics.generationSample({ ...record.timing, observedGenerationDurationNs: duration })
+    return sample === undefined || sample.estimated
+      ? []
+      : [{ ...sample, providerTimed: record.timing?.generationDurationNs !== undefined }]
   })
   const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
+  const rates = generation.map((sample) => sample.tokensPerSecond).toSorted((a, b) => a - b)
   if (first.length === 0 && total.length === 0 && duration === 0) return undefined
   return {
     samples: first.length,
+    generationSamples: generation.length,
+    providerTimedSamples: generation.filter((sample) => sample.providerTimed).length,
+    observedSamples: generation.filter((sample) => !sample.providerTimed).length,
+    ...(rates.length === 0
+      ? {}
+      : {
+          generationP50TokensPerSecond: rates[Math.ceil(rates.length * 0.5) - 1],
+          generationP90TokensPerSecond: rates[Math.ceil(rates.length * 0.9) - 1],
+        }),
     ...(first.length === 0
       ? {}
       : {
@@ -303,6 +327,7 @@ export const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect):
   id: row.id,
   sessionID: row.session_id,
   ...(row.input_id === null ? {} : { inputID: row.input_id }),
+  ...(row.usage_anchor === null ? {} : { usageAnchor: row.usage_anchor }),
   ...(row.assistant_message_id === null ? {} : { assistantMessageID: row.assistant_message_id }),
   ...(row.connection_identity_digest === null ? {} : { connectionIdentityDigest: row.connection_identity_digest }),
   source: row.source,
@@ -355,8 +380,10 @@ const layer = Layer.effect(
           Effect.map((rows) => rows.map(rowRecord)),
         )
 
-    const recentSteps: Interface["recentSteps"] = (sessionID) =>
-      db
+    const recentSteps: Interface["recentSteps"] = (sessionID, model) =>
+      model ? SessionCacheDiagnostics.recentGenerationRecords(db, sessionID, model).pipe(
+        Effect.map((rows) => rows.map(rowRecord)),
+      ) : db
         .select()
         .from(SessionProviderRequestTable)
         .where(
@@ -471,6 +498,23 @@ const layer = Layer.effect(
       lock
         .withPermit(
           Effect.gen(function* () {
+            const ambientAnchor = yield* SessionUsageAttribution.Current
+            const dimensions = yield* UsageAnalytics.capture(db, input.sessionID)
+            const usageAnchor =
+              input.usageAnchor === null
+                ? undefined
+                : (input.usageAnchor ??
+                  (input.source === "step"
+                    ? yield* SessionUsageAttribution.current(db, input.sessionID)
+                    : ambientAnchor === null
+                      ? undefined
+                      : (ambientAnchor ??
+                        (input.inputID
+                          ? yield* SessionUsageAttribution.resolve(db, {
+                              sessionID: input.sessionID,
+                              inputID: input.inputID,
+                            })
+                          : yield* SessionUsageAttribution.current(db, input.sessionID)))))
             const requestID = yield* db.transaction(
               () =>
                 Effect.gen(function* () {
@@ -526,7 +570,14 @@ const layer = Layer.effect(
                   const requestID = ProviderRequest.ID.make(`prq_${randomUUID().replaceAll("-", "")}`)
                   pending.set(requestID, {
                     input,
-                    request: (previous?.request ?? 0) + 1,
+                    usageAnchor,
+                    request:
+                      Math.max(
+                        previous?.request ?? 0,
+                        ...[...pending.values()]
+                          .filter((request) => request.input.sessionID === input.sessionID)
+                          .map((request) => request.request),
+                      ) + 1,
                     defaultInvalidation: defaultInvalidation(previous, input, compactedSincePrevious),
                     attempts: 0,
                     completed: false,
@@ -587,34 +638,37 @@ const layer = Layer.effect(
                           }
                         : {}),
                     }
-                    yield* events.publish(SessionEvent.ProviderRequestRecorded, {
-                      id: requestID,
-                      sessionID: input.sessionID,
-                      inputID: input.inputID,
-                      assistantMessageID: completion.assistantMessageID ?? input.assistantMessageID,
-                      connectionIdentityDigest:
-                        completion.connectionIdentityDigest === null
-                          ? undefined
-                          : (completion.connectionIdentityDigest ?? input.connectionIdentityDigest),
-                      source: input.source,
-                      agent: input.agent,
-                      model: input.model,
-                      routeID: input.routeID,
-                      promptCacheKey: input.promptCacheKey,
-                      systemDigest: input.systemDigest,
-                      toolDigest: input.toolDigest,
-                      request: current.request,
-                      attempts: Math.max(1, current.attempts),
-                      invalidation: completion.invalidation ?? current.defaultInvalidation,
-                      continuation: completion.continuation,
-                      ...(completion.cacheReadReported === undefined
-                        ? {}
-                        : { cacheReadReported: completion.cacheReadReported }),
-                      ...(Object.keys(timing).length === 0 ? {} : { timing }),
-                      ...(completion.cost === undefined ? {} : { cost: completion.cost }),
-                      tokens: completion.tokens,
-                      time,
-                    })
+                    yield* events
+                      .publish(SessionEvent.ProviderRequestRecorded, {
+                        id: requestID,
+                        sessionID: input.sessionID,
+                        inputID: input.inputID,
+                        usageAnchor,
+                        assistantMessageID: completion.assistantMessageID ?? input.assistantMessageID,
+                        connectionIdentityDigest:
+                          completion.connectionIdentityDigest === null
+                            ? undefined
+                            : (completion.connectionIdentityDigest ?? input.connectionIdentityDigest),
+                        source: input.source,
+                        agent: input.agent,
+                        model: input.model,
+                        routeID: input.routeID,
+                        promptCacheKey: input.promptCacheKey,
+                        systemDigest: input.systemDigest,
+                        toolDigest: input.toolDigest,
+                        request: current.request,
+                        attempts: Math.max(1, current.attempts),
+                        invalidation: completion.invalidation ?? current.defaultInvalidation,
+                        continuation: completion.continuation,
+                        ...(completion.cacheReadReported === undefined
+                          ? {}
+                          : { cacheReadReported: completion.cacheReadReported }),
+                        ...(Object.keys(timing).length === 0 ? {} : { timing }),
+                        ...(completion.cost === undefined ? {} : { cost: completion.cost }),
+                        tokens: completion.tokens,
+                        time,
+                      })
+                      .pipe(Effect.provideService(UsageAnalytics.Current, dimensions))
                   }),
                 )
                 .pipe(
@@ -628,6 +682,7 @@ const layer = Layer.effect(
                 )
             return {
               requestID,
+              ...(usageAnchor === undefined ? {} : { usageAnchor }),
               defaultInvalidation: pending.get(requestID)?.defaultInvalidation ?? "first-request",
               observeAttempt,
               observeEvent: Effect.fnUntraced(function* (event) {
@@ -666,7 +721,19 @@ const layer = Layer.effect(
         )
         .pipe(Effect.catchTag("SqlError", Effect.die))) as unknown as Interface["next"]
 
-    return Service.of({ next, observeAttempt, list, recentSteps, listAll, summary })
+    return Service.of({
+      next,
+      observeAttempt,
+      list,
+      recentSteps,
+      listAll,
+      summary,
+      activeRequests: Effect.sync(() =>
+        [...pending.values()]
+          .filter((request) => !request.completed)
+          .map((request) => ({ sessionID: request.input.sessionID, usageAnchor: request.usageAnchor })),
+      ),
+    })
   }),
 )
 

@@ -40,8 +40,8 @@ const it = testEffect(
 )
 
 const now = 31 * 24 * 60 * 60 * 1000
-const stale = now - 30 * 24 * 60 * 60 * 1000 - 1
-const recent = now - 30 * 24 * 60 * 60 * 1000
+const stale = now - 7 * 24 * 60 * 60 * 1000 - 1
+const recent = now - 7 * 24 * 60 * 60 * 1000
 const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("gpt-5.6"), providerID: Provider.ID.make("openai") })
 
 const insert = (id: Session.ID, timeUpdated = stale) =>

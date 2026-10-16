@@ -21,6 +21,7 @@ import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionPending } from "./pending"
 import { SessionProviderRequest } from "./provider-request"
+import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionSchema } from "./schema"
 import { SessionStore } from "./store"
@@ -29,12 +30,20 @@ import { SessionUsage } from "./usage"
 export const accept = (output: string, previous: string) => {
   const text = output.trim()
   const words = text.split(/\s+/).length
+  if (!text || words < 2 || words > 40 || text.length > 400 || /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(text))
+    return
   if (
-    !text || words < 2 || words > 40 || text.length > 400 ||
-    /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(text)
-  ) return
-  if (/^["'“”‘’`#>{\[]|^(?:(?:suggested )?(?:suggestion|prediction|prompt|message)|next (?:message|prompt)|user)\s*[:\-]/iu.test(text)) return
-  if (/^(?:(?:an? )?(?:error|exception|failure)\b|failed\b|traceback\b|http\s*\d{3}\b|no (?:\w+ )?(?:suggestion|prediction)|nothing\b|none\b|n\/a\b|(?:i|we) (?:cannot|can't|can’t|am unable)|sorry\b|as an (?:ai|assistant)|there (?:is|are) no\b|(?:the )?user (?:might|may|will|would)|(?:the )?next (?:message|prompt) (?:is|could|might))/iu.test(text)) return
+    /^["'“”‘’`#>{\[]|^(?:(?:suggested )?(?:suggestion|prediction|prompt|message)|next (?:message|prompt)|user)\s*[:\-]/iu.test(
+      text,
+    )
+  )
+    return
+  if (
+    /^(?:(?:an? )?(?:error|exception|failure)\b|failed\b|traceback\b|http\s*\d{3}\b|no (?:\w+ )?(?:suggestion|prediction)|nothing\b|none\b|n\/a\b|(?:i|we) (?:cannot|can't|can’t|am unable)|sorry\b|as an (?:ai|assistant)|there (?:is|are) no\b|(?:the )?user (?:might|may|will|would)|(?:the )?next (?:message|prompt) (?:is|could|might))/iu.test(
+      text,
+    )
+  )
+    return
   if (text.toLocaleLowerCase().replace(/\s+/g, " ") === previous.trim().toLocaleLowerCase().replace(/\s+/g, " ")) return
   return text
 }
@@ -51,217 +60,296 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionPrediction") {}
 
-export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(Service, Effect.gen(function* () {
-  const events = yield* EventRuntime.Service
-  const llm = yield* LLMClient.Service
-  const agents = yield* Agent.Service
-  const config = yield* Config.Service
-  const helpers = yield* SessionHelperPolicy.Service
-  const requests = yield* SessionProviderRequest.Service
-  const database = yield* Database.Service
-  const store = yield* SessionStore.Service
-  const memory = yield* Memory.Service
-  const permission = yield* Permission.Service
-  const location = yield* Location.Service
-  const autonomy = yield* SessionAutonomy.Service
-  const unavailable = { status: "unavailable" as const }
-  type Outcome = typeof unavailable | { readonly status: "suggested"; readonly text: string }
-  const fork = yield* FiberSet.makeRuntime<never, Outcome, never>()
-  const active = new Map<SessionSchema.ID, { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> }>()
-  const eligible = Effect.fn("SessionPrediction.eligible")(function* (sessionID: SessionSchema.ID) {
-    const session = yield* store.get(sessionID)
-    if (
-      !session || session.parentID || session.location.directory !== location.directory ||
-      session.location.workspaceID !== location.workspaceID
-    ) return
-    if ((yield* autonomy.snapshot(sessionID)).state.goal?.status === "active") return
-    if (
-      (yield* SessionPending.list(database.db, sessionID)).length ||
-      (yield* SessionPending.compaction(database.db, sessionID))
-    ) return
-    const history = (yield* SessionHistory.snapshotWindow(database.db, sessionID, 20)).messages
-    const assistant = history.findLast(message => message.type === "assistant")
-    const user = history.findLast(message => message.type === "user")
-    if (
-      !assistant || !user || !assistant.time.completed || assistant.error ||
-      history.indexOf(user) > history.indexOf(assistant)
-    ) return
-    const text = assistant.content.flatMap(part => part.type === "text" ? [part.text] : []).join("")
-    if (!text.trim() || !user.text.trim()) return
-    return { session, user, assistant, text }
-  })
-  const generate = Effect.fn("SessionPrediction.generate")(function* (
-    sessionID: SessionSchema.ID,
-    input: { readonly memory: ReadonlyArray<"repository" | "knowledge">; readonly hint?: string },
-    owner: { cancelled: boolean },
-  ) {
-    if (owner.cancelled) return unavailable
-    const context = yield* eligible(sessionID)
-    if (!context || owner.cancelled) return unavailable
-    const agent = yield* agents.get(Agent.ID.make("prediction"))
-    if (!agent) return unavailable
-    const resolved = yield* helpers.resolveModel(context.session, "prediction", agent)
-    if (!resolved || owner.cancelled) return unavailable
-    const recent = { user: context.user.text.slice(-2000), assistant: context.text.slice(-4000) }
-    const hint = input.hint?.trim().slice(0, 2000)
-    const snippets = yield* Effect.forEach(input.memory, (scope) => Effect.gen(function* () {
-      const status = yield* memory.status(scope)
-      if (!status.enabled || (scope === "repository" && !status.repository)) return []
-      const access = yield* permission.evaluateEffective({
-        sessionID, agent: context.session.agent ?? context.assistant.agent,
-        action: "memory_read", resource: status.root,
+export const layer = (options?: SessionModelHeaders.Options) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      const llm = yield* LLMClient.Service
+      const agents = yield* Agent.Service
+      const config = yield* Config.Service
+      const helpers = yield* SessionHelperPolicy.Service
+      const requests = yield* SessionProviderRequest.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const memory = yield* Memory.Service
+      const permission = yield* Permission.Service
+      const location = yield* Location.Service
+      const autonomy = yield* SessionAutonomy.Service
+      const unavailable = { status: "unavailable" as const }
+      type Outcome = typeof unavailable | { readonly status: "suggested"; readonly text: string }
+      const fork = yield* FiberSet.makeRuntime<never, Outcome, never>()
+      const active = new Map<SessionSchema.ID, { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> }>()
+      const eligible = Effect.fn("SessionPrediction.eligible")(function* (sessionID: SessionSchema.ID) {
+        const session = yield* store.get(sessionID)
+        if (
+          !session ||
+          session.parentID ||
+          session.location.directory !== location.directory ||
+          session.location.workspaceID !== location.workspaceID
+        )
+          return
+        if ((yield* autonomy.snapshot(sessionID)).state.goal?.status === "active") return
+        if (
+          (yield* SessionPending.list(database.db, sessionID)).length ||
+          (yield* SessionPending.compaction(database.db, sessionID))
+        )
+          return
+        const history = (yield* SessionHistory.snapshotWindow(database.db, sessionID, 20)).messages
+        const assistant = history.findLast((message) => message.type === "assistant")
+        const user = history.findLast((message) => message.type === "user")
+        if (
+          !assistant ||
+          !user ||
+          !assistant.time.completed ||
+          assistant.error ||
+          history.indexOf(user) > history.indexOf(assistant)
+        )
+          return
+        const text = assistant.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
+        if (!text.trim() || !user.text.trim()) return
+        return { session, user, assistant, text }
       })
-      if (access !== "allow" && access !== "ask") return []
-      const result = yield* memory.search(
-        { scope, query: `${recent.user.slice(0, 512)} ${recent.assistant.slice(0, 511)}`, limit: 3 }, status.root,
+      const generate = Effect.fn("SessionPrediction.generate")(function* (
+        sessionID: SessionSchema.ID,
+        input: { readonly memory: ReadonlyArray<"repository" | "knowledge">; readonly hint?: string },
+        owner: { cancelled: boolean },
+      ) {
+        if (owner.cancelled) return unavailable
+        const usageAnchor = yield* SessionUsageAttribution.dispatch(database.db, sessionID)
+        const context = yield* eligible(sessionID)
+        if (!context || owner.cancelled) return unavailable
+        const agent = yield* agents.get(Agent.ID.make("prediction"))
+        if (!agent) return unavailable
+        const resolved = yield* helpers.resolveModel(context.session, "prediction", agent)
+        if (!resolved || owner.cancelled) return unavailable
+        const recent = { user: context.user.text.slice(-2000), assistant: context.text.slice(-4000) }
+        const hint = input.hint?.trim().slice(0, 2000)
+        const snippets = yield* Effect.forEach(input.memory, (scope) =>
+          Effect.gen(function* () {
+            const status = yield* memory.status(scope)
+            if (!status.enabled || (scope === "repository" && !status.repository)) return []
+            const access = yield* permission.evaluateEffective({
+              sessionID,
+              agent: context.session.agent ?? context.assistant.agent,
+              action: "memory_read",
+              resource: status.root,
+            })
+            if (access !== "allow" && access !== "ask") return []
+            const result = yield* memory.search(
+              { scope, query: `${recent.user.slice(0, 512)} ${recent.assistant.slice(0, 511)}`, limit: 3 },
+              status.root,
+            )
+            return result.hits.slice(0, 3).map((hit) => ({
+              scope,
+              id: hit.id,
+              ...(hit.title === undefined ? {} : { title: hit.title.slice(0, 200) }),
+              snippet: hit.snippet.slice(0, 600),
+            }))
+          }).pipe(Effect.catchCause(() => Effect.succeed([]))),
+        )
+        if (owner.cancelled) return unavailable
+        const baseRequest = LLM.request({
+          model: resolved.model,
+          http: {
+            headers: SessionModelHeaders.make(context.session, {
+              ...options,
+              providerID: resolved.ref.providerID,
+              accountIdentityDigest: resolved.accountIdentityDigest,
+            }),
+          },
+          system: agent.system,
+          messages: [Message.user(JSON.stringify({ ...recent, memory: snippets.flat(), ...(hint ? { hint } : {}) }))],
+          tools: [],
+        })
+        const entries = yield* config.entries()
+        const efficiency = SessionRunnerCache.efficiencySettings(Config.latest(entries, "efficiency"))
+        const cache = SessionRunnerCache.providerOptions({
+          projectID: context.session.projectID,
+          directory: context.session.location.directory,
+          workspaceID: context.session.location.workspaceID,
+          providerID: resolved.ref.providerID,
+          modelID: resolved.ref.id,
+          variant: resolved.ref.variant,
+          accountIdentityDigest: resolved.accountIdentityDigest,
+          policyRevision: CACHE_POLICY_REVISION,
+          permissions: agent.permissions,
+          system: baseRequest.system,
+          tools: baseRequest.tools,
+          apiModelID: resolved.model.id,
+          sessionID,
+          routeID: resolved.model.route.id,
+          anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+            modelID: resolved.model.id,
+            configured: efficiency.anthropicTtl,
+            interactive: false,
+          }),
+          openaiMode: efficiency.openaiMode,
+          openaiExtendedRetention: efficiency.openaiExtendedRetention,
+        })
+        const tracker = yield* requests.next({
+          sessionID,
+          inputID: context.user.id,
+          usageAnchor: usageAnchor ?? null,
+          source: "prediction",
+          agent: agent.id,
+          model: resolved.ref,
+          connectionIdentityDigest: resolved.accountIdentityDigest,
+          routeID: resolved.model.route.id,
+          promptCacheKey: cache.promptCacheKey,
+          systemDigest: cache.systemDigest,
+          toolDigest: cache.toolDigest,
+        })
+        const request = LLMRequest.update(baseRequest, {
+          id: tracker.requestID,
+          providerOptions: cache.providerOptions,
+          cache: cache.cache,
+        })
+        const chunks: string[] = []
+        let failed = false
+        let finished = false
+        let usage: SessionUsage.Recorded | undefined
+        let recordedCost: Money.USD | undefined
+        let timing: ReturnType<typeof SessionUsage.timing>
+        const settle = Effect.suspend(() =>
+          Effect.gen(function* () {
+            if (usage) yield* events.publish(SessionEvent.UsageRecorded, { sessionID, source: "prediction", ...usage })
+            yield* tracker.complete({
+              tokens: usage?.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              ...(recordedCost === undefined ? {} : { cost: recordedCost }),
+              continuation: "full",
+              ...(timing === undefined ? {} : { timing }),
+              ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+            })
+          }),
+        )
+        const streamed = yield* llm.stream(request).pipe(
+          Stream.runForEach((event) => {
+            if (LLMEvent.is.providerError(event)) failed = true
+            if (LLMEvent.is.finish(event)) {
+              finished = true
+              if (event.reason !== "stop") failed = true
+            }
+            if (LLMEvent.is.textDelta(event)) {
+              if (chunks.join("").length + event.text.length > 400) failed = true
+              if (!failed) chunks.push(event.text)
+            }
+            if (LLMEvent.is.stepFinish(event)) {
+              timing = SessionUsage.timing(event.usage)
+              const step = SessionUsage.record(event.usage, resolved.cost)
+              usage = usage ? SessionUsage.add(usage, step) : step
+              if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)) !== undefined)
+                recordedCost = usage.cost
+            }
+            return Effect.void
+          }),
+          Effect.as(true),
+          Effect.catchCause(() => Effect.succeed(false)),
+          Effect.ensuring(settle),
+        )
+        if (!streamed || failed || !finished || owner.cancelled) return unavailable
+        const text = accept(chunks.join(""), context.user.text)
+        if (!text) return unavailable
+        const current = yield* eligible(sessionID)
+        if (
+          !current ||
+          current.assistant.id !== context.assistant.id ||
+          current.user.id !== context.user.id ||
+          current.session.agent !== context.session.agent ||
+          current.session.model?.providerID !== context.session.model?.providerID ||
+          current.session.model?.id !== context.session.model?.id ||
+          current.session.model?.profile !== context.session.model?.profile ||
+          current.session.model?.variant !== context.session.model?.variant ||
+          owner.cancelled
+        )
+          return unavailable
+        yield* events.publish(
+          SessionEvent.PredictionUpdated,
+          { sessionID, sourceMessageID: context.assistant.id, text },
+          { location: context.session.location },
+        )
+        return { status: "suggested" as const, text }
+      })
+      const request: Interface["request"] = (sessionID, input) =>
+        Effect.gen(function* () {
+          const usageAnchor = yield* SessionUsageAttribution.dispatch(database.db, sessionID)
+          const prior = active.get(sessionID)
+          if (prior) {
+            prior.cancelled = true
+            if (prior.fiber) yield* Fiber.interrupt(prior.fiber)
+          }
+          const owner: { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> } = { cancelled: false }
+          active.set(sessionID, owner)
+          const fiber = fork(
+            SessionUsageAttribution.withAnchor(
+              sessionID,
+              usageAnchor,
+              Effect.yieldNow.pipe(
+                Effect.andThen(generate(sessionID, input, owner)),
+                Effect.interruptible,
+                Effect.catchCause(() => Effect.succeed(unavailable)),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (active.get(sessionID) === owner) active.delete(sessionID)
+                  }),
+                ),
+              ),
+            ),
+          )
+          owner.fiber = fiber
+          const exit = yield* Fiber.await(fiber)
+          if (exit._tag === "Success") return exit.value
+          return unavailable
+        })
+      const stop = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (
+            typeof event.data !== "object" ||
+            event.data === null ||
+            !("sessionID" in event.data) ||
+            typeof event.data.sessionID !== "string"
+          )
+            return
+          const sessionID = SessionSchema.ID.make(event.data.sessionID)
+          if (
+            [
+              "session.input.admitted",
+              "session.execution.started",
+              "session.moved",
+              "session.deleted",
+              "session.archived",
+              "session.agent.selected",
+              "session.model.selected",
+            ].includes(event.type)
+          ) {
+            const owner = active.get(sessionID)
+            if (owner) {
+              owner.cancelled = true
+              if (owner.fiber) fork(Fiber.interrupt(owner.fiber).pipe(Effect.as(unavailable)))
+            }
+          }
+        }),
       )
-      return result.hits.slice(0, 3).map(hit => ({
-        scope, id: hit.id,
-        ...(hit.title === undefined ? {} : { title: hit.title.slice(0, 200) }),
-        snippet: hit.snippet.slice(0, 600),
-      }))
-    }).pipe(Effect.catchCause(() => Effect.succeed([]))))
-    if (owner.cancelled) return unavailable
-    const baseRequest = LLM.request({
-      model: resolved.model,
-      http: { headers: SessionModelHeaders.make(context.session, {
-        ...options, providerID: resolved.ref.providerID, accountIdentityDigest: resolved.accountIdentityDigest,
-      }) },
-      system: agent.system,
-      messages: [Message.user(JSON.stringify({ ...recent, memory: snippets.flat(), ...(hint ? { hint } : {}) }))],
-      tools: [],
-    })
-    const entries = yield* config.entries()
-    const efficiency = SessionRunnerCache.efficiencySettings(Config.latest(entries, "efficiency"))
-    const cache = SessionRunnerCache.providerOptions({
-      projectID: context.session.projectID,
-      directory: context.session.location.directory,
-      workspaceID: context.session.location.workspaceID,
-      providerID: resolved.ref.providerID,
-      modelID: resolved.ref.id,
-      variant: resolved.ref.variant,
-      accountIdentityDigest: resolved.accountIdentityDigest,
-      policyRevision: CACHE_POLICY_REVISION,
-      permissions: agent.permissions,
-      system: baseRequest.system,
-      tools: baseRequest.tools,
-      apiModelID: resolved.model.id,
-      sessionID,
-      routeID: resolved.model.route.id,
-      anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
-        modelID: resolved.model.id, configured: efficiency.anthropicTtl, interactive: false,
-      }),
-      openaiMode: efficiency.openaiMode,
-      openaiExtendedRetention: efficiency.openaiExtendedRetention,
-    })
-    const tracker = yield* requests.next({
-      sessionID, inputID: context.user.id, source: "prediction", agent: agent.id, model: resolved.ref,
-      connectionIdentityDigest: resolved.accountIdentityDigest,
-      routeID: resolved.model.route.id,
-      promptCacheKey: cache.promptCacheKey,
-      systemDigest: cache.systemDigest,
-      toolDigest: cache.toolDigest,
-    })
-    const request = LLMRequest.update(baseRequest, {
-      id: tracker.requestID, providerOptions: cache.providerOptions, cache: cache.cache,
-    })
-    const chunks: string[] = []
-    let failed = false
-    let finished = false
-    let usage: SessionUsage.Recorded | undefined
-    let recordedCost: Money.USD | undefined
-    let timing: ReturnType<typeof SessionUsage.timing>
-    const settle = Effect.suspend(() => Effect.gen(function* () {
-      if (usage) yield* events.publish(SessionEvent.UsageRecorded, { sessionID, source: "prediction", ...usage })
-      yield* tracker.complete({
-        tokens: usage?.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        ...(recordedCost === undefined ? {} : { cost: recordedCost }),
-        continuation: "full",
-        ...(timing === undefined ? {} : { timing }),
-        ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
-      })
-    }))
-    const streamed = yield* llm.stream(request).pipe(
-      Stream.runForEach(event => {
-        if (LLMEvent.is.providerError(event)) failed = true
-        if (LLMEvent.is.finish(event)) {
-          finished = true
-          if (event.reason !== "stop") failed = true
-        }
-        if (LLMEvent.is.textDelta(event)) {
-          if (chunks.join("").length + event.text.length > 400) failed = true
-          if (!failed) chunks.push(event.text)
-        }
-        if (LLMEvent.is.stepFinish(event)) {
-          timing = SessionUsage.timing(event.usage)
-          const step = SessionUsage.record(event.usage, resolved.cost)
-          usage = usage ? SessionUsage.add(usage, step) : step
-          if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)))
-            recordedCost = usage.cost
-        }
-        return Effect.void
-      }),
-      Effect.as(true), Effect.catchCause(() => Effect.succeed(false)), Effect.ensuring(settle),
-    )
-    if (!streamed || failed || !finished || owner.cancelled) return unavailable
-    const text = accept(chunks.join(""), context.user.text)
-    if (!text) return unavailable
-    const current = yield* eligible(sessionID)
-    if (
-      !current || current.assistant.id !== context.assistant.id ||
-      current.user.id !== context.user.id || current.session.agent !== context.session.agent ||
-      current.session.model?.providerID !== context.session.model?.providerID ||
-      current.session.model?.id !== context.session.model?.id ||
-      current.session.model?.profile !== context.session.model?.profile ||
-      current.session.model?.variant !== context.session.model?.variant || owner.cancelled
-    ) return unavailable
-    yield* events.publish(
-      SessionEvent.PredictionUpdated,
-      { sessionID, sourceMessageID: context.assistant.id, text },
-      { location: context.session.location },
-    )
-    return { status: "suggested" as const, text }
-  })
-  const request: Interface["request"] = (sessionID, input) => Effect.gen(function* () {
-    const prior = active.get(sessionID)
-    if (prior) {
-      prior.cancelled = true
-      if (prior.fiber) yield* Fiber.interrupt(prior.fiber)
-    }
-    const owner: { cancelled: boolean; fiber?: Fiber.Fiber<Outcome> } = { cancelled: false }
-    active.set(sessionID, owner)
-    const fiber = fork(Effect.yieldNow.pipe(
-      Effect.andThen(generate(sessionID, input, owner)),
-      Effect.interruptible,
-      Effect.catchCause(() => Effect.succeed(unavailable)),
-      Effect.ensuring(Effect.sync(() => { if (active.get(sessionID) === owner) active.delete(sessionID) })),
-    ))
-    owner.fiber = fiber
-    const exit = yield* Fiber.await(fiber)
-    if (exit._tag === "Success") return exit.value
-    return unavailable
-  })
-  const stop = yield* events.listen(event => Effect.sync(() => {
-    if (typeof event.data !== "object" || event.data === null || !("sessionID" in event.data) || typeof event.data.sessionID !== "string") return
-    const sessionID = SessionSchema.ID.make(event.data.sessionID)
-    if (["session.input.admitted", "session.execution.started", "session.moved", "session.deleted", "session.archived", "session.agent.selected", "session.model.selected"].includes(event.type)) {
-      const owner = active.get(sessionID)
-      if (owner) {
-        owner.cancelled = true
-        if (owner.fiber) fork(Fiber.interrupt(owner.fiber).pipe(Effect.as(unavailable)))
-      }
-    }
-  }))
-  yield* Effect.addFinalizer(() => stop)
-  return Service.of({ request })
-}))
+      yield* Effect.addFinalizer(() => stop)
+      return Service.of({ request })
+    }),
+  )
 
 export const node = makeLocationNode({
   service: Service,
   layer: layer(),
   deps: [
-    EventRuntime.node, llmClient, Agent.node, Config.node, SessionHelperPolicy.node,
-    SessionProviderRequest.node, Database.node, SessionStore.node, Memory.node,
-    Permission.node, Location.node, SessionAutonomy.node,
+    EventRuntime.node,
+    llmClient,
+    Agent.node,
+    Config.node,
+    SessionHelperPolicy.node,
+    SessionProviderRequest.node,
+    Database.node,
+    SessionStore.node,
+    Memory.node,
+    Permission.node,
+    Location.node,
+    SessionAutonomy.node,
   ],
 })

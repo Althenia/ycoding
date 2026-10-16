@@ -22,6 +22,7 @@ import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionPendingTable } from "./sql"
+import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -220,6 +221,7 @@ export const admit = Effect.fn("SessionPending.admit")(function* (
     readonly id: SessionMessage.ID
     readonly sessionID: SessionSchema.ID
     readonly input: Message
+    readonly causedBy?: UsageAnchor.Ref
   },
 ) {
   const existing = yield* find(db, request.id)
@@ -234,6 +236,7 @@ export const admit = Effect.fn("SessionPending.admit")(function* (
       inputID: request.id,
       sessionID: request.sessionID,
       input: request.input,
+      causedBy: request.causedBy,
     })
     .pipe(
       Effect.flatMap((event) => {

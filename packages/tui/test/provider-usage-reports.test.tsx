@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { ProviderRequestReport } from "@ycoding-ai/client"
+import type { UsageReportOutput } from "@ycoding-ai/client"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
@@ -13,7 +13,7 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 type ReportInput = {
-  group: ProviderRequestReport["group"]
+  group: UsageReportOutput["group"]
   from?: number
   to?: number
   offset?: number
@@ -33,18 +33,24 @@ const metrics = (logical: number, input = logical * 1_000) => ({
   cost: logical / 10,
   costProvenance: "current_catalog" as const,
   cacheReadReported: true,
+  costCoverage: { pricedRequests: logical + 1, unpricedRequests: 0 },
 })
 
 function report(
-  group: ProviderRequestReport["group"],
+  group: UsageReportOutput["group"],
   rows: Array<{ key: string; label: string; logical: number }> = [
     { key: "alpha", label: "Alpha", logical: 4 },
     { key: "beta", label: "Beta", logical: 3 },
   ],
   options?: { rowCount?: number; nextOffset?: number },
-): ProviderRequestReport {
-  const values: ProviderRequestReport["rows"] = rows.map((row) => ({ key: row.key, label: row.label, ...metrics(row.logical) }))
+): UsageReportOutput {
+  const values: UsageReportOutput["rows"] = rows.map((row) => ({ key: row.key, label: row.label, ...metrics(row.logical) }))
   if (values[0]) values[0].speed = {
+    generationSamples: 4,
+    providerTimedSamples: 4,
+    observedSamples: 0,
+    generationP50TokensPerSecond: 42.5,
+    generationP90TokensPerSecond: 42.5,
     firstOutputP50Ms: 125,
     firstOutputP95Ms: 250,
     totalP50Ms: 1_200,
@@ -74,7 +80,7 @@ function deferred<T>() {
 async function renderReports(input: {
   width?: number
   height?: number
-  load: (query: ReportInput) => Promise<ProviderRequestReport>
+  load: (query: ReportInput) => Promise<UsageReportOutput>
   onRefresh?: () => void
   tab?: ProviderUsageView
 }) {
@@ -120,6 +126,7 @@ async function waitFor(app: Awaited<ReturnType<typeof renderReports>>, predicate
 test("defaults tables to all retained history and exposes normalized metrics plus explicit custom dates", async () => {
   const calls: ReportInput[] = []
   const app = await renderReports({
+    width: 240,
     load: async (query) => {
       calls.push(query)
       const value = report(query.group)
@@ -128,6 +135,7 @@ test("defaults tables to all retained history and exposes normalized metrics plu
         tokens: { input: 4_000, output: 1_200, reasoning: 300, cache: { read: 0, write: 40 } },
         cost: undefined,
         costProvenance: undefined,
+        costCoverage: { pricedRequests: 0, unpricedRequests: value.rows[0].physical },
         cacheReadReported: undefined,
       }
       return value
@@ -151,7 +159,8 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
     expect(frame).toContain("Cache read Unknown")
-    expect(frame).toContain("Total tokens ≥5,540 · Cost $0.00")
+    expect(frame).toContain("Total tokens ≥5,540 · Cost unreported")
+    expect(frame).not.toContain("Cost $0.00")
     expect(frame).toContain("≥ marks a lower bound")
     expect(frame).toContain("First output p50 125ms · p95 250ms")
     expect(frame).toContain("Total p50 1,200ms · p95 2,500ms · Output 42.5 tok/s")
@@ -179,11 +188,11 @@ test("defaults tables to all retained history and exposes normalized metrics plu
 }, 30_000)
 
 test("preserves selected identity on refresh and fences stale, failed, and changed-query results", async () => {
-  const requests: Array<{ query: ReportInput; result: ReturnType<typeof deferred<ProviderRequestReport>> }> = []
+  const requests: Array<{ query: ReportInput; result: ReturnType<typeof deferred<UsageReportOutput>> }> = []
   let refreshes = 0
   const app = await renderReports({
     load: (query) => {
-      const result = deferred<ProviderRequestReport>()
+      const result = deferred<UsageReportOutput>()
       requests.push({ query, result })
       return result.promise
     },
@@ -281,7 +290,7 @@ test("removes the retention remark while preserving the empty-window message", a
     },
   })
   try {
-    const frame = await waitFor(populated, (value) => value.includes("Total cost: $0.00"), "populated stats")
+    const frame = await waitFor(populated, (value) => value.includes("Total cost: unreported"), "populated stats")
     expect(frame).not.toContain("Usage before")
   } finally {
     populated.renderer.destroy()
@@ -341,10 +350,10 @@ test("pages bounded rows and keeps keyboard or mouse selection visible without a
 }, 30_000)
 
 test("invalidates late report work when the screen unmounts", async () => {
-  const requests: Array<ReturnType<typeof deferred<ProviderRequestReport>>> = []
+  const requests: Array<ReturnType<typeof deferred<UsageReportOutput>>> = []
   const app = await renderReports({
     load: () => {
-      const result = deferred<ProviderRequestReport>()
+      const result = deferred<UsageReportOutput>()
       requests.push(result)
       return result.promise
     },

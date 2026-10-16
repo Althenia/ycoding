@@ -20,6 +20,8 @@ const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
 const initialLoading = new URLSearchParams(location.search).has("initial-loading")
 const largeValues = new URLSearchParams(location.search).has("large-values")
 const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
+const oldGroups = new URLSearchParams(location.search).has("old-groups")
+const forecastMode = new URLSearchParams(location.search).get("forecast")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
 const providers: UsageProvider[] = [
   { providerID: "openai", label: longDistribution ? "Provider with a long descriptive name and a shared workspace plan" : "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
@@ -61,6 +63,7 @@ const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
   logical: index + 1, physical: index + 2, helpers: 0, continued: 0, fallback: 0,
   cost: index % 6 === 0 ? undefined : (index + 1) * 0.18,
   costProvenance: index % 6 === 0 ? undefined : index % 3 === 0 ? "current_catalog" : "recorded", tokens,
+  costCoverage: { pricedRequests: index % 6 === 0 ? 0 : index + 1, unpricedRequests: index % 6 === 0 ? index + 1 : 0 },
 }))
 const monthlyRows: UsageReportRow[] = [
   { ...rows[1]!, key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", cost: longDistribution ? 12_000_000 : 6, costProvenance: "recorded" },
@@ -77,7 +80,7 @@ const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "
 }) : Array.from({ length: 41 }, (_, index) => ({
   ...rows[index % 30]!, key: input.group === "model" ? `${["openai", "anthropic", "openrouter", "github-copilot"][index % 4]}/${encodeURIComponent(sample[index % sample.length]!.toLowerCase().replaceAll(" ", "-"))}-${index + 1}` : `${input.group}-${index}`,
   label: input.group === "model" ? `${sample[index % sample.length]} ${index + 1}` : `${input.group === "session" ? "Session" : input.group === "project" ? "Project" : "Agent"} ${index + 1}`,
-  physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded",
+  logical: 41 - index, physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded", costCoverage: { pricedRequests: 41 - index, unpricedRequests: 0 },
 }))
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
 let releasePage: (() => void) | undefined
@@ -89,6 +92,7 @@ let revision = 0
 let retryFailure = false
 let outage = false
 let handlers: RemoteTransportHandlers | undefined
+let quotaSnapshots = providers
 const beginReload = () => { revision += 1; pendingReload = new Promise<void>((resolve) => { releaseReload = resolve }) }
 const refreshedProviders = () => providers.map((provider) => ({ ...provider, updatedAt: Date.now(), windows: provider.windows.map((window) => ({ ...window,
   ...(window.used === undefined ? {} : { used: window.used + revision }),
@@ -99,11 +103,11 @@ const unknown: RemoteRequestOutcome = { status: "unknown", error: { code: "outco
 
 const report = (input: UsageReportInput) => {
   if (input.group === "model" && input.limit === 200) return { group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
-    total: { logical: 4, physical: 4, helpers: 0, continued: 0, fallback: 0,
+    total: { logical: 10, physical: 14, helpers: 0, continued: 0, fallback: 0, costCoverage: { pricedRequests: 9, unpricedRequests: 1 },
       cost: (longDistribution ? 20_000_000 : 15) + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } },
     rowCount: monthlyRows.length }
   const all = entries(input).map((row, index) => ({ ...row,
-    ...(refreshCycle && revision > 0 && input.group === "day" ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const } : {}),
+    ...(refreshCycle && revision > 0 && input.group === "day" ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const, costCoverage: { pricedRequests: row.logical, unpricedRequests: 0 } } : {}),
     ...(largeValues && input.group === "day" && index === 29 ? { physical: 7_720, tokens: { input: 2_267_963_225, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } : {}),
   }))
   const sorted = input.group === "day" ? all : [...all].sort((a, b) => {
@@ -114,7 +118,10 @@ const report = (input: UsageReportInput) => {
   })
   const offset = input.offset ?? 0
   return { group: input.group, rows: sorted.slice(offset, offset + (input.limit ?? 25)), total: {
-    logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, cost: 104.32, costProvenance: "current_catalog" as const, tokens,
+    logical: all.reduce((sum, row) => sum + row.logical, 0), physical: all.reduce((sum, row) => sum + row.physical, 0), helpers: 0, continued: 0, fallback: 0,
+    cost: all.some((row) => row.cost !== undefined) ? all.reduce((sum, row) => sum + (row.cost ?? 0), 0) : undefined, costProvenance: "current_catalog" as const,
+    costCoverage: { pricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.pricedRequests ?? 0), 0), unpricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.unpricedRequests ?? 0), 0) },
+    tokens: { input: all.reduce((sum, row) => sum + row.tokens.input, 0), output: all.reduce((sum, row) => sum + row.tokens.output, 0), reasoning: all.reduce((sum, row) => sum + row.tokens.reasoning, 0), cache: { read: all.reduce((sum, row) => sum + row.tokens.cache.read, 0), write: all.reduce((sum, row) => sum + row.tokens.cache.write, 0) } },
   }, rowCount: all.length, ...((offset + (input.limit ?? 25)) < all.length ? { nextOffset: offset + (input.limit ?? 25) } : {}) }
 }
 
@@ -128,9 +135,20 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
   if (old) return failure("unknown_operation", "Unknown operation")
   if (unknownUsage && retryFailure) return failure("internal_error", operation === "usage.providers" ? "Quota retry failed." : operation === "usage.summary" ? "Summary retry failed." : "Report retry failed.")
   if (operation === "usage.report" && oldZone && input?.timeZone !== undefined) return failure("invalid_message", "Unknown usage report field")
+  if (operation === "usage.report" && oldGroups && input && !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group)) return failure("invalid_message", "Unknown usage report group")
   if (refreshCycle && pendingReload) await pendingReload
-  if (operation === "usage.providers") return ok(none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers)
+  if (operation === "usage.providers") { quotaSnapshots = none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
   if (operation === "usage.summary") return ok({ logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 })
+  if (operation === "usage.forecast") {
+    const asOf = Date.now()
+    const quotas = quotaSnapshots.flatMap((provider) => provider.windows.map((window) => ({
+      providerID: provider.providerID, ...(provider.profile === undefined ? {} : { profile: provider.profile }), windowID: window.id, unit: window.unit,
+      source: provider.source, stability: provider.stability, updatedAt: provider.updatedAt,
+      ...(forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
+        : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
+    })))
+    return ok({ asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) })
+  }
   if (input === undefined) return failure("internal_error", "Missing report input")
   if (paged && input.group !== "day" && input.limit !== 200 && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
     await new Promise<void>((resolve) => { releasePage = resolve })

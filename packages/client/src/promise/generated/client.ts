@@ -85,6 +85,10 @@ import type {
   SessionUsageOutput,
   SessionUsageReportInput,
   SessionUsageReportOutput,
+  SessionPromptCostsInput,
+  SessionPromptCostsOutput,
+  SessionTaskCostsInput,
+  SessionTaskCostsOutput,
   SessionSkillsInput,
   SessionSkillsOutput,
   SessionResolveSkillConflictInput,
@@ -155,6 +159,8 @@ import type {
   ProviderRefreshOutput,
   ProviderGetInput,
   ProviderGetOutput,
+  ProviderUsageForecastInput,
+  ProviderUsageForecastOutput,
   ProviderUsageListInput,
   ProviderUsageListOutput,
   ProviderUsageGetInput,
@@ -1093,6 +1099,10 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/report`,
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
@@ -1103,6 +1113,30 @@ export function make(options: ClientOptions) {
             },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      promptCosts: (input: SessionPromptCostsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionPromptCostsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/prompts`,
+            query: { inputIDs: input["inputIDs"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      taskCosts: (input: SessionTaskCostsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionTaskCostsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/tasks`,
+            query: { sessionIDs: input["sessionIDs"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
             empty: false,
           },
           requestOptions,
@@ -1545,6 +1579,18 @@ export function make(options: ClientOptions) {
         ),
     },
     providerUsage: {
+      forecast: (input: ProviderUsageForecastInput, requestOptions?: RequestOptions) =>
+        request<ProviderUsageForecastOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/usage/forecast`,
+            query: { location: input["location"], localScope: input["localScope"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input?: ProviderUsageListInput, requestOptions?: RequestOptions) =>
         request<ProviderUsageListOutput>(
           {
@@ -3029,6 +3075,10 @@ export function make(options: ClientOptions) {
             path: `/api/usage/report`,
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],

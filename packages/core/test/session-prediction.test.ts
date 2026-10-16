@@ -82,6 +82,19 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
 
 const helperText = (index = 0) => requests[index]?.messages[0]?.content.find((part) => part.type === "text")?.text
 
+it.effect("preserves a known zero helper price", () => Effect.gen(function* () {
+  const zero = Money.USDPerMillionTokens.make(0)
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => cost.splice(0, cost.length, { input: zero, output: zero, cache: { read: zero, write: zero } })),
+    () => Effect.gen(function* () {
+      const f = yield* setup()
+      expect((yield* f.prediction.request(f.sessionID, { memory: [] })).status).toBe("suggested")
+      expect(yield* f.db.select({ source: SessionProviderRequestTable.source, cost: SessionProviderRequestTable.cost }).from(SessionProviderRequestTable).where(eq(SessionProviderRequestTable.session_id, f.sessionID)).get()).toEqual({ source: "prediction", cost: 0 })
+    }),
+    (previous) => Effect.sync(() => cost.splice(0, cost.length, ...previous)),
+  )
+}))
+
 const setup = (options: { child?: boolean; goal?: boolean; pending?: boolean; running?: boolean; reply?: boolean; user?: string; assistant?: string } = {}) => Effect.gen(function* () {
   requests.length = 0; searches.length = 0; accessChecks.length = 0
   requestInterruptions = 0

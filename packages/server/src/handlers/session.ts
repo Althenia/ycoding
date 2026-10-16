@@ -247,6 +247,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.promptCosts",
+        (ctx) => session.promptCosts({ sessionID: ctx.params.sessionID, ...ctx.query }).pipe(
+          Effect.map((data) => ({ data })), Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+        ),
+      )
+      .handle(
+        "session.taskCosts",
+        (ctx) => session.taskCosts({ sessionID: ctx.params.sessionID, ...ctx.query }).pipe(
+          Effect.map((data) => ({ data })), Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+        ),
+      )
+      .handle(
         "session.autonomy.get",
         Effect.fn(function* (ctx) {
           return {

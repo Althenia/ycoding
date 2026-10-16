@@ -15,6 +15,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { LLMEvent } from "@ycoding-ai/ai"
 import { Session } from "@ycoding-ai/core/session"
@@ -207,6 +208,34 @@ it.effect("reads only the latest eight Step requests for the exact Session in as
       generatedTokens: 12,
       observedGenerationDurationNs: 2_000_000,
     })
+  }),
+)
+
+it.effect("restores selected-model samples beyond newer requests with indexed bounded reads", () =>
+  Effect.gen(function* () {
+    const sessionID = Session.ID.make("ses_speed_reselection")
+    yield* insertSession(sessionID)
+    const db = (yield* Database.Service).db
+    const service = yield* SessionProviderRequest.Service
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("earlier"), providerID: Provider.ID.make("openai") })
+    for (let index = 0; index < 24; index++) {
+      const tracker = yield* service.next({ sessionID, source: "step", agent: Agent.defaultID,
+        model: index < 2 ? { ...model, ...(index === 1 ? { profile: "work" } : {}) } : { ...model, id: CatalogModel.ID.make("newer") },
+        routeID: "openai-responses", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
+      yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        timing: index === 1 ? { estimatedTokens: 60, estimatedGenerationDurationNs: 900_000_000 }
+          : { generatedTokens: 40, observedGenerationDurationNs: 100_000_000 } })
+    }
+    expect((yield* service.recentSteps(sessionID, model)).map((row) => row.model.id)).toEqual([model.id, model.id])
+    yield* db.update(SessionTable).set({ model }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+    const read = yield* SessionCacheDiagnostics.read(db, sessionID)
+    expect(read?.generationSpeed?.latest).toMatchObject({ tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true })
+    expect((yield* SessionCacheDiagnostics.read(db, sessionID))?.generationSpeed).toEqual(read?.generationSpeed)
+    const plan = yield* db.all<{ detail: string }>(sql`EXPLAIN QUERY PLAN SELECT * FROM session_provider_request
+      WHERE session_id = ${sessionID} AND request < ${Number.MAX_SAFE_INTEGER} ORDER BY request DESC LIMIT 10000`).pipe(Effect.orDie)
+    expect(plan.map((row) => row.detail).join(" ")).toContain("session_provider_request_session_request_idx")
+    expect(plan.map((row) => row.detail).join(" ")).not.toContain("SCAN")
+    expect(plan.map((row) => row.detail).join(" ")).not.toContain("TEMP B-TREE")
   }),
 )
 

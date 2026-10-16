@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { SessionMessageInfo } from "@ycoding-ai/client"
+import type { SessionMessageInfo, SessionPromptCostsOutput } from "@ycoding-ai/client"
+import type { useData } from "../src/context/data"
 import { railPlacement, railWidth } from "../src/routes/session/rail"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
@@ -21,6 +22,47 @@ const session = {
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 9 },
 }
+
+test.each(["known", "partial", "unreported", "fallback"] as const)("user message mounts its %s cost inside the transcript inset", async (state) => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_cost", type: "user", text: "Pricing scope", files: [], agents: [], time: { created: 1 } },
+    { id: "msg_cost_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Cost anchor verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ]
+  const empty = { requests: 0, tokens: session.tokens, cost: { pricedRequests: 0, unpricedRequests: 0 } }
+  const cost = state === "known" ? { known: 1.25, total: 1.25, pricedRequests: 1, unpricedRequests: 0 }
+    : state === "partial" ? { known: 2, pricedRequests: 1, unpricedRequests: 1 } : { pricedRequests: 0, unpricedRequests: 1 }
+  const total = { requests: cost.pricedRequests + cost.unpricedRequests, tokens: { ...session.tokens, input: 10 }, cost }
+  const response: SessionPromptCostsOutput = { units: state === "fallback" ? [] : [{ anchor: { sessionID, inputID: "msg_cost" }, status: state === "partial" ? "so-far" : "settled", attribution: "complete", history: "retained", total, main: total, children: empty, helpers: [] }], unattributed: empty, history: "retained" }
+  const pruned = { ...total, requests: 1, cost: { known: 999, total: 999, pricedRequests: 1, unpricedRequests: 0 } }
+  response.units.unshift({ anchor: { sessionID, inputID: "msg_pruned" }, status: "settled", attribution: "complete", history: "retained", total: pruned, main: pruned, children: empty, helpers: [] })
+  const expected = state === "known" ? "Prompt cost $1.25" : state === "partial" ? "Prompt cost Known $2.00 + unreported" : "Prompt cost unreported"
+  let data: ReturnType<typeof useData> | undefined
+  const screen = await renderScreen({ width: 100, height: 44, args: { sessionID }, data: (value) => { data = value },
+    route: (url) => url.pathname.endsWith("/usage/prompts") ? json({ data: response }) : routeFor(messages)(url),
+    settle: (view) => data?.session.promptCosts.state(sessionID) === "ready" && view.captureCharFrame().includes(expected),
+  })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("Pricing scope")
+    expect(frame).not.toContain("Prompt cost $999")
+    expect(frame.split(expected)).toHaveLength(2)
+    const line = screen.lines().find((line) => line.includes(expected))!
+    expect(line.indexOf("Prompt cost") - screen.scrollbox()!.x).toBe(3)
+    if (state === "partial") expect(frame).toContain("so far · incomplete")
+    if (state === "unreported") { expect(frame).toContain("Prompt cost unreported · incomplete"); expect(frame).not.toContain("Prompt cost $0.00") }
+    if (state === "known") expect(frame).toContain("Main $1.25")
+    if (state === "fallback") expect(frame).not.toContain("0 priced")
+  } finally { await screen.dispose() }
+})
+
+test("a user message without text or files mounts no orphan cost line", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_empty_cost", type: "user", text: "", files: [], agents: [], time: { created: 1 } },
+    { id: "msg_empty_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Empty prompt boundary verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ]
+  const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "Empty prompt boundary verified" })
+  try { expect(screen.frame()).not.toContain("Prompt cost") } finally { await screen.dispose() }
+})
 
 const usagePatch = [
   "--- a/packages/core/src/provider/usage.ts",

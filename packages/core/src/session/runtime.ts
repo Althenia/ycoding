@@ -19,6 +19,11 @@ import { SessionUsage } from "./usage"
 import { SessionUsageRead, type Aggregate, type PricingRef } from "./usage-read"
 import { SessionUsagePricing } from "./usage-pricing"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import type { UsageAccounting } from "@ycoding-ai/schema/usage-accounting"
+import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
+import { SessionUsageAttribution } from "./usage-attribution"
+import { RetentionSettings } from "../retention-settings"
+import { SqlError } from "effect/unstable/sql/SqlError"
 import { SessionAutonomy } from "./autonomy"
 import { SessionCompactionJob } from "./compaction-job"
 import { SessionCompactionExecution } from "./compaction-execution"
@@ -386,6 +391,7 @@ export interface Interface {
     metadata?: Record<string, unknown>
     delivery?: SessionPending.Delivery
     resume?: boolean
+    causedBy?: UsageAnchor.Ref
   }) => Effect.Effect<SessionPending.User, NotFoundError | PromptConflictError | AttachmentError>
   /** Generates text from current Session context without admitting input or mutating history. */
   readonly generate: (input: {
@@ -401,6 +407,12 @@ export interface Interface {
   ) => Effect.Effect<ProviderRequest.Report, NotFoundError>
   readonly usageAll: () => Effect.Effect<ProviderRequest.Summary>
   readonly usageReportAll: (input: ProviderRequest.ReportInput) => Effect.Effect<ProviderRequest.Report>
+  readonly promptCosts: (
+    input: UsageAccounting.PromptInput & { readonly sessionID: SessionSchema.ID },
+  ) => Effect.Effect<UsageAccounting.PromptCosts, NotFoundError>
+  readonly taskCosts: (
+    input: UsageAccounting.TaskInput & { readonly sessionID: SessionSchema.ID },
+  ) => Effect.Effect<UsageAccounting.TaskCosts, NotFoundError>
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
     readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error>
@@ -468,6 +480,7 @@ export interface Interface {
     metadata?: Record<string, unknown>
     delivery?: SessionPending.Delivery
     resume?: boolean
+    causedBy?: UsageAnchor.Ref
   }) => Effect.Effect<SessionPending.Synthetic, NotFoundError | SyntheticConflictError>
   readonly revert: {
     readonly stage: (input: {
@@ -488,12 +501,47 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 function usageReportGroup(
   group: ProviderRequest.ReportGroup,
   item: {
-    readonly record: Pick<SessionProviderRequest.CostedRecord, "model" | "agent" | "time">
+    readonly record: Pick<SessionProviderRequest.CostedRecord, "model" | "agent" | "time" | "usageAnchor">
     readonly session: Pick<SessionSchema.Info, "id" | "title" | "projectID">
+    readonly taskID?: SessionSchema.ID
   },
   projects: ReadonlyArray<Project.Info>,
   formatter?: Intl.DateTimeFormat,
 ) {
+  if (group === "provider")
+    return { key: JSON.stringify([group, item.record.model.providerID]), label: item.record.model.providerID }
+  if (group === "provider-profile-model")
+    return {
+      key: JSON.stringify([
+        group,
+        item.record.model.providerID,
+        item.record.model.profile ?? null,
+        item.record.model.id,
+      ]),
+      label: `${item.record.model.providerID}/${item.record.model.id} · ${item.record.model.profile ?? "Provider default"}`,
+    }
+  if (group === "provider-model")
+    return {
+      key: JSON.stringify([group, item.record.model.providerID, item.record.model.id]),
+      label: `${item.record.model.providerID}/${item.record.model.id}`,
+    }
+  if (group === "model-id") return { key: JSON.stringify([group, item.record.model.id]), label: item.record.model.id }
+  if (group === "profile")
+    return {
+      key: JSON.stringify([group, item.record.model.providerID, item.record.model.profile ?? null]),
+      label: `${item.record.model.providerID} · ${item.record.model.profile ?? "Provider default"}`,
+    }
+  if (group === "prompt")
+    return {
+      key: JSON.stringify([
+        group,
+        item.record.usageAnchor?.sessionID ?? null,
+        item.record.usageAnchor?.inputID ?? null,
+      ]),
+      label: item.record.usageAnchor?.inputID ?? "Unattributed",
+    }
+  if (group === "task")
+    return { key: JSON.stringify([group, item.taskID ?? null]), label: item.taskID ?? "Main Session / unattributed" }
   if (group === "model") {
     const variant = item.record.model.variant
     return {
@@ -574,6 +622,7 @@ function combineUsage(
 
 function usageMetrics(item: Aggregate): ProviderRequest.ReportMetrics {
   return {
+    costCoverage: { pricedRequests: item.priced, unpricedRequests: item.logical - item.priced },
     logical: item.logical,
     physical: item.physical,
     helpers: item.helpers,
@@ -592,13 +641,185 @@ function usageMetrics(item: Aggregate): ProviderRequest.ReportMetrics {
   }
 }
 
+function correctedUsage(
+  metrics: ProviderRequest.ReportMetrics,
+  cost: number,
+  requests: number,
+): ProviderRequest.ReportMetrics {
+  if (requests === 0) return metrics
+  return {
+    ...metrics,
+    cost: Money.USD.make((metrics.cost ?? 0) + cost),
+    costProvenance: "current_catalog",
+    ...(metrics.costCoverage
+      ? {
+          costCoverage: {
+            pricedRequests: metrics.costCoverage.pricedRequests + requests,
+            unpricedRequests: metrics.costCoverage.unpricedRequests - requests,
+          },
+        }
+      : {}),
+  }
+}
+
+function reportDimensions(
+  group: ProviderRequest.ReportGroup,
+  key: string,
+): ProviderRequest.ReportDimensions | undefined {
+  if (
+    !["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(group)
+  )
+    return undefined
+  const parts = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))))(key)
+  const providerID = Provider.ID.make(parts[1] ?? "")
+  if (group === "provider") return { group, providerID }
+  if (group === "provider-model") return { group, providerID, modelID: CatalogModel.ID.make(parts[2]!) }
+  if (group === "model-id") return { group, modelID: CatalogModel.ID.make(parts[1]!) }
+  const profile = {
+    providerID,
+    ...(parts[2] === null
+      ? { profileState: "provider-default" as const }
+      : { profile: parts[2]!, profileState: "recorded" as const }),
+  }
+  if (group === "profile") return { group, ...profile }
+  if (group === "provider-profile-model") return { group, ...profile, modelID: CatalogModel.ID.make(parts[3]!) }
+  if (group === "prompt")
+    return parts[1] === null
+      ? { group, attribution: "unattributed" }
+      : {
+          group,
+          attribution: "complete",
+          anchor: { sessionID: SessionSchema.ID.make(parts[1]!), inputID: SessionMessage.ID.make(parts[2]!) },
+        }
+  return parts[1] === null
+    ? { group: "task", attribution: "unattributed" }
+    : { group: "task", attribution: "complete", sessionID: SessionSchema.ID.make(parts[1]!) }
+}
+
+function dimensionLabel(dimensions: ProviderRequest.ReportDimensions) {
+  if (dimensions.group === "provider") return dimensions.providerID
+  if (dimensions.group === "model-id") return dimensions.modelID
+  if (dimensions.group === "provider-model") return `${dimensions.providerID}/${dimensions.modelID}`
+  if (dimensions.group === "profile") return `${dimensions.providerID} · ${dimensions.profile ?? "Provider default"}`
+  if (dimensions.group === "provider-profile-model")
+    return `${dimensions.providerID}/${dimensions.modelID} · ${dimensions.profile ?? "Provider default"}`
+  if (dimensions.group === "prompt") return dimensions.anchor?.inputID ?? "Unattributed"
+  return dimensions.sessionID ?? "Main Session / unattributed"
+}
+
+function usageWhere(input: Partial<ProviderRequest.ReportInput>, sessions?: ReadonlyArray<SessionSchema.ID>) {
+  return sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+    ${input.from === undefined ? sql`` : sql`AND r.time_created >= ${input.from}`}
+    ${input.to === undefined ? sql`` : sql`AND r.time_created < ${input.to}`}
+    ${input.providerID === undefined ? sql`` : sql`AND json_extract(r.model, '$.providerID') = ${input.providerID}`}
+    ${input.profile === undefined ? sql`` : sql`AND json_extract(r.model, '$.profile') = ${input.profile}`}
+    ${input.modelID === undefined ? sql`` : sql`AND json_extract(r.model, '$.id') = ${input.modelID}`}
+    ${input.selectedEffort === undefined ? sql`` : sql`AND json_extract(r.model, '$.variant') = ${input.selectedEffort}`}`
+}
+
+function accountingBucket() {
+  return {
+    requests: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    known: 0,
+    priced: 0,
+    unpriced: 0,
+    catalog: false,
+  }
+}
+
+function addAccounting(
+  bucket: ReturnType<typeof accountingBucket>,
+  record: Parameters<typeof usagePrice>[1]["record"],
+  cost: number | undefined,
+  catalog: boolean,
+) {
+  bucket.requests += 1
+  bucket.tokens.input += record.tokens.input
+  bucket.tokens.output += record.tokens.output
+  bucket.tokens.reasoning += record.tokens.reasoning
+  bucket.tokens.cache.read += record.tokens.cache.read
+  bucket.tokens.cache.write += record.tokens.cache.write
+  if (cost === undefined) {
+    bucket.unpriced += 1
+    return
+  }
+  bucket.known += cost
+  bucket.priced += 1
+  bucket.catalog ||= catalog
+}
+
+function accountingBreakdown(
+  bucket: ReturnType<typeof accountingBucket>,
+  complete: boolean,
+): UsageAccounting.Breakdown {
+  return {
+    requests: bucket.requests,
+    tokens: bucket.tokens,
+    cost: {
+      pricedRequests: bucket.priced,
+      unpricedRequests: bucket.unpriced,
+      ...(bucket.priced === 0
+        ? {}
+        : {
+            known: Money.USD.make(bucket.known),
+            provenance: bucket.catalog ? ("current_catalog" as const) : ("recorded" as const),
+            ...(complete && bucket.unpriced === 0 ? { total: Money.USD.make(bucket.known) } : {}),
+          }),
+    },
+  }
+}
+
+function accountingUnit() {
+  return {
+    total: accountingBucket(),
+    main: accountingBucket(),
+    children: accountingBucket(),
+    helpers: new Map<ProviderRequest.Source, ReturnType<typeof accountingBucket>>(),
+  }
+}
+
+function addUnit(
+  unit: ReturnType<typeof accountingUnit>,
+  row: Parameters<typeof usagePrice>[1] & { readonly record: { readonly source: ProviderRequest.Source } },
+  main: boolean,
+  cost: number | undefined,
+) {
+  const catalog = cost !== undefined && !("cost" in row.record && row.record.cost !== null)
+  addAccounting(unit.total, row.record, cost, catalog)
+  addAccounting(main ? unit.main : unit.children, row.record, cost, catalog)
+  if (row.record.source === "step") return
+  const helper = unit.helpers.get(row.record.source) ?? accountingBucket()
+  unit.helpers.set(row.record.source, helper)
+  addAccounting(helper, row.record, cost, catalog)
+}
+
+function unitBreakdown(unit: ReturnType<typeof accountingUnit>, complete: boolean) {
+  return {
+    total: accountingBreakdown(unit.total, complete),
+    main: accountingBreakdown(unit.main, complete),
+    children: accountingBreakdown(unit.children, complete),
+    helpers: [...unit.helpers]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([source, value]) => ({ source, ...accountingBreakdown(value, complete) })),
+  }
+}
+
 type UsagePricing = SessionUsagePricing.Snapshot
 
 function usagePrice(
   pricing: UsagePricing,
-  item: Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>["rows"][number],
+  item: Pick<
+    Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>["rows"][number],
+    "directory" | "workspaceID"
+  > & {
+    readonly record: Pick<
+      Effect.Success<ReturnType<typeof SessionUsageRead.unpriced>>["rows"][number]["record"],
+      "model" | "tokens"
+    >
+  },
 ) {
-  const record = SessionProviderRequest.rowRecord(item.record)
+  const record = item.record
   const options = pricing.get(
     JSON.stringify([
       item.directory,
@@ -628,6 +849,7 @@ const layer = Layer.effect(
     const contextState = yield* SessionContextState.Service
     const store = yield* SessionStore.Service
     const providerRequests = yield* SessionProviderRequest.Service
+    const retentionSettings = yield* RetentionSettings.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
     const attachments = yield* AttachmentStore.Service
@@ -817,8 +1039,11 @@ const layer = Layer.effect(
       if (!session) return yield* new NotFoundError({ sessionID })
       return session
     })
-    const usageFamily = Effect.fnUntraced(function* (session: Effect.Success<ReturnType<typeof usageRoot>>) {
-      if (session.parentID) return [session.id]
+    const usageFamily = Effect.fnUntraced(function* (
+      session: Effect.Success<ReturnType<typeof usageRoot>>,
+      recursive = false,
+    ) {
+      if (session.parentID && !recursive) return [session.id]
       const sessions = [session.id]
       const seen = new Set<SessionSchema.ID>([session.id])
       for (const current of sessions) {
@@ -850,20 +1075,21 @@ const layer = Layer.effect(
             })
           if (children.length < 200) break
           cursor = children.at(-1)!
+          yield* Effect.yieldNow
         }
+        yield* Effect.yieldNow
       }
       return sessions
     })
     const usageScope = Effect.fnUntraced(function* (
       session?: Effect.Success<ReturnType<typeof usageRoot>>,
-      range: Pick<ProviderRequest.ReportInput, "from" | "to"> = {},
+      range: Partial<ProviderRequest.ReportInput> = {},
+      recursive = false,
     ) {
-      const sessions = session ? yield* usageFamily(session) : undefined
+      const sessions = session ? yield* usageFamily(session, recursive) : undefined
       return {
         sessions,
-        where: sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
-        ${range.from === undefined ? sql`` : sql`AND r.time_created >= ${range.from}`}
-        ${range.to === undefined ? sql`` : sql`AND r.time_created < ${range.to}`}`,
+        where: usageWhere(range, sessions),
       }
     })
     const pricingCache = SessionUsagePricing.make()
@@ -878,9 +1104,9 @@ const layer = Layer.effect(
       ),
       (unsubscribe) => unsubscribe,
     )
-    const pricingSnapshot = <A>(
+    const pricingSnapshot = <A, E>(
       scope: ReturnType<typeof usageScope>,
-      read: (pricing: UsagePricing, selection: Effect.Success<ReturnType<typeof usageScope>>) => Effect.Effect<A>,
+      read: (pricing: UsagePricing, selection: Effect.Success<ReturnType<typeof usageScope>>) => Effect.Effect<A, E>,
     ) =>
       Effect.gen(function* () {
         const resolved = new Map<string, SessionUsagePricing.Entry | undefined>()
@@ -905,7 +1131,7 @@ const layer = Layer.effect(
                 return { type: "complete" as const, value: yield* read(pricing, selection) }
               }),
             )
-            .pipe(Effect.orDie)
+            .pipe(Effect.catchIf((error): error is SqlError => error instanceof SqlError, Effect.die))
           if (settled.type === "complete") return settled.value
           for (const ref of settled.refs.values()) {
             const location = Location.Ref.make({
@@ -957,9 +1183,7 @@ const layer = Layer.effect(
       pricing: UsagePricing,
       sessions?: ReadonlyArray<SessionSchema.ID>,
     ) => Effect.Effect<ProviderRequest.Report> = Effect.fnUntraced(function* (input, projectInfos, pricing, sessions) {
-      const where = sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
-        ${input.from === undefined ? sql`` : sql`AND r.time_created >= ${input.from}`}
-        ${input.to === undefined ? sql`` : sql`AND r.time_created < ${input.to}`}`
+      const where = usageWhere(input, sessions)
       const formatter =
         input.timeZone && ["hour", "day", "month"].includes(input.group)
           ? new Intl.DateTimeFormat("en-US", {
@@ -972,7 +1196,9 @@ const layer = Layer.effect(
               timeZoneName: "longOffset",
             })
           : undefined
-      const corrections = new Map<string, number>()
+      const corrections = new Map<string, { cost: number; requests: number }>()
+      let correctedCost = 0
+      let correctedRequests = 0
       for (const sessionID of sessions ?? [undefined]) {
         let after: string | undefined
         while (true) {
@@ -983,16 +1209,30 @@ const layer = Layer.effect(
             sessionID,
           )
           for (const item of page.rows) {
-            const record = SessionProviderRequest.rowRecord(item.record)
+            const anchor =
+              item.record.usage_anchor ??
+              (sessions && item.inputID
+                ? yield* SessionUsageAttribution.resolve(usageDb, { sessionID: item.sessionID, inputID: item.inputID })
+                : undefined)
+            const record = { ...item.record, usageAnchor: anchor, time: DateTime.makeUnsafe(item.record.time_created) }
             const session = {
               id: item.sessionID,
               title: item.title,
-              projectID: item.projectID,
+              projectID: Project.ID.make(item.projectID),
             }
             const cost = usagePrice(pricing, item)
             if (cost === undefined) continue
-            const group = usageReportGroup(input.group, { record, session }, projectInfos, formatter)
-            corrections.set(group.key, (corrections.get(group.key) ?? 0) + cost)
+            const tasks =
+              input.group === "task"
+                ? Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(SessionSchema.ID)))(item.taskPath)
+                : []
+            for (const taskID of tasks.length === 0 ? [undefined] : tasks) {
+              const group = usageReportGroup(input.group, { record, session, taskID }, projectInfos, formatter)
+              const current = corrections.get(group.key)
+              corrections.set(group.key, { cost: (current?.cost ?? 0) + cost, requests: (current?.requests ?? 0) + 1 })
+            }
+            correctedCost += cost
+            correctedRequests += 1
           }
           if (page.after === undefined) break
           after = page.after
@@ -1034,14 +1274,7 @@ const layer = Layer.effect(
         sessions,
       })
       const totals = usageMetrics(page.total)
-      const total =
-        corrections.size === 0
-          ? totals
-          : combineUsage(totals, {
-              ...SessionProviderRequest.reportMetrics([]),
-              cost: Money.USD.make([...corrections.values()].reduce((sum, cost) => sum + cost, 0)),
-              costProvenance: "current_catalog",
-            })
+      const total = correctedUsage(totals, correctedCost, correctedRequests)
       const rows = page.rows.map((item) => {
         const model = Schema.decodeUnknownSync(Schema.fromJsonString(CatalogModel.Ref))(item.model)
         const group = usageReportGroup(
@@ -1061,10 +1294,12 @@ const layer = Layer.effect(
           projectInfos,
           formatter,
         )
+        const dimensions = reportDimensions(input.group, item.key)
         return {
           key: item.key,
-          label: group.label,
+          label: dimensions ? dimensionLabel(dimensions) : group.label,
           ...(input.group === "model" ? { model } : {}),
+          ...(dimensions ? { dimensions } : {}),
           ...usageMetrics(item),
           ...(item.speed === undefined ? {} : { speed: item.speed }),
         }
@@ -1104,7 +1339,7 @@ const layer = Layer.effect(
             sessionID,
           )
           for (const item of page.rows) {
-            const record = SessionProviderRequest.rowRecord(item.record)
+            const record = item.record
             const cost = usagePrice(pricing, item)
             if (cost === undefined) continue
             const identity = JSON.stringify([
@@ -1114,13 +1349,8 @@ const layer = Layer.effect(
               record.model.profile ?? null,
             ])
             const current = groups.get(identity)!
-            const correction = {
-              ...SessionProviderRequest.reportMetrics([]),
-              cost,
-              costProvenance: "current_catalog" as const,
-            }
-            total = combineUsage(total, correction)
-            groups.set(identity, { ...current, metrics: combineUsage(current.metrics, correction) })
+            total = correctedUsage(total, cost, 1)
+            groups.set(identity, { ...current, metrics: correctedUsage(current.metrics, cost, 1) })
           }
           if (page.after === undefined) break
           unpricedAfter = page.after
@@ -1177,6 +1407,184 @@ const layer = Layer.effect(
           : {}),
       }
     })
+    const accountingActivity = Effect.fnUntraced(function* (sessions: ReadonlyArray<SessionSchema.ID>) {
+      const active = new Set(yield* execution.active)
+      const anchors = [
+        ...(yield* providerRequests.activeRequests).flatMap((request) =>
+          request.usageAnchor ? [request.usageAnchor] : [],
+        ),
+      ]
+      const contributors = yield* SessionUsageAttribution.active
+      for (const contributor of contributors) {
+        active.add(contributor.sessionID)
+        if (contributor.anchor) anchors.push(contributor.anchor)
+      }
+      for (const sessionID of sessions) {
+        const task = yield* usageDb
+          .get<{ state: string }>(sql`SELECT state FROM session_task WHERE session_id = ${sessionID}`)
+          .pipe(Effect.orDie)
+        if (task && ["starting", "running", "waiting", "cancelling"].includes(task.state)) active.add(sessionID)
+        if (active.has(sessionID)) {
+          const anchor = yield* SessionUsageAttribution.current(usageDb, sessionID)
+          if (anchor) anchors.push(anchor)
+        }
+        yield* Effect.yieldNow
+      }
+      return { active, anchors: new Set(anchors.map((anchor) => JSON.stringify([anchor.sessionID, anchor.inputID]))) }
+    })
+    const accountingHistory = Effect.fnUntraced(function* (sessions: ReadonlyArray<SessionSchema.ID>, days: number) {
+      const cutoff = Date.now() - days * 86_400_000
+      let since = cutoff
+      let oldest = Infinity
+      for (const sessionID of sessions) {
+        const row = yield* usageDb
+          .get<{
+            created: number
+            prunedThrough: number | null
+          }>(sql`SELECT time_created AS created, usage_pruned_through AS prunedThrough FROM session WHERE id = ${sessionID}`)
+          .pipe(Effect.orDie)
+        if (!row) return { since: Infinity, history: "partial" as const }
+        oldest = Math.min(oldest, row.created)
+        if (row.prunedThrough !== null) since = Math.max(since, row.prunedThrough + 1)
+        yield* Effect.yieldNow
+      }
+      return { since, history: oldest < since ? ("partial" as const) : ("retained" as const) }
+    })
+    const readPromptCosts = Effect.fnUntraced(function* (
+      input: UsageAccounting.PromptInput & { readonly sessionID: SessionSchema.ID },
+      pricing: UsagePricing,
+      sessions: ReadonlyArray<SessionSchema.ID>,
+      days: number,
+    ): Effect.fn.Return<UsageAccounting.PromptCosts> {
+      const units = new Map<
+        string,
+        { anchor: UsageAnchor.Ref; valid: boolean; started?: number; value: ReturnType<typeof accountingUnit> }
+      >()
+      for (const inputID of input.inputIDs) {
+        const anchor = yield* SessionUsageAttribution.resolve(usageDb, { sessionID: input.sessionID, inputID })
+        if (anchor && (anchor.sessionID !== input.sessionID || anchor.inputID !== inputID)) continue
+        const reference = anchor ?? { sessionID: input.sessionID, inputID }
+        const message = yield* usageDb
+          .get<{
+            created: number
+          }>(sql`SELECT time_created AS created FROM session_message WHERE session_id = ${reference.sessionID} AND id = ${reference.inputID}`)
+          .pipe(Effect.orDie)
+        const started =
+          message?.created ??
+          (yield* SessionUsageAttribution.admitted(usageDb, reference.sessionID, reference.inputID))?.timeCreated
+        units.set(JSON.stringify([reference.sessionID, reference.inputID]), {
+          anchor: reference,
+          valid: anchor !== undefined,
+          started,
+          value: accountingUnit(),
+        })
+      }
+      const unattributed = accountingBucket()
+      yield* SessionUsageRead.each(usageDb, sessions, (row) =>
+        Effect.gen(function* () {
+          const anchor =
+            row.record.usage_anchor ??
+            (row.record.input_id
+              ? yield* SessionUsageAttribution.resolve(usageDb, {
+                  sessionID: row.sessionID,
+                  inputID: row.record.input_id,
+                })
+              : undefined)
+          const cost = row.record.cost ?? (row.record.source === "decision" ? undefined : usagePrice(pricing, row))
+          if (!anchor) {
+            addAccounting(unattributed, row.record, cost, row.record.cost === null && cost !== undefined)
+            return
+          }
+          const unit = units.get(JSON.stringify([anchor.sessionID, anchor.inputID]))
+          if (unit) addUnit(unit.value, row, row.sessionID === anchor.sessionID, cost)
+        }),
+      )
+      const history = yield* accountingHistory(sessions, days)
+      const activity = yield* accountingActivity(sessions)
+      return {
+        history: history.history,
+        unattributed: accountingBreakdown(unattributed, false),
+        units: [...units].map(([key, unit]) => {
+          const coverage =
+            unit.valid && unit.started !== undefined && unit.started >= history.since
+              ? ("retained" as const)
+              : ("partial" as const)
+          const attribution = !unit.valid
+            ? ("unattributed" as const)
+            : unattributed.requests > 0
+              ? ("partial" as const)
+              : ("complete" as const)
+          return {
+            anchor: unit.anchor,
+            status: activity.anchors.has(key) ? ("so-far" as const) : ("settled" as const),
+            attribution,
+            history: coverage,
+            ...unitBreakdown(unit.value, unit.valid && attribution === "complete" && coverage === "retained"),
+          }
+        }),
+      }
+    })
+    const readTaskCosts = Effect.fnUntraced(function* (
+      input: UsageAccounting.TaskInput & { readonly sessionID: SessionSchema.ID },
+      pricing: UsagePricing,
+      family: ReadonlyArray<SessionSchema.ID>,
+      days: number,
+    ): Effect.fn.Return<UsageAccounting.TaskCosts, NotFoundError> {
+      const units = new Map<
+        SessionSchema.ID,
+        {
+          anchor?: UsageAnchor.Ref
+          started: number
+          sessions: ReadonlySet<SessionSchema.ID>
+          value: ReturnType<typeof accountingUnit>
+        }
+      >()
+      for (const sessionID of input.sessionIDs) {
+        if (!family.includes(sessionID)) return yield* new NotFoundError({ sessionID })
+        const task = yield* usageDb
+          .select()
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!task) return yield* new NotFoundError({ sessionID })
+        const sessions = yield* usageFamily({ id: sessionID, parentID: task.parent_id }, true)
+        const anchor =
+          task.usage_anchor ?? (yield* SessionUsageAttribution.resolve(usageDb, { sessionID, inputID: task.input_id }))
+        units.set(sessionID, {
+          anchor,
+          started: task.time_created,
+          sessions: new Set(sessions),
+          value: accountingUnit(),
+        })
+      }
+      const selected = [...new Set([...units.values()].flatMap((unit) => [...unit.sessions]))]
+      const total = accountingBucket()
+      yield* SessionUsageRead.each(usageDb, selected, (row) =>
+        Effect.sync(() => {
+          const cost = row.record.cost ?? (row.record.source === "decision" ? undefined : usagePrice(pricing, row))
+          addAccounting(total, row.record, cost, row.record.cost === null && cost !== undefined)
+          for (const [sessionID, unit] of units)
+            if (unit.sessions.has(row.sessionID)) addUnit(unit.value, row, row.sessionID === sessionID, cost)
+        }),
+      )
+      const activity = yield* accountingActivity(selected)
+      const history = yield* accountingHistory(selected, days)
+      const tasks: UsageAccounting.TaskCost[] = []
+      for (const [sessionID, unit] of units) {
+        const coverage = yield* accountingHistory([...unit.sessions], days)
+        const history = unit.started >= coverage.since ? ("retained" as const) : ("partial" as const)
+        tasks.push({
+          sessionID,
+          ...(unit.anchor ? { usageAnchor: unit.anchor } : {}),
+          history,
+          attribution: "complete",
+          status: [...unit.sessions].some((id) => activity.active.has(id)) ? "so-far" : "settled",
+          ...unitBreakdown(unit.value, history === "retained"),
+        })
+      }
+      return { tasks, history: history.history, total: accountingBreakdown(total, history.history === "retained") }
+    })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
         Effect.mapError(
@@ -1228,7 +1636,7 @@ const layer = Layer.effect(
         sessionID,
         source: "session-state",
         text: asleep
-          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Questions, forms, and guardrail reviews are decided by the decision model while sleep is on. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : awake.lid ?? "unreported"}. On battery this drains the battery and a closed lid traps heat.`
+          ? `The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done. Questions, forms, and guardrail reviews are decided by the decision model while sleep is on. Keep-awake: idle ${awake.state}, lid ${awake.lid === "held" ? "held by another YCoding process" : (awake.lid ?? "unreported")}. On battery this drains the battery and a closed lid traps heat.`
           : "The user is back. Sleep mode is off; questions, forms, and guardrail reviews return to the user unless other autonomy settings apply.",
       }).pipe(Effect.catchCause((cause) => asleep
         ? Effect.logWarning("Unable to record family sleep notice", { sessionID }) : Effect.failCause(cause)))
@@ -1580,8 +1988,9 @@ const layer = Layer.effect(
       usageReport: Effect.fn("Session.usageReport")(function* (input) {
         const session = yield* usageRoot(input.sessionID)
         const projectInfos = input.group === "project" ? yield* projects.list() : []
-        return yield* pricingSnapshot(usageScope(session, input), (pricing, selection) =>
-          readUsageReport(input, projectInfos, pricing, selection.sessions),
+        return yield* pricingSnapshot(
+          usageScope(session, input, input.group === "prompt" || input.group === "task"),
+          (pricing, selection) => readUsageReport(input, projectInfos, pricing, selection.sessions),
         )
       }),
       usageAll: Effect.fn("Session.usageAll")(function* () {
@@ -1591,6 +2000,20 @@ const layer = Layer.effect(
         const projectInfos = input.group === "project" ? yield* projects.list() : []
         return yield* pricingSnapshot(usageScope(undefined, input), (pricing) =>
           readUsageReport(input, projectInfos, pricing),
+        )
+      }),
+      promptCosts: Effect.fn("Session.promptCosts")(function* (input) {
+        const session = yield* usageRoot(input.sessionID)
+        const days = (yield* retentionSettings.read()).recordsDays
+        return yield* pricingSnapshot(usageScope(session, {}, true), (pricing, selection) =>
+          readPromptCosts(input, pricing, selection.sessions!, days),
+        )
+      }),
+      taskCosts: Effect.fn("Session.taskCosts")(function* (input) {
+        const session = yield* usageRoot(input.sessionID)
+        const days = (yield* retentionSettings.read()).recordsDays
+        return yield* pricingSnapshot(usageScope(session, {}, true), (pricing, selection) =>
+          readTaskCosts(input, pricing, selection.sessions!, days),
         )
       }),
       autonomy: {
@@ -1934,6 +2357,7 @@ const layer = Layer.effect(
                     const admitted = yield* SessionPending.admit(db, events, {
                       id: messageID,
                       sessionID: input.sessionID,
+                      causedBy: input.causedBy,
                       input: SessionPending.Message.make({
                         type: "user",
                         data: {
@@ -2290,6 +2714,8 @@ const layer = Layer.effect(
                     ]
                   : []),
               ])
+              const diagnostics = yield* store.diagnostics(session.id)
+              if (diagnostics) yield* events.publish(SessionEvent.DiagnosticsUpdated, { sessionID: session.id, diagnostics })
               return { status: "switched" } as const
             }
             const compacted = yield* compactForModelSwitch(session, input.model, targetBudget)
@@ -2308,6 +2734,8 @@ const layer = Layer.effect(
                   ]
                 : []),
             ])
+            const diagnostics = yield* store.diagnostics(reloaded.id)
+            if (diagnostics) yield* events.publish(SessionEvent.DiagnosticsUpdated, { sessionID: reloaded.id, diagnostics })
             return { status: "switched" } as const
           }),
         )
@@ -2638,6 +3066,7 @@ const layer = Layer.effect(
                     const admitted = yield* SessionPending.admit(db, events, {
                       id: inputID,
                       sessionID: input.sessionID,
+                      causedBy: input.causedBy,
                       input: SessionPending.Message.make({
                         type: "synthetic",
                         data: {
@@ -2989,6 +3418,7 @@ export const node = makeGlobalNode({
     SessionContextState.node,
     SessionStore.node,
     SessionProviderRequest.node,
+    RetentionSettings.node,
     LocationServiceMap.node,
     SessionProjector.node,
     SessionContextExclusionCleanup.node,

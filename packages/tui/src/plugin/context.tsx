@@ -61,7 +61,7 @@ type Registration = {
 
 const PluginContext = createContext<Value>()
 
-export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>) {
+export function PluginProvider(props: ParentProps<{ packages: PackageResolver; builtins?: readonly Plugin.Definition[] }>) {
   const renderer = useRenderer()
   const client = useClient()
   const data = useData()
@@ -237,7 +237,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
       setStore("states", [])
     })
 
-    for (const plugin of builtins) {
+    for (const plugin of props.builtins ?? builtins) {
       setStore("registrations", plugin.id, {
         target: plugin.id,
         plugin,

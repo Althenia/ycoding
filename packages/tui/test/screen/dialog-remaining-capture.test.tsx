@@ -590,7 +590,7 @@ async function route(url: URL, request: Request) {
     ["/api/integration", "/api/model", "/api/model/default", "/api/provider"].includes(url.pathname)
   ) {
     profileRefreshPaths.push(url.pathname)
-    await new Promise<void>((resolve) => profileRefreshResolvers.push(resolve))
+    if (url.pathname !== "/api/model/default") await new Promise<void>((resolve) => profileRefreshResolvers.push(resolve))
     if (url.pathname === "/api/integration") {
       return json({
         location,

@@ -1,4 +1,4 @@
-import type { ProviderRequestReport } from "@ycoding-ai/client"
+import type { UsageReportOutput } from "@ycoding-ai/client"
 import { RGBA, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
@@ -8,6 +8,9 @@ import { DialogHeader, DialogTitle, useDialog } from "../../ui/dialog"
 import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogSelect } from "../../ui/dialog-select"
 import { Locale } from "../../util/locale"
+import { UsageGroupDialog, UsageFilterDialog, usageGroupOptions } from "./usage-filters"
+import { UsageSpeedDetails } from "./usage-cost"
+import { costText, reportLabel } from "../../util/usage-accounting"
 
 export const PROVIDER_USAGE_VIEWS = [
   "overview",
@@ -20,24 +23,30 @@ export const PROVIDER_USAGE_VIEWS = [
   "projects",
   "stats",
   "agents",
+  "prompts",
+  "tasks",
 ] as const
 
 export type ProviderUsageView = (typeof PROVIDER_USAGE_VIEWS)[number]
 export type ProviderUsageReportView = Exclude<ProviderUsageView, "overview" | "usage">
 export type ProviderUsageReportInput = {
-  group: ProviderRequestReport["group"]
+  group: UsageReportOutput["group"]
   from?: number
   to?: number
   offset?: number
   limit?: number
   sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite"
   order?: "asc" | "desc"
+  providerID?: string
+  profile?: string
+  modelID?: string
+  selectedEffort?: string
 }
 
 type DateRange =
   | { type: "last7" | "last30" | "all" }
   | { type: "custom"; from: number; to: number; fromLabel: string; toLabel: string }
-type ReportMetrics = ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]
+type ReportMetrics = UsageReportOutput["total"] | UsageReportOutput["rows"][number]
 type Sort = NonNullable<ProviderUsageReportInput["sort"]>
 type Order = NonNullable<ProviderUsageReportInput["order"]>
 type StatsSummary = {
@@ -46,7 +55,7 @@ type StatsSummary = {
 }
 type ReportState = {
   queryKey: string
-  report?: ProviderRequestReport
+  report?: UsageReportOutput
   stats?: StatsSummary
   loading: boolean
   failed: boolean
@@ -54,7 +63,7 @@ type ReportState = {
 }
 
 const PAGE_SIZE = 100
-const REPORT_LEGEND = "STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where cache reads were unreported"
+const REPORT_LEGEND = "Configured request-date analytics retention · STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where cache reads were unreported"
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 const STATS_PAGE_SIZE = 200
@@ -64,13 +73,15 @@ export function providerUsageViewLabel(view: ProviderUsageView) {
   return view[0].toUpperCase() + view.slice(1)
 }
 
-function providerUsageReportGroup(view: ProviderUsageReportView): ProviderRequestReport["group"] {
+function providerUsageReportGroup(view: ProviderUsageReportView): UsageReportOutput["group"] {
   if (view === "models") return "model"
   if (view === "daily" || view === "stats") return "day"
   if (view === "hourly") return "hour"
   if (view === "monthly") return "month"
   if (view === "sessions") return "session"
   if (view === "projects") return "project"
+  if (view === "prompts") return "prompt"
+  if (view === "tasks") return "task"
   return "agent"
 }
 
@@ -78,9 +89,11 @@ export function ProviderUsageReports(props: {
   view: ProviderUsageReportView
   refresh: number
   now?: () => number
-  load?: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>
+  load?: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>
 }) {
   const [range, setRange] = createSignal<DateRange>({ type: "all" })
+  const [grouping, setGrouping] = createSignal<{ view: ProviderUsageReportView; group: UsageReportOutput["group"] }>()
+  const [filters, setFilters] = createSignal<Pick<ProviderUsageReportInput, "providerID" | "profile" | "modelID" | "selectedEffort">>({})
   const [sorting, setSorting] = createSignal({ view: props.view, ...defaultSorting(props.view) })
   const [page, setPage] = createSignal({ view: props.view, offset: 0 })
   const [selected, setSelected] = createSignal<string>()
@@ -90,7 +103,7 @@ export function ProviderUsageReports(props: {
 
   const stats = createMemo(() => props.view === "stats")
   const tableView = createMemo(() => props.view === "stats" ? undefined : props.view)
-  const group = createMemo(() => providerUsageReportGroup(props.view))
+  const group = createMemo(() => grouping()?.view === props.view ? grouping()!.group : providerUsageReportGroup(props.view))
   const offset = createMemo(() => page().view === props.view ? page().offset : 0)
   const setOffset = (value: number) => setPage({ view: props.view, offset: value })
   const currentSorting = createMemo(() => sorting().view === props.view ? sorting() : { view: props.view, ...defaultSorting(props.view) })
@@ -119,6 +132,7 @@ export function ProviderUsageReports(props: {
     const bounds = currentStats ? statsDateBounds(props.now?.() ?? Date.now()) : dateBounds(currentRange, props.now?.() ?? Date.now())
     const query: ProviderUsageReportInput = {
       group: currentGroup,
+      ...filters(),
       ...bounds,
       offset: currentOffset,
       limit: currentStats ? STATS_PAGE_SIZE : PAGE_SIZE,
@@ -181,6 +195,10 @@ export function ProviderUsageReports(props: {
           onRangeError={setRangeError}
           onOffset={setOffset}
           onSelect={setSelected}
+          onGroup={(group) => { setGrouping({ view: props.view, group }); setOffset(0) }}
+          onFilter={(key, value) => { setFilters((current) => ({ ...current, [key]: value, ...(key === "providerID" ? { profile: undefined } : {}) })); setOffset(0) }}
+          filters={filters()}
+          group={group()}
         />
       )}
     </Show>
@@ -188,10 +206,10 @@ export function ProviderUsageReports(props: {
 }
 
 async function loadReport(
-  loader: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>,
+  loader: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>,
   query: ProviderUsageReportInput,
   stats: boolean,
-): Promise<{ report: ProviderRequestReport; stats?: StatsSummary }> {
+): Promise<{ report: UsageReportOutput; stats?: StatsSummary }> {
   if (!stats) return { report: await loader(query) }
   const [models, sessions, report] = await Promise.all([
     loader({ ...query, group: "model", offset: 0, limit: 1, sort: "tokens", order: "desc" }),
@@ -202,7 +220,7 @@ async function loadReport(
 }
 
 async function loadDays(
-  loader: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>,
+  loader: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>,
   query: ProviderUsageReportInput,
 ) {
   const first = await loader(query)
@@ -230,6 +248,10 @@ function ProviderUsageTable(props: {
   onRangeError: (error: string | undefined) => void
   onOffset: (offset: number) => void
   onSelect: (key: string) => void
+  group: UsageReportOutput["group"]
+  filters: Pick<ProviderUsageReportInput, "providerID" | "profile" | "modelID" | "selectedEffort">
+  onGroup: (group: UsageReportOutput["group"]) => void
+  onFilter: (key: "providerID" | "profile" | "modelID" | "selectedEffort", value: string | undefined) => void
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -255,7 +277,7 @@ function ProviderUsageTable(props: {
   const showDetails = () => {
     const row = selected()
     if (!row) return
-    dialog.replace(() => <UsageDetails row={row} />)
+    dialog.replace(() => <UsageDetails row={row} group={props.group} />)
   }
   const showRange = () => dialog.replace(() => (
     <UsageRangeDialog range={props.range} onSelect={props.onRange} onError={props.onRangeError} />
@@ -276,6 +298,9 @@ function ProviderUsageTable(props: {
   Keymap.createLayer(() => ({
     mode: "base",
     commands: [
+      { id: "provider-usage.group", title: "Choose usage grouping", group: "Usage", bind: "b", run: () => dialog.replace(() => <UsageGroupDialog current={usageGroupOptions.find((option) => option.value === props.group)?.value ?? "model"} onSelect={props.onGroup} />) },
+      ...([{ key: "providerID", label: "Provider", bind: "p" }, { key: "profile", label: "Recorded profile", bind: "l" }, { key: "modelID", label: "Model ID", bind: "m" }, { key: "selectedEffort", label: "Selected effort", bind: "e" }] as const).map((field) => ({ id: `provider-usage.filter.${field.key}`, title: `Filter usage by ${field.label}`, group: "Usage", bind: field.bind,
+        run: () => dialog.replace(() => <UsageFilterDialog label={field.label} value={props.filters[field.key]} onSelect={(value) => props.onFilter(field.key, value)} />) })),
       { id: "provider-usage.row.previous", title: "Previous usage row", group: "Usage", bind: "up", run: () => move(-1) },
       { id: "provider-usage.row.next", title: "Next usage row", group: "Usage", bind: "down", run: () => move(1) },
       { id: "provider-usage.row.home", title: "First usage row", group: "Usage", bind: "home", run: () => moveTo(0) },
@@ -321,8 +346,10 @@ function ProviderUsageTable(props: {
         {(report) => (
           <>
             <text flexShrink={0} fg={theme.text.default} attributes={TextAttributes.BOLD}>
-              {providerUsageViewLabel(props.view)} · All sessions
+              {providerUsageViewLabel(props.view)} · All sessions · Group {props.group}{props.filters.selectedEffort ? ` · selected effort ${props.filters.selectedEffort}` : ""}
             </text>
+            <Show when={!narrow()}><text flexShrink={0} fg={theme.text.subdued} wrapMode="word">b group · p provider · l profile · m model · e selected effort</text></Show>
+            <Show when={props.group === "task"}><text flexShrink={0} fg={theme.text.subdued}>Inclusive task rows overlap; do not add them for a family total.</text></Show>
             <text flexShrink={0} fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(dimensions().width - 6, 96)))}</text>
             <Show when={!narrow()} fallback={<text flexShrink={0} fg={theme.text.subdued}>{compactHeader(props.view, props.sort, props.order)}</text>}>
               <ReportHeader view={props.view} width={dimensions().width} sort={props.sort} order={props.order} onSort={props.onSort} />
@@ -346,9 +373,9 @@ function ProviderUsageTable(props: {
                   >
                     <Show
                       when={!narrow()}
-                      fallback={<CompactReportRow row={row} selected={() => row.key === props.selected} width={dimensions().width} />}
+                      fallback={<CompactReportRow row={row} group={props.group} selected={() => row.key === props.selected} width={dimensions().width} />}
                     >
-                      <WideReportRow row={row} selected={() => row.key === props.selected} width={dimensions().width} />
+                      <WideReportRow row={row} group={props.group} selected={() => row.key === props.selected} width={dimensions().width} />
                     </Show>
                   </box>
                 )}
@@ -357,7 +384,7 @@ function ProviderUsageTable(props: {
             <box flexShrink={0} flexDirection="column">
               <text attributes={TextAttributes.BOLD}>{reportTotal(report().total)}</text>
               <text fg={theme.text.subdued}>
-                {Locale.truncate(REPORT_LEGEND, Math.max(1, dimensions().width - 6))}
+                {Locale.truncate(narrow() ? "b group · p provider · l profile · m model · e effort · retained analytics" : REPORT_LEGEND, Math.max(1, dimensions().width - 6))}
               </text>
               <text fg={theme.text.subdued}>
                 Scope: All sessions · Range: {rangeLabel(props.range)} · Sort: {sortLabel(props.sort, props.order)} · {pageLabel(props.offset, report())}
@@ -391,27 +418,40 @@ function ProviderUsageTable(props: {
   )
 }
 
-function UsageDetails(props: { row: ProviderRequestReport["rows"][number] }) {
+function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: UsageReportOutput["group"] }) {
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
+  let scroll: ScrollBoxRenderable | undefined
+  Keymap.createLayer(() => ({ mode: "modal", commands: [
+    { id: "usage.details.page-up", title: "Scroll usage details up", bind: "pageup", run: () => scroll?.scrollBy(-Math.max(1, scroll.viewport.height)) },
+    { id: "usage.details.page-down", title: "Scroll usage details down", bind: "pagedown", run: () => scroll?.scrollBy(Math.max(1, scroll.viewport.height)) },
+  ] }))
   onMount(() => dialog.setSize("medium"))
   return (
     <box flexDirection="column" paddingBottom={1}>
       <DialogHeader title={<DialogTitle>Usage details</DialogTitle>} />
+      <scrollbox ref={(value: ScrollBoxRenderable) => { scroll = value }} maxHeight={Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 6)} scrollbarOptions={{ visible: false }}>
       <box flexDirection="column" paddingLeft={3} paddingRight={3} paddingTop={1}>
-        <text fg={theme.text.feedback.info.default}>{props.row.label}</text>
+        <text fg={theme.text.feedback.info.default}>{reportLabel(props.row, props.group)}</text>
         <text>Steps (model calls) {formatNumber(props.row.logical)} · provider attempts {formatNumber(props.row.physical)}</text>
         <text>Helpers {formatNumber(props.row.helpers)} · continued {formatNumber(props.row.continued)} · fallback {formatNumber(props.row.fallback)}</text>
         <text>Input {formatNumber(props.row.tokens.input)} · Visible output {formatNumber(props.row.tokens.output)}</text>
         <text>Reasoning {formatNumber(props.row.tokens.reasoning)}</text>
         <text>Cache read {cacheRead(props.row, formatNumber)} · write {formatNumber(props.row.tokens.cache.write)}</text>
-        <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · Cost {costLabel(props.row)}</text>
+        <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · {props.group === "task" ? "Cost (inclusive)" : "Cost"} {costLabel(props.row)}</text>
         <text>First output p50 {latency(props.row.speed?.firstOutputP50Ms)} · p95 {latency(props.row.speed?.firstOutputP95Ms)}</text>
         <text>Total p50 {latency(props.row.speed?.totalP50Ms)} · p95 {latency(props.row.speed?.totalP95Ms)} · Output {throughput(props.row.speed?.outputTokensPerSecond)}</text>
+        <UsageSpeedDetails speed={props.row.speed} />
+        <text>{props.row.costCoverage ? `${props.row.costCoverage.pricedRequests} priced · ${props.row.costCoverage.unpricedRequests} unpriced` : "Cost coverage unreported"}</text>
+        <Show when={props.row.model?.variant}><text>Selected effort {props.row.model?.variant}</text></Show>
+        <Show when={props.row.dimensions && "profileState" in props.row.dimensions}><text>{props.row.dimensions && "profileState" in props.row.dimensions && props.row.dimensions.profileState === "provider-default" ? "Provider default at request time" : "Recorded profile"}</text></Show>
         <Show when={props.row.cacheReadReported !== true}>
           <text fg={theme.text.subdued}>≥ marks a lower bound: the provider did not report every cache read.</text>
         </Show>
       </box>
+      </scrollbox>
+      <text paddingLeft={3} fg={theme.text.subdued}>Page Up/Page Down scroll · Escape close</text>
     </box>
   )
 }
@@ -486,7 +526,7 @@ function ProviderUsageStats(props: {
       ? [theme.hue.gray[200], theme.hue.green[300], theme.hue.green[500], theme.hue.green[700], theme.hue.green[900]]
       : [theme.hue.gray[800], theme.hue.green[800], theme.hue.green[600], theme.hue.green[400], theme.hue.green[200]],
   )
-  const level = (row: ProviderRequestReport["rows"][number] | undefined) => {
+  const level = (row: UsageReportOutput["rows"][number] | undefined) => {
     if (!row || knownTokens(row) === 0) return 0
     const ratio = knownTokens(row) / maximum()
     return ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1
@@ -518,7 +558,7 @@ function ProviderUsageStats(props: {
     }, { run: 0, best: 0 }).best
     const trailing = active.at(-1) ? active : active.slice(0, -1)
     const current = trailing.length - (trailing.findLastIndex((value) => !value) + 1)
-    const busiest = rows().reduce<ProviderRequestReport["rows"][number] | undefined>(
+    const busiest = rows().reduce<UsageReportOutput["rows"][number] | undefined>(
       (best, row) => (best === undefined || knownTokens(row) > knownTokens(best) ? row : best),
       undefined,
     )
@@ -580,7 +620,7 @@ function ProviderUsageStats(props: {
             <box flexGrow={1} />
             <text fg={theme.text.subdued}>
               {summary().first
-                ? ""
+                ? "Retained history only; missing days do not prove inactivity."
                 : "No usage recorded in the last 52 weeks."}
             </text>
           </>
@@ -614,7 +654,8 @@ function compactHeader(view: ProviderUsageReportView, sort: Sort, order: Order) 
 }
 
 function CompactReportRow(props: {
-  row: ProviderRequestReport["rows"][number]
+  row: UsageReportOutput["rows"][number]
+  group: UsageReportOutput["group"]
   selected: () => boolean
   width: number
 }) {
@@ -622,7 +663,7 @@ function CompactReportRow(props: {
   return (
     <box flexDirection="column" width="100%">
       <text fg={props.selected() ? theme.text.feedback.info.default : theme.text.default} attributes={props.selected() ? TextAttributes.BOLD : undefined}>
-        {props.selected() ? ">" : " "} {Locale.truncate(props.row.label, Math.max(1, props.width - 8))}
+        {props.selected() ? ">" : " "} {Locale.truncate(reportLabel(props.row, props.group), Math.max(1, props.width - 8))}
       </text>
       <text>
         {"  "}<span>{formatNumber(props.row.logical)} steps</span>
@@ -637,9 +678,11 @@ function CompactReportRow(props: {
 
 function reportGeometry(width: number) {
   const available = Math.max(1, width - 6)
-  const columns = { steps: 7, input: 8, output: 8, reasoning: 8, read: 11, write: 11, total: 9, cost: 10, speed: 11 }
-  const reserved = Object.entries(columns).reduce((total, [key, value]) => total + value * (key === "speed" ? 5 : 1), 0) + 13
-  return { ...columns, name: Math.max(22, available - reserved), fits: available >= 22 + reserved }
+  const columns = { steps: 7, input: 8, output: 8, reasoning: 8, read: 11, write: 11, total: 9, cost: 14, speed: 11 }
+  const primary = Object.entries(columns).reduce((total, [key, value]) => total + (key === "speed" ? 0 : value), 0) + 8
+  const timing = available >= 60 + primary + 5 * (columns.speed + 1)
+  const reserved = primary + (timing ? 5 * (columns.speed + 1) : 0)
+  return { ...columns, timing, name: Math.max(22, available - reserved), fits: available >= 60 + primary }
 }
 
 function ReportHeader(props: {
@@ -660,11 +703,13 @@ function ReportHeader(props: {
     { key: "cacheWrite" as const, label: "CACHE WRITE", width: geometry.write },
     { key: "tokens" as const, label: "TOTAL", width: geometry.total },
     { key: "cost" as const, label: "COST", width: geometry.cost },
+    ...(geometry.timing ? [
     { key: undefined, label: "FIRST P50", width: geometry.speed },
     { key: undefined, label: "FIRST P95", width: geometry.speed },
     { key: undefined, label: "TOTAL P50", width: geometry.speed },
     { key: undefined, label: "TOTAL P95", width: geometry.speed },
     { key: undefined, label: "TOK/S", width: geometry.speed },
+    ] : []),
   ]
   return (
     <box flexShrink={0} flexDirection="row">
@@ -691,7 +736,8 @@ function sortIndicator(sort: Sort, order: Order) {
 }
 
 function WideReportRow(props: {
-  row: ProviderRequestReport["rows"][number]
+  row: UsageReportOutput["rows"][number]
+  group: UsageReportOutput["group"]
   selected: () => boolean
   width: number
 }) {
@@ -699,7 +745,7 @@ function WideReportRow(props: {
   const geometry = reportGeometry(props.width)
   return (
     <text attributes={props.selected() ? TextAttributes.BOLD : undefined}>
-      <span style={{ fg: props.selected() ? theme.text.feedback.info.default : theme.text.default }}>{`${props.selected() ? ">" : " "} ${Locale.truncate(props.row.label, geometry.name - 2)}`.padEnd(geometry.name)}</span>{" "}
+      <span style={{ fg: props.selected() ? theme.text.feedback.info.default : theme.text.default }}>{`${props.selected() ? ">" : " "} ${Locale.truncate(reportLabel(props.row, props.group), geometry.name - 2)}`.padEnd(geometry.name)}</span>{" "}
       <span>{compactNumber(props.row.logical).padStart(geometry.steps)}</span>{" "}
       <span style={{ fg: theme.text.feedback.success.default }}>{compactNumber(props.row.tokens.input).padStart(geometry.input)}</span>{" "}
       <span style={{ fg: theme.text.feedback.warning.subdued }}>{compactNumber(props.row.tokens.output).padStart(geometry.output)}</span>{" "}
@@ -707,12 +753,14 @@ function WideReportRow(props: {
       <span style={{ fg: theme.text.feedback.info.default }}>{cacheRead(props.row, compactNumber).padStart(geometry.read)}</span>{" "}
       <span style={{ fg: theme.text.feedback.info.subdued }}>{compactNumber(props.row.tokens.cache.write).padStart(geometry.write)}</span>{" "}
       <span style={{ fg: theme.text.default }}>{tokenTotalLabel(props.row, compactNumber).padStart(geometry.total)}</span>{" "}
-      <span style={{ fg: theme.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>{" "}
+      <span style={{ fg: theme.text.feedback.success.subdued }}>{tableCost(props.row).padStart(geometry.cost)}</span>
+      <Show when={geometry.timing}>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.firstOutputP50Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.firstOutputP95Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP50Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP95Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{(props.row.speed?.outputTokensPerSecond === undefined ? "unreported" : props.row.speed.outputTokensPerSecond.toFixed(1)).padStart(geometry.speed)}</span>
+      </Show>
     </text>
   )
 }
@@ -774,7 +822,9 @@ function tokenTotalLabel(value: ReportMetrics, format: (value: number) => string
 }
 
 function tableCost(value: ReportMetrics) {
-  return `$${(value.cost ?? 0).toFixed(2)}`
+  if (value.cost === undefined) return "unreported"
+  const price = value.cost >= 100_000 ? `$${compactNumber(value.cost)}` : `$${value.cost.toFixed(2)}`
+  return value.costCoverage?.unpricedRequests ? `${price} + ?` : value.costCoverage === undefined ? `Known ${price}` : price
 }
 
 function latency(value: number | undefined) {
@@ -786,14 +836,16 @@ function throughput(value: number | undefined) {
 }
 
 function costLabel(value: ReportMetrics) {
-  return `$${(value.cost ?? 0).toFixed(2)}`
+  if (value.costCoverage === undefined) return value.cost === undefined ? "unreported" : `Known $${value.cost.toFixed(2)} · coverage unreported`
+  return costText({ ...value.costCoverage, known: value.cost, provenance: value.costProvenance,
+    ...(value.costCoverage.unpricedRequests === 0 && value.cost !== undefined ? { total: value.cost } : {}) })
 }
 
-function reportTotal(value: ProviderRequestReport["total"]) {
+function reportTotal(value: UsageReportOutput["total"]) {
   return `Total · ${formatNumber(value.logical)} steps · ${tokenTotalLabel(value, formatNumber)} tokens · ${costLabel(value)}`
 }
 
-function pageLabel(offset: number, report: ProviderRequestReport) {
+function pageLabel(offset: number, report: UsageReportOutput) {
   if (report.rows.length === 0) return `Rows 0 of ${formatNumber(report.rowCount)}`
   return `Rows ${formatNumber(offset + 1)}–${formatNumber(offset + report.rows.length)} of ${formatNumber(report.rowCount)}`
 }

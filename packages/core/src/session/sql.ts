@@ -32,6 +32,7 @@ import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { RelativePath } from "../schema"
 import type { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import type { SessionEvent } from "@ycoding-ai/schema/session-event"
+import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
 
@@ -65,6 +66,7 @@ export const SessionTable = sqliteTable(
     tokens_reasoning: integer().notNull().default(0),
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
+    usage_pruned_through: integer(),
     revert: text({ mode: "json" }).$type<Session.Revert>(),
     permission: text({ mode: "json" }).$type<Permission.Ruleset>(),
     autonomy: text({ mode: "json" }).$type<SessionAutonomyState>(),
@@ -104,6 +106,7 @@ export const SessionProviderRequestTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     input_id: text().$type<SessionMessage.ID>(),
+    usage_anchor: text({ mode: "json" }).$type<UsageAnchor.Ref>(),
     assistant_message_id: text().$type<SessionMessage.ID>(),
     connection_identity_digest: text(),
     source: text().$type<ProviderRequest.Source>().notNull(),
@@ -127,13 +130,6 @@ export const SessionProviderRequestTable = sqliteTable(
     uniqueIndex("session_provider_request_session_request_idx").on(table.session_id, table.request),
     index("session_provider_request_session_source_idx").on(table.session_id, table.source),
     index("session_provider_request_time_created_idx").on(table.time_created),
-    index("session_provider_request_time_created_id_idx").on(table.time_created, table.id),
-    index("session_provider_request_unpriced_idx")
-      .on(table.id)
-      .where(sql`${table.cost} is null and ${table.source} <> 'decision'`),
-    index("session_provider_request_session_unpriced_idx")
-      .on(table.session_id, table.id)
-      .where(sql`${table.cost} is null and ${table.source} <> 'decision'`),
   ],
 )
 
@@ -398,6 +394,7 @@ export const SessionCompactionJobTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     legacy_input_id: text().$type<SessionMessage.ID>(),
+    usage_anchor: text({ mode: "json" }).$type<UsageAnchor.Ref>(),
     trigger: text().$type<SessionCompaction.Trigger>().notNull(),
     requested_through_message_id: text().$type<SessionMessage.ID>().notNull(),
     requested_through_seq: integer().notNull(),
@@ -635,6 +632,7 @@ export const SessionTaskTable = sqliteTable(
     parent_assistant_message_id: text().$type<SessionMessage.ID>().notNull(),
     tool_call_id: text().notNull(),
     input_id: text().$type<SessionMessage.ID>().notNull().unique(),
+    usage_anchor: text({ mode: "json" }).$type<UsageAnchor.Ref>(),
     description: text().notNull(),
     agent: text().notNull(),
     model: text({ mode: "json" }).$type<Model.Ref>().notNull(),

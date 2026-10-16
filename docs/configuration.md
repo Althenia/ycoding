@@ -350,6 +350,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `mcp`                   | object                                | MCP defaults and named servers.                                                             |
 | `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                      |
 | `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).      |
+| `analytics_retention`   | object                                | Global-only usage and latency fact retention; see [Analytics retention](#analytics-retention). |
 | `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                            |
 | `commands`              | record                                | Named slash commands.                                                                       |
 | `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
@@ -1533,7 +1534,8 @@ The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chr
 ```json
 {
   "session_retention": {
-    "days": 7
+    "days": 7,
+    "records_days": 7
   }
 }
 ```
@@ -1541,8 +1543,29 @@ The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chr
 | Key                      | Type             | Default | Effect                                                                                     |
 | ------------------------ | ---------------- | ------- | ------------------------------------------------------------------------------------------ |
 | `session_retention.days` | positive integer | `7`     | Delete a root Session family once every member has been idle for longer than this many days. |
+| `session_retention.records_days` | positive integer | `7` | Remove Session-owned provider-request, usage, file-change and context-exclusion records after this idle period; skip locally executing Sessions. |
 
 `session_retention` is global-only: the server reads it from the global configuration directory, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, and ignores it in project configuration, because one SQLite database serves every project. Retention is read when a sweep runs; the first sweep loads it in the background. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, scheduling, and the cross-process limitation.
+
+`records_days` does not change whole-family deletion under `days` or analytics retention. Exactly the configured idle interval remains retained; cleanup applies only after that boundary. Resuming after record cleanup preserves available ordinary transcript content but cannot replay deleted provider reasoning/tool state or recover expired captured-change and context-exclusion records from analytics. Both keys require integers greater than zero.
+
+## Analytics retention
+
+```json
+{
+  "analytics_retention": {
+    "usage_days": 30,
+    "latency_days": 30
+  }
+}
+```
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `analytics_retention.usage_days` | positive integer | `30` | Retain usage analytics by request creation time independently of Session deletion and activity. |
+| `analytics_retention.latency_days` | positive integer | `30` | Retain machine-local latency samples by server receipt time, subject to the existing 10,000-row cap. |
+
+These keys are global-only and use the global configuration directory, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`; project configuration cannot change them. Each sweep reads current global values. Exactly the configured period remains retained; older facts are eligible for cleanup. Values must be integers greater than zero. Usage cleanup runs at startup and hourly in bounded, yielding batches; latency cleanup keeps its startup/read/write/hourly schedule. Provider quota observations remain bounded process-local history and are not persisted by either setting.
 
 ## Question timeout
 

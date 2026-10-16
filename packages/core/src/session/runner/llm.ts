@@ -33,6 +33,7 @@ import { SessionContextPressure } from "../context-pressure"
 import { SessionEvent } from "../event"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
+import { SessionUsageAttribution } from "../usage-attribution"
 import { SessionModelRequest } from "../model-request"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
@@ -496,6 +497,7 @@ const layer = Layer.effect(
       let firstReasoningNs: bigint | undefined
       let firstToolInputNs: bigint | undefined
       let streamedOutput = ""
+      const streamedToolInputs = new Set<string>()
       let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
       let generationUsage: Extract<LLMEvent, { type: "step-finish" }>["usage"]
       let generationEndedNs: bigint | undefined
@@ -506,6 +508,7 @@ const layer = Layer.effect(
           text: firstTextNs,
           reasoning: firstReasoningNs,
           toolInput: firstToolInputNs,
+          started: generationStartedNs,
           ended: generationEndedNs ?? (yield* Clock.currentTimeNanos),
           streamedOutput,
         })
@@ -521,7 +524,7 @@ const layer = Layer.effect(
             routeID: effectiveModel.route.id,
             providerCache: settlement ? providerCache(settlement) : undefined,
             generationSpeed: SessionCacheDiagnostics.generationSpeed(
-              yield* providerRequests.recentSteps(session.id),
+              yield* providerRequests.recentSteps(session.id, effective.ref),
               { model: effective.ref, timing: { ...settlement?.timing, ...generationTiming } },
             ),
           }),
@@ -531,6 +534,7 @@ const layer = Layer.effect(
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
+      const generationStartedNs = yield* Clock.currentTimeNanos
       const providerStream = llm.stream(prepared.request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -569,6 +573,9 @@ const layer = Layer.effect(
             }
             if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
               streamedOutput += event.text
+            if (event.type === "tool-input-delta" && event.text.length > 0) streamedToolInputs.add(event.id)
+            if (event.type === "tool-call" && !streamedToolInputs.has(event.id))
+              streamedOutput += JSON.stringify(event.input) ?? ""
             if (event.type === "text-delta" && event.text.length > 0 && firstTextNs === undefined)
               firstTextNs = yield* Clock.currentTimeNanos
             if (event.type === "reasoning-delta" && event.text.length > 0 && firstReasoningNs === undefined)
@@ -614,7 +621,7 @@ const layer = Layer.effect(
                           content: [...update.content],
                         }),
                       ),
-                  }),
+                  }).pipe(Effect.provideService(SessionUsageAttribution.Current, requestTracker.usageAnchor ?? null)),
                 ).pipe(
                   Effect.flatMap((settlement) =>
                     publish(

@@ -4,15 +4,19 @@ import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
 import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
-import { compactUsageTotal, dailySpend, donutGeometry, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
+import type { RemoteUsageForecast } from "@ycoding-ai/remote"
+import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
+import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
+import { QuotaForecastBlock, UsageStatisticsDetails } from "./usage-cost"
+import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
-const groups = ["model", "session", "project", "agent"] as const
+const groups = usageGroups.map((group) => group.value)
 type BreakdownInput = UsageReportInput & UsageBreakdown
-const names = { model: "Model", session: "Session", project: "Project", agent: "Agent" }
+const names = { model: "Model", session: "Session", project: "Project", agent: "Agent", provider: "Provider", "provider-profile-model": "Provider / profile / model", "provider-model": "Provider / model", "model-id": "Model ID", profile: "Profile", prompt: "Prompt", task: "Task" }
 const columns = [
   { key: "steps", label: "Steps" }, { key: "tokens", label: "Tokens" }, { key: "input", label: "Input" },
-  { key: "output", label: "Output" }, { key: "reasoning", label: "Reasoning" }, { key: "cacheRead", label: "Cache read" }, { key: "cost", label: "Cost" },
+  { key: "output", label: "Output" }, { key: "reasoning", label: "Reasoning" }, { key: "cacheRead", label: "Cache read" }, { key: "cacheWrite", label: "Cache write" }, { key: "cost", label: "Cost" },
 ] as const
 const count = (value: number) => new Intl.NumberFormat().format(value)
 const distributionColors = ["var(--yc-green-strong)", "var(--yc-yellow-strong)", "var(--yc-text-muted)", "var(--yc-green)", "var(--yc-border-strong)"]
@@ -27,6 +31,7 @@ export function UsagePage() {
   const [now, setNow] = createSignal(Date.now())
   const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(localStorage.getItem(usageZoneKey) === "local" ? "local" : "utc")
   const [group, setGroup] = createSignal<(typeof groups)[number]>("model")
+  const [filters, setFilters] = createSignal<UsageFiltersPresentation>({ provider: "", profile: "", model: "", effort: "", range: "last30" })
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
   const [offset, setOffset] = createSignal(0)
@@ -53,11 +58,15 @@ export function UsagePage() {
   const connected = createMemo(() => remote.state().transport.kind === "open")
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
   const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
-  const reports = createMemo(() => usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order() }))
+  const reports = createMemo(() => usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order(), providerID: filters().provider, profile: filters().profile, modelID: filters().model, selectedEffort: filters().effort, range: filters().range, from: filters().from, to: filters().to }))
   const dailyInput = createMemo<UsageReportInput>(() => reports().daily)
   const monthlyInput = createMemo<UsageReportInput>(() => reports().monthly)
   const breakdownInput = createMemo<BreakdownInput>(() => reports().breakdown)
   const providersQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageProviders(remote.scope(), connected()))
+  const forecastQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageForecast(remote.scope(), connected()))
+  const forecast = () => usageRead(forecastQuery())
+  const forecastData = () => forecast().status === "error" ? undefined : forecast().data
+  const quotaForecastState = () => forecast().status === "ready" && forecastData()?.quotas === undefined ? "error" : forecast().status
   createRemoteQuery(remote.store.queryClient, () => remote.queries.usageSummary(remote.scope(), connected()))
   const dailyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), dailyInput()))
   const monthlyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), monthlyInput()))
@@ -84,11 +93,10 @@ export function UsagePage() {
     return connection.kind === "connected" || connection.kind === "offline" ? connection.deviceName : undefined
   }
   const distribution = createMemo(() => providerDistribution(monthlyData(), providerData() ?? [], distributionMetric()))
-  const totalLabel = () => distributionMetric() === "spend" ? `Exact estimated USD total: ${money(distribution().total)}` : `Exact token total: ${count(distribution().total)}`
+  const totalLabel = () => distributionMetric() === "spend" ? `Exact known USD subtotal: ${money(distribution().total)}` : `Exact token total: ${count(distribution().total)}`
   const shownTotal = () => compactTotal() ? compactUsageTotal(distribution().total, distributionMetric()) : distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)
   const arcs = createMemo(() => donutGeometry(distribution().segments, 72))
   const segmentIDs = createMemo(() => distribution().segments.map((segment) => segment.providerID))
-  const providerCosts = createMemo(() => new Map(providerDistribution(monthlyData(), providerData() ?? [], "spend").segments.map((segment) => [segment.providerID, segment.value])))
   const activeSegment = () => arcs().find((segment) => segment.providerID === activeProvider())
   const placeDay = (x: number, y: number) => {
     if (!dayCard || !dayTooltip) return
@@ -204,15 +212,21 @@ export function UsagePage() {
       <Show when={providerData() && providerRead().status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
       <div class="usage-providers"><For each={providerKeys()}>{(key) => {
         const initial = providers().find((provider) => providerKey(provider) === key)!
-        return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} />
+        return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} forecasts={forecastData()?.quotas} forecastAsOf={forecastData()?.asOf} forecastState={quotaForecastState()} />
       }}</For></div>
     </section>
+
+    <Show when={forecastData()}><section class="usage-breakdown-section" aria-label="Recorded token consumption"><h2>Recorded consumption · Backend</h2>
+      <For each={forecastData()?.localRates}>{(rate) => <p class="usage-message">{rate.providerID}{rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}{rate.modelID ? ` · ${rate.modelID}` : ""}: {count(rate.tokensPerMinute)} tokens/min · 5m {rate.tokensPerMinute5 === undefined ? "unreported" : count(rate.tokensPerMinute5)} · 60m {rate.tokensPerMinute60 === undefined ? "unreported" : count(rate.tokensPerMinute60)}<Show when={rate.estimatedUSDPerHour !== undefined}> · {money(rate.estimatedUSDPerHour!)} estimated/hour</Show> · {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}</p>}</For>
+      <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
+      <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
+    </section></Show>
 
     <section class="usage-spend" aria-labelledby="usage-spend-title">
       <h2 class="visually-hidden" id="usage-spend-title">Spend overview</h2>
       <Show when={dailyData()}>
         <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
-          <h3>{tileLabels[id]}</h3><strong>{money(tileValue(id).cost)}</strong>
+          <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id))}</strong>
           <p class="usage-tile__meta"><span>{count(tileValue(id).requests)} requests</span><span>{count(tileValue(id).tokens)} tokens</span></p>
           <Show when={id === "last30"}><svg viewBox="0 0 100 32" aria-label="Spend trend over the last 30 days" role="img" preserveAspectRatio="none"><polyline points={sparkline()} /></svg></Show>
         </article>}</For></div>
@@ -224,26 +238,27 @@ export function UsagePage() {
           <Show when={dailyData()} fallback={<Show when={daily()?.status === "unsupported" || daily()?.status === "error"} fallback={<Show when={connected()}><LoadingPlaceholder kind="chart" label="Loading daily spend…" /></Show>}>
             <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></Show></p>
           </Show>}>
-            <p class="usage-chart__today">Today: {money(days().at(-1)?.cost ?? 0)} · {count(days().at(-1)?.requests ?? 0)} requests</p>
+            <p class="usage-chart__today">Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests</p>
             <svg viewBox="0 0 900 180" role="img" aria-label="Daily cost over the last 30 days, with exact values in the table" preserveAspectRatio="none">
               <line x1="0" y1="156" x2="900" y2="156" class="usage-chart__axis" />
               <For each={dayKeys()}>{(key, index) => {
                 const entry = () => days().find((item) => item.key === key)!
                 const height = () => entry().cost === 0 ? 2 : Math.max(4, entry().cost / Math.max(1, ...days().map((item) => item.cost)) * 138)
                 return <rect x={index() * 30 + 7} y={156 - height()} width="16" height={height()} rx="2" class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
-                  tabindex="0" role="img" data-cursor="action" aria-label={`${key}: estimated cost ${money(entry().cost)}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
+                  tabindex="0" role="img" data-cursor="action" aria-label={`${key}: estimated cost ${spendCostText(entry())}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
                   onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX, event.clientY)) } }}
                   onPointerMove={(event) => { if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveDay(undefined) }}
                   onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
                   onBlur={() => setActiveDay(undefined)} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveDay(entry()); queueMicrotask(() => placeDay(event.clientX || rect.left + rect.width / 2, event.clientY || rect.top + rect.height / 2)) }} />
               }}</For>
             </svg>
-            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><span>Estimated cost {money(entry().cost)}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
+            <Show when={activeDay()}>{(entry) => <div class="usage-chart__tooltip" ref={dayTooltip} style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }} role="status"><strong>{entry().key}</strong><span>Estimated cost {spendCostText(entry())}</span><span>{count(entry().requests)} requests · {count(entry().tokens)} tokens</span></div>}</Show>
             <div class="usage-chart__labels"><span>{days()[0]?.label}</span><span>{days()[14]?.label}</span><span>Today</span></div>
-            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{money(entry.cost)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
+            <Show when={tableOpen()}><div id="usage-daily-table" class="usage-table-wrap"><table><caption>Daily usage, last 30 {zoneLabel()} days</caption><thead><tr><th scope="col">Day</th><th scope="col">Cost</th><th scope="col">Tokens</th><th scope="col">Requests</th></tr></thead><tbody><For each={[...days()].reverse()}>{(entry) => <tr><th scope="row">{entry.key}</th><td>{spendCostText(entry)}</td><td>{count(entry.tokens)}</td><td>{count(entry.requests)}</td></tr>}</For></tbody></table></div></Show>
           </Show>
         </div>
         <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
+          <Show when={monthlyData()}>{(value) => <p class="usage-message">Pricing: {reportCostText(value().total)}</p>}</Show>
           <div class="usage-distribution__head"><div><h3 id="usage-distribution-title">Provider distribution (current {zoneLabel()} month)</h3><p>Current {zoneLabel()} month</p></div>
             <div class="usage-distribution__controls"><div class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Distribution metric">
               <button type="button" aria-pressed={distributionMetric() === "spend"} onClick={() => setDistributionMetric("spend")}>Spend</button>
@@ -254,7 +269,7 @@ export function UsagePage() {
           <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
           <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see monthly usage."}</p></Show>
           <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
-          <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.</p>}>
+          <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">{distributionMetric() === "spend" ? `Cost ${reportCostText(monthlyData()!.total)} · no positive known spend this month.` : "No recorded tokens this month."}</p>}>
             <div class="usage-distribution__body">
               <div class="usage-distribution__chart" ref={distributionChart}>
               <svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}>
@@ -264,7 +279,7 @@ export function UsagePage() {
                   const segment = () => arcs().find((item) => item.providerID === id) ?? initial
                   return <circle class="usage-donut__arc" cx="100" cy="100" r="72" fill="none" stroke-width="26"
                     style={{ stroke: distributionColors[index() % distributionColors.length], "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`, "--usage-circumference": segment().circumference, "stroke-dashoffset": segment().offset }}
-                    tabindex="0" role="img" data-cursor="action" aria-label={`${segment().label}: estimated cost ${money(providerCosts().get(id) ?? 0)}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
+                    tabindex="0" role="img" data-cursor="action" aria-label={`${segment().label}: cost ${segment().costLabel ?? "unreported"}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
                     onPointerEnter={(event) => { if (event.pointerType !== "touch") { setActiveProvider(id); queueMicrotask(() => placeProvider(event.clientX, event.clientY)) } }}
                     onPointerMove={(event) => { if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY) }} onPointerLeave={(event) => { if (event.pointerType !== "touch") setActiveProvider(undefined) }}
                     onFocus={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setActiveProvider(id); queueMicrotask(() => placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2)) }}
@@ -273,17 +288,17 @@ export function UsagePage() {
               </svg>
               <div class="usage-donut__center">
                 <strong class="usage-donut__total" role="img" tabindex="0" aria-label={totalLabel()} title={totalLabel()}>{shownTotal()}</strong>
-                <span class="usage-donut__caption" ref={distributionCaption}>{distributionMetric() === "spend" ? "estimated USD" : "tokens"}</span>
+                <span class="usage-donut__caption" ref={distributionCaption}>{distributionMetric() === "spend" ? "known USD" : "tokens"}</span>
               </div>
               <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">{distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}</span>
               </div>
-              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
+              <Show when={activeSegment()}>{(segment) => <div class="usage-distribution__tooltip" ref={providerTooltip} style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }} role="status"><strong>{segment().label}</strong><span>Cost {segment().costLabel ?? "unreported"} · {Math.round(segment().share * 100)}% share</span><Show when={distributionMetric() === "tokens"}><span>{count(segment().value)} tokens</span></Show></div>}</Show>
               <ul class="usage-distribution__legend" aria-label={distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"}><For each={segmentIDs()}>{(id, index) => {
                 const initial = distribution().segments.find((segment) => segment.providerID === id)!
                 const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
                 return <li>
                 <span class="usage-distribution__swatch" style={{ background: distributionColors[index() % distributionColors.length] }} aria-hidden="true" />
-                <span class="usage-distribution__name">{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? money(segment().value) : count(segment().value)}</strong>
+                <span class="usage-distribution__name">{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? segment().costLabel ?? "unreported" : count(segment().value)}</strong>
               </li>
               }}</For></ul>
             </div>
@@ -294,39 +309,37 @@ export function UsagePage() {
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
       <div class="usage-breakdown__head"><h2 id="usage-breakdown-title">Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
-      <div class="usage-tabs" role="tablist" aria-label="Breakdown group" onKeyDown={(event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return
-        event.preventDefault()
-        const index = event.key === "Home" ? 0 : event.key === "End" ? groups.length - 1 : (groups.indexOf(group()) + (event.key === "ArrowRight" ? 1 : -1) + groups.length) % groups.length
-        selectGroup(groups[index]!)
-        event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[index]?.focus()
-      }}><For each={groups}>{(item) => <button id={`usage-tab-${item}`} role="tab" type="button" aria-selected={group() === item} aria-controls="usage-breakdown-panel" tabindex={group() === item ? 0 : -1} onClick={() => selectGroup(item)}>{names[item]}</button>}</For></div></div>
-      <div id="usage-breakdown-panel" role="tabpanel" aria-labelledby={`usage-tab-${group()}`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
+      <UsageGroupControl value={group()} onChange={selectGroup} /></div>
+      <UsageFilterControls value={filters()} providers={[...new Map((providerRead().data ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()]} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />
+      <Show when={group() === "task"}><p class="usage-message">Inclusive task rows overlap; do not add them for a family total.</p></Show>
+      <div id="usage-breakdown-panel" role="region" aria-label={`${names[group()]} usage breakdown`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
         <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown().status === "loading" || breakdown().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
-        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage."}</p></Show>
+        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">{unsupportedReportMessage(breakdownInput())}</p></Show>
         <Show when={!displayed() && breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
         <Show when={displayed()}><Show when={(displayed()?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
           <div class="usage-breakdown__mobile" ref={mobileRows} style={{ "min-height": `${minimumRowsHeight()}px` }}><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, providerRead().data ?? [], row.model) : undefined
-            return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? row.label}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{money(row.cost ?? 0)}</b></div>
+            const identity = () => shownBreakdown()?.input.group === "model" || row.dimensions ? reportIdentity(row, providerRead().data ?? []) : undefined
+            return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{reportCostText(row)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
+              <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
             </article>
           }}</For></div>
           <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}>{breakdownTableOpen() ? "Hide table" : "View table"}</button>
           <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownBreakdown()?.input.group ?? group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" ? modelIdentity(row.key, providerRead().data ?? [], row.model) : undefined
-            return <tr><th scope="row"><span>{identity()?.model ?? row.label}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td class="usage-table__cost">{money(row.cost ?? 0)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
+            const identity = () => shownBreakdown()?.input.group === "model" || row.dimensions ? reportIdentity(row, providerRead().data ?? []) : undefined
+            return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
           <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => retryReport(breakdownInput())}>Retry</button></span></Show></div>
           <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}>Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
+          <p class="usage-message">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
         </Show></Show>
       </div>
     </section>
-    <footer class="usage-cost-note">Costs are estimates from recorded usage and model pricing, not provider bills.</footer>
+    <footer class="usage-cost-note">Costs are estimates from recorded usage and model pricing, not provider bills. Analytics use configurable request-date retention (default 30 days), independently of Session deletion. Session-owned prompt and task views can have a shorter retained history.</footer>
   </div>
 }
 
-function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number }) {
+function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number; readonly forecasts?: RemoteUsageForecast["quotas"]; readonly forecastAsOf?: number; readonly forecastState: string }) {
   const label = (value: string) => value.replaceAll("_", " ")
   const heading = () => providerHeading(props.provider())
   const updated = () => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(props.provider().updatedAt)
@@ -337,18 +350,19 @@ function ProviderCard(props: { readonly provider: () => UsageProvider; readonly 
     <Show when={props.provider().windows.length > 0} fallback={<p class="usage-provider__empty">{props.provider().message ?? "This provider has not reported any quota metrics."}</p>}>
       <div class="usage-provider__windows"><For each={props.provider().windows.map((window) => window.id)}>{(id) => {
         const initial = props.provider().windows.find((window) => window.id === id)!
-        return <QuotaRow window={() => props.provider().windows.find((window) => window.id === id) ?? initial} now={props.now} />
+        return <QuotaRow window={() => props.provider().windows.find((window) => window.id === id) ?? initial} now={props.now} forecast={matchingQuotaForecast(props.provider(), props.provider().windows.find((window) => window.id === id) ?? initial, props.forecasts)} forecastAsOf={props.forecastAsOf} forecastState={props.forecastState} />
       }}</For></div>
     </Show>
   </article>
 }
 
-function QuotaRow(props: { readonly window: () => UsageWindow; readonly now: number }) {
+function QuotaRow(props: { readonly window: () => UsageWindow; readonly now: number; readonly forecast?: NonNullable<RemoteUsageForecast["quotas"]>[number]; readonly forecastAsOf?: number; readonly forecastState: string }) {
   const quota = () => quotaWindow(props.window(), props.now)
   return <div class="usage-window"><div class="usage-window__top"><span><strong>{props.window().label}</strong><Show when={quota().used}> <b>{quota().used} used</b></Show><Show when={quota().limit}> of {quota().limit}</Show><Show when={quota().remaining && !quota().used}> <b>{quota().remaining} remaining</b></Show></span>
       <Show when={quota().pace}><span class={`usage-pace usage-pace--${quota().pace === "Ahead of pace" ? "ahead" : quota().pace === "Below pace" ? "below" : "on"}`}>{quota().pace?.toLowerCase()}</span></Show>
     </div>
     <Show when={quota().fill !== undefined}><div class="usage-meter" role="progressbar" aria-label={`${props.window().label} used`} aria-valuenow={quota().fill} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${quota().fill}%` }} /></div></Show>
     <div class="usage-window__details"><Show when={quota().reset}><span>{quota().reset}</span></Show><Show when={quota().remaining && quota().used}><span>{quota().remaining} {props.window().unit === "usd" ? "remaining" : "left"}</span></Show><Show when={props.window().unlimited}><span>Unlimited</span></Show></div>
+    <Show when={props.forecast} fallback={<p class="usage-window__details">Forecast {props.forecastState === "loading" || props.forecastState === "idle" ? "loading" : "unavailable"}{props.forecastState === "unsupported" ? " · Update YCoding on this machine" : props.forecastState === "error" ? " · lookup failed; refresh quotas to retry" : props.forecastState === "ready" ? " · No matching quota observation" : ""}</p>}>{(value) => <QuotaForecastBlock forecast={value()} now={props.now} asOf={props.forecastAsOf} />}</Show>
   </div>
 }

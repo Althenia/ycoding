@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { accountedTask } from "../../../test/usage-fixture"
 import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, shellStatusLabel, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
@@ -101,13 +102,15 @@ test("usage always yields the same four slots and never turns an unreported valu
   expect(keys(usageSlots(base, {}))).toEqual(["tokens", "cost", "context", "cache"])
   expect(usageSlots(base, {}).map((slot) => [slot.state, slot.value])).toEqual([["unreported", "—"], ["unreported", "—"], ["unreported", "—"], ["unreported", "—"]])
   expect(usageSlots(base, { loading: true }).map((slot) => slot.state)).toEqual(["loading", "loading", "loading", "loading"])
-  const reported = { ...base, tokens: 20, cost: 0.25, contextTotal: 800, contextLimit: 2_000, cacheHitRatio: 0.75 }
+  const reported = { ...base, accounting: accountedTask(base.sessionID), contextTotal: 800, contextLimit: 2_000, cacheHitRatio: 0.75 }
   expect(usageSlots(reported, { loading: true }).map((slot) => [slot.state, slot.value])).toEqual([["value", "20"], ["value", "$0.25"], ["value", "800 / 2,000"], ["value", "75% hit"]])
   expect(usageSlots(reported, {})[2]?.meter).toBeCloseTo(0.4)
   const noLimit = usageSlots({ ...reported, contextLimit: undefined }, {})[2]
   expect(noLimit?.value).toBe("800 / unreported")
   expect(noLimit?.meter).toBeUndefined()
-  expect(usageSlots({ ...reported, cost: 0, tokens: 0 }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
+  expect(usageSlots({ ...reported, accounting: accountedTask(base.sessionID, 0, 0) }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
+  const partial = accountedTask(base.sessionID)
+  expect(usageSlots({ ...reported, accounting: { ...partial, status: "so-far", attribution: "partial", total: { ...partial.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" } } } }, {})[1]?.value).toBe("Known $0.25 + unreported · so far · incomplete")
   expect(usageSlots({ ...reported, contextTotal: 5_000, contextLimit: 2_000 }, {})[2]?.meter).toBe(1)
 })
 
@@ -116,4 +119,15 @@ test("queued shells show their queue position and other statuses show their own 
   expect(shellStatusLabel({ status: "queued" })).toBe("queued")
   expect(shellStatusLabel({ status: "running" })).toBe("running")
   expect(shellStatusLabel({ status: "killed", queuePosition: 2 })).toBe("killed")
+})
+
+test("a connector without task costs states the update in Tokens and Cost, never a bare dash", () => {
+  const base: TeamSubagent = { sessionID: "ses_child", parentID: "ses_root", description: "Task", state: "running", revision: 1, updatedAt: 1, cacheHitRatio: 0.5 }
+  const slots = usageSlots(base, { accountingUnsupported: true })
+  expect(slots.map((slot) => [slot.label, slot.state, slot.value])).toEqual([
+    ["Tokens (inclusive)", "unsupported", "Update YCoding"], ["Cost (inclusive)", "unsupported", "Update YCoding"], ["Context", "unreported", "—"], ["Cache", "value", "50% hit"],
+  ])
+  expect(usageSlots(base, { accountingUnsupported: true, loading: true }).map((slot) => slot.state)).toEqual(["unsupported", "unsupported", "loading", "value"])
+  expect(usageSlots(base, { loading: true }).slice(0, 2).map((slot) => slot.state)).toEqual(["loading", "loading"])
+  expect(usageSlots({ ...base, accounting: accountedTask("ses_child") }, { accountingUnsupported: true }).slice(0, 2).map((slot) => slot.state)).toEqual(["value", "value"])
 })

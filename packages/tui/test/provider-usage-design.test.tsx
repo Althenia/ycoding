@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { ProviderRequestReport, ProviderRequestSummary } from "@ycoding-ai/client"
+import type { UsageReportOutput, ProviderRequestSummary } from "@ycoding-ai/client"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
@@ -55,7 +55,7 @@ test("renders an unreported cache read as a word instead of a bare placeholder",
   </ConfigProvider></TestTuiContexts>, { width: 189, height: 38 })
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("Unknown/300")
     expect(frame).not.toMatch(/\s-\/300/)
@@ -87,7 +87,7 @@ test.each([
     { width, height },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+  await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
 
   try {
     const frame = app.captureCharFrame()
@@ -95,7 +95,7 @@ test.each([
     const spans = app.captureSpans().lines
     const header = spans.slice(0, 3)
     const footer = spans.slice(-4, -1)
-    const row = lines.find((line) => line.includes("LIFETIME MODEL BREAKDOWN"))
+    const row = lines.find((line) => line.includes("RETAINED MODEL BREAKDOWN"))
 
     expect(lines).toHaveLength(height + 1)
     expect(lines.every((line) => line.length <= width)).toBe(true)
@@ -105,7 +105,7 @@ test.each([
     expect(header.flatMap((line) => line.spans).some((span) => span.text.includes("Usage") && span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
     expect(footer.slice(1).flatMap((line) => line.spans).every((span) => span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
     expect(app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("Overview"))?.fg.toInts()).toEqual([...blue])
-    expect(row?.indexOf("LIFETIME MODEL BREAKDOWN")).toBe(3)
+    expect(row?.indexOf("RETAINED MODEL BREAKDOWN")).toBe(3)
     const navigation = lines.slice(3, 6).find((line) => line.includes("Overview"))!
     expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
     const separators = [...navigation.matchAll(/│/g)].map((match) => match.index)
@@ -150,7 +150,7 @@ test("sorts complete overview model rows client-side and keeps Total pinned", as
   )
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
     app.mockInput.pressKey("i")
     let frame = await app.waitForFrame((value) => value.includes("INPUT▼") && value.indexOf("openrouter/") < value.indexOf("openai/"))
     let lines = frame.split("\n")
@@ -179,7 +179,7 @@ test.each([
     tokens: { input: 1_000, output: 200, reasoning: 50, cache: { read: 300, write: 40 } },
     cost: 0.02, costProvenance: "recorded" as const, cacheReadReported: true,
   }
-  const report: ProviderRequestReport = {
+  const report: UsageReportOutput = {
     group: "model", rowCount: 1,
     rows: [{ key: "model-a", label: `openrouter/${longModelID}`, ...metrics }],
     total: metrics,

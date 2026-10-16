@@ -138,6 +138,7 @@ describe("Session.log", () => {
         helpers: 0,
         continued: 0,
         fallback: 0,
+        costCoverage: { pricedRequests: 0, unpricedRequests: 0 },
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       })
       expect(Schema.encodeSync(ProviderRequest.Report)(empty)).toBeDefined()
@@ -189,6 +190,12 @@ describe("Session.log", () => {
       const variant = yield* session.create({ location })
       const profile = yield* session.create({ location })
       for (const [index, item] of [variant, profile].entries()) {
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: index === 0 ? 20 : 10 })
+          .where(eq(SessionTable.id, item.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
           id: ProviderRequest.ID.make(`prq_collision_${index}`),
           sessionID: item.id,
@@ -212,12 +219,6 @@ describe("Session.log", () => {
           timing: { firstOutputMs: index === 0 ? 10 : 20 },
           time: DateTime.makeUnsafe(0),
         })
-        yield* db
-          .update(SessionTable)
-          .set({ time_updated: index === 0 ? 20 : 10 })
-          .where(eq(SessionTable.id, item.id))
-          .run()
-          .pipe(Effect.orDie)
       }
       const report = yield* session.usageReportAll({ group: "model" })
       expect(report.rows).toMatchObject([
@@ -229,6 +230,13 @@ describe("Session.log", () => {
         },
       ])
       expect(report.rowCount).toBe(1)
+      yield* db
+        .update(SessionTable)
+        .set({ time_updated: 0 })
+        .where(eq(SessionTable.id, variant.id))
+        .run()
+        .pipe(Effect.orDie)
+      expect((yield* session.usageReportAll({ group: "model" })).rows[0]!.label).toBe(report.rows[0]!.label)
     }),
   )
   it.effect("keeps breadth-first family latest-request tie order and child-only scope", () =>
@@ -359,13 +367,25 @@ describe("Session.log", () => {
         totalP95Ms: 300,
         outputTokensPerSecond: 5,
         samples: 3,
+        generationSamples: 2,
+        providerTimedSamples: 2,
+        observedSamples: 0,
+        generationP50TokensPerSecond: 10 / 3,
+        generationP90TokensPerSecond: 20,
       })
       expect(global.rows).toEqual(local.rows)
       expect(local.rows[0]?.model).toMatchObject({ providerID: "custom", id: "speed" })
       expect(SessionProviderRequest.reportSpeed([])).toBeUndefined()
       const ledger = yield* SessionProviderRequest.Service
       const absent = (yield* ledger.list(created.id)).slice(3)
-      expect(SessionProviderRequest.reportSpeed(absent)).toEqual({ totalP50Ms: 200, totalP95Ms: 200, samples: 0 })
+      expect(SessionProviderRequest.reportSpeed(absent)).toEqual({
+        totalP50Ms: 200,
+        totalP95Ms: 200,
+        samples: 0,
+        generationSamples: 0,
+        providerTimedSamples: 0,
+        observedSamples: 0,
+      })
       expect(SessionProviderRequest.reportSpeed(absent.slice(1))).toBeUndefined()
     }),
   )

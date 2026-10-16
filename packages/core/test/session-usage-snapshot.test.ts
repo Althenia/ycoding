@@ -12,6 +12,7 @@ import { AbsolutePath } from "../src/schema"
 import { Session } from "../src/session"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
+import { UsageAnalytics } from "../src/usage-analytics"
 import { SessionExecution } from "../src/session/execution"
 import { Catalog } from "../src/catalog"
 import { CatalogModel } from "../src/model"
@@ -159,7 +160,7 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
                 time_created: id === "old" ? 0 : 1,
               })
               .run()
-              .pipe(Effect.orDie)
+              .pipe(Effect.andThen(db.transaction(() => UsageAnalytics.backfill(db))), Effect.orDie)
           yield* Effect.gen(function* () {
             const database = yield* Database.Service
             const session = yield* Session.Service
@@ -220,6 +221,7 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
           }).pipe(
             Effect.provide(
               AppNodeBuilder.build(LayerNode.group([Database.node, Session.node, LocationServiceMap.node]), [
+                [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})],
                 [Database.node, database],
                 [SessionExecution.node, SessionExecution.noopLayer],
                 [LocationServiceMap.node, locations],

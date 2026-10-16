@@ -4,6 +4,7 @@ import { Api } from "../api"
 import { ServerInfo } from "../server-info"
 import { Database } from "@ycoding-ai/core/database/database"
 import { WebLatency } from "@ycoding-ai/core/web-latency"
+import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { InvalidCursorError, InvalidRequestError } from "@ycoding-ai/protocol/errors"
 
@@ -11,9 +12,11 @@ export const ServerHandler = HttpApiBuilder.group(Api, "server.server", (handler
   Effect.gen(function* () {
     const database = yield* Database.Service
     const consent = yield* TelemetryConsent.Service
-    yield* WebLatency.prune(database.db)
+    const settings = yield* RetentionSettings.Service
+    const prune = Effect.gen(function* () { yield* WebLatency.prune(database.db, (yield* settings.read()).latencyDays) })
+    yield* prune
     yield* Effect.sleep("1 hour").pipe(
-      Effect.andThen(WebLatency.prune(database.db)),
+      Effect.andThen(prune),
       Effect.catchCause(() => Effect.logWarning("Could not prune expired Web latency samples")),
       Effect.repeat(Schedule.forever),
       Effect.forkScoped({ startImmediately: true }),
@@ -40,13 +43,13 @@ export const ServerHandler = HttpApiBuilder.group(Api, "server.server", (handler
           })
           if (!valid) return yield* new InvalidRequestError({ message: "Invalid telemetry sample", field: "samples" })
           const database = yield* Database.Service
-          return yield* WebLatency.append(database.db, ctx.payload.samples)
+          return yield* WebLatency.append(database.db, ctx.payload.samples, (yield* settings.read()).latencyDays)
         }),
       )
       .handle("telemetry.list", (ctx) =>
         Effect.gen(function* () {
           const database = yield* Database.Service
-          return yield* WebLatency.list(database.db, ctx.query).pipe(
+          return yield* WebLatency.list(database.db, ctx.query, (yield* settings.read()).latencyDays).pipe(
             Effect.catchTag(
               "WebLatency.InvalidCursorError",
               () => new InvalidCursorError({ message: "Invalid telemetry cursor" }),

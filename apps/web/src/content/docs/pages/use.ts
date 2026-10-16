@@ -187,9 +187,9 @@ export const usePages: readonly DocPage[] = [
           {
             kind: "list",
             items: [
-              "Subagents are durable child Sessions that run in the background. Use child-session controls to inspect status and conversation, then return to the parent Session.",
+              "Subagents are durable child Sessions that run in the background. Use child-session controls to inspect status and conversation, then return to the parent Session. Task cost includes descendants; inclusive task rows overlap and are not additive family totals.",
               "Session-owned terminals open from the command palette. Inspection is read-only until you explicitly take control; closing the inspector detaches without terminating the terminal.",
-              "The transcript contains tool and compaction records. Use /timeline to navigate, /fork to branch, and /undo or /redo to stage or clear a revert boundary.",
+              "The transcript contains tool and compaction records. Use /timeline to navigate, /fork to branch, and /undo or /redo to stage or clear a revert boundary. One cost block belongs to each actual user prompt, independent of edited files; synthetic and compaction messages do not split it. Dispatched child work keeps its original prompt owner, even after a newer prompt. Running contributors show so far; unknown prices and incomplete retained history stay explicit.",
               "Chrome extension and isolated-browser controls are distinct tools with explicit permissions. Availability depends on installation and platform support.",
             ],
           },
@@ -609,6 +609,18 @@ export const usePages: readonly DocPage[] = [
               { title: "Review the result", text: "Inspect staged changes, then commit the revert or clear it to restore the prior boundary." },
             ],
           },
+        ],
+      },
+      {
+        heading: "Usage, prompt costs, and forecasts",
+        blocks: [
+          { kind: "paragraph", text: "Usage compares retained requests by provider, provider-qualified profile and model, model ID, Session, project, agent, prompt and recursive task. Choose a range and selected effort when comparing models; selected effort is your stored choice, not a claim about the provider's effective setting. An unnamed profile means provider default at request time, not today's default account." },
+          { kind: "paragraph", text: "Measured generation median and p90 use individual provider-counted request rates in tokens per second, with sample counts and provider-timed or observed coverage. Weighted throughput is a separate metric. The ≈ rate beside a Session model estimates only received output; it never enters measured trends, consumption, pricing or quota forecasts." },
+          { kind: "paragraph", text: "A prompt's cost includes its main Session span, dispatched children and helpers such as title, decision and compaction. Child work keeps the prompt that caused it, even after you send another message. Sending or answering a child assigns future work to that dispatch, while already-started requests keep their owner. Running contributors show so far. Recursive task costs include descendants; inclusive rows overlap and must not be added for a family total." },
+          { kind: "callout", tone: "info", title: "Unknown is not free", text: "An explicit zero stays $0.00. Missing prices show unreported or a Known subtotal plus unreported, with priced and unpriced request counts. Historical attribution and retained-history gaps stay incomplete. Costs estimate recorded usage at provider or model prices, not subscription invoices or complete historical bills." },
+          { kind: "paragraph", text: "Global retention settings control Session-owned records with session_retention.records_days (default 7 idle days), usage analytics with analytics_retention.usage_days (default 30 request-date days), and machine-local latency with analytics_retention.latency_days (default 30 server-receipt days). Each accepts a positive integer and is ignored in project configuration. Analytics survive Session deletion until their own retention boundary; a resumed Session cannot recover expired provider state, captured changes or context exclusions from analytics." },
+          { kind: "paragraph", text: "Each quota window can show native-unit burn and an exhaustion estimate only when its provider limits and fresh evidence support it. Recent deltas use a one-hour horizon with a 15-minute half-life; forecasts show method, observation period, evidence and freshness. Restarting the local runtime warms up its process-local observations. Sparse, stale, incompatible or unsupported evidence keeps a reason instead of a made-up projection. No increase observed does not mean unlimited, and a balance without a reported reset has no reset projection." },
+          { kind: "related", slugs: ["usage/tui", "usage/remote"] },
         ],
       },
       {

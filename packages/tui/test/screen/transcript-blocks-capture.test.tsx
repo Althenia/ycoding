@@ -164,6 +164,8 @@ const route: FetchHandler = (url) => {
         revision: 1,
         time: { created: now - (index + 1) * 60_000, updated: now },
       })),
+      summary: { total: children.length, active: children.length, running: children.length, waiting: 0 },
+      cursor: {},
     })
   if (url.pathname === `/api/session/${sessionID}/skills`)
     return json({

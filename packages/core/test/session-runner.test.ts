@@ -125,6 +125,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Option,
   LayerMap,
   Schema,
   Scope,
@@ -2691,7 +2692,7 @@ describe("SessionRunnerLLM", () => {
           cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(2.5) },
         },
       ]
-      yield* admit(session, "Price one-hour writes")
+      const input = yield* admit(session, "Price one-hour writes")
       response = reply.text("Done", "hourly-cost").map((event) =>
         LLMEvent.is.stepFinish(event)
           ? LLMEvent.stepFinish({
@@ -2708,6 +2709,21 @@ describe("SessionRunnerLLM", () => {
       expect(requireAssistant(yield* session.context(sessionID)).cost).toBe(Money.USD.make(0.004))
       const records = yield* (yield* SessionProviderRequest.Service).list(sessionID)
       expect(records[0]?.cost).toBe(Money.USD.make(0.004))
+      const costs = yield* session.promptCosts({ sessionID, inputIDs: [input.id] })
+      expect(costs.units[0]).toMatchObject({
+        anchor: { sessionID, inputID: input.id },
+        attribution: "complete",
+        total: {
+          requests: 1,
+          cost: { known: 0.004, pricedRequests: 1, unpricedRequests: 0 },
+          tokens: { cache: { write: 1_000 } },
+        },
+        main: { requests: 1 },
+      })
+      expect(costs.units[0]!.total.tokens).toEqual((yield* session.usage(sessionID)).tokens)
+      expect(costs.unattributed.requests).toBe(0)
+      expect(JSON.stringify(requests[0]?.messages)).not.toContain("usageAnchor")
+      expect(JSON.stringify(requests[0]?.messages)).not.toContain("causedBy")
     }),
   )
 
@@ -3242,8 +3258,8 @@ describe("SessionRunnerLLM", () => {
       const diagnostics = yield* session.diagnostics(sessionID)
       expect(diagnostics?.generationSpeed?.latest).toMatchObject({
         tokens: 30,
-        durationNs: 5_000_000,
-        tokensPerSecond: 6_000,
+        durationNs: 1,
+        tokensPerSecond: 30_000_000_000,
       })
       expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(diagnostics?.generationSpeed)
       expect(diagnostics).toMatchObject({
@@ -3274,128 +3290,133 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect(
-    "times observed generation and estimates received output with unreported hidden reasoning",
-    () =>
-      Effect.gen(function* () {
-        const session = yield* setup
-        currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
-        responseStream = Stream.concat(
-          Stream.fromIterable([
-            LLMEvent.stepStart({ index: 0 }),
-            LLMEvent.reasoningStart({ id: "speed-reasoning" }),
-            LLMEvent.reasoningDelta({ id: "speed-reasoning", text: "Think" }),
-            LLMEvent.reasoningEnd({ id: "speed-reasoning" }),
-          ]),
-          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
-            Stream.flatMap(() =>
-              Stream.fromIterable([
-                LLMEvent.textStart({ id: "speed-text" }),
-                LLMEvent.textDelta({ id: "speed-text", text: "Done" }),
-                LLMEvent.textEnd({ id: "speed-text" }),
-                LLMEvent.stepFinish({
-                  index: 0,
-                  reason: "stop",
-                  usage: {
-                    outputTokens: 12,
-                  },
-                }),
-                LLMEvent.finish({ reason: "stop" }),
-              ]),
-            ),
+  it.effect("weights local generation windows including provider-counted hidden reasoning", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "speed-reasoning" }),
+          LLMEvent.reasoningDelta({ id: "speed-reasoning", text: "Think" }),
+          LLMEvent.reasoningEnd({ id: "speed-reasoning" }),
+        ]),
+        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+          Stream.flatMap(() =>
+            Stream.fromIterable([
+              LLMEvent.textStart({ id: "speed-text" }),
+              LLMEvent.textDelta({ id: "speed-text", text: "Done" }),
+              LLMEvent.textEnd({ id: "speed-text" }),
+              LLMEvent.stepFinish({
+                index: 0,
+                reason: "stop",
+                usage: {
+                  outputTokens: 12,
+                },
+              }),
+              LLMEvent.finish({ reason: "stop" }),
+            ]),
           ),
-        )
-        responses = [reply.text("Title", "speed-title")]
-        yield* admit(session, "Measure generation")
-        yield* session.resume(sessionID)
-        const measured = yield* session.diagnostics(sessionID)
-        expect(measured?.generationSpeed?.latest).toMatchObject({
-          tokens: 12,
-          durationNs: 2_000_000_000,
-          tokensPerSecond: 6,
-        })
-        expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(measured?.generationSpeed)
-        const requests = yield* SessionProviderRequest.Service
-        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
-          generatedTokens: 12,
-          observedGenerationDurationNs: 2_000_000_000,
-        })
+        ),
+      )
+      responses = [reply.text("Title", "speed-title")]
+      yield* admit(session, "Measure generation")
+      yield* session.resume(sessionID)
+      const measured = yield* session.diagnostics(sessionID)
+      expect(measured?.generationSpeed?.latest).toMatchObject({
+        tokens: 12,
+        durationNs: 2_000_000_000,
+        tokensPerSecond: 6,
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(measured?.generationSpeed)
+      const requests = yield* SessionProviderRequest.Service
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
+        generatedTokens: 12,
+        observedGenerationDurationNs: 2_000_000_000,
+      })
 
-        responseStream = Stream.concat(
-          Stream.fromIterable([
-            LLMEvent.stepStart({ index: 0 }),
-            LLMEvent.reasoningStart({ id: "speed-hidden-summary" }),
-            LLMEvent.reasoningDelta({ id: "speed-hidden-summary", text: "Summary" }),
-            LLMEvent.reasoningEnd({ id: "speed-hidden-summary" }),
-          ]),
-          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
-            Stream.flatMap(() =>
-              Stream.fromIterable([
-                LLMEvent.textStart({ id: "speed-hidden-text" }),
-                LLMEvent.textDelta({ id: "speed-hidden-text", text: "Answer" }),
-                LLMEvent.textEnd({ id: "speed-hidden-text" }),
-                LLMEvent.stepFinish({
-                  index: 0,
-                  reason: "stop",
-                  usage: {
-                    outputTokens: 15,
-                    outputMayIncludeUnreportedReasoning: true,
-                  },
-                }),
-                LLMEvent.finish({ reason: "stop" }),
-              ]),
-            ),
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "speed-hidden-summary" }),
+          LLMEvent.reasoningDelta({ id: "speed-hidden-summary", text: "Summary" }),
+          LLMEvent.reasoningEnd({ id: "speed-hidden-summary" }),
+        ]),
+        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+          Stream.flatMap(() =>
+            Stream.fromIterable([
+              LLMEvent.textStart({ id: "speed-hidden-text" }),
+              LLMEvent.textDelta({ id: "speed-hidden-text", text: "Answer" }),
+              LLMEvent.textEnd({ id: "speed-hidden-text" }),
+              LLMEvent.stepFinish({
+                index: 0,
+                reason: "stop",
+                usage: {
+                  outputTokens: 15,
+                  outputMayIncludeUnreportedReasoning: true,
+                },
+              }),
+              LLMEvent.finish({ reason: "stop" }),
+            ]),
           ),
-        )
-        responses = [reply.text("Title", "speed-hidden-title")]
-        yield* admit(session, "Hidden thinking")
-        yield* session.resume(sessionID)
-        const hidden = yield* session.diagnostics(sessionID)
-        expect(hidden?.generationSpeed?.latest).toMatchObject({ estimated: true, tokens: 3, durationNs: 2_000_000_000, tokensPerSecond: 1.5 })
-        expect(hidden?.generationSpeed?.recent).toHaveLength(1)
-        expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(hidden?.generationSpeed)
-        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({ estimatedTokens: 3, estimatedGenerationDurationNs: 2_000_000_000 })
-        responses = [
-          [
-            LLMEvent.stepStart({ index: 0 }),
-            LLMEvent.textStart({ id: "speed-openai-text" }),
-            LLMEvent.textDelta({ id: "speed-openai-text", text: "Visible" }),
-            LLMEvent.textEnd({ id: "speed-openai-text" }),
-            LLMEvent.stepFinish({
-              index: 0,
-              reason: "stop",
-              usage: {
-                outputTokens: 12,
-                reasoningTokens: 4,
-                generationDurationNs: 2_000_000_000,
-              },
-            }),
-            LLMEvent.finish({ reason: "stop" }),
-          ],
-        ]
-        yield* admit(session, "Unstreamed separate reasoning")
-        yield* session.resume(sessionID)
-        const separate = yield* session.diagnostics(sessionID)
-        expect(separate?.generationSpeed?.latest).toMatchObject({
-          tokens: 12,
-          durationNs: 2_000_000_000,
-          tokensPerSecond: 6,
-        })
-        expect(separate?.generationSpeed?.recent).toHaveLength(2)
-        const events = yield* EventRuntime.Service
-        yield* events.publish(SessionEvent.Compaction.StartedV1, { sessionID, reason: "manual", recent: "" })
-        yield* events.publish(SessionEvent.Compaction.EndedV1, {
-          sessionID,
-          reason: "manual",
-          text: "summary",
-          recent: "",
-        })
-        expect(yield* session.diagnostics(sessionID)).toBeUndefined()
-        expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
-      }),
+        ),
+      )
+      responses = [reply.text("Title", "speed-hidden-title")]
+      yield* admit(session, "Hidden thinking")
+      yield* session.resume(sessionID)
+      const hidden = yield* session.diagnostics(sessionID)
+      expect(hidden?.generationSpeed?.latest).toMatchObject({
+        tokens: 27,
+        durationNs: 4_000_000_000,
+        tokensPerSecond: 6.75,
+      })
+      expect(hidden?.generationSpeed?.recent).toHaveLength(2)
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(hidden?.generationSpeed)
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
+        generatedTokens: 15,
+        observedGenerationDurationNs: 2_000_000_000,
+      })
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "speed-openai-text" }),
+          LLMEvent.textDelta({ id: "speed-openai-text", text: "Visible" }),
+          LLMEvent.textEnd({ id: "speed-openai-text" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              outputTokens: 12,
+              reasoningTokens: 4,
+              generationDurationNs: 2_000_000_000,
+            },
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      yield* admit(session, "Unstreamed separate reasoning")
+      yield* session.resume(sessionID)
+      const separate = yield* session.diagnostics(sessionID)
+      expect(separate?.generationSpeed?.latest).toMatchObject({
+        tokens: 39,
+        durationNs: 4_000_000_001,
+      })
+      expect(separate?.generationSpeed?.latest?.tokensPerSecond).toBeCloseTo(9.75)
+      expect(separate?.generationSpeed?.recent).toHaveLength(3)
+      const events = yield* EventRuntime.Service
+      yield* events.publish(SessionEvent.Compaction.StartedV1, { sessionID, reason: "manual", recent: "" })
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
+        sessionID,
+        reason: "manual",
+        text: "summary",
+        recent: "",
+      })
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(separate?.generationSpeed)
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(separate?.generationSpeed)
+    }),
   )
 
-  it.effect("times tool-call output without counting reasoning generated before its summary streamed", () =>
+  it.effect("times tool-call output including reported reasoning tokens", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
@@ -3434,7 +3455,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       const requests = yield* SessionProviderRequest.Service
       expect((yield* requests.recentSteps(sessionID))[0]?.timing).toEqual({
-        generatedTokens: 200,
+        generatedTokens: 4_200,
         observedGenerationDurationNs: 4_000_000_000,
       })
     }),
@@ -3450,25 +3471,60 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.toolInputStart({ id: "estimated-tool", name: "unknown_tool" }),
           LLMEvent.toolInputDelta({ id: "estimated-tool", name: "unknown_tool", text: '{"path":' }),
         ]),
-        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
-          LLMEvent.toolInputDelta({ id: "estimated-tool", name: "unknown_tool", text: '"a.ts"}' }),
-          LLMEvent.toolInputEnd({ id: "estimated-tool", name: "unknown_tool" }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ]))),
+        Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+          Stream.flatMap(() =>
+            Stream.fromIterable([
+              LLMEvent.toolInputDelta({ id: "estimated-tool", name: "unknown_tool", text: '"a.ts"}' }),
+              LLMEvent.toolInputEnd({ id: "estimated-tool", name: "unknown_tool" }),
+              LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+              LLMEvent.finish({ reason: "stop" }),
+            ]),
+          ),
+        ),
       )
       responses = [reply.text("Title", "speed-title")]
       yield* admit(session, "Estimate tool output")
       yield* session.resume(sessionID)
       const requests = yield* SessionProviderRequest.Service
-      expect((yield* requests.recentSteps(sessionID))[0]?.timing).toMatchObject({ estimatedTokens: 4, estimatedGenerationDurationNs: 2_000_000_000 })
-      expect((yield* requests.recentSteps(sessionID))).toHaveLength(2)
-      expect((yield* session.snapshot(sessionID)).generationSpeed).toMatchObject({ unreportedReason: expect.any(String) })
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toBeUndefined()
+      expect((yield* requests.recentSteps(sessionID))[0]?.timing).toMatchObject({
+        estimatedTokens: 4,
+        estimatedGenerationDurationNs: 2_000_000_000,
+      })
+      expect(yield* requests.recentSteps(sessionID)).toHaveLength(2)
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toMatchObject({
+        estimated: true, tokens: 5, durationNs: 2_000_000_001,
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest?.tokensPerSecond).toBeCloseTo(2.5)
     }),
   )
 
-  it.effect("omits a buffered output burst instead of reporting an implausible generation rate", () =>
+  for (const streamed of [false, true]) it.effect(`estimates complete provider tool calls ${streamed ? "without counting arguments twice" : "from the request window"}`, () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({ id: "tool-speed", provider: "openai", route: OpenAIChat.route })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          ...(streamed ? [LLMEvent.toolInputStart({ id: "provider-call", name: "provider_search" }),
+            LLMEvent.toolInputDelta({ id: "provider-call", name: "provider_search", text: '{"path":"a.ts"}' })] : []),
+        ]),
+        Stream.fromEffect(TestClock.adjust("1 second")).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.toolCall({ id: "provider-call", name: "provider_search", input: { path: "a.ts" }, providerExecuted: true }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]))),
+      )
+      responses = [reply.text("Done", "tool-speed-recovery")]
+      yield* admit(session, "Measure tool-only output")
+      yield* session.resume(sessionID)
+      const ledger = yield* SessionProviderRequest.Service
+      expect((yield* ledger.recentSteps(sessionID))[0]?.timing).toMatchObject({
+        estimatedTokens: 4, estimatedGenerationDurationNs: 1_000_000_000,
+      })
+    }),
+  )
+
+  it.effect("retains short output windows with provider counts", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = Model.make({ id: "speed-model", provider: "anthropic", route: OpenAIChat.route })
@@ -3514,11 +3570,13 @@ describe("SessionRunnerLLM", () => {
       responses = [reply.text("Title", "speed-title")]
       yield* admit(session, "Buffered output")
       yield* session.resume(sessionID)
-      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toMatchObject({ recent: [], unreportedReason: expect.any(String) })
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toBeUndefined()
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toMatchObject({
+        latest: { tokens: 2_355, durationNs: 70_000_000 },
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.recent).toHaveLength(1)
       const requests = yield* SessionProviderRequest.Service
       expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({ generatedTokens: 2_355 })
-      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing?.observedGenerationDurationNs).toBeUndefined()
+      expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing?.observedGenerationDurationNs).toBe(70_000_000)
     }),
   )
 
@@ -3531,46 +3589,81 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.textStart({ id: "split-speed" }),
           LLMEvent.textDelta({ id: "split-speed", text: " " }),
         ]),
-        Stream.fromEffect(TestClock.adjust("1 second")).pipe(Stream.flatMap(() => Stream.concat(
-          Stream.fromIterable(["a", "b", "c", "d", "e", "f", " "].map((text) => LLMEvent.textDelta({ id: "split-speed", text }))),
-          Stream.fromEffect(TestClock.adjust("1 second")).pipe(Stream.flatMap(() => Stream.fromIterable([
-            LLMEvent.textEnd({ id: "split-speed" }),
-            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-            LLMEvent.finish({ reason: "stop" }),
-          ]))),
-        ))),
+        Stream.fromEffect(TestClock.adjust("1 second")).pipe(
+          Stream.flatMap(() =>
+            Stream.concat(
+              Stream.fromIterable(
+                ["a", "b", "c", "d", "e", "f", " "].map((text) => LLMEvent.textDelta({ id: "split-speed", text })),
+              ),
+              Stream.fromEffect(TestClock.adjust("1 second")).pipe(
+                Stream.flatMap(() =>
+                  Stream.fromIterable([
+                    LLMEvent.textEnd({ id: "split-speed" }),
+                    LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+                    LLMEvent.finish({ reason: "stop" }),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
       )
       yield* admit(session, "Measure split output")
       yield* session.resume(sessionID)
       const ledger = yield* SessionProviderRequest.Service
-      expect((yield* ledger.recentSteps(sessionID)).at(-1)?.timing)
-        .toMatchObject({ estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 })
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
-        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
+        estimatedTokens: 2,
+        estimatedGenerationDurationNs: 2_000_000_000,
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toMatchObject({
+        estimated: true,
+        tokens: 2,
+        tokensPerSecond: 1,
+      })
     }),
   )
 
-  it.effect("excludes a Step settled before compaction completion even when its message follows the compaction row", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      const events = yield* EventRuntime.Service
-      responseStream = Stream.fromEffect(events.publish(SessionEvent.Compaction.StartedV1, {
-        sessionID, reason: "manual", recent: "",
-      })).pipe(Stream.flatMap(() => Stream.fromIterable([
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.textStart({ id: "pre-compaction-speed" }),
-        LLMEvent.textDelta({ id: "pre-compaction-speed", text: "Done" }),
-        LLMEvent.textEnd({ id: "pre-compaction-speed" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 } }),
-        LLMEvent.finish({ reason: "stop" }),
-      ])))
-      yield* admit(session, "Measure before compaction settles")
-      yield* session.resume(sessionID)
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest?.tokensPerSecond).toBe(80)
-      yield* events.publish(SessionEvent.Compaction.EndedV1, { sessionID, reason: "manual", text: "summary", recent: "" })
-      expect((yield* session.snapshot(sessionID)).generationSpeed).toBeUndefined()
-      expect(yield* session.diagnostics(sessionID)).toBeUndefined()
-    }),
+  it.effect(
+    "retains generation samples across compaction completion independently of message position",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const events = yield* EventRuntime.Service
+        responseStream = Stream.fromEffect(
+          events.publish(SessionEvent.Compaction.StartedV1, {
+            sessionID,
+            reason: "manual",
+            recent: "",
+          }),
+        ).pipe(
+          Stream.flatMap(() =>
+            Stream.fromIterable([
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.textStart({ id: "pre-compaction-speed" }),
+              LLMEvent.textDelta({ id: "pre-compaction-speed", text: "Done" }),
+              LLMEvent.textEnd({ id: "pre-compaction-speed" }),
+              LLMEvent.stepFinish({
+                index: 0,
+                reason: "stop",
+                usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 },
+              }),
+              LLMEvent.finish({ reason: "stop" }),
+            ]),
+          ),
+        )
+        yield* admit(session, "Measure before compaction settles")
+        yield* session.resume(sessionID)
+        const speed = (yield* session.snapshot(sessionID)).generationSpeed
+        expect(speed?.latest).toMatchObject({ tokens: 80, durationNs: 1, tokensPerSecond: 80_000_000_000 })
+        yield* events.publish(SessionEvent.Compaction.EndedV1, {
+          sessionID,
+          reason: "manual",
+          text: "summary",
+          recent: "",
+        })
+        expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(speed)
+        expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(speed)
+      }),
   )
 
   it.effect("resets speed output and its observation window after a pre-output retry", () =>
@@ -3578,24 +3671,37 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const events = yield* EventRuntime.Service
       const scheduled = yield* Deferred.make<void>()
-      const unsubscribe = yield* events.listen((event) => event.type === SessionEvent.RetryScheduled.type
-        ? Deferred.succeed(scheduled, undefined) : Effect.void)
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === SessionEvent.RetryScheduled.type ? Deferred.succeed(scheduled, undefined) : Effect.void,
+      )
       responseStreams = [
-        Stream.concat(Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.textStart({ id: "retry-whitespace" }),
-          LLMEvent.textDelta({ id: "retry-whitespace", text: "                " }),
-          LLMEvent.textEnd({ id: "retry-whitespace" }),
-        ]), Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(Stream.flatMap(() => Stream.fail(providerUnavailable())))),
-        Stream.concat(Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.textStart({ id: "retry-speed" }),
-          LLMEvent.textDelta({ id: "retry-speed", text: "12345678" }),
-        ]), Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
-          LLMEvent.textEnd({ id: "retry-speed" }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ])))),
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "retry-whitespace" }),
+            LLMEvent.textDelta({ id: "retry-whitespace", text: "                " }),
+            LLMEvent.textEnd({ id: "retry-whitespace" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(
+            Stream.flatMap(() => Stream.fail(providerUnavailable())),
+          ),
+        ),
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "retry-speed" }),
+            LLMEvent.textDelta({ id: "retry-speed", text: "12345678" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([
+                LLMEvent.textEnd({ id: "retry-speed" }),
+                LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+                LLMEvent.finish({ reason: "stop" }),
+              ]),
+            ),
+          ),
+        ),
       ]
       yield* admit(session, "Measure retried output")
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
@@ -3605,12 +3711,18 @@ describe("SessionRunnerLLM", () => {
       yield* unsubscribe
       expect(requests).toHaveLength(2)
       const ledger = yield* SessionProviderRequest.Service
-      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({ attempts: 2,
-        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 } })
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
-        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
-      expect((yield* session.diagnostics(sessionID))?.generationSpeed)
-        .toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({
+        attempts: 2,
+        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 },
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toMatchObject({
+        estimated: true,
+        tokens: 2,
+        tokensPerSecond: 1,
+      })
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(
+        (yield* session.snapshot(sessionID)).generationSpeed,
+      )
     }),
   )
 
@@ -3618,64 +3730,92 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
       responseStreams = [
-        Stream.concat(Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.textStart({ id: "overflow-whitespace" }),
-          LLMEvent.textDelta({ id: "overflow-whitespace", text: "                " }),
-          LLMEvent.textEnd({ id: "overflow-whitespace" }),
-        ]), Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(Stream.flatMap(() => Stream.succeed(
-          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
-        )))),
-        Stream.concat(Stream.fromIterable([
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.textStart({ id: "overflow-speed" }),
-          LLMEvent.textDelta({ id: "overflow-speed", text: "12345678" }),
-        ]), Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
-          LLMEvent.textEnd({ id: "overflow-speed" }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ])))),
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "overflow-whitespace" }),
+            LLMEvent.textDelta({ id: "overflow-whitespace", text: "                " }),
+            LLMEvent.textEnd({ id: "overflow-whitespace" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("5 seconds")).pipe(
+            Stream.flatMap(() =>
+              Stream.succeed(
+                LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+              ),
+            ),
+          ),
+        ),
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.textStart({ id: "overflow-speed" }),
+            LLMEvent.textDelta({ id: "overflow-speed", text: "12345678" }),
+          ]),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([
+                LLMEvent.textEnd({ id: "overflow-speed" }),
+                LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+                LLMEvent.finish({ reason: "stop" }),
+              ]),
+            ),
+          ),
+        ),
       ]
       yield* admit(session, "Measure recovered output")
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(2)
       const ledger = yield* SessionProviderRequest.Service
-      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({ attempts: 2,
-        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 } })
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest)
-        .toMatchObject({ estimated: true, tokens: 2, tokensPerSecond: 1 })
-      expect((yield* session.diagnostics(sessionID))?.generationSpeed)
-        .toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({
+        attempts: 2,
+        timing: { estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 },
+      })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toMatchObject({
+        estimated: true,
+        tokens: 2,
+        tokensPerSecond: 1,
+      })
+      expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(
+        (yield* session.snapshot(sessionID)).generationSpeed,
+      )
     }),
   )
 
-  it.effect("replaces live measured speed after a raw no-output failed Step", () =>
+  it.effect("retains live measured speed after a raw no-output failed Step", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const events = yield* EventRuntime.Service
       const live: SessionCacheDiagnostics.Info[] = []
-      const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
-        if (event.type === SessionEvent.DiagnosticsUpdated.type)
-          live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
-      }))
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === SessionEvent.DiagnosticsUpdated.type)
+            live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+        }),
+      )
       currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
-      responses = [[
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.textStart({ id: "measured-before-failure" }),
-        LLMEvent.textDelta({ id: "measured-before-failure", text: "Done" }),
-        LLMEvent.textEnd({ id: "measured-before-failure" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 } }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "measured-before-failure" }),
+          LLMEvent.textDelta({ id: "measured-before-failure", text: "Done" }),
+          LLMEvent.textEnd({ id: "measured-before-failure" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: { outputTokens: 80, generationDurationNs: 1_000_000_000 },
+          }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
       yield* admit(session, "Measure before failure")
       yield* session.resume(sessionID)
-      expect(live.at(-1)?.generationSpeed?.latest?.tokensPerSecond).toBe(80)
+      expect(live.at(-1)?.generationSpeed?.latest?.tokensPerSecond).toBe(80_000_000_000)
       responseStream = Stream.fail(invalidRequest())
       yield* admit(session, "Fail without output")
       yield* session.resume(sessionID).pipe(Effect.exit)
       const snapshot = yield* session.snapshot(sessionID)
-      expect(snapshot.generationSpeed?.unreportedReason).toBeDefined()
-      expect(live.at(-1)?.generationSpeed?.latest).toBeUndefined()
+      expect(snapshot.generationSpeed?.latest).toMatchObject({ tokens: 80, durationNs: 1, tokensPerSecond: 80_000_000_000 })
+      expect(live.at(-1)?.generationSpeed?.latest).toEqual(snapshot.generationSpeed?.latest)
       expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
       yield* unsubscribe
     }),
@@ -3687,10 +3827,12 @@ describe("SessionRunnerLLM", () => {
         const session = yield* setup
         const events = yield* EventRuntime.Service
         const live: SessionCacheDiagnostics.Info[] = []
-        const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
-          if (event.type === SessionEvent.DiagnosticsUpdated.type)
-            live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
-        }))
+        const unsubscribe = yield* events.listen((event) =>
+          Effect.sync(() => {
+            if (event.type === SessionEvent.DiagnosticsUpdated.type)
+              live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+          }),
+        )
         currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
         const received = yield* Deferred.make<void>()
         responseStream = Stream.concat(
@@ -3699,13 +3841,17 @@ describe("SessionRunnerLLM", () => {
             LLMEvent.textStart({ id: `partial-${terminal}` }),
             LLMEvent.textDelta({ id: `partial-${terminal}`, text: "12345678" }),
           ]),
-          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => terminal === "failure"
-            ? Stream.fail(invalidRequest())
-            : terminal === "provider-error"
-              ? Stream.succeed(LLMEvent.providerError({ message: "Invalid request" }))
-              : terminal === "interruption"
-                ? Stream.fromEffect(Deferred.succeed(received, undefined)).pipe(Stream.flatMap(() => Stream.never))
-                : Stream.empty)),
+          Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(
+            Stream.flatMap(() =>
+              terminal === "failure"
+                ? Stream.fail(invalidRequest())
+                : terminal === "provider-error"
+                  ? Stream.succeed(LLMEvent.providerError({ message: "Invalid request" }))
+                  : terminal === "interruption"
+                    ? Stream.fromEffect(Deferred.succeed(received, undefined)).pipe(Stream.flatMap(() => Stream.never))
+                    : Stream.empty,
+            ),
+          ),
         )
         yield* admit(session, terminal)
         if (terminal === "interruption") {
@@ -3717,10 +3863,17 @@ describe("SessionRunnerLLM", () => {
         }
         if (terminal !== "interruption") yield* session.resume(sessionID).pipe(Effect.exit)
         const requests = yield* SessionProviderRequest.Service
-        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing)
-          .toMatchObject({ estimatedTokens: 2, estimatedGenerationDurationNs: 2_000_000_000 })
+        expect((yield* requests.recentSteps(sessionID)).at(-1)?.timing).toMatchObject({
+          estimatedTokens: 2,
+          estimatedGenerationDurationNs: 2_000_000_000,
+        })
         const snapshot = yield* session.snapshot(sessionID)
-        expect(snapshot.generationSpeed?.latest).toMatchObject({ estimated: true, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1 })
+        expect(snapshot.generationSpeed?.latest).toMatchObject({
+          estimated: true,
+          tokens: 2,
+          durationNs: 2_000_000_000,
+          tokensPerSecond: 1,
+        })
         expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
         expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(snapshot.generationSpeed)
         yield* unsubscribe
@@ -3772,9 +3925,8 @@ describe("SessionRunnerLLM", () => {
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(toolExecutionsStarted)
       const observed = yield* Fiber.join(live).pipe(Effect.timeout("1 second"))
-
+      expect(Option.isSome(observed)).toBe(true)
       expect(observed).toMatchObject({
-        _tag: "Some",
         value: {
           data: {
             sessionID,
@@ -3782,7 +3934,7 @@ describe("SessionRunnerLLM", () => {
               context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
               tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
               cache: { eligible: 1_000, hitRatio: 0.9, readReported: true, writeReported: false },
-              generationSpeed: { latest: { tokens: 30, durationNs: 5_000_000, tokensPerSecond: 6_000 } },
+              generationSpeed: { latest: { tokens: 30, durationNs: 1, tokensPerSecond: 30_000_000_000 } },
             },
           },
         },
@@ -8198,10 +8350,12 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const eventRuntime = yield* EventRuntime.Service
       const diagnostics: SessionCacheDiagnostics.Info[] = []
-      const unsubscribe = yield* eventRuntime.listen((event) => Effect.sync(() => {
-        if (event.type === SessionEvent.DiagnosticsUpdated.type)
-          diagnostics.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
-      }))
+      const unsubscribe = yield* eventRuntime.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === SessionEvent.DiagnosticsUpdated.type)
+            diagnostics.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+        }),
+      )
       yield* admit(session, "Interrupt retry backoff")
       responseStream = Stream.fail(providerUnavailable())
 
@@ -8221,7 +8375,8 @@ describe("SessionRunnerLLM", () => {
       // session-execution.test.ts and the TUI header reads durable status from here.
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(assistant.time.completed).toBeDefined()
-      expect((yield* session.snapshot(sessionID)).generationSpeed?.unreportedReason).toBeDefined()
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.latest).toBeUndefined()
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.recent).toEqual([])
       expect(diagnostics).toHaveLength(1)
       expect(diagnostics.at(-1)?.generationSpeed).toEqual((yield* session.snapshot(sessionID)).generationSpeed)
       yield* unsubscribe

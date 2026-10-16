@@ -36,7 +36,8 @@ test("encodes optional consent-gated timing and report speed without undefined f
   expect(
     Schema.encodeSync(ProviderRequest.Timing)({ firstOutputMs: undefined, totalMs: undefined, retryWaitMs: undefined }),
   ).toEqual({})
-  expect(Schema.encodeSync(ProviderRequest.Speed)({ samples: 0, firstOutputP50Ms: undefined })).toEqual({ samples: 0 })
+  expect(Schema.encodeSync(ProviderRequest.Speed)({ samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0, firstOutputP50Ms: undefined }))
+    .toEqual({ samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0 })
 })
 
 test("decodes content-free provider request records", () => {

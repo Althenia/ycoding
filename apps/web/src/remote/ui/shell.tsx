@@ -18,6 +18,7 @@ import { SIGN_IN_PROVIDERS } from "../http"
 import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
 import {
+  generationSpeedDisplay,
   type PendingRequestView,
 } from "../projection"
 import type { SessionInfoView } from "../store"
@@ -512,7 +513,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                     parentTitle={state().sessions.find((item) => item.id === childParentID())?.title ?? "Main session"}
                     agent={activeSession()?.agent ?? currentTask()?.agent} description={currentTask()?.description ?? activeSession()?.title}
                     status={currentTask()?.state} modelLabel={activeSession()?.modelLabel ?? currentTask()?.modelLabel}
-                    economics={currentTask() === undefined ? undefined : { tokens: currentTask()?.tokens, cost: currentTask()?.cost, cacheHitRatio: currentTask()?.cacheHitRatio,
+                    economics={{ speed: generationSpeedDisplay(state().view, state().view?.model), accounting: currentTask()?.accounting, accountingUnavailable: currentTask()?.accountingUnavailable, accountingUnsupported: state().team?.accountingUnsupported, tokens: currentTask()?.tokens, cost: currentTask()?.cost, cacheHitRatio: currentTask()?.cacheHitRatio,
                       cacheRead: currentTask()?.cacheRead, cacheWrite: currentTask()?.cacheWrite, contextTotal: currentTask()?.contextTotal, contextLimit: currentTask()?.contextLimit }}
                     question={currentTask()?.question}
                     onAnswer={(questionID, text) => remote.store.answerSubagent(activeSession()?.id ?? "", questionID, text)}

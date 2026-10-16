@@ -172,10 +172,11 @@ test("terminal step and run events use durable creation time for activity, not l
   expect(applySessionEvent(view, { type: "session.execution.succeeded", created: 400, data: { sessionID: "ses_a" } }, 10_000).activeAt).toBe(500)
 })
 
-test("live diagnostics replace selected-Session speed and context, then clear on compaction or unreported values", () => {
+test("live weighted speed retains model effort changes and compaction independently of context", () => {
   const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
   const first = { model: selected, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
   const second = { model: selected, tokens: 15, durationNs: 3_000_000, tokensPerSecond: 5_000 }
+  const aggregate = { model: selected, tokens: 27, durationNs: 5_000_000, tokensPerSecond: 5_400 }
   const diagnostics = (speed?: unknown, limit?: number) => ({
     model: selected, context: { total: 74_000, ...(limit === undefined ? {} : { limit }), remaining: 184_000, percent: 29 },
     tokens: { uncachedInput: 60_000, output: 10_000, reasoning: 2_000, cacheRead: 2_000, cacheWrite: 0 },
@@ -188,12 +189,12 @@ test("live diagnostics replace selected-Session speed and context, then clear on
   expect(generationSpeedDisplay(initial, selected)?.label).toBe("6,000 tok/s")
   expect(contextWindowDisplay(initial, selected)?.usedPercent).toBe(29)
   const updated = apply(initial, "session.diagnostics.updated", {
-    sessionID: "ses_a", diagnostics: diagnostics({ latest: second, recent: [first, second] }, 258_000),
+    sessionID: "ses_a", diagnostics: diagnostics({ latest: aggregate, recent: [first, second] }, 258_000),
   }, 2)
-  expect(generationSpeedDisplay(updated, selected)).toMatchObject({ label: "5,000 tok/s", trend: expect.any(String) })
+  expect(generationSpeedDisplay(updated, selected)).toMatchObject({ label: "5,400 tok/s", trend: expect.any(String) })
   expect(updated.generationSpeed?.recent).toHaveLength(2)
   const switched = apply(updated, "session.model.selected", { sessionID: "ses_a", model: { ...selected, variant: "low" } })
-  expect(generationSpeedDisplay(switched, switched.model)).toBeUndefined()
+  expect(generationSpeedDisplay(switched, switched.model)?.label).toBe("5,400 tok/s")
   expect(contextWindowDisplay(switched, switched.model)).toBeUndefined()
   const unreported = apply(updated, "session.diagnostics.updated", {
     sessionID: "ses_a", diagnostics: diagnostics(undefined, undefined),
@@ -202,22 +203,21 @@ test("live diagnostics replace selected-Session speed and context, then clear on
   expect(contextWindowDisplay(unreported, selected)).toBeUndefined()
   const compacted = apply(updated, "session.compaction.ended", { sessionID: "ses_a", jobID: "cmp_1",
     boundary: { messageID: "msg_before", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, 4)
-  expect(generationSpeedDisplay(compacted, selected)).toBeUndefined()
+  expect(generationSpeedDisplay(compacted, selected)?.label).toBe("5,400 tok/s")
   expect(contextWindowDisplay(compacted, selected)).toBeUndefined()
 })
 
-test("labels latest estimates and unavailable speed without borrowing an older measurement", () => {
+test("labels model-wide estimates across profiles and leaves empty populations blank", () => {
   const selected = { providerID: "anthropic", id: "claude", profile: "work" }
   const measured = { model: selected, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
   const view = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
     sessionID: "ses_a", diagnostics: { generationSpeed: { latest: { ...measured, estimated: true }, recent: [measured] } },
   })
   expect(generationSpeedDisplay(view, selected)).toMatchObject({ label: "≈ 80 tok/s", description: expect.stringContaining("Estimated") })
-  expect(generationSpeedDisplay(view, { ...selected, profile: "personal" })).toBeUndefined()
+  expect(generationSpeedDisplay(view, { ...selected, profile: "personal" })?.label).toBe("≈ 80 tok/s")
   const unreported = apply(view, "session.diagnostics.updated", { sessionID: "ses_a",
-    diagnostics: { generationSpeed: { model: selected, recent: [measured], unreportedReason: "No streamed output" } } })
-  expect(generationSpeedDisplay(unreported, selected))
-    .toMatchObject({ label: "unreported", description: "No streamed output" })
+    diagnostics: { generationSpeed: { model: selected, recent: [] } } })
+  expect(generationSpeedDisplay(unreported, selected)).toBeUndefined()
 })
 
 test("terminal live diagnostics replace measured speed and restore an interrupted estimate without provider usage", () => {
@@ -230,7 +230,7 @@ test("terminal live diagnostics replace measured speed and restore an interrupte
     error: { type: "provider.invalid-request", message: "Invalid request" } })
   const replaced = apply(failed, "session.diagnostics.updated", { sessionID: "ses_a", diagnostics: {
     generationSpeed: { model, recent: [measured], unreportedReason: "No usable provider measurement or streamed output window of at least one second" } } })
-  expect(generationSpeedDisplay(replaced, model)?.label).toBe("unreported")
+  expect(generationSpeedDisplay(replaced, model)?.label).toBeUndefined()
   const interrupted = apply(replaced, "session.step.failed", { sessionID: "ses_a", assistantMessageID: "msg_interrupted",
     error: { type: "aborted", message: "Step interrupted" } })
   const history = { model, latest: { model, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1, estimated: true }, recent: [measured] }
@@ -706,7 +706,7 @@ describe("snapshot readers", () => {
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow }, selected))
       .toMatchObject({ usedPercent: 29, leftPercent: 71, tokens: "74K / 258K tokens", fraction: 74_000 / 258_000 })
     expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed },
-      { ...selected, variant: "low" })).toBeUndefined()
+      { ...selected, variant: "low" })?.label).toBe("6,000 tok/s")
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow },
       { ...selected, variant: "low" })).toBeUndefined()
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: { model: selected, used: 0, limit: 258_000 } }, selected)).toBeUndefined()

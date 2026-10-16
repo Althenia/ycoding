@@ -2,10 +2,17 @@ import { For, Show, createEffect, createSignal, on, type JSX } from "solid-js"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import type { TeamActionOutcome, TeamSubagent } from "./team-model"
-import { formatCacheHit } from "./team-model"
+import { accountingUnsupportedText, formatCacheHit } from "./team-model"
 import "./subagent-bar.css"
+import type { RemoteUsageTaskCost } from "@ycoding-ai/remote"
+import { accountingPresentation, costText } from "./usage-accounting"
+import { TaskCostDetails } from "./usage-cost"
+import { tokenCount } from "./usage-model"
 
 export type SubagentEconomicsView = {
+  readonly accounting?: RemoteUsageTaskCost
+  readonly accountingUnavailable?: boolean
+  readonly accountingUnsupported?: boolean
   readonly tokens?: number
   readonly contextTotal?: number
   readonly contextLimit?: number
@@ -13,6 +20,7 @@ export type SubagentEconomicsView = {
   readonly cacheRead?: number
   readonly cacheWrite?: number
   readonly cost?: number
+  readonly speed?: { readonly label: string; readonly description: string }
 }
 
 export function TeamAnswerForm(props: {
@@ -40,8 +48,6 @@ export function TeamAnswerForm(props: {
 }
 
 const statusIcon: Readonly<Partial<Record<TeamSubagent["state"], IconName>>> = { completed: "check", failed: "alert", lost: "alert", cancelled: "minus" }
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
-
 export function subagentMetrics(modelLabel: string | undefined, economics: SubagentEconomicsView | undefined) {
   const count = (value: number) => value.toLocaleString("en-US")
   const cache = economics?.cacheHitRatio === undefined && economics?.cacheRead === undefined && economics?.cacheWrite === undefined ? undefined
@@ -52,9 +58,10 @@ export function subagentMetrics(modelLabel: string | undefined, economics: Subag
     ].filter((part) => part !== undefined).join(" · ")
   return [
     { key: "model", label: "Model", value: modelLabel },
-    { key: "tokens", label: "Tokens", value: economics?.tokens === undefined ? undefined : count(economics.tokens) },
+    { key: "speed", label: "Speed", value: economics?.speed?.label },
+    { key: "tokens", label: "Tokens (inclusive)", value: economics?.accounting === undefined ? undefined : count(tokenCount(economics.accounting.total.tokens)) },
     { key: "cache", label: "Cache", value: cache },
-    { key: "cost", label: "Cost", value: economics?.cost === undefined ? undefined : money.format(economics.cost) },
+    { key: "cost", label: "Cost (inclusive)", value: economics?.accounting === undefined ? undefined : `${costText(economics.accounting.total.cost)}${economics.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(economics.accounting, economics.accountingUnavailable).complete ? "" : " · incomplete"}` },
     { key: "context", label: "Context", value: economics?.contextTotal === undefined ? undefined : `${count(economics.contextTotal)} / ${economics.contextLimit === undefined ? "unreported" : count(economics.contextLimit)}` },
   ].flatMap((metric) => metric.value === undefined ? [] : [{ key: metric.key, label: metric.label, value: metric.value }])
 }
@@ -83,6 +90,7 @@ export function SubagentBar(props: {
     <div class="subagent-bar__header">
       <div class="subagent-bar__identity">
         <strong class="subagent-bar__agent" title={props.agent ?? "Subagent"}>{props.agent ?? "Subagent"}</strong>
+        <Show when={props.economics?.speed}>{(speed) => <span class="subagent-bar__speed" title={speed().description}>{speed().label}</span>}</Show>
         <span class={`subagent-bar__status subagent-bar__status--${props.status ?? "unreported"}`}>
           <span class="subagent-bar__mark" aria-hidden="true"><Show when={props.status !== undefined ? statusIcon[props.status] : undefined} fallback={<span class="status-dot" />}>{(name) => <Icon name={name()} size={12} />}</Show></span>
           {props.status ?? "Status unreported"}
@@ -106,6 +114,8 @@ export function SubagentBar(props: {
             </dl>
           </Show>
           <p class="subagent-bar__rollup">Rolls up to {props.parentTitle}</p>
+          <Show when={props.economics?.accounting === undefined && props.economics?.accountingUnsupported === true}><p class="subagent-bar__rollup" role="status">{accountingUnsupportedText}: this machine cannot report task tokens and cost.</p></Show>
+          <Show when={props.economics?.accounting}>{(task) => <TaskCostDetails unit={accountingPresentation(task(), props.economics?.accountingUnavailable)} />}</Show>
         </div>
       </Modal>
     </Show>

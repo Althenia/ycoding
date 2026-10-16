@@ -12,6 +12,7 @@ import {
   Show,
   Switch,
   useContext,
+  untrack,
 } from "solid-js"
 import path from "node:path"
 import { EOL, tmpdir } from "node:os"
@@ -91,6 +92,8 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
+import { PromptCostBlock } from "./usage-cost"
+import { accountingPresentation } from "../../util/usage-accounting"
 import { usePromptRef } from "../../context/prompt"
 import { projectedPromptInput } from "../../prompt/codec"
 import { useEpilogue } from "../../context/epilogue"
@@ -331,6 +334,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
   const client = useClient()
+  createEffect(() => {
+    const connected = client.connection.status() === "connected"
+    const id = route.sessionID
+    data.session.message.list(id).filter((message) => message.type === "user").map((message) => message.id).join(",")
+    if (connected) untrack(() => { void data.session.promptCosts.sync(id).catch(() => undefined) })
+  })
   let skillReadRevision = 0
   createEffect(on([() => client.connection.status(), () => {
     const history = data.session.message.history(route.sessionID)
@@ -823,7 +832,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (!props.viewports || !scroll || scroll.isDestroyed) return
     props.viewports.set(mountedSessionID, {
       scrollTop: scroll.scrollTop,
-      follow: !navigationMessage() && scroll.scrollTop >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1,
+      follow: !navigationMessage() && following(),
       navigationMessage: navigationMessage(),
       navigationSlack: navigationSlack(),
     })
@@ -876,7 +885,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const changed = observedScrollTop !== undefined && observedScrollTop !== position
     observedScrollTop = position
     const atBottom = position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1
-    setFollowing(mountedEnd() === rows.length && atBottom)
+    if (changed) setFollowing(mountedEnd() === rows.length && atBottom)
     if (!changed || history()?.status === "loading" || history()?.status === "error") return
     if (position <= 8 && !atBottom && (mountedStart() > 0 || history()?.before)) void pageHistory()
     if (position >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 8 && mountedEnd() < rows.length) void pageHistory("newer")
@@ -1776,6 +1785,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
+                contentOptions={{ overflow: "scroll" }}
                 verticalScrollbarOptions={{
                   paddingLeft: 1,
                   visible: showScrollbar(),
@@ -3074,6 +3084,7 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 function UserMessage(props: { message: SessionMessageUser; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
+  const cost = createMemo(() => data.session.promptCosts.get(ctx.sessionID, props.message.id))
   const send = createMemo(() => data.session.submissions.list(ctx.sessionID).find((entry) => entry.input.promptID === props.message.id), undefined, { equals: false })
   const files = createMemo(() =>
     (send()?.admitted ? projectedPromptInput(props.message).files ?? [] : send()?.input.payload.files ?? projectedPromptInput(props.message).files ?? []).map((file, index) => ({
@@ -3208,6 +3219,9 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
         >
           <Spinner color={theme.text.subdued} frames={DOT_TRAIL_FRAMES} interval={160} />
         </Show>
+        <box width="100%" flexDirection="column">
+          <Show when={cost()} fallback={<box paddingLeft={3} paddingRight={3}><text fg={theme.text.subdued}>Prompt cost {data.session.promptCosts.state(ctx.sessionID) === "loading" ? "loading" : "unreported"}</text></box>}>{(unit) => <PromptCostBlock unit={accountingPresentation(unit(), data.session.promptCosts.state(ctx.sessionID) === "unavailable")} />}</Show>
+        </box>
       </box>
     </Show>
   )
@@ -4275,6 +4289,10 @@ export function InlineToolRow(props: {
     if (props.failed && !props.complete) return props.failure ?? props.children
     return props.children
   }
+  const labelHeight = () => {
+    const value = label()
+    return typeof value === "string" ? value.split("\n").length : 1
+  }
   return (
     <box
       width={ctx?.width}
@@ -4296,6 +4314,7 @@ export function InlineToolRow(props: {
         <SessionActivitySpacer running={running()} color={markerColor()} />
         <text
           minWidth={0}
+          minHeight={labelHeight()}
           flexShrink={1}
           wrapMode="none"
           truncate={true}

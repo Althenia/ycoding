@@ -8,6 +8,7 @@ import { LocationProvider } from "../../../src/context/location"
 import { RouteProvider } from "../../../src/context/route"
 import { Composer } from "../../../src/routes/session/composer"
 import { ToastProvider } from "../../../src/ui/toast"
+import { DialogProvider } from "../../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -83,9 +84,9 @@ async function mount(fixture: ReturnType<typeof createFetch>) {
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: parentID }}>
                       <LeaderProbe />
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID={parentID} open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>

@@ -100,6 +100,10 @@ export const Operation = Schema.Literals([
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "session.usageReport",
+  "session.promptCosts",
+  "session.taskCosts",
+  "usage.forecast",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
 ]).check(Schema.isMaxLength(64))

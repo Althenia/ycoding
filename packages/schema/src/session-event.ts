@@ -24,6 +24,7 @@ import { TokenUsage } from "./token-usage.js"
 import { SessionPending } from "./session-pending.js"
 import { Project } from "./project.js"
 import { ProviderRequest } from "./provider-request.js"
+import { UsageAnchor } from "./usage-anchor.js"
 import { SessionOrchestration } from "./session-orchestration.js"
 import { Permission } from "./permission.js"
 import { SessionCompaction } from "./session-compaction.js"
@@ -331,6 +332,7 @@ export const InputAdmitted = Event.durable({
     ...Base,
     inputID: SessionMessage.ID,
     input: SessionPending.Message,
+    causedBy: UsageAnchor.Ref.pipe(optional),
   },
 })
 export type InputAdmitted = typeof InputAdmitted.Type
@@ -404,7 +406,13 @@ export namespace Task {
   export const Updated = Event.durable({
     type: "session.task.updated",
     ...options,
-    schema: { sessionID: SessionID, change: SessionOrchestration.Change },
+    schema: {
+      sessionID: SessionID,
+      change: SessionOrchestration.Change.mapMembers(([launched, ...rest]) => [
+        Schema.Struct({ ...launched.fields, usageAnchor: UsageAnchor.Ref.pipe(optional) }),
+        ...rest,
+      ]).pipe(Schema.toTaggedUnion("type")),
+    },
   })
   export type Updated = typeof Updated.Type
 }
@@ -807,7 +815,7 @@ export namespace Compaction {
   export const Admitted = Event.durable({
     type: "session.compaction.admitted",
     ...current,
-    schema: { ...Base, jobID: SessionCompaction.ID, pressure: SessionCompaction.Pressure.pipe(optional) },
+    schema: { ...Base, jobID: SessionCompaction.ID, pressure: SessionCompaction.Pressure.pipe(optional), usageAnchor: UsageAnchor.Ref.pipe(optional) },
   })
   export type Admitted = typeof Admitted.Type
 

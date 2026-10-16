@@ -9,6 +9,8 @@ import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventRuntime } from "../event"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
+import { SessionUsageAttribution } from "./usage-attribution"
+import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
 import {
   CompactionManifestBlobTable,
   SessionCompactionJobTable,
@@ -22,6 +24,7 @@ type Row = typeof SessionCompactionJobTable.$inferSelect
 export type Status = Row["status"]
 
 export interface Job {
+  readonly usageAnchor?: UsageAnchor.Ref
   readonly id: SessionCompaction.ID
   readonly sessionID: SessionSchema.ID
   readonly trigger: SessionCompaction.Trigger
@@ -237,12 +240,14 @@ const publishAdmission = Effect.fnUntraced(function* (
   now: number,
 ): Effect.fn.Return<SessionCompaction.Admission, Conflict> {
   const id = input.id ?? SessionCompaction.ID.create()
+  const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.sessionID)
   yield* events
     .publish(
       SessionEvent.Compaction.Admitted,
       {
         sessionID: input.sessionID,
         jobID: id,
+        usageAnchor,
         ...(input.pressure === undefined ? {} : { pressure: input.pressure }),
       },
       {
@@ -252,6 +257,7 @@ const publishAdmission = Effect.fnUntraced(function* (
             .values({
               id,
               session_id: input.sessionID,
+              usage_anchor: usageAnchor,
               trigger: input.trigger,
               requested_through_message_id: input.requestedThrough.messageID,
               requested_through_seq: input.requestedThrough.seq,
@@ -668,6 +674,7 @@ const withExistingJob = <A, E>(
 
 function fromRow(row: Row): Job {
   return {
+    ...(row.usage_anchor === null ? {} : { usageAnchor: row.usage_anchor }),
     id: row.id,
     sessionID: row.session_id,
     trigger: row.trigger,

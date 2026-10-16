@@ -1,5 +1,7 @@
 import { RemoteLimits, isRemoteLatencySample, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
+import type { RemoteUsageTaskCost, RemoteUsagePromptCost } from "@ycoding-ai/remote"
+import { readPromptCosts, readTaskCosts } from "./usage-read"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
   createNotificationDelivery,
@@ -119,6 +121,8 @@ export type SessionInfoView = {
 }
 
 export type TeamTaskView = {
+  readonly accounting?: RemoteUsageTaskCost
+  readonly accountingUnavailable?: boolean
   readonly sessionID: string
   readonly parentID: string
   readonly description: string
@@ -146,6 +150,7 @@ type TeamView = {
   readonly total?: number
   readonly activeTotal?: number
   readonly economicsUnsupported?: boolean
+  readonly accountingUnsupported?: boolean
   readonly economicsLoading?: boolean
   readonly next?: string
   readonly pageLoading: boolean
@@ -1010,6 +1015,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const cue = readTeamCue(item.event)
       return cue?.kind === "reported" && cue.outcome === "completed"
     })) scheduleCapturedRefresh()
+    const accountingChanged = items.some((item) => typeof item.event === "object" && item.event !== null && ["session.input.promoted", "session.usage.updated", "session.step.failed", "session.task.updated", "session.compaction.ended", "session.compaction.failed", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(String(Reflect.get(item.event, "type"))))
+    if (accountingChanged && transport && container.state.activeSessionID) void loadPromptCosts(transport, container.state.activeSessionID, selectionToken)
+    if (accountingChanged && !refreshTeam && teamWatching && transport && container.state.team?.status === "ready")
+      void loadTeamEconomics(transport, selectionToken, container.state.team.rootID, container.state.team.tasks.map((task) => task.sessionID), "accounting")
     if (items.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
       container.state.activeSessionID !== undefined) void loadCompactionHistory(container.state.activeSessionID, selectionToken)
     if (gap) void resyncSelected()
@@ -1100,6 +1109,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       currentTeam?.rootID === rootID && container.state.transport.kind === "open") {
       if (refresh && currentTeam.status === "ready" && outcome.status !== "ok") {
         setState({ team: { ...currentTeam, pageLoading: false, refreshing: false } })
+        void loadTeamEconomics(owner, token, rootID, currentTeam.tasks.map((task) => task.sessionID), "accounting")
       } else if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
         setState({ team: { ...currentTeam, status: "unsupported", tasks: [], pageLoading: false, refreshing: false } })
       } else if (outcome.status !== "ok") {
@@ -1126,6 +1136,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             ...(typeof active === "number" && Number.isInteger(active) && active >= 0 ? { activeTotal: active } : {}),
             ...(typeof next === "string" && next.length > 0 ? { next } : {}), pageLoading: false, refreshing: false } })
           if (activityWatching && container.state.familyActivity?.status !== "unsupported") void loadFamilyActivity(owner, rootID)
+          void loadTeamEconomics(owner, token, rootID, tasks.map((task) => task.sessionID), "accounting")
           if (currentTeam.shellStatus === "loading" || refresh && currentTeam.shellStatus !== "unsupported") void loadTeamShells(owner, token, rootID)
         }
       }
@@ -1138,14 +1149,90 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   let economicsReads = 0
-  const loadTeamEconomics = async (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[]) => {
+  const loadTeamEconomics = async (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[], read: "diagnostics" | "accounting" | "both") => {
     economicsReads += 1
     if (container.state.team?.rootID === rootID) setState({ team: { ...container.state.team, economicsLoading: true } })
     try {
-      await readTeamEconomicsRows(owner, token, rootID, sessionIDs)
+      await Promise.all([
+        ...(read === "accounting" ? [] : [readTeamEconomicsRows(owner, token, rootID, sessionIDs)]),
+        ...(read === "diagnostics" ? [] : [readTeamTaskCosts(owner, token, rootID, sessionIDs)]),
+      ])
     } finally {
       economicsReads -= 1
       if (economicsReads === 0 && container.state.team?.economicsLoading === true) setState({ team: { ...container.state.team, economicsLoading: false } })
+    }
+  }
+
+  /**
+   * One task-cost read per family at a time. Requests that arrive while it runs, or inside the
+   * interval after it settled, share one trailing rerun that covers every loaded task.
+   */
+  const taskCostIntervalMs = 5_000
+  let taskCosts: { readonly owner: RemoteTransport; readonly rootID: string; readonly token: number; readonly ids: Set<string>
+    running?: Promise<void>; queued: boolean; cancel?: () => void; settledAt: number } | undefined
+  const resetTaskCosts = () => {
+    taskCosts?.cancel?.()
+    taskCosts = undefined
+  }
+
+  const readTeamTaskCosts = (owner: RemoteTransport, token: number, rootID: string, sessionIDs: readonly string[]): Promise<void> => {
+    if (container.state.team?.accountingUnsupported) return Promise.resolve()
+    if (taskCosts?.owner !== owner || taskCosts.rootID !== rootID || taskCosts.token !== token) {
+      taskCosts?.cancel?.()
+      taskCosts = { owner, rootID, token, ids: new Set(), queued: false, settledAt: -Infinity }
+    }
+    const state = taskCosts
+    sessionIDs.forEach((id) => state.ids.add(id))
+    if (state.running) {
+      state.queued = true
+      return state.running
+    }
+    if (state.cancel) return Promise.resolve()
+    const wait = Math.max(0, taskCostIntervalMs - (monotonicNow() - state.settledAt))
+    if (wait > 0) {
+      state.cancel = schedule(() => {
+        state.cancel = undefined
+        if (taskCosts === state) void startTaskCostRead(state)
+      }, wait)
+      return Promise.resolve()
+    }
+    return startTaskCostRead(state)
+  }
+
+  const startTaskCostRead = (state: NonNullable<typeof taskCosts>) => {
+    state.queued = false
+    const ids = [...new Set([...state.ids, ...(container.state.team?.rootID === state.rootID ? container.state.team.tasks.map((task) => task.sessionID) : [])])]
+    state.ids.clear()
+    const running = readTaskCostPages(state, ids).finally(() => {
+      if (taskCosts !== state) return
+      state.running = undefined
+      state.settledAt = monotonicNow()
+      if (state.queued) void readTeamTaskCosts(state.owner, state.token, state.rootID, [])
+    })
+    state.running = running
+    return running
+  }
+
+  const readTaskCostPages = async (state: NonNullable<typeof taskCosts>, sessionIDs: readonly string[]) => {
+    const { owner, rootID, token } = state
+    const current = () => taskCosts === state && teamWatching && token === selectionToken && isCurrentConnection(owner) && container.state.team?.rootID === rootID
+    for (let offset = 0; offset < sessionIDs.length; offset += 100) {
+      if (!current()) return
+      const ids = sessionIDs.slice(offset, offset + 100)
+      const outcome = await owner.request("session.taskCosts", { sessionID: rootID, input: { sessionIDs: ids }, timeoutMs: 30_000 })
+      if (!current() || !container.state.team) return
+      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
+        setState({ team: { ...container.state.team, accountingUnsupported: true } })
+        return
+      }
+      const data = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? readTaskCosts(Reflect.get(outcome.value, "data")) : undefined
+      if (!data) {
+        const unread = new Set(sessionIDs.slice(offset))
+        setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((task) => unread.has(task.sessionID) ? { ...task, accountingUnavailable: true } : task) } })
+        return
+      }
+      const tasks = new Map(data.tasks.filter((task) => ids.includes(task.sessionID)).map((task) => [task.sessionID, task]))
+      setState({ team: { ...container.state.team, tasks: container.state.team.tasks.map((task) => ids.includes(task.sessionID) ? { ...task, accounting: tasks.get(task.sessionID), accountingUnavailable: !tasks.has(task.sessionID) } : task) } })
     }
   }
 
@@ -1295,7 +1382,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelFamilyRefresh = undefined
       setState({ teamCues: [], familyActivity: container.state.familyActivity === undefined ? undefined : { ...container.state.familyActivity, status: "loading" },
         ...(container.state.team === undefined ? {} : { team: { ...container.state.team, status: "loading", pageLoading: false, refreshing: false,
-          shellStatus: "loading", sideChatStatus: "loading", sideChatLoading: false, economicsUnsupported: false } }) })
+          shellStatus: "loading", sideChatStatus: "loading", sideChatLoading: false, economicsUnsupported: false, accountingUnsupported: false } }) })
     }
     if (rejected && status.kind === "closed") {
       clearPendingLatency()
@@ -1610,6 +1697,32 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     lastCapturedRead = -Infinity
   }
 
+  let promptRead: { owner: RemoteTransport; sessionID: string; token: number; again: boolean } | undefined
+  const loadPromptCosts = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    if (promptRead?.owner === owner && promptRead.sessionID === sessionID && promptRead.token === token) { promptRead.again = true; return }
+    const ids = container.state.view?.id === sessionID ? container.state.view.messages.filter((message) => message.kind === "user" && message.state !== "pending").map((message) => message.id) : []
+    if (ids.length === 0) return
+    const read = { owner, sessionID, token, again: false }
+    promptRead = read
+    if (container.state.view?.id === sessionID) setState({ view: { ...container.state.view, promptCostState: "loading" } })
+    const units: RemoteUsagePromptCost[] = []
+    try {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const inputIDs = ids.slice(offset, offset + 100)
+        const outcome = await owner.request("session.promptCosts", { sessionID, input: { inputIDs }, timeoutMs: 30_000 })
+        if (promptRead !== read || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || container.state.view?.id !== sessionID) return
+        const data = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? readPromptCosts(Reflect.get(outcome.value, "data")) : undefined
+        if (!data) { setState({ view: { ...container.state.view, promptCostState: "unavailable" } }); return }
+        units.push(...data.units.filter((unit) => unit.anchor.sessionID === sessionID && inputIDs.includes(unit.anchor.inputID)))
+      }
+      if (container.state.view?.id !== sessionID) return
+      const resident = new Set(container.state.view.messages.filter((message) => message.kind === "user").map((message) => message.id))
+      setState({ view: { ...container.state.view, promptCosts: units.filter((unit) => resident.has(unit.anchor.inputID)), promptCostState: "ready" } })
+    } finally {
+      if (promptRead === read) { promptRead = undefined; if (read.again && token === selectionToken && isCurrentConnection(owner)) void loadPromptCosts(owner, sessionID, token) }
+    }
+  }
+
   const loadCapturedChanges = async (owner: RemoteTransport, sessionID: string, token: number) => {
     if (capturedUnsupported) return
     if (capturedRead?.owner === owner && capturedRead.sessionID === sessionID && capturedRead.token === token) {
@@ -1777,6 +1890,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ view: { ...view, messages },
       history: { status: "idle", ...(hasCompactionCheckpoint(messages) || page.before === undefined ? {} : { before: page.before }) } })
     void loadCompactionHistory(sessionID, token)
+    void loadPromptCosts(owner, sessionID, token)
   }
 
   const loadOversizedMessage = async (messageID: string) => {
@@ -1858,6 +1972,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
       }))
       void loadCompactionHistory(sessionID, token)
+      if (transport) void loadPromptCosts(transport, sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && container.state.team !== undefined) void loadTeam(owner, token, container.state.team.rootID, undefined, true)
@@ -2263,6 +2378,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (teamWatching && (!sameFamily || container.state.team?.status !== "ready")) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
+      void loadPromptCosts(active, sessionID, token)
       snapshotStage.resolve(true)
       await Promise.all([sessionReads, pendingInputs])
     }
@@ -2296,6 +2412,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         : container.state.selectedSessionInfo })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
+      void loadPromptCosts(active, sessionID, token)
       void confirmWatermark(active, sessionID, token)
       if (teamWatching && (!retained || container.state.team?.status !== "ready")) void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
@@ -2579,6 +2696,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     cancelSessionsFrameWindow = undefined
     sessionsFrameQueued = false
     resetCapturedRefresh()
+    resetTaskCosts()
     statusReloadLocal = false
     carouselRefreshPending = false
     carouselRevision += 1
@@ -2867,6 +2985,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       goalsInFlight.clear()
       capturedUnsupported = false
       resetCapturedRefresh()
+      resetTaskCosts()
       cancelSessionsFrameWindow?.()
       cancelSessionsFrameWindow = undefined
       sessionsFrameQueued = false
@@ -3010,7 +3129,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         ...(team.shellStatus === "loading" ? [loadTeamShells(owner, token, team.rootID)] : []),
         ...(team.sideChatStatus === "loading" ? [loadSideChats(owner, token, team.rootID)] : []),
         ...(!team.economicsUnsupported && team.tasks.some((task) => task.tokens === undefined) ? [loadTeamEconomics(owner, token, team.rootID,
-          team.tasks.filter((task) => task.tokens === undefined).slice(0, 15).map((task) => task.sessionID))] : []),
+          team.tasks.filter((task) => task.tokens === undefined).slice(0, 15).map((task) => task.sessionID), "diagnostics")] : []),
       ])
     },
     loadSelectedSubagentEconomics: async () => {
@@ -3022,7 +3141,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const token = selectionToken
       if (selectedEconomicsRead?.owner === owner && selectedEconomicsRead.token === token && selectedEconomicsRead.rootID === team.rootID && selectedEconomicsRead.childID === childID) return
       selectedEconomicsRead = { owner, token, rootID: team.rootID, childID }
-      await loadTeamEconomics(owner, token, team.rootID, [childID])
+      await loadTeamEconomics(owner, token, team.rootID, [childID], "both")
     },
     loadMoreSideChats: async () => {
       const owner = transport
@@ -3628,6 +3747,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       cancelSessionsFrameWindow = undefined
       sessionsFrameQueued = false
       resetCapturedRefresh()
+      resetTaskCosts()
       clearPendingLatency()
       latency.dispose()
       goalsInFlight.clear()
@@ -3765,7 +3885,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
     await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
-    if (isCurrentConnection(owner)) void loadCapturedChanges(owner, sessionID, token)
+    if (isCurrentConnection(owner)) {
+      void loadCapturedChanges(owner, sessionID, token)
+      void loadPromptCosts(owner, sessionID, token)
+    }
     if (!isCurrentConnection(owner)) return
     if (reloaded === "applied") {
       setState({ notice: "Reconnected. Session history reloaded read-only." })
@@ -3874,9 +3997,11 @@ function readTeamEconomics(value: unknown): (Pick<TeamTaskView, "sessionID" | "c
   }
 }
 
-function retainedEconomics(task: TeamTaskView | undefined): Pick<TeamTaskView, "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens"> {
+function retainedEconomics(task: TeamTaskView | undefined): Pick<TeamTaskView, "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens" | "accounting" | "accountingUnavailable"> {
   if (task === undefined) return {}
   return {
+    ...(task.accounting === undefined ? {} : { accounting: task.accounting }),
+    ...(task.accountingUnavailable === undefined ? {} : { accountingUnavailable: task.accountingUnavailable }),
     ...(task.cacheHitRatio === undefined ? {} : { cacheHitRatio: task.cacheHitRatio }),
     ...(task.cacheRead === undefined ? {} : { cacheRead: task.cacheRead }),
     ...(task.cacheWrite === undefined ? {} : { cacheWrite: task.cacheWrite }),

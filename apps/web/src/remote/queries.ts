@@ -1,9 +1,10 @@
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
-import type { RemoteOperation, RemoteWorkspaceInfo } from "@ycoding-ai/remote"
+import type { RemoteOperation, RemoteWorkspaceInfo, RemoteUsageForecast } from "@ycoding-ai/remote"
+import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
-import { reportKey, type UsageProvider, type UsageReport, type UsageReportInput, type UsageSummary } from "./ui/usage-model"
+import { reportKey, reportNeedsNewerConnector, type UsageProvider, type UsageReport, type UsageReportInput, type UsageSummary } from "./ui/usage-model"
 
 /** One device connection: a device switch, disconnect, or rejected credential starts a new generation. */
 export type QueryScope = { readonly deviceID: string; readonly generation: number }
@@ -28,6 +29,7 @@ export const remoteKeys = {
   usage: (scope: QueryScope) => [...remoteKeys.scope(scope), "usage"] as const,
   usageProviders: (scope: QueryScope) => [...remoteKeys.usage(scope), "providers"] as const,
   usageSummary: (scope: QueryScope) => [...remoteKeys.usage(scope), "summary"] as const,
+  usageForecast: (scope: QueryScope) => [...remoteKeys.usage(scope), "forecast", "backend"] as const,
   usageReport: (scope: QueryScope, input: UsageReportInput) => [...remoteKeys.usage(scope), "report", reportKey(input)] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
@@ -119,11 +121,16 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     read: readUsageMetrics, unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
   })
 
+  const usageForecast = (scope: QueryScope | undefined, enabled: boolean) => usageQuery<RemoteUsageForecast>({
+    scope, enabled, key: remoteKeys.usageForecast, operation: "usage.forecast", request: () => ({ input: { localScope: "backend" } }),
+    read: readUsageForecast, unsupported: unknownOperation, label: "Usage forecast", unreadable: "The device returned an unreadable usage forecast.",
+  })
+
   const usageReport = (scope: QueryScope | undefined, enabled: boolean, report: UsageReportInput) => usageQuery<UsageReport>({
     scope, enabled: enabled && (report.limit === undefined || Number.isInteger(report.limit) && report.limit >= 1 && report.limit <= 200),
     key: (current) => remoteKeys.usageReport(current, report), operation: "usage.report", request: () => ({ input: report }),
     read: (raw) => readUsageReport(raw, report.group),
-    unsupported: (outcome) => outcome.status === "failed" && (outcome.error.code === "unknown_operation" || report.timeZone !== undefined && outcome.error.code === "invalid_message"),
+    unsupported: (outcome) => outcome.status === "failed" && (outcome.error.code === "unknown_operation" || reportNeedsNewerConnector(report) && outcome.error.code === "invalid_message"),
     label: "Usage report", unreadable: "The device returned an unreadable usage report.",
   })
 
@@ -133,7 +140,10 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     await Promise.all(keys.map((queryKey) => client.refetchQueries({ queryKey, type: "all" })))
   }
 
-  const refreshUsage = (scope: QueryScope) => refetchFresh([remoteKeys.usageProviders(scope), remoteKeys.usageSummary(scope)])
+  const refreshUsage = async (scope: QueryScope) => {
+    await refetchFresh([remoteKeys.usageProviders(scope), remoteKeys.usageSummary(scope)])
+    await refetchFresh([remoteKeys.usageForecast(scope)])
+  }
 
   const retryUsageReport = (scope: QueryScope, input: UsageReportInput) => refetchFresh([remoteKeys.usageReport(scope, input)])
 
@@ -234,7 +244,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
-  return { usageProviders, usageSummary, usageReport, refreshUsage, retryUsageReport, keepAwake, keepAwakeMutation, workspaces }
+  return { usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport, keepAwake, keepAwakeMutation, workspaces }
 }
 
 export type RemoteQueries = ReturnType<typeof createRemoteQueries>
@@ -268,7 +278,7 @@ function readUsageMetrics(value: unknown): UsageSummary | undefined {
   return value as UsageSummary
 }
 
-function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
+export function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
   if (typeof value !== "object" || value === null || Reflect.get(value, "group") !== group || !Array.isArray(Reflect.get(value, "rows")) ||
     !Number.isInteger(Reflect.get(value, "rowCount")) || Reflect.get(value, "rowCount") < 0 ||
     (Reflect.get(value, "nextOffset") !== undefined && (!Number.isInteger(Reflect.get(value, "nextOffset")) || Reflect.get(value, "nextOffset") < 0)) ||
@@ -277,6 +287,20 @@ function readUsageReport(value: unknown, group: UsageReportInput["group"]): Usag
   if (!rows.every((row) => typeof row === "object" && row !== null && typeof Reflect.get(row, "key") === "string" &&
     typeof Reflect.get(row, "label") === "string" && readUsageMetrics(row) !== undefined &&
     ((Reflect.get(row, "cost") === undefined) === (Reflect.get(row, "costProvenance") === undefined)))) return undefined
+  if (rows.some((row) => {
+    if (typeof row !== "object" || row === null) return true
+    const coverage = Reflect.get(row, "costCoverage")
+    if (coverage !== undefined && (typeof coverage !== "object" || coverage === null || ["pricedRequests", "unpricedRequests"].some((key) => !Number.isSafeInteger(Reflect.get(coverage, key)) || Reflect.get(coverage, key) < 0))) return true
+    const speed = Reflect.get(row, "speed")
+    if (speed !== undefined && (typeof speed !== "object" || speed === null || ["generationSamples", "providerTimedSamples", "observedSamples", "samples"].some((key) => !Number.isSafeInteger(Reflect.get(speed, key)) || Reflect.get(speed, key) < 0))) return true
+    if (!["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(group)) return false
+    const dimension = Reflect.get(row, "dimensions")
+    if (Reflect.get(row, "model") !== undefined || typeof dimension !== "object" || dimension === null || Reflect.get(dimension, "group") !== group) return true
+    if (["provider", "provider-profile-model", "provider-model", "profile"].includes(group) && typeof Reflect.get(dimension, "providerID") !== "string") return true
+    if (["model-id", "provider-model", "provider-profile-model"].includes(group) && typeof Reflect.get(dimension, "modelID") !== "string") return true
+    if (group === "profile" || group === "provider-profile-model") return !["recorded", "provider-default"].includes(Reflect.get(dimension, "profileState")) || (Reflect.get(dimension, "profileState") === "recorded") !== (typeof Reflect.get(dimension, "profile") === "string")
+    return false
+  })) return undefined
   return value as UsageReport
 }
 

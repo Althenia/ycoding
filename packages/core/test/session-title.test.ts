@@ -250,6 +250,35 @@ it.effect("leaves the generated title unchanged when title generation is off", (
   }),
 )
 
+it.effect("preserves a known zero helper price", () => Effect.gen(function* () {
+  const zero = Money.USDPerMillionTokens.make(0)
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => cost.splice(0, cost.length, { input: zero, output: zero, cache: { read: zero, write: zero } })),
+    () => Effect.gen(function* () {
+      requests = []
+      titleMode = "model"
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => editor.update(Agent.ID.make("title"), (agent) => {
+        agent.mode = "primary"
+        agent.hidden = true
+        agent.system = "You are a title generator."
+      }))
+      const sessionID = Session.ID.make("ses_title_zero_price")
+      yield* insertSession(sessionID)
+      yield* prompt(sessionID, "Debug the build")
+      const store = yield* SessionStore.Service
+      const session = yield* store.get(sessionID)
+      if (!session) return yield* Effect.die("session missing")
+      const title = yield* SessionTitle.Service
+      yield* title.generateForFirstPrompt(session)
+      const database = yield* Database.Service
+      expect(requests).toHaveLength(1)
+      expect(yield* database.db.select({ source: SessionProviderRequestTable.source, cost: SessionProviderRequestTable.cost }).from(SessionProviderRequestTable).where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toEqual({ source: "title", cost: 0 })
+    }),
+    (previous) => Effect.sync(() => cost.splice(0, cost.length, ...previous)),
+  )
+}))
+
 it.effect("does not generate once a second user message exists", () =>
   Effect.gen(function* () {
     requests = []

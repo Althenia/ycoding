@@ -11,6 +11,7 @@ import { ProjectTable } from "../src/project/sql"
 import { AbsolutePath } from "../src/schema"
 import { SessionSchema } from "../src/session/schema"
 import { SessionExecution } from "../src/session/execution"
+import { RetentionSettings } from "../src/retention-settings"
 import { SessionUsageCleanup } from "../src/session/usage-cleanup"
 import { SessionFileChangeCleanup } from "../src/session/file-change-cleanup"
 
@@ -82,6 +83,12 @@ for (const kind of ["usage", "files"] as const)
             [
               [Database.node, database],
               [SessionExecution.node, execution],
+              [
+                RetentionSettings.node,
+                Layer.succeed(RetentionSettings.Service, {
+                  read: () => Effect.succeed({ recordsDays: 7, usageDays: 30, latencyDays: 30 }),
+                }),
+              ],
             ],
           ),
         ),

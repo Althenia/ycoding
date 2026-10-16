@@ -8,6 +8,8 @@ import { DateTimeUtcFromMillis, NonNegativeInt, optional, PositiveInt } from "./
 import { SessionID } from "./session-id.js"
 import { ID as SessionMessageID } from "./session-message-id.js"
 import { TokenUsage } from "./token-usage.js"
+import { Provider } from "./provider.js"
+import { UsageAnchor } from "./usage-anchor.js"
 
 export const ID = Schema.String.check(Schema.isStartsWith("prq_")).pipe(
   Schema.brand("ProviderRequest.ID"),
@@ -40,8 +42,35 @@ export type Continuation = typeof Continuation.Type
 export const CostProvenance = Schema.Literals(["recorded", "current_catalog"])
 export type CostProvenance = typeof CostProvenance.Type
 
-export const ReportGroup = Schema.Literals(["model", "hour", "day", "month", "session", "project", "agent"])
+export const ReportGroup = Schema.Literals(["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"])
 export type ReportGroup = typeof ReportGroup.Type
+
+export const CostCoverage = Schema.Struct({ pricedRequests: NonNegativeInt, unpricedRequests: NonNegativeInt })
+  .annotate({ identifier: "ProviderRequest.CostCoverage" })
+export interface CostCoverage extends Schema.Schema.Type<typeof CostCoverage> {}
+
+const ProfileFields = {
+  providerID: Provider.ID,
+  profile: Model.ProfileName.pipe(optional),
+  profileState: Schema.Literals(["recorded", "provider-default"]),
+}
+const profileMatches = Schema.makeFilter((value: { readonly profile?: string; readonly profileState: string }) =>
+  (value.profileState === "recorded") === (value.profile !== undefined), {
+  expected: "a recorded profile name or the provider default at request time",
+  meta: { _tag: "isMaxProperties", maxProperties: 6 },
+  arbitrary: { constraint: { maxLength: 6 } },
+})
+
+export const ReportDimensions = Schema.Union([
+  Schema.Struct({ group: Schema.Literal("provider"), providerID: Provider.ID }),
+  Schema.Struct({ group: Schema.Literal("provider-profile-model"), ...ProfileFields, modelID: Model.ID }).check(profileMatches),
+  Schema.Struct({ group: Schema.Literal("provider-model"), providerID: Provider.ID, modelID: Model.ID }),
+  Schema.Struct({ group: Schema.Literal("model-id"), modelID: Model.ID }),
+  Schema.Struct({ group: Schema.Literal("profile"), ...ProfileFields }).check(profileMatches),
+  Schema.Struct({ group: Schema.Literal("prompt"), anchor: UsageAnchor.Ref.pipe(optional), attribution: Schema.Literals(["complete", "partial", "unattributed"]) }),
+  Schema.Struct({ group: Schema.Literal("task"), sessionID: SessionID.pipe(optional), attribution: Schema.Literals(["complete", "partial", "unattributed"]) }),
+]).annotate({ identifier: "ProviderRequest.ReportDimensions" })
+export type ReportDimensions = typeof ReportDimensions.Type
 
 export const ReportSort = Schema.Literals(["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"])
 export type ReportSort = typeof ReportSort.Type
@@ -64,6 +93,11 @@ export const Timing = Schema.Struct({
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
 
 export const Speed = Schema.Struct({
+  generationSamples: NonNegativeInt,
+  generationP50TokensPerSecond: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)).pipe(optional),
+  generationP90TokensPerSecond: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)).pipe(optional),
+  providerTimedSamples: NonNegativeInt,
+  observedSamples: NonNegativeInt,
   firstOutputP50Ms: NonNegativeInt.pipe(optional),
   firstOutputP95Ms: NonNegativeInt.pipe(optional),
   totalP50Ms: NonNegativeInt.pipe(optional),
@@ -78,6 +112,10 @@ const ReportTimeZone = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLeng
 
 export const ReportInput = Schema.Struct({
   group: ReportGroup,
+  providerID: Provider.ID.pipe(optional),
+  profile: Model.ProfileName.pipe(optional),
+  modelID: Model.ID.pipe(optional),
+  selectedEffort: Schema.String.check(Schema.isNonEmpty()).pipe(optional),
   timeZone: ReportTimeZone.pipe(optional),
   /** Inclusive UTC epoch-millisecond lower bound. */
   from: NonNegativeInt.pipe(optional),
@@ -91,8 +129,8 @@ export const ReportInput = Schema.Struct({
   .check(
     Schema.makeFilter((value) => value.from === undefined || value.to === undefined || value.from < value.to, {
       expected: "from before to",
-      meta: { _tag: "isMaxProperties", maxProperties: 8 },
-      arbitrary: { constraint: { maxLength: 8 } },
+      meta: { _tag: "isMaxProperties", maxProperties: 12 },
+      arbitrary: { constraint: { maxLength: 12 } },
     }),
   )
   .annotate({ identifier: "ProviderRequest.ReportInput" })
@@ -102,6 +140,7 @@ export const Record = Schema.Struct({
   id: ID,
   sessionID: SessionID,
   inputID: SessionMessageID.pipe(optional),
+  usageAnchor: UsageAnchor.Ref.pipe(optional),
   assistantMessageID: SessionMessageID.pipe(optional),
   connectionIdentityDigest: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).pipe(optional),
   source: Source,
@@ -174,6 +213,7 @@ const ReportMetricsFields = {
   helpers: NonNegativeInt,
   continued: NonNegativeInt,
   fallback: NonNegativeInt,
+  costCoverage: CostCoverage.pipe(optional),
   tokens: TokenUsage.Info,
   /** Absent when no contributing request has recorded or current-catalog-estimated cost. */
   cost: Money.USD.pipe(optional),
@@ -195,7 +235,7 @@ const costAndProvenanceTogether = (maxProperties: number) =>
   )
 
 export const ReportMetrics = Schema.Struct(ReportMetricsFields)
-  .check(costAndProvenanceTogether(9))
+  .check(costAndProvenanceTogether(10))
   .annotate({ identifier: "ProviderRequest.ReportMetrics" })
 export interface ReportMetrics extends Schema.Schema.Type<typeof ReportMetrics> {}
 
@@ -203,10 +243,11 @@ export const ReportRow = Schema.Struct({
   key: Schema.String,
   label: Schema.String,
   model: Model.Ref.pipe(optional),
+  dimensions: ReportDimensions.pipe(optional),
   ...ReportMetricsFields,
   speed: Speed.pipe(optional),
 })
-  .check(costAndProvenanceTogether(12))
+  .check(costAndProvenanceTogether(15))
   .annotate({ identifier: "ProviderRequest.ReportRow" })
 export interface ReportRow extends Schema.Schema.Type<typeof ReportRow> {}
 
@@ -217,5 +258,11 @@ export const Report = Schema.Struct({
   /** Number of grouped rows before pagination. */
   rowCount: NonNegativeInt,
   nextOffset: NonNegativeInt.pipe(optional),
-}).annotate({ identifier: "ProviderRequest.Report" })
+}).check(Schema.makeFilter((value) =>
+  !["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(value.group) ||
+    value.rows.every((row) => row.dimensions?.group === value.group && row.model === undefined), {
+  expected: "typed dimensions without a representative model in mixed groups",
+  meta: { _tag: "isMaxProperties", maxProperties: 5 },
+  arbitrary: { constraint: { maxLength: 5 } },
+})).annotate({ identifier: "ProviderRequest.Report" })
 export interface Report extends Schema.Schema.Type<typeof Report> {}

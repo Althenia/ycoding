@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type {
@@ -2426,10 +2426,6 @@ async function renderMeasuredScreen(input: {
   config: { animations: boolean }
 }) {
   const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false })
-  const runtime = await import("../src/plugin/runtime")
-  const originalRuntime = { ...runtime }
-  const pluginRuntime = runtime.createPluginRuntime()
-  mock.module("../src/plugin/runtime", () => ({ ...originalRuntime, createPluginRuntime: () => pluginRuntime }))
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)
@@ -2456,13 +2452,9 @@ async function renderMeasuredScreen(input: {
     input: setup.mockInput,
     frame: () => setup.captureCharFrame(),
     async dispose() {
-      try {
-        if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-        await task.catch(() => {})
-        await server.stop()
-      } finally {
-        mock.module("../src/plugin/runtime", () => originalRuntime)
-      }
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      await task.catch(() => {})
+      await server.stop()
     },
   }
 }

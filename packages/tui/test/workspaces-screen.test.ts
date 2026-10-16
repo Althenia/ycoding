@@ -1,7 +1,9 @@
-import { expect, mock, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { Global } from "@ycoding-ai/core/global"
 import type { ProjectInventoryEntry } from "@ycoding-ai/client"
 import { createEventStream, createFetch, directory, json, worktree, type FetchHandler } from "./fixture/tui-client"
@@ -59,9 +61,8 @@ const inventory: ProjectInventoryEntry[] = [
 type Recorded = { method: string; url: URL; body?: unknown }
 
 async function launch(input: { width: number; handler?: FetchHandler }) {
+  const state = await mkdtemp(path.join(tmpdir(), "ycoding-workspaces-"))
   const setup = await createTestRenderer({ width: input.width, height: 34, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
     started = resolve
@@ -95,8 +96,9 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
       config: { get: async () => ({}), update: async () => ({}) },
       packages: { resolve: async () => undefined },
       args: {},
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    }).pipe(Effect.provide(Global.layerWith({ state })), Effect.provide(FileSystem.layerNoop({}))),
   )
   await ready
   await Bun.sleep(100)
@@ -125,7 +127,7 @@ async function launch(input: { width: number; handler?: FetchHandler }) {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await task.catch(() => undefined)
     await server.stop()
-    mock.restore()
+    await rm(state, { recursive: true, force: true })
   }
   return { setup, requests, frame, line, waitFor, open, inventoryRequests, stop }
 }
@@ -223,6 +225,7 @@ test("selection near the end loads the next page once with the returned cursor a
   })
   try {
     await app.open()
+    await app.waitFor(() => app.line("Workspaces").includes("12 loaded"))
     expect(app.line("Workspaces")).toContain("12 loaded · more available")
     expect(app.inventoryRequests()).toHaveLength(1)
 
@@ -403,6 +406,11 @@ test("delete copy needs a second press and removes the project copy row", async 
 
 test("enter opens home so the next new session is created in the selected directory", async () => {
   const created: unknown[] = []
+  const model = {
+    id: "workspace-fixture", modelID: "workspace-fixture", providerID: "openai", name: "Workspace fixture", family: "",
+    capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], time: { released: 0 }, cost: [],
+    status: "active", enabled: true, limit: { context: 200_000, output: 32_000 },
+  }
   const app = await launch({
     width: 100,
     handler: async (url, request) => {
@@ -410,6 +418,9 @@ test("enter opens home so the next new session is created in the selected direct
         directory: url.searchParams.get("location[directory]") ?? directory,
         project: { id: "proj_test", directory: worktree },
       }
+      if (url.pathname === "/api/location") return json(responseLocation)
+      if (url.pathname === "/api/model/default")
+        return json({ location: responseLocation, data: { ...model, selection: { providerID: model.providerID, id: model.id } } })
       if (url.pathname === "/api/agent")
         return json({
           location: responseLocation,
@@ -427,22 +438,7 @@ test("enter opens home so the next new session is created in the selected direct
       if (url.pathname === "/api/model")
         return json({
           location: responseLocation,
-          data: [
-            {
-              id: "workspace-fixture",
-              modelID: "workspace-fixture",
-              providerID: "openai",
-              name: "Workspace fixture",
-              family: "",
-              capabilities: { tools: true, input: ["text"], output: ["text"] },
-              variants: [],
-              time: { released: 0 },
-              cost: [],
-              status: "active",
-              enabled: true,
-              limit: { context: 200_000, output: 32_000 },
-            },
-          ],
+          data: [model],
         })
       if (url.pathname === "/api/provider")
         return json({
@@ -479,6 +475,7 @@ test("enter opens home so the next new session is created in the selected direct
     await Bun.sleep(50)
     app.setup.mockInput.pressEnter()
     await app.waitFor(() => app.frame().includes("What should we build?"))
+    await app.waitFor(() => app.frame().includes("Workspace fixture"))
     await app.setup.mockInput.typeText("hello")
     app.setup.mockInput.pressEnter()
     await app.waitFor(() => created.length > 0)

@@ -37,6 +37,7 @@ import { ConfigProviderUsage } from "./config/provider-usage"
 import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { ConfigReference } from "./config/reference"
 import { ConfigSessionRetention } from "./config/session-retention"
+import { ConfigAnalyticsRetention } from "./config/analytics-retention"
 import { ConfigShell } from "./config/shell"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigVariable } from "./config/variable"
@@ -118,7 +119,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   session_retention: ConfigSessionRetention.Info.pipe(Schema.optional).annotate({
     description:
-      "Automatic deletion of idle root Session families. Read from global configuration only (default days: 7)",
+      "Global-only idle root-family and Session-record retention (default days and records_days: 7)",
+  }),
+  analytics_retention: ConfigAnalyticsRetention.Info.pipe(Schema.optional).annotate({
+    description: "Global-only retention of usage facts by request date and latency samples by receipt date (default days: 30)",
   }),
   question_timeout_seconds: ConfigQuestionTimeout.Seconds.pipe(Schema.optional).annotate({
     description:

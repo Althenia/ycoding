@@ -29,9 +29,12 @@ import { CursorUsage } from "./provider-usage/cursor"
 import { SessionRunnerModel } from "./session/runner/model"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
+import { ProviderUsageForecast } from "./provider-usage/forecast"
+import { UsageForecast } from "@ycoding-ai/schema/usage-forecast"
+import { Money } from "@ycoding-ai/schema/money"
+import { Location } from "./location"
+import { SessionUsageRead, type LocalUsageBin, type LocalSpend } from "./session/usage-read"
 import { Database } from "./database/database"
-import { SessionProviderRequestTable } from "./session/sql"
-import { gte } from "drizzle-orm"
 
 const minute = 60_000
 
@@ -47,6 +50,7 @@ export interface Interface {
   readonly get: (input: GetInput) => Effect.Effect<ProviderUsage.Snapshot>
   readonly list: (input?: { readonly refresh?: boolean }) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
   readonly observe: (observation: ProviderUsage.Observation, profileSource?: string) => Effect.Effect<void>
+  readonly forecast: (input: UsageForecast.Input) => Effect.Effect<UsageForecast.Info>
 }
 
 export interface AdapterInput {
@@ -67,53 +71,51 @@ export interface MakeInput {
   readonly cache?: ProviderUsageCache.Interface
   readonly ttlMs?: Readonly<Record<string, number>>
   readonly now?: () => number
-  readonly localSpend?: () => Effect.Effect<ReadonlyArray<LocalSpendRow>, unknown>
+  readonly localSpend?: () => Effect.Effect<ReadonlyArray<LocalSpend>, unknown>
+  readonly localUsage?: (
+    scope: UsageForecast.LocalScope,
+    asOf: number,
+  ) => Effect.Effect<ReadonlyArray<LocalUsageBin>, unknown>
   readonly accountUnknown?: (refresh?: boolean) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
-}
-
-interface LocalSpendRow {
-  readonly model: { readonly providerID: string }
-  readonly cost: number | null
-  readonly timeCreated: number
 }
 
 const localSpendProviders = new Set(["anthropic", "openai", "opencode", "opencode-go", "xai"])
 
-export function localSpendSnapshots(rows: ReadonlyArray<LocalSpendRow>, now: number) {
-  const start = new Date(now).setHours(0, 0, 0, 0)
-  const end = new Date(start).setDate(new Date(start).getDate() + 1)
-  const totals = rows
-    .filter(
-      (row): row is LocalSpendRow & { readonly cost: number } =>
-        row.cost !== null &&
-        Number.isFinite(row.cost) &&
-        row.cost >= 0 &&
-        row.timeCreated >= start &&
-        row.timeCreated < end &&
-        localSpendProviders.has(row.model.providerID),
-    )
-    .reduce(
-      (values, row) => values.set(row.model.providerID, (values.get(row.model.providerID) ?? 0) + row.cost),
-      new Map<string, number>(),
-    )
-  return [...totals]
-    .toSorted(([left], [right]) => left.localeCompare(right))
+export function localSpendSnapshots(rows: ReadonlyArray<LocalSpend>, now: number) {
+  return rows
+    .filter((row) => localSpendProviders.has(row.providerID))
+    .toSorted((left, right) => left.providerID.localeCompare(right.providerID))
     .map(
-      ([providerID, used]) =>
+      (row) =>
         new ProviderUsage.Snapshot({
-          providerID: Provider.ID.make(providerID),
+          providerID: row.providerID,
           label:
-            providerID === "opencode"
+            row.providerID === "opencode"
               ? "OpenCode Zen"
-              : providerID === "opencode-go"
+              : row.providerID === "opencode-go"
                 ? "OpenCode Go"
-                : providerLabel(Provider.ID.make(providerID)),
+                : providerLabel(row.providerID),
           profile: "YCoding local",
           status: "available",
           source: "local_session",
           stability: "stable",
           updatedAt: Math.max(0, Math.trunc(now)),
-          windows: [new ProviderUsage.Window({ id: "today", label: "Today", unit: "usd", used })],
+          windows: [
+            new ProviderUsage.Window({
+              id: "today",
+              label: "Today",
+              unit: "usd",
+              ...(row.knownUSD === undefined ? {} : { used: row.knownUSD }),
+            }),
+          ],
+          ...(row.unpricedRequests === 0
+            ? {}
+            : {
+                message:
+                  row.pricedRequests === 0
+                    ? "Local request prices are unreported"
+                    : "Known local spend excludes unreported prices",
+              }),
         }),
     )
 }
@@ -129,6 +131,20 @@ export function make(input: MakeInput): Interface {
   const now = input.now ?? Date.now
   const cache = input.cache ?? ProviderUsageCache.make({ now })
   const observations = new Map<string, ProviderUsage.Snapshot>()
+  const forecast = ProviderUsageForecast.make()
+  const accounts = new WeakMap<ProviderUsage.Snapshot, string>()
+  const retain = (snapshot: ProviderUsage.Snapshot, account?: string) =>
+    Effect.sync(() => {
+      if (account === undefined) return snapshot
+      accounts.set(snapshot, account)
+      for (const window of snapshot.windows)
+        forecast.observe({
+          account,
+          snapshot: new ProviderUsage.Snapshot({ ...snapshot, windows: [window] }),
+          semantics: quotaSemantics(snapshot, window),
+        })
+      return snapshot
+    }).pipe(Effect.catchCause(() => Effect.succeed(snapshot)))
 
   const unavailable = (
     providerID: Provider.ID,
@@ -176,7 +192,7 @@ export function make(input: MakeInput): Interface {
         : credentialID === undefined
           ? observations.get(`${providerID}:`)
           : undefined
-    const profiled = Effect.fnUntraced(function* (snapshot: ProviderUsage.Snapshot) {
+    const profiled = Effect.fnUntraced(function* (snapshot: ProviderUsage.Snapshot, bound = true) {
       if (!selected) return snapshot
       const currentCandidates = credentialsFor(yield* input.credentials.all(), providerID)
       const current = currentCandidates.find(
@@ -186,23 +202,25 @@ export function make(input: MakeInput): Interface {
           credential.accountGeneration === selected.accountGeneration,
       )
       if (!current) return unavailable(providerID, "unsupported", "Provider usage account changed during refresh")
-      return currentCandidates.length > 1 && current.label
-        ? new ProviderUsage.Snapshot({
-            providerID: snapshot.providerID,
-            label: snapshot.label,
-            profile: current.label,
-            status: snapshot.status,
-            source: snapshot.source,
-            stability: snapshot.stability,
-            updatedAt: snapshot.updatedAt,
-            windows: snapshot.windows,
-            ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
-          })
-        : snapshot
+      const value =
+        currentCandidates.length > 1 && current.label
+          ? new ProviderUsage.Snapshot({
+              providerID: snapshot.providerID,
+              label: snapshot.label,
+              profile: current.label,
+              status: snapshot.status,
+              source: snapshot.source,
+              stability: snapshot.stability,
+              updatedAt: snapshot.updatedAt,
+              windows: snapshot.windows,
+              ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
+            })
+          : snapshot
+      return yield* retain(value, bound ? SessionRunnerModel.accountIdentityDigest(current) : undefined)
     })
 
     const current = observed()
-    if (!refresh && current) return profileSource === undefined ? current : yield* profiled(current)
+    if (!refresh && current) return yield* profiled(current, profileSource !== undefined)
 
     const adapter = input.adapters[providerID]
     if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
@@ -216,7 +234,8 @@ export function make(input: MakeInput): Interface {
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: `${providerID}:${selected.id}:${selected.accountGeneration}:${selected.generation}`,
+        key: `${providerID}:${selected.id}:${selected.accountGeneration}`,
+        generation: selected.generation,
         ttlMs: input.ttlMs?.[providerID] ?? minute,
         refresh,
         load: adapter({
@@ -244,6 +263,7 @@ export function make(input: MakeInput): Interface {
           ),
         ),
       )
+    const fetched = yield* profiled(snapshot)
     const latest = observed()
     // A no-data unsupported snapshot (for example the Muse placeholder, whose timestamp is
     // only its generation time) carries no quota, so it cannot supersede a stored observation.
@@ -251,8 +271,51 @@ export function make(input: MakeInput): Interface {
       latest &&
       (latest.updatedAt >= snapshot.updatedAt || (snapshot.status === "unsupported" && snapshot.windows.length === 0))
     )
-      return profileSource === undefined ? latest : yield* profiled(latest)
-    return yield* profiled(snapshot)
+      return yield* profiled(latest, profileSource !== undefined)
+    return fetched
+  })
+
+  const list = Effect.fn("ProviderUsage.list")(function* (
+    request?: { readonly refresh?: boolean },
+    includeLocal = true,
+  ) {
+    const providers = yield* input.providers.available()
+    const credentials = yield* input.credentials.all()
+    const targets = [...new Set(providers.map((provider) => provider.id))].toSorted().flatMap((providerID) => {
+      const candidates = credentialsFor(credentials, providerID)
+      const profiles =
+        input.adapters[providerID] && candidates.length > 1
+          ? candidates.toSorted((left, right) => left.label.localeCompare(right.label)).map((item) => item.id)
+          : [undefined]
+      return profiles.map((credentialID) => ({ providerID, candidates, credentialID }))
+    })
+    const snapshots = yield* Effect.forEach(
+      targets,
+      (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh),
+      { concurrency: 4 },
+    )
+    const local =
+      includeLocal && input.localSpend
+        ? yield* Effect.suspend(input.localSpend).pipe(
+            Effect.map((rows) => localSpendSnapshots(rows, now())),
+            Effect.catchCause(() => Effect.succeed([])),
+          )
+        : []
+    const available = new Set(providers.map((provider) => provider.id))
+    const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh) : []
+    const unbound = [...observations].flatMap(([key, snapshot]) =>
+      key.endsWith(":") &&
+      available.has(snapshot.providerID) &&
+      credentialsFor(credentials, snapshot.providerID).length > 1
+        ? [snapshot]
+        : [],
+    )
+    return [
+      ...snapshots,
+      ...unbound,
+      ...unknown.filter((snapshot) => available.has(snapshot.providerID)),
+      ...local.filter((snapshot) => available.has(snapshot.providerID)),
+    ]
   })
 
   return {
@@ -265,46 +328,53 @@ export function make(input: MakeInput): Interface {
         request.refresh,
       )
     }),
-    list: Effect.fn("ProviderUsage.list")(function* (request) {
-      const providers = yield* input.providers.available()
-      const credentials = yield* input.credentials.all()
-      const targets = [...new Set(providers.map((provider) => provider.id))].toSorted().flatMap((providerID) => {
-        const candidates = credentialsFor(credentials, providerID)
-        const profiles =
-          input.adapters[providerID] && candidates.length > 1
-            ? candidates.toSorted((left, right) => left.label.localeCompare(right.label)).map((item) => item.id)
-            : [undefined]
-        return profiles.map((credentialID) => ({ providerID, candidates, credentialID }))
-      })
-      const snapshots = yield* Effect.forEach(
-        targets,
-        (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh),
-        { concurrency: 4 },
+    list,
+    forecast: Effect.fn("ProviderUsage.forecast")(function* (request) {
+      const asOf = Math.max(0, Math.trunc(now()))
+      const [snapshots, bins] = yield* Effect.all(
+        [
+          list(undefined, false).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
+          input.localUsage
+            ? Effect.suspend(() => input.localUsage!(request.localScope, asOf)).pipe(
+                Effect.catchCause(() => Effect.succeed(undefined)),
+              )
+            : Effect.succeed([]),
+        ],
+        { concurrency: 2 },
       )
-      const local = input.localSpend
-        ? yield* input.localSpend().pipe(
-            Effect.map((rows) => localSpendSnapshots(rows, now())),
-            Effect.catchCause(() => Effect.succeed([])),
-          )
-        : []
-      const available = new Set(providers.map((provider) => provider.id))
-      const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh) : []
-      const unbound = [...observations].flatMap(([key, snapshot]) =>
-        key.endsWith(":") &&
-        available.has(snapshot.providerID) &&
-        credentialsFor(credentials, snapshot.providerID).length > 1
-          ? [snapshot]
-          : [],
+      const localRates = yield* Effect.sync(() => bins === undefined ? undefined : localRateForecasts(bins, asOf)).pipe(
+        Effect.catchCause(() => Effect.succeed(undefined)),
       )
-      return [
-        ...snapshots,
-        ...unbound,
-        ...unknown.filter((snapshot) => available.has(snapshot.providerID)),
-        ...local.filter((snapshot) => available.has(snapshot.providerID)),
-      ]
+      return yield* Effect.sync(() => ({
+        asOf,
+        localScope: request.localScope,
+        ...(localRates === undefined ? {} : { localRates }),
+        ...(snapshots === undefined ? {} : { quotas: snapshots.flatMap((snapshot) =>
+          snapshot.source === "local_session"
+            ? []
+            : snapshot.windows.map((window) => ({
+                providerID: snapshot.providerID,
+                ...(snapshot.profile === undefined ? {} : { profile: snapshot.profile }),
+                windowID: window.id,
+                unit: window.unit,
+                ...forecast.quota({
+                  account: accounts.get(snapshot),
+                  snapshot,
+                  window,
+                  now: asOf,
+                  semantics: quotaSemantics(snapshot, window),
+                  wholeWindowMean:
+                    (snapshot.providerID === "cursor" && window.id === "included") ||
+                    (snapshot.providerID === "xai" && window.id === "weekly"),
+                }),
+              })),
+        ) }),
+      })).pipe(
+        Effect.catchCause(() => Effect.succeed({ asOf, localScope: request.localScope })),
+      )
     }),
-    observe: Effect.fn("ProviderUsage.observe")((observation, profileSource) =>
-      Effect.sync(() => {
+    observe: Effect.fn("ProviderUsage.observe")(function* (observation, profileSource) {
+      yield* Effect.gen(function* () {
         const snapshot = new ProviderUsage.Snapshot({
           providerID: observation.providerID,
           label: observation.label,
@@ -316,9 +386,103 @@ export function make(input: MakeInput): Interface {
         })
         const key = `${observation.providerID}:${profileSource ?? ""}`
         const current = observations.get(key)
-        if (!current || snapshot.updatedAt >= current.updatedAt) observations.set(key, snapshot)
+        if (current && snapshot.updatedAt < current.updatedAt) return
+        observations.delete(key)
+        observations.set(key, snapshot)
+        while (observations.size > 256) observations.delete(observations.keys().next().value!)
+        if (profileSource === undefined) return
+        yield* retain(snapshot, profileSource)
+      }).pipe(Effect.catchCause(() => Effect.void))
+    }),
+  }
+}
+
+function quotaSemantics(
+  snapshot: ProviderUsage.Snapshot,
+  window: ProviderUsage.Window,
+): ProviderUsageForecast.Semantics {
+  if (snapshot.providerID === "opencode-go" && window.id === "session") return "rolling"
+  if (
+    snapshot.providerID === "github-copilot" &&
+    window.unit === "percent" &&
+    (window.limit !== undefined || window.remaining !== undefined)
+  )
+    return "unknown"
+  if (
+    window.unlimited === true ||
+    (window.resetAt === undefined &&
+      window.periodSeconds === undefined &&
+      (window.remaining !== undefined || window.limit !== undefined))
+  )
+    return "balance"
+  if (window.resetAt === undefined) return "unknown"
+  const fixed =
+    (window.unit === "percent" &&
+      ((snapshot.providerID === "anthropic" && (window.id === "five-hour" || /^seven-day(?:-|$)/.test(window.id))) ||
+        (snapshot.providerID === "openai" && /-(?:primary|secondary)$/.test(window.id)) ||
+        (snapshot.providerID === "muse" && ["window", "weekly"].includes(window.id)) ||
+        (snapshot.providerID === "github-copilot" && ["credits", "chat", "completions"].includes(window.id)) ||
+        (snapshot.providerID === "xai" && window.id === "weekly") ||
+        (["zai", "zai-coding-plan"].includes(snapshot.providerID) && ["session", "weekly"].includes(window.id)) ||
+        (snapshot.providerID === "cursor" && window.id === "included") ||
+        (snapshot.providerID === "opencode-go" && ["weekly", "monthly"].includes(window.id)))) ||
+    (["zai", "zai-coding-plan"].includes(snapshot.providerID) &&
+      window.id === "web-searches" &&
+      window.unit === "count")
+  if (fixed) return "fixed-reset"
+  return "unknown"
+}
+
+function localRateForecasts(bins: ReadonlyArray<LocalUsageBin>, asOf: number): ReadonlyArray<UsageForecast.LocalRate> {
+  const groups = new Map<string, LocalUsageBin[]>()
+  for (const bin of bins) {
+    const key = JSON.stringify([bin.providerID, bin.profile, bin.modelID])
+    const current = groups.get(key)
+    if (current) current.push(bin)
+    if (!current) groups.set(key, [bin])
+  }
+  return [...groups.values()].map((values) => {
+    const rate = ProviderUsageForecast.localRates(
+      values.map((bin) => ({
+        start: bin.start,
+        tokens:
+          bin.tokens.input + bin.tokens.output + bin.tokens.reasoning + bin.tokens.cache.read + bin.tokens.cache.write,
+        ...(bin.knownUSD === undefined ? {} : { knownUSD: bin.knownUSD }),
+        pricedRequests: bin.pricedRequests,
+        unpricedRequests: bin.unpricedRequests,
+      })),
+      asOf,
+    )
+    return {
+      providerID: values[0].providerID,
+      ...(values[0].profile === undefined ? {} : { profile: values[0].profile }),
+      modelID: values[0].modelID,
+      observedFrom: rate.observedFrom,
+      observedTo: rate.observedTo,
+      tokensPerMinute: rate.tokensPerMinute,
+      tokensPerMinute5: rate.tokensPerMinute5,
+      tokensPerMinute60: rate.tokensPerMinute60,
+      coverage: rate.coverage,
+      ...(rate.estimatedUSDPerHour === undefined
+        ? {}
+        : { estimatedUSDPerHour: Money.USD.make(rate.estimatedUSDPerHour) }),
+    }
+  })
+}
+
+export function localReads(database: Database.Interface, location: Location.Ref, now: () => number = Date.now) {
+  return {
+    localSpend: () => {
+      const dayStart = new Date(now()).setHours(0, 0, 0, 0)
+      const dayEnd = new Date(dayStart).setDate(new Date(dayStart).getDate() + 1)
+      return SessionUsageRead.localSpend(database, { dayStart, dayEnd })
+    },
+    localUsage: (scope: UsageForecast.LocalScope, asOf: number) =>
+      SessionUsageRead.localUsage(database, {
+        from: asOf - 60 * minute,
+        to: asOf,
+        scope: scope === "backend" ? { type: "backend" } : { type: "location", location },
       }),
-    ),
   }
 }
 
@@ -332,6 +496,7 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const http = yield* HttpClient.HttpClient
     const database = yield* Database.Service
+    const location = yield* Location.Service
     const providerUsage = Config.latest(yield* config.entries(), "provider_usage")
     const cache = ProviderUsageCache.make()
     const claude = createClaudeCodeCredentialStore({
@@ -383,16 +548,7 @@ const layer = Layer.effect(
                     Effect.catch(() => Effect.succeed([])),
                   ),
             }),
-        localSpend: () =>
-          database.db
-            .select({
-              model: SessionProviderRequestTable.model,
-              cost: SessionProviderRequestTable.cost,
-              timeCreated: SessionProviderRequestTable.time_created,
-            })
-            .from(SessionProviderRequestTable)
-            .where(gte(SessionProviderRequestTable.time_created, new Date().setHours(0, 0, 0, 0)))
-            .all(),
+        ...localReads(database, location),
       }),
     )
   }),
@@ -401,7 +557,16 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Catalog.node, Config.node, Credential.node, Integration.node, Database.node, Global.node, httpClient],
+  deps: [
+    Catalog.node,
+    Config.node,
+    Credential.node,
+    Integration.node,
+    Database.node,
+    Global.node,
+    Location.node,
+    httpClient,
+  ],
 })
 
 export const muse: Adapter = (input) => Effect.succeed(MuseUsage.unreported(input.updatedAt))

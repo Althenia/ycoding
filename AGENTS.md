@@ -298,6 +298,7 @@ const table = sqliteTable("session", {
 
 ## Provider cache and usage behavior
 
+- Keep backend/Location usage analytics in `usage_analytics_request` and Session/tree views on Session-owned records; select the source once by scope and never mix stores in a read. Capture analytics dimensions at request time and retain facts independently of Session lifetime. Read global-only retention at each sweep: `session_retention.records_days` defaults to 7 idle days, `analytics_retention.usage_days` to 30 request-date days, and `analytics_retention.latency_days` to 30 server-receipt days; require positive integers. Keep exact boundaries, skip executing Sessions during record cleanup, and never reconstruct expired Session records from analytics.
 - Separate provider prompt caching, TUI cache diagnostics, project-artifact reuse, and provider quota reporting. Do not label them as one cache layer.
 - Provider-usage refresh is read-only and best effort. It must never block Session startup or model execution.
 - Preserve source and stability labels. Unknown quota values are absent and render as unreported; never coerce them to zero.

@@ -288,6 +288,7 @@ test("unavailable explicit Session variant retains the draft and starts no model
       const stale = { ...session, model: { ...session.model, variant: "removed" } }
       if (url.pathname === "/api/session") return json({ data: [stale], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: stale })
+      if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: stale })
       if (url.pathname === `/api/session/${sessionID}/model`) {
         switches.push(url.pathname)
         return new Response(null, { status: 204 })
@@ -423,6 +424,7 @@ test("an unadmitted local send shows a dot-trail receipt beneath the bubble", as
     await still.input.typeText("static unadmitted send")
     still.input.pressEnter()
     await stillHold.started
+    await waitFor(() => bubbleReceipt(still.lines(), "static unadmitted send").receipt.includes("⋯"), "static sending receipt")
     await still.renderOnce()
     const current = bubbleReceipt(still.lines(), "static unadmitted send")
     expect(current.bubble).toContain("static unadmitted send")

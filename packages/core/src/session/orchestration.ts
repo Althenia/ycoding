@@ -1,4 +1,5 @@
 export * as SessionOrchestration from "./orchestration"
+import { SessionUsageAttribution } from "./usage-attribution"
 
 import type { Model } from "@ycoding-ai/schema/model"
 import {
@@ -458,7 +459,7 @@ const layer = Layer.effect(
       return yield* new NotFoundError({ parentID, childID })
     })
 
-    const publish = (childID: SessionSchema.ID, change: Change, id?: string) =>
+    const publish = (childID: SessionSchema.ID, change: typeof SessionEvent.Task.Updated.Type["data"]["change"], id?: string) =>
       events.publish(
         SessionEvent.Task.Updated,
         { sessionID: childID, change },
@@ -580,6 +581,7 @@ const layer = Layer.effect(
         return locks.withLock(ids.childID)(
           Effect.gen(function* () {
             const parent = yield* sessions.get(input.parentID)
+            const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.parentID)
             const prepared = input.prepared
             const promptDigest = Hash.sha256(input.prompt)
             const start = Effect.gen(function* () {
@@ -590,6 +592,7 @@ const layer = Layer.effect(
                   text: input.prompt,
                   resume: false,
                   origin: "subagent",
+                  causedBy: existing ? existing.usage_anchor ?? undefined : usageAnchor,
                 })
                 .pipe(
                   Effect.mapError((error) =>
@@ -640,6 +643,7 @@ const layer = Layer.effect(
               ids.childID,
               {
                 type: "launched",
+                usageAnchor,
                 parentID: input.parentID,
                 parentAssistantMessageID: input.parentAssistantMessageID,
                 toolCallID: input.toolCallID,
@@ -679,6 +683,7 @@ const layer = Layer.effect(
               .synthetic({
                 id: input.messageID,
                 sessionID: input.childID,
+                causedBy: yield* SessionUsageAttribution.dispatch(db, input.parentID),
                 text: `Parent message:\n${JSON.stringify({ text: input.text, delivery: input.delivery })}`,
                 description: "Parent subagent message",
                 metadata: {
@@ -733,6 +738,7 @@ const layer = Layer.effect(
               .synthetic({
                 id,
                 sessionID: input.childID,
+                causedBy: yield* SessionUsageAttribution.dispatch(db, input.parentID),
                 text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: input.text, data: input.data })}`,
                 description: "Parent subagent answer",
                 metadata: {
@@ -841,6 +847,7 @@ const layer = Layer.effect(
                     row.tool_call_id,
                   ).answer(question.id),
                   sessionID: childID,
+                  causedBy: yield* SessionUsageAttribution.dispatch(db, childID),
                   text: `Parent answer:\n${JSON.stringify({
                     questionID: question.id,
                     text: answerText,

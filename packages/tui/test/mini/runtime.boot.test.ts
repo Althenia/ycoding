@@ -124,6 +124,7 @@ describe("run runtime boot", () => {
           name: "OpenAI",
           models: {
             "gpt-5": {
+              enabled: true,
               name: "gpt-5",
               cost: {
                 input: 0,

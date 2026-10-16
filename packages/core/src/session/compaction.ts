@@ -35,6 +35,7 @@ import { SessionHistory } from "./history"
 import { SessionLiveState } from "./live-state"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
+import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
@@ -465,7 +466,7 @@ const make = (dependencies: Dependencies): Interface => {
     return yield* new ManifestError({ code: "invalid_manifest" })
   })
 
-  return Service.of({ manifest })
+  return Service.of({ manifest: (job, prepareOwner) => SessionUsageAttribution.withAnchor(job.sessionID, job.usageAnchor, manifest(job, prepareOwner)) })
 }
 
 const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (

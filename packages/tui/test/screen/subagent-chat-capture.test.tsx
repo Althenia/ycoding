@@ -14,13 +14,14 @@ const parent = session(parentID, "Provider cache audit", "general", undefined, 9
 const child = session(sessionID, "Sync the provider docs with the new cache telemetry fields.", "general", parentID, 0.41)
 const tasks = [createTask(sessionID, "docs-sync", "running", 1), createTask("ses_0a22ce03", "test-triage", "waiting", 2), createTask("ses_0a22ce04", "keymap-audit", "completed", 3)]
 
-test("captures populated subagent chat states at reference terminal dimensions", async () => {
-  for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, height: 24 }]) {
+for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, { width: 80, height: 24 }]) {
+  test(`captures populated subagent chat at ${viewport.width}×${viewport.height}`, async () => {
     const lines = await captureRoute({
       ...viewport,
       args: { sessionID },
-      settle: "Claude Sonnet 5",
-      stable: ["Claude Sonnet 5", "◦ docs-sync"],
+      settle: viewport.width >= 120 ? "18.4K / 200K · 9%" : "docs-sync (1 of 3)",
+      stable: ["Claude Sonnet 5", "◦ docs-sync", ...(viewport.width >= 120
+        ? ["Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions."] : [])],
       route,
     })
     expect(lines).toHaveLength(viewport.height)
@@ -65,8 +66,26 @@ test("captures populated subagent chat states at reference terminal dimensions",
     if (viewport.width >= 120) expect(lines.join("\n")).toContain("┃")
     if (viewport.width < 120) expect(lines.join("\n")).not.toContain("┃")
     await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-chat-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
-  }
-}, 120_000)
+  })
+}
+
+for (const viewport of [{ width: 80, height: 24 }, DESIGN_VIEWPORT]) {
+  test(`selected child speed reaches the economics panel and footer at ${viewport.width}×${viewport.height}`, async () => {
+    const lines = await captureRoute({ ...viewport, args: { sessionID }, settle: "≈ 100 tok/s", stable: ["docs-sync (1 of 3)", "≈ 100 tok/s"],
+      route: async (url) => {
+        const response = route(url)
+        if (url.pathname !== `/api/session/${sessionID}/diagnostics` || !response) return response
+        const body = await response.json()
+        return json({ ...body, data: { ...body.data, generationSpeed: { model: child.model, recent: [],
+          latest: { model: child.model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true } } } })
+      },
+    })
+    expect(lines.join("\n")).toContain("≈ 100 tok/s")
+    expect(lines.findLast((line) => line.includes("docs-sync (1 of 3)"))).toContain("≈ 100 tok/s")
+    if (viewport.width >= 120) expect(lines.join("\n").match(/≈ 100 tok\/s/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(lines.every((line) => line.length <= viewport.width)).toBe(true)
+  })
+}
 
 function session(id: string, title: string, agent: string, parentID: string | undefined, cost: number) { return { id, title, projectID: location.project.id, location: { directory }, agent, ...(parentID ? { parentID } : {}), model: { providerID: "anthropic", id: "claude-sonnet-5", variant: "fast" }, cost, tokens: { input: 18_400, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 4 } } }
 function createTask(sessionID: string, agent: string, state: "running" | "waiting" | "completed", created: number) { return { sessionID, parentID, description: agent === "docs-sync" ? "Read provider docs and cross-check fields" : agent, agent, model: { providerID: "anthropic", id: "claude-sonnet-5" }, background: true, state, revision: 1, ...(state === "waiting" ? { question: { text: "Need test guidance", time: now - 2_000 } } : {}), time: { created, updated: created } } }

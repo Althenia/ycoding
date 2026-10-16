@@ -35,6 +35,7 @@ import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionContextState } from "./context-state"
 import { HistoryPrunedError } from "./error"
 import { SessionHistory } from "./history"
+import { UsageAnalytics } from "../usage-analytics"
 
 type DatabaseService = Database.Interface["db"]
 type CurrentDurableEvent = Extract<SessionEvent.Event, { readonly durable: object }>
@@ -615,6 +616,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
         parent_assistant_message_id: change.parentAssistantMessageID,
         tool_call_id: change.toolCallID,
         input_id: change.inputID,
+        usage_anchor: change.usageAnchor,
         description: change.description,
         agent: change.agent,
         model: change.model,
@@ -956,6 +958,7 @@ const layer = Layer.effectDiscard(
             id: event.data.id,
             session_id: event.data.sessionID,
             input_id: event.data.inputID,
+            usage_anchor: event.data.usageAnchor,
             assistant_message_id: event.data.assistantMessageID,
             connection_identity_digest: event.data.connectionIdentityDigest,
             source: event.data.source,
@@ -1372,4 +1375,4 @@ export const selectTranscriptForSession = (sessionID: SessionSchema.ID) =>
     return yield* selectTranscript(db, sessionID)
   })
 
-export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node, AppProcess.node] })
+export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventRuntime.node, Database.node, AppProcess.node, UsageAnalytics.node] })

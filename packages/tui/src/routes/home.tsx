@@ -66,6 +66,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
 
 function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const shortcut = Keymap.useShortcut("command.palette.show")
   const usageShortcut = Keymap.useShortcut("home.provider-usage.open")
   const route = useRoute()
@@ -80,20 +81,20 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
     <box
       width="100%"
       flexShrink={0}
-      flexDirection="row"
+      flexDirection={dimensions().width < 120 ? "column" : "row"}
       justifyContent="space-between"
       paddingLeft={3}
       paddingRight={3}
       height={3}
-      alignItems="center"
+      alignItems={dimensions().width < 120 ? "flex-start" : "center"}
       backgroundColor={theme.background.chrome}
     >
-      <box flexDirection="row" gap={3}>
+      <box flexDirection="row" gap={3} flexShrink={0}>
         <text fg={theme.text.subdued}>main</text>
         <ModeChips autonomy={props.autonomy} />
         <text fg={theme.text.subdued}>subagents 0</text>
       </box>
-      <box flexDirection="row" gap={3} flexShrink={0}>
+      <box flexDirection="row" gap={3} flexShrink={0} alignSelf={dimensions().width < 120 ? "flex-end" : undefined}>
         <text fg={theme.text.default} wrapMode="none" onMouseUp={openUsage}>
           <Show when={usageShortcut()}>{(value) => `${value().replaceAll("ctrl+", "⌃")} `}</Show>
           <span style={{ fg: theme.text.subdued }}>usage</span>

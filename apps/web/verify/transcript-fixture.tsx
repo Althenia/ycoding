@@ -3,6 +3,7 @@ import { Store } from "@tanstack/solid-store"
 import { render } from "solid-js/web"
 import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
 import { TodoPanel } from "../src/remote/ui/todo-panel"
+import { accountedTask } from "../test/usage-fixture"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"
@@ -39,6 +40,19 @@ const oversizedMode = new URLSearchParams(location.search).has("oversized")
 const pendingOversized = new URLSearchParams(location.search).get("oversized") === "pending"
 const compactionMode = new URLSearchParams(location.search).get("compaction")
 const fileChangesMode = new URLSearchParams(location.search).get("file-changes")
+const costsMode = new URLSearchParams(location.search).has("costs")
+const costUnit = (inputID: string, partial: boolean) => {
+  const task = accountedTask("ses_a", 0.25, 20)
+  const cost = partial ? { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" as const } : task.total.cost
+  return { anchor: { sessionID: "ses_a", inputID }, status: partial ? "so-far" as const : "settled" as const, attribution: partial ? "partial" as const : "complete" as const, history: "retained" as const,
+    total: { ...task.total, cost }, main: task.main, children: partial ? { ...task.total, cost: { pricedRequests: 0, unpricedRequests: 1 } } : task.children, helpers: partial ? [{ ...task.total, source: "decision" as const, cost: { pricedRequests: 0, unpricedRequests: 1 } }] : [] }
+}
+const costMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_cost_known", text: "Known cost", state: "consumed", created: 1 },
+  { kind: "user", id: "msg_cost_partial", text: "Partial cost", state: "consumed", created: 2 },
+  { kind: "user", id: "msg_cost_unreported", text: "Unreported cost", state: "promoted", created: 3 },
+  { kind: "user", id: "msg_cost_pending", text: "Queued prompt", state: "pending", delivery: "queue", created: 4 },
+]
 const [fileChangeStatus, setFileChangeStatus] = createSignal<SessionView["status"]>(new URLSearchParams(location.search).get("status") === "running" ? "running" : "idle")
 const fileChanges = [
   { path: "apps/web/src/remote/ui/conversation.tsx", patch: fileChangesMode === "unavailable" ? "Binary files a/a.png and b/a.png differ" : "@@ -1,2 +1,3 @@\n-old value\n+new value\n+extra line\n tail", additions: 30, deletions: 5 },
@@ -171,7 +185,7 @@ const imageSnapshot = () => readSnapshot({ sourceEpoch: "epoch_1", session: { id
     ...(streamedImageText ? [{ type: "text", text: streamedImageText }] : []),
   ] },
 ] })?.messages ?? imageMessages
-const [messages, setMessages] = createSignal(longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
+const [messages, setMessages] = createSignal(longMode ? longMessages("long", 150) : synthetic ? syntheticMessages(synthetic === "compacted") : fileChangesMode ? fileChangeMessages : costsMode ? costMessages : toolOutput ? outputMessages : historyMode ? navigationMessages.slice(12) : imagesMode ? imageMessages : oversizedMode ? [{ kind: "oversized", id: "msg_big", projected: !pendingOversized, state: pendingOversized ? "pending" : "loading" }] as const : navigation ? navigationMessages : runningStep ? runningMessages : visibility ? visibilityMessages : notification ? notificationMessages : compactionMode ? compactionMessages : initial)
 const [compactionHistory, setCompactionHistory] = createSignal(compactionMode && compactionMode !== "old" ? {
   data: [{ jobID: "cmp_old", trigger: "auto", status: "completed" as const, metrics: { ...compressionMetrics, inputTokens: 500, retainedTokens: 200 }, created: 2 }, { jobID: "cmp_live", trigger: "manual", status: "running" as const, created: 3 }],
   truncated: compactionMode === "truncated", completedBefore: compactionMode === "truncated" ? 2 : 0, completedCount: compactionMode === "truncated" ? 3 : 1, totalSavedTokens: compactionMode === "truncated" ? 900 : 300,
@@ -188,7 +202,7 @@ const root = document.getElementById("app")
 if (!root) throw new Error("Missing transcript root")
 const store = createRemoteStore({ http: createRemoteHttp({ fetch: Object.assign(async () => new Response(null, { status: 401 }), { preconnect: () => {} }) }), createTransport: () => { throw new Error("Fixture transport must not connect") } })
 const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceID: "dev_1" }
-const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fileChangeStatus() === "running" ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages() } : fixtureState.view })
+const fixtureSnapshot = () => ({ ...fixtureState, history: history(), view: costsMode ? { ...createSessionView("ses_a"), messages: messages(), promptCosts: [costUnit("msg_cost_known", false), costUnit("msg_cost_partial", true)], promptCostState: "ready" as const } : fileChangesMode ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges } : compactionMode ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() } : fileChangeStatus() === "running" ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages() } : fixtureState.view })
 Object.defineProperty(store, "container", { value: new Store(fixtureSnapshot()) })
 createRoot(() => createEffect(() => store.container.setState(() => fixtureSnapshot())))
 Object.defineProperty(store, "loadOlderMessages", { value: async () => {

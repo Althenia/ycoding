@@ -17,6 +17,7 @@ import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
+import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionSchema } from "./schema"
 import { SessionUsage } from "./usage"
@@ -69,150 +70,155 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGoal") {}
 
 const make = (dependencies: Dependencies) => {
-  const generate = Effect.fn("SessionGoal.generate")(function* (
-    db: Database.Interface["db"],
-    input: {
-      readonly session: SessionSchema.Info
-      readonly request: string | ((assistant: SessionMessage.Assistant | undefined) => string)
-    },
-  ) {
-    const agent = yield* dependencies.agents.get(Agent.ID.make("goal"))
-    if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
-    const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
-    if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
-    const latestUser = yield* SessionHistory.latest(db, input.session.id, "user")
-    const requestText =
-      typeof input.request === "string"
-        ? input.request
-        : input.request(yield* SessionHistory.latest(db, input.session.id, "assistant"))
-    const context = (yield* SessionHistory.recent(db, input.session.id, 12))
-      .flatMap((message) => {
-        if (message.type === "user") return [`User: ${message.text}`]
-        if (message.type === "assistant")
-          return [
-            `Assistant: ${message.content
-              .filter((part) => part.type === "text" || part.type === "reasoning")
-              .map((part) => part.text)
-              .join("\n")}`,
-          ]
-        if (message.type === "system" || message.type === "synthetic" || message.type === "skill")
-          return [`Context: ${message.text}`]
-        return []
-      })
-      .join("\n")
-      .slice(-MAX_CONTEXT_CHARS)
-    const baseRequest = LLM.request({
-      model: resolved.model,
-      http: {
-        headers: SessionModelHeaders.make(input.session, {
-          ...dependencies.headers,
-          providerID: resolved.ref.providerID,
-          accountIdentityDigest: resolved.accountIdentityDigest,
-        }),
+  const generate = Effect.fn("SessionGoal.generate")(
+    function* (
+      db: Database.Interface["db"],
+      input: {
+        readonly session: SessionSchema.Info
+        readonly request: string | ((assistant: SessionMessage.Assistant | undefined) => string)
       },
-      system: agent.system,
-      messages: [Message.user(["Recent conversation context:", context || "(none)", "", requestText].join("\n"))],
-      tools: [],
-    })
-    const namespaceInput = {
-      projectID: input.session.projectID,
-      directory: input.session.location.directory,
-      workspaceID: input.session.location.workspaceID,
-      providerID: resolved.ref.providerID,
-      modelID: resolved.ref.id,
-      variant: resolved.ref.variant,
-      accountIdentityDigest: resolved.accountIdentityDigest,
-      policyRevision: CACHE_POLICY_REVISION,
-      permissions: agent.permissions,
-      system: baseRequest.system,
-      tools: baseRequest.tools,
-    }
-    const efficiency = SessionRunnerCache.efficiencySettings(
-      Config.latest(yield* dependencies.config.entries(), "efficiency"),
-    )
-    const cache = SessionRunnerCache.providerOptions({
-      ...namespaceInput,
-      apiModelID: resolved.model.id,
-      sessionID: input.session.id,
-      routeID: resolved.model.route.id,
-      anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
-        modelID: resolved.model.id,
-        configured: efficiency.anthropicTtl,
-        interactive: false,
-      }),
-      openaiMode: efficiency.openaiMode,
-      openaiExtendedRetention: efficiency.openaiExtendedRetention,
-    })
-    const tracker = yield* dependencies.requests.next({
-      sessionID: input.session.id,
-      inputID: latestUser?.id,
-      source: "goal",
-      agent: agent.id,
-      model: resolved.ref,
-      connectionIdentityDigest: resolved.accountIdentityDigest,
-      routeID: resolved.model.route.id,
-      promptCacheKey: cache.promptCacheKey,
-      systemDigest: cache.systemDigest,
-      toolDigest: cache.toolDigest,
-    })
-    const request = LLMRequest.update(baseRequest, {
-      id: tracker.requestID,
-      providerOptions: cache.providerOptions,
-      cache: cache.cache,
-    })
-    const chunks: string[] = []
-    let failed = false
-    let settled = false
-    let usage: SessionUsage.Recorded | undefined
-    let recordedCost: Money.USD | undefined
-    let timing: ReturnType<typeof SessionUsage.timing>
-    const recordUsage = Effect.suspend(() =>
-      usage
-        ? dependencies.events.publish(SessionEvent.UsageRecorded, {
-            sessionID: input.session.id,
-            source: "goal",
-            ...usage,
-          })
-        : Effect.void,
-    )
-    const completeRequest = Effect.suspend(() => {
-      const recorded = usage ?? {
-        cost: Money.USD.zero,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      }
-      return tracker.complete({
-        tokens: recorded.tokens,
-        ...(recordedCost === undefined ? {} : { cost: recordedCost }),
-        continuation: "full",
-        ...(timing === undefined ? {} : { timing }),
-        ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+    ) {
+      const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.session.id)
+      const agent = yield* dependencies.agents.get(Agent.ID.make("goal"))
+      if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
+      const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
+      if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
+      const latestUser = yield* SessionHistory.latest(db, input.session.id, "user")
+      const requestText =
+        typeof input.request === "string"
+          ? input.request
+          : input.request(yield* SessionHistory.latest(db, input.session.id, "assistant"))
+      const context = (yield* SessionHistory.recent(db, input.session.id, 12))
+        .flatMap((message) => {
+          if (message.type === "user") return [`User: ${message.text}`]
+          if (message.type === "assistant")
+            return [
+              `Assistant: ${message.content
+                .filter((part) => part.type === "text" || part.type === "reasoning")
+                .map((part) => part.text)
+                .join("\n")}`,
+            ]
+          if (message.type === "system" || message.type === "synthetic" || message.type === "skill")
+            return [`Context: ${message.text}`]
+          return []
+        })
+        .join("\n")
+        .slice(-MAX_CONTEXT_CHARS)
+      const baseRequest = LLM.request({
+        model: resolved.model,
+        http: {
+          headers: SessionModelHeaders.make(input.session, {
+            ...dependencies.headers,
+            providerID: resolved.ref.providerID,
+            accountIdentityDigest: resolved.accountIdentityDigest,
+          }),
+        },
+        system: agent.system,
+        messages: [Message.user(["Recent conversation context:", context || "(none)", "", requestText].join("\n"))],
+        tools: [],
       })
-    })
-    const streamed = yield* dependencies.llm.stream(request).pipe(
-      Stream.runForEach((event) => {
-        if (LLMEvent.is.providerError(event)) failed = true
-        if (LLMEvent.is.finish(event)) settled = true
-        if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
-        if (LLMEvent.is.stepFinish(event)) {
-          timing = SessionUsage.timing(event.usage)
-          const step = SessionUsage.record(event.usage, resolved.cost)
-          usage = usage ? SessionUsage.add(usage, step) : step
-          if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)))
-            recordedCost = usage.cost
+      const namespaceInput = {
+        projectID: input.session.projectID,
+        directory: input.session.location.directory,
+        workspaceID: input.session.location.workspaceID,
+        providerID: resolved.ref.providerID,
+        modelID: resolved.ref.id,
+        variant: resolved.ref.variant,
+        accountIdentityDigest: resolved.accountIdentityDigest,
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: agent.permissions,
+        system: baseRequest.system,
+        tools: baseRequest.tools,
+      }
+      const efficiency = SessionRunnerCache.efficiencySettings(
+        Config.latest(yield* dependencies.config.entries(), "efficiency"),
+      )
+      const cache = SessionRunnerCache.providerOptions({
+        ...namespaceInput,
+        apiModelID: resolved.model.id,
+        sessionID: input.session.id,
+        routeID: resolved.model.route.id,
+        anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+          modelID: resolved.model.id,
+          configured: efficiency.anthropicTtl,
+          interactive: false,
+        }),
+        openaiMode: efficiency.openaiMode,
+        openaiExtendedRetention: efficiency.openaiExtendedRetention,
+      })
+      const tracker = yield* dependencies.requests.next({
+        sessionID: input.session.id,
+        inputID: latestUser?.id,
+        usageAnchor: usageAnchor ?? null,
+        source: "goal",
+        agent: agent.id,
+        model: resolved.ref,
+        connectionIdentityDigest: resolved.accountIdentityDigest,
+        routeID: resolved.model.route.id,
+        promptCacheKey: cache.promptCacheKey,
+        systemDigest: cache.systemDigest,
+        toolDigest: cache.toolDigest,
+      })
+      const request = LLMRequest.update(baseRequest, {
+        id: tracker.requestID,
+        providerOptions: cache.providerOptions,
+        cache: cache.cache,
+      })
+      const chunks: string[] = []
+      let failed = false
+      let settled = false
+      let usage: SessionUsage.Recorded | undefined
+      let recordedCost: Money.USD | undefined
+      let timing: ReturnType<typeof SessionUsage.timing>
+      const recordUsage = Effect.suspend(() =>
+        usage
+          ? dependencies.events.publish(SessionEvent.UsageRecorded, {
+              sessionID: input.session.id,
+              source: "goal",
+              ...usage,
+            })
+          : Effect.void,
+      )
+      const completeRequest = Effect.suspend(() => {
+        const recorded = usage ?? {
+          cost: Money.USD.zero,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         }
-        return Effect.void
-      }),
-      Effect.as(true),
-      Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
-      Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest), Effect.asVoid)),
-    )
-    yield* recordUsage
-    yield* completeRequest
-    if (!streamed || failed || !settled) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
-    const synthesized = chunks.join("").trim().replace(/\s+/g, " ")
-    if (!synthesized) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
-    return synthesized
-  })
+        return tracker.complete({
+          tokens: recorded.tokens,
+          ...(recordedCost === undefined ? {} : { cost: recordedCost }),
+          continuation: "full",
+          ...(timing === undefined ? {} : { timing }),
+          ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+        })
+      })
+      const streamed = yield* dependencies.llm.stream(request).pipe(
+        Stream.runForEach((event) => {
+          if (LLMEvent.is.providerError(event)) failed = true
+          if (LLMEvent.is.finish(event)) settled = true
+          if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+          if (LLMEvent.is.stepFinish(event)) {
+            timing = SessionUsage.timing(event.usage)
+            const step = SessionUsage.record(event.usage, resolved.cost)
+            usage = usage ? SessionUsage.add(usage, step) : step
+            if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)) !== undefined)
+              recordedCost = usage.cost
+          }
+          return Effect.void
+        }),
+        Effect.as(true),
+        Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
+        Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest), Effect.asVoid)),
+      )
+      yield* recordUsage
+      yield* completeRequest
+      if (!streamed || failed || !settled) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
+      const synthesized = chunks.join("").trim().replace(/\s+/g, " ")
+      if (!synthesized) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
+      return synthesized
+    },
+    (effect, db, input) => SessionUsageAttribution.contribute(db, input.session.id, effect),
+  )
   const synthesize = Effect.fn("SessionGoal.synthesize")(
     (db: Database.Interface["db"], input: Parameters<Interface["synthesize"]>[0]) =>
       generate(db, { session: input.session, request: `Goal synthesis request:\n${input.text}` }),

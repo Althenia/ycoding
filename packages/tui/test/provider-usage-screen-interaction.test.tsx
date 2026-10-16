@@ -206,7 +206,6 @@ async function route(url: URL, request: Request) {
       `/api/session/${sessionID}/permission`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
-      `/api/session/${sessionID}/subagent`,
       "/api/shell",
       "/api/mcp",
       "/api/integration",

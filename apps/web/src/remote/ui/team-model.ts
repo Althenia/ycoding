@@ -1,4 +1,6 @@
 import type { SessionInfoView, TeamTaskView } from "../store"
+import { accountingPresentation, costText } from "./usage-accounting"
+import { tokenCount } from "./usage-model"
 
 export type TeamSubagent = TeamTaskView & {
   readonly startedAt?: number
@@ -33,6 +35,7 @@ export type TeamPanelData = {
   readonly refreshing?: boolean
   readonly economicsLoading?: boolean
   readonly economicsUnsupported?: boolean
+  readonly accountingUnsupported?: boolean
   readonly shells: readonly TeamShell[]
   readonly shellTruncated?: boolean
   readonly shellStatus: "loading" | "ready" | "unsupported" | "error"
@@ -134,24 +137,25 @@ export function formatElapsed(startedAt: number | undefined, endedAt: number): s
 export type UsageSlot = {
   readonly key: "tokens" | "cost" | "context" | "cache"
   readonly label: string
-  readonly state: "value" | "loading" | "unreported"
+  readonly state: "value" | "loading" | "unreported" | "unsupported"
   readonly value: string
   readonly meter?: number
 }
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+export const accountingUnsupportedText = "Update YCoding"
 
-export function usageSlots(task: TeamSubagent, economics: { readonly loading?: boolean }): readonly UsageSlot[] {
-  const slot = (key: UsageSlot["key"], label: string, value: string | undefined, meter?: number): UsageSlot =>
+export function usageSlots(task: TeamSubagent, economics: { readonly loading?: boolean; readonly accountingUnsupported?: boolean }): readonly UsageSlot[] {
+  const slot = (key: UsageSlot["key"], label: string, value: string | undefined, meter?: number, accounted = false): UsageSlot =>
     value !== undefined ? { key, label, state: "value", value, ...(meter === undefined ? {} : { meter }) }
-      : { key, label, state: economics.loading === true ? "loading" : "unreported", value: "—" }
+      : accounted && economics.accountingUnsupported === true ? { key, label, state: "unsupported", value: accountingUnsupportedText }
+        : { key, label, state: economics.loading === true ? "loading" : "unreported", value: "—" }
   const context = task.contextTotal === undefined ? undefined
     : `${task.contextTotal.toLocaleString("en-US")} / ${task.contextLimit === undefined ? "unreported" : task.contextLimit.toLocaleString("en-US")}`
   const meter = task.contextTotal === undefined || task.contextLimit === undefined || task.contextLimit <= 0 ? undefined : Math.min(1, task.contextTotal / task.contextLimit)
   const cache = formatCacheHit(task.cacheHitRatio)
   return [
-    slot("tokens", "Tokens", task.tokens?.toLocaleString("en-US")),
-    slot("cost", "Cost", task.cost === undefined ? undefined : money.format(task.cost)),
+    slot("tokens", "Tokens (inclusive)", task.accounting === undefined ? undefined : tokenCount(task.accounting.total.tokens).toLocaleString("en-US"), undefined, true),
+    slot("cost", "Cost (inclusive)", task.accounting?.total.cost.known === undefined ? undefined : `${costText(task.accounting.total.cost)}${task.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(task.accounting, task.accountingUnavailable).complete ? "" : " · incomplete"}`, undefined, true),
     slot("context", "Context", context, meter),
     slot("cache", "Cache", task.cacheHitRatio === undefined || cache === "—" ? undefined : cache),
   ]

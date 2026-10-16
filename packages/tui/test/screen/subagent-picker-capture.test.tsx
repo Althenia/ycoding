@@ -14,6 +14,7 @@ import { LocationProvider, useLocation } from "../../src/context/location"
 import { RouteProvider } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { ToastProvider } from "../../src/ui/toast"
+import { DialogProvider } from "../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -80,14 +81,15 @@ test("captures populated subagent picker states at reference terminal dimensions
       // Tabs retain the requested order, and each active task owns one row: the status column, the
       // agent, the description and the metadata share it, with the metadata flush against the
       // composer's right inset so no column can overlap or push another off the row.
-      const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 45
+      expect(lines.join("\n")).toContain("c inclusive task cost details")
+      const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 43
       expectAt(lines, tabs, 3, "Subagents")
       expectAt(lines, tabs, 14, "2")
       const tabLine = lines[tabs] ?? ""
       expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
       expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
       expect(tabLine).not.toContain("Idle")
-      const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13] : [50, 52]
+      const rows = viewport.height === NARROW_VIEWPORT.height ? [10, 12] : [48, 50]
       expectAt(lines, rows[0], 3, "? awaiting")
       expectAt(lines, rows[0], 19, "test-triage  · Tria")
       expectAt(lines, rows[1], 3, "running")
@@ -104,7 +106,7 @@ test("captures populated subagent picker states at reference terminal dimensions
         expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
         expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
         // Only the awaiting task adds a second row, and it carries the question, never metadata.
-        expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
+        expectAt(lines, 49, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
         expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length + 2)
         expectAt(lines, 64, 3, "Enter attach")
         expectAt(lines, 64, 18, "↑↓ move")
@@ -177,7 +179,7 @@ async function boot(viewport: { width: number; height: number }) {
                   <SyncLocation />
                   <RouteProvider initialRoute={{ type: "session", sessionID }}>
                     <Keymap.Provider>
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <box width={viewport.width} height={viewport.height} flexDirection="column">
                           <Header
                             path="~/Workspace/Personal/YCoding"
@@ -191,7 +193,7 @@ async function boot(viewport: { width: number; height: number }) {
                           <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
                           <Footer branch="main" sessionID={sessionID} autonomy={{ mode: "normal", yolo: false }} />
                         </box>
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </Keymap.Provider>
                   </RouteProvider>
                 </LocationProvider>
@@ -241,7 +243,7 @@ async function waitFor(frame: () => string, text: string) {
 
 function expectAt(lines: string[], row: number, column: number, text: string) {
   const actual = lines[row]?.slice(column, column + text.length)
-  if (actual !== text) throw new Error(`Expected ${JSON.stringify(text)} at ${row}:${column}, found at ${lines[row]?.indexOf(text)}: ${lines[row]}`)
+  if (actual !== text) throw new Error(`Expected ${JSON.stringify(text)} at ${row}:${column}, found at ${lines.findIndex((line) => line.includes(text))}:${lines.find((line) => line.includes(text))?.indexOf(text)}: ${lines.join("\n")}`)
 }
 
 function task(sessionID: string, agent: string, description: string, state: "waiting" | "running" | "completed" | "cancelled", elapsed: number, modelID: string) {

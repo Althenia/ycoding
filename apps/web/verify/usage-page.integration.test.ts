@@ -73,9 +73,9 @@ test("provider distribution keeps exact large values readable in one accessible 
               description:card.querySelector('.usage-donut').getAttribute('aria-label')};
           })()`)
           expect(result.total).toBe(expected)
-          expect(result.exact).toBe(`${metric === "Spend" ? "Exact estimated USD total" : "Exact token total"}: ${exact}`)
+          expect(result.exact).toBe(`${metric === "Spend" ? "Exact known USD subtotal" : "Exact token total"}: ${exact}`)
           expect(result.title).toBe(result.exact)
-          expect(result.unit).toBe(metric === "Spend" ? "estimated USD" : "tokens")
+          expect(result.unit).toBe(metric === "Spend" ? "known USD" : "tokens")
           expect(result.exactTooWide).toBe(true)
           expect(result.insideHole).toBe(true)
           expect(result.contained).toBe(true)
@@ -111,8 +111,8 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider')?.innerText ?? ''`)).not.toContain("provider api")
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider time')?.getAttribute('aria-label') ?? ''`)).toContain("source: provider API, stability: stable")
         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
-        expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('aria-label') ?? ''`)).toBe("Exact estimated USD total: $15.00")
-        expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('title') ?? ''`)).toBe("Exact estimated USD total: $15.00")
+         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('aria-label') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
+         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('title') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$38.42 remaining")
         expect(await page.evaluate<string>(`[...document.querySelectorAll('.usage-provider')].find(card => card.textContent.includes('OpenRouter'))?.innerText ?? ''`)).toContain("$0.00")
         const result = await page.evaluate<{ overflow: boolean; providerColumns: number; tileColumns: number; visualColumns: number; cardRadius: string; innerBorder: string; headHeight: number; mobileRows: number; requests: number; controls: boolean; content: number }>(`(() => {
@@ -136,7 +136,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         if (width! >= 768) expect(result.headHeight).toBeLessThan(100)
         expect(result.mobileRows).toBe(width! < 768 ? 25 : 0)
         if (width! < 768) expect(await page.evaluate<number>(`document.querySelectorAll('.usage-mobile-row .usage-provider-chip').length`)).toBe(25)
-        expect(result.requests).toBe(5)
+        expect(result.requests).toBe(6)
         expect(result.controls).toBe(true)
         await Bun.write(new URL(`../../../.cache/tmp/usage-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         if (width === 390 && theme === "dark" || width === 1440 && theme === "light") {
@@ -164,13 +164,13 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
           expect(await page.evaluate<number>(`document.querySelectorAll('.usage-tile svg').length`)).toBe(1)
           await page.evaluate(`document.querySelector('.usage-chart__head button')?.click()`)
           expect(await page.evaluate<number>(`document.querySelectorAll('#usage-daily-table tbody tr').length`)).toBe(30)
-          await page.evaluate(`document.querySelector('#usage-tab-session')?.click()`)
+          await selectSessionGroup(page)
           await wait(page, `document.querySelector('#usage-breakdown-panel tbody tr')?.textContent?.includes('Session') === true`)
           await page.evaluate(`document.querySelector('.usage-breakdown__table-toggle')?.click()`)
           expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.usage-breakdown__table')).display`)).not.toBe("none")
           await page.evaluate(`document.querySelector('.usage-breakdown th:last-child button')?.click()`)
           await page.evaluate(`document.querySelector('.usage-pagination button:last-child')?.click()`)
-          expect(await page.evaluate<unknown>(`window.usageRequests().at(-1)?.input`)).toMatchObject({ group: "session", sort: "cost", order: "asc", offset: 25 })
+          expect(await page.evaluate<unknown>(`window.usageRequests().filter(item => item.operation === 'usage.report' && item.input?.group === 'session').at(-1)?.input`)).toMatchObject({ group: "session", sort: "cost", order: "asc", offset: 25 })
           await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
           expect(await page.evaluate<unknown>(`window.usageRequests().filter(item => item.operation === 'usage.providers').at(-1)?.input`)).toEqual({ refresh: true })
         }
@@ -188,6 +188,34 @@ test("an older connector shows an actionable update state", async () => {
   } finally { await page.close() }
 })
 
+test("an older connector's rejection of a new report group is an update prompt, not a generic error with Retry", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1024, 768)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?old-groups`)
+    await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length > 0`)
+    await selectSessionGroup(page, "Provider")
+    await wait(page, `document.querySelector('[aria-labelledby="usage-breakdown-title"]')?.textContent?.includes('Update YCoding on this machine to use this grouping or filter.') === true`)
+    expect(await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="usage-breakdown-title"] [role="alert"]') === null && ![...document.querySelectorAll('[aria-labelledby="usage-breakdown-title"] button')].some((button) => button.textContent.trim() === 'Retry')`)).toBe(true)
+  } finally { await page.close() }
+}, 20_000)
+
+test("a run-out time already past reads as now, and an unavailable forecast read is not shown as no consumption", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1024, 768)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=past`)
+    await wait(page, `document.querySelector('.usage-quota-forecast')?.textContent?.includes('Estimated exhaustion now') === true`)
+    expect(await page.evaluate<boolean>(`!document.querySelector('.usage-page').textContent.includes('1970') && document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.')`)).toBe(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=quotas-absent`)
+    await wait(page, `[...document.querySelectorAll('.usage-window__details')].some((item) => item.textContent.includes('Forecast unavailable · lookup failed; refresh quotas to retry'))`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.usage-quota-forecast') === null && document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.')`)).toBe(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=rates-absent`)
+    await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('Recorded consumption unreported · lookup unavailable.') === true`)
+    expect(await page.evaluate<boolean>(`!document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.') && document.querySelector('.usage-quota-forecast') !== null`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
 test("usage waits for a connected machine and loads after connection opens", async () => {
   const page = await browser!.openPage()
   try {
@@ -198,7 +226,7 @@ test("usage waits for a connected machine and loads after connection opens", asy
     expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="status"]').length`)).toBe(1)
     await page.evaluate(`window.usageConnect()`)
     await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
-    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(5)
+    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
   } finally { await page.close() }
 })
 
@@ -288,7 +316,7 @@ test("sort and group changes retain the same table while only its report changes
     expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table') && document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
     await page.evaluate(`window.usageReleasePage()`)
     await wait(page, `document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'false'`)
-    await page.evaluate(`document.querySelector('#usage-tab-session')?.click()`)
+    await selectSessionGroup(page)
     await wait(page, `window.usageRequests().some(item => item.operation === 'usage.report' && item.input?.group === 'session')`)
     expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table') && document.querySelector('.usage-breakdown tbody tr')?.textContent?.includes('Session') === false && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
     await page.evaluate(`window.usageReleasePage()`)
@@ -310,7 +338,8 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       const daily = await page.evaluate<{ text: string; inside: boolean; distance: number; name: string | null }>(`(() => { const card = document.querySelector('.usage-chart'); const tip = card.querySelector('.usage-chart__tooltip'); const bar = card.querySelector('.usage-chart__bar:first-of-type'); const a = card.getBoundingClientRect(); const b = tip?.getBoundingClientRect(); const r = bar.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; return { text: tip?.textContent ?? '', inside: !!b && b.left >= a.left && b.right <= a.right && b.top >= a.top && b.bottom <= a.bottom && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight, distance: b ? Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom)) : Infinity, name: bar?.getAttribute('aria-label') ?? null }; })()`)
       expect(daily.text).toContain("requests")
       expect(daily.text).toContain("tokens")
-      expect(daily.text).toContain("$")
+      expect(daily.text).toContain("unreported")
+      expect(daily.text).not.toContain("$0.00")
       expect(daily.inside).toBe(true)
       expect(daily.distance).toBeLessThan(25)
       expect(daily.name).toContain("requests")
@@ -347,7 +376,7 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
         expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("$10.00")
         expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("tokens")
       }
-      expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(5)
+      expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
     } finally { await page.close() }
   }
 }, 180_000)
@@ -518,13 +547,13 @@ test("unknown Usage reads keep good panels while one recovery read settles, then
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
         alerts: document.querySelectorAll('.usage-page [role="alert"]').length, requests: window.usageRequests().length,
-      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 10 })
+      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 12 })
       await page.evaluate(`window.usageAgentBack(false)`)
-      await wait(page, `window.usageRequests().length === 15`)
+      await wait(page, `window.usageRequests().length === 18`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="alert"]').length`)).toBe(0)
       await page.evaluate(`window.usageOutage()`)
       await page.evaluate(`window.usageAgentBack(true)`)
-      await wait(page, `window.usageRequests().length === 25`)
+      await wait(page, `window.usageRequests().length === 30`)
       expect(await page.evaluate<{ providers: number; tiles: number; arcs: number; rows: number; alerts: string[] }>(`({
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
@@ -540,7 +569,7 @@ test("first Usage reads reserve visible placeholders without replacing settled c
     try {
       await page.setViewport(width, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?initial-loading&refresh-cycle`)
-      await wait(page, `window.usageRequests().length === 5 && document.querySelectorAll('.usage-page .loading-placeholder').length === 4`)
+      await wait(page, `window.usageRequests().length === 6 && document.querySelectorAll('.usage-page .loading-placeholder').length === 4`)
       const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; monthlyReserve: number; overflow: boolean }>(`(() => {
         const placeholders = [...document.querySelectorAll('.usage-page .loading-placeholder')];
         return { kinds: placeholders.map(item => [...item.classList].find(name => name.startsWith('loading-placeholder--'))), labels: placeholders.map(item => item.textContent.trim()),
@@ -567,7 +596,7 @@ test("first Usage reads reserve visible placeholders without replacing settled c
       expect(settled).toMatchObject({ placeholders: 0, sameCards: true, overflow: false })
       expect(settled.cards.map((height, index) => Math.abs(height - pending.cards[index]!)).every((difference) => difference <= 64)).toBe(true)
       await page.evaluate(`window.usageReconnect()`)
-      await wait(page, `window.usageRequests().length === 10`)
+      await wait(page, `window.usageRequests().length === 12`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
       await page.evaluate(`window.usageReleaseReload()`)
       await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('39%') === true`)
@@ -575,6 +604,14 @@ test("first Usage reads reserve visible placeholders without replacing settled c
     } finally { await page.close() }
   }
 }, 180_000)
+
+async function selectSessionGroup(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, label = "Sessions") {
+  await page.evaluate(`document.querySelector('[aria-label="Usage group"]').click()`)
+  await wait(page, `!!document.querySelector('[role="listbox"][aria-label="Usage group"]')`)
+  await page.evaluate(`(() => { const option = [...document.querySelectorAll('[role="listbox"][aria-label="Usage group"] [role="option"]')].find(item => item.textContent.trim() === ${JSON.stringify(label)}); if (!option) throw new Error('Group missing'); option.click(); })()`)
+  await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.includes('Confirm Selection'))?.click()`)
+  await wait(page, `!document.querySelector('.custom-select__surface') && !document.querySelector('.custom-select__dialog')`)
+}
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {
   for (let index = 0; index < 50; index++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(100) }

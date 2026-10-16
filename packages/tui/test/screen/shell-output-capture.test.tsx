@@ -115,7 +115,7 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/subagent`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
+  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: null })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })

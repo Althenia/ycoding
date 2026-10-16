@@ -97,9 +97,8 @@ export function SidebarCacheContent(props: {
     const model = latest?.model ?? value?.model
     if (!model) return undefined
     const selected = props.selectedModel?.()
-    if (selected && (selected.providerID !== model.providerID || selected.id !== model.id ||
-      selected.variant !== model.variant || selected.profile !== model.profile)) return undefined
-    if (!latest) return { label: "unreported", reason: value?.unreportedReason ?? "No usable generation measurement" }
+    if (selected && (selected.providerID !== model.providerID || selected.id !== model.id)) return undefined
+    if (!latest) return undefined
     const rate = latest.tokensPerSecond >= 1
       ? Math.round(latest.tokensPerSecond).toLocaleString("en-US") : latest.tokensPerSecond.toPrecision(2)
     const label = Locale.truncateWidth(`${latest.estimated ? "≈ " : ""}${rate} tok/s`, Math.max(1, rowWidth() - "Speed".length - 1))
@@ -141,10 +140,7 @@ export function SidebarCacheContent(props: {
       <Show when={diagnostics()}>
         <RailRow label="Cache" value={cache()} valueColor={theme.text.feedback.success.default} />
       </Show>
-      <Show when={speed()}>{(value) => <>
-        <RailRow label="Speed" value={value().label} />
-        <Show when={value().reason}>{(reason) => <text fg={theme.text.subdued}>{reason()}</text>}</Show>
-      </>}</Show>
+      <Show when={speed()}>{(value) => <RailRow label="Speed" value={value().label} />}</Show>
       <Show when={hasSpend()}>
         <>
           <Show when={diagnostics()}>

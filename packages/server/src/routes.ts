@@ -56,6 +56,7 @@ import { processIdentityLayer } from "./process-identity"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { RemoteConnection } from "./remote-connection"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
+import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
 
 const applicationServices = LayerNode.group([
   Database.node,
@@ -83,6 +84,7 @@ const applicationServices = LayerNode.group([
   SessionOrchestrationNotifier.node,
   KeepAwake.node,
   TelemetryConsent.node,
+  RetentionSettings.node,
 ])
 
 export function createRoutes(
@@ -123,6 +125,7 @@ function makeRoutes<AuthError, AuthServices>(
     [Watcher.node, Watcher.configured({ enabled: options.fs?.filewatcher })],
     [FileSystemSearch.node, FileSystemSearch.configured({ fff: options.fs?.fff })],
     [Global.node, Global.layerWith(options.config?.directory ? { config: options.config.directory } : {})],
+    [RetentionSettings.node, RetentionSettings.configured({ file: options.config?.file, content: options.config?.content })],
     [
       Config.node,
       Config.configured({

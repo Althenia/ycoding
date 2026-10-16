@@ -43,6 +43,7 @@ import { SessionTodo } from "@ycoding-ai/schema/session-todo"
 import { EventLog } from "@ycoding-ai/schema/event-log"
 import { SessionSkillStatus } from "@ycoding-ai/schema/session-skill-status"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { UsageAccounting } from "@ycoding-ai/schema/usage-accounting"
 import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
 import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 
@@ -255,6 +256,10 @@ export const SessionSubagentListQuery = Schema.Struct({
 
 export const SessionUsageReportQuery = Schema.Struct({
   group: ProviderRequest.ReportGroup,
+  providerID: ProviderRequest.ReportInput.fields.providerID,
+  profile: ProviderRequest.ReportInput.fields.profile,
+  modelID: ProviderRequest.ReportInput.fields.modelID,
+  selectedEffort: ProviderRequest.ReportInput.fields.selectedEffort,
   timeZone: Schema.String.pipe(Schema.optional),
   from: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
   to: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
@@ -838,6 +843,26 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
               "Group and sort retained provider-request usage for a Session or root Session family before bounded pagination without exposing request routing, cache namespaces, digests, or raw provider payloads. Sorting defaults to ascending row key.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.promptCosts", "/api/session/:sessionID/usage/prompts", {
+        params: { sessionID: Session.ID },
+        query: UsageAccounting.PromptInput,
+        success: Schema.Struct({ data: UsageAccounting.PromptCosts }),
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "session.promptCosts", summary: "Read retained prompt costs" })),
+    )
+    .add(
+      HttpApiEndpoint.get("session.taskCosts", "/api/session/:sessionID/usage/tasks", {
+        params: { sessionID: Session.ID },
+        query: UsageAccounting.TaskInput,
+        success: Schema.Struct({ data: UsageAccounting.TaskCosts }),
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "session.taskCosts", summary: "Read recursive retained task costs" })),
     )
     .add(
       HttpApiEndpoint.get("session.skills", "/api/session/:sessionID/skills", {

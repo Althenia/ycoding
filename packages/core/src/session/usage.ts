@@ -9,8 +9,6 @@ import { Token } from "../util/token"
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
-export const minimumObservedGenerationDurationNs = 1_000_000_000
-
 export const tokens = (usage: Usage | undefined): TokenUsage.Info => ({
   input: safe(usage?.nonCachedInputTokens),
   output: safe(usage?.visibleOutputTokens),
@@ -59,42 +57,19 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
 
 export const generationTiming = (
   usage: Usage | undefined,
-  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint; readonly streamedOutput?: string },
+  times: { readonly started?: bigint; readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint; readonly streamedOutput?: string },
 ): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs" | "estimatedTokens" | "estimatedGenerationDurationNs"> | undefined => {
-  const measured = measuredGenerationTiming(usage, times)
-  if (measured?.generatedTokens && ((Number.isSafeInteger(usage?.generationDurationNs) && (usage?.generationDurationNs ?? 0) > 0) || measured.observedGenerationDurationNs)) return measured
-  const start = earliest([times.text, times.reasoning, times.toolInput])
-  const duration = start === undefined ? 0n : times.ended - start
-  const estimatedTokens = Token.estimate(times.streamedOutput ?? "")
-  if (estimatedTokens <= 0 || duration < BigInt(minimumObservedGenerationDurationNs) || duration > BigInt(Number.MAX_SAFE_INTEGER)) return measured
-  return { ...measured, estimatedTokens, estimatedGenerationDurationNs: Number(duration) }
-}
-
-function measuredGenerationTiming(
-  usage: Usage | undefined,
-  times: { readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint },
-): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs"> | undefined {
   const normalized = tokens(usage)
-  if (usage?.generationDurationNs !== undefined) return providerTimedTokens(normalized.output + normalized.reasoning)
-  const visibleStart = earliest([times.text, times.toolInput])
-  const thinkingFoldedIntoOutput = times.reasoning !== undefined && !normalized.reasoning
-  if (usage?.outputMayIncludeUnreportedReasoning === true && !normalized.reasoning) return undefined
-  const generatedTokens = thinkingFoldedIntoOutput ? normalized.output : visibleStart === undefined ? 0 : normalized.output
-  if (!Number.isSafeInteger(generatedTokens) || generatedTokens <= 0) return undefined
-  const start = thinkingFoldedIntoOutput ? earliest([times.reasoning, visibleStart]) : visibleStart
-  if (start === undefined) return undefined
-  const observed = times.ended - start
-  const observedGenerationDurationNs = observed >= BigInt(minimumObservedGenerationDurationNs) &&
-    observed <= BigInt(Number.MAX_SAFE_INTEGER)
-    ? Number(observed) : undefined
-  return {
-    generatedTokens,
-    ...(observedGenerationDurationNs === undefined ? {} : { observedGenerationDurationNs }),
-  }
-}
-
-function providerTimedTokens(generatedTokens: number) {
-  return Number.isSafeInteger(generatedTokens) && generatedTokens > 0 ? { generatedTokens } : undefined
+  const generatedTokens = normalized.output + normalized.reasoning
+  const measured = Number.isSafeInteger(generatedTokens) && generatedTokens > 0 ? { generatedTokens } : undefined
+  const start = earliest([times.text, times.reasoning, times.toolInput]) ?? times.started
+  if (start === undefined) return measured
+  const duration = times.ended - start
+  if (duration < 0n || duration > BigInt(Number.MAX_SAFE_INTEGER)) return measured
+  const durationNs = Number(duration === 0n ? 1n : duration)
+  if (measured) return { ...measured, observedGenerationDurationNs: durationNs }
+  if (!times.streamedOutput?.length) return undefined
+  return { estimatedTokens: Math.max(1, Token.estimate(times.streamedOutput)), estimatedGenerationDurationNs: durationNs }
 }
 
 function earliest(values: ReadonlyArray<bigint | undefined>) {

@@ -248,7 +248,8 @@ const layer = (options?: Config.Options) =>
         pruneHistory: history.sweep,
         cleanup: Effect.fn("SessionRetention.cleanup")(function* (now?: number) {
           const settings = yield* config
-          const days = Config.latest(yield* settings.entries(), "session_retention")?.days ?? defaultDays
+          const days = (yield* settings.entries()).filter((entry): entry is Config.Document => entry.type === "document")
+            .findLast((entry) => entry.info.session_retention?.days !== undefined)?.info.session_retention?.days ?? defaultDays
           const cutoff = (now ?? (yield* Clock.currentTimeMillis)) - Duration.toMillis(Duration.days(days))
           let cursor: { id: SessionSchema.ID; updated: number } | undefined
           let deleted = 0

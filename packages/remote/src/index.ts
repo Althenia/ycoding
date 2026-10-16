@@ -97,6 +97,10 @@ export const remoteOperations = [
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "session.usageReport",
+  "session.promptCosts",
+  "session.taskCosts",
+  "usage.forecast",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -155,6 +159,9 @@ export const remoteSessionOperations = [
   "session.switchAgent",
   "session.command",
   "session.skill",
+  "session.usageReport",
+  "session.promptCosts",
+  "session.taskCosts",
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
@@ -229,6 +236,10 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "usage.providers": "read",
   "usage.summary": "read",
   "usage.report": "read",
+  "session.usageReport": "read",
+  "session.promptCosts": "read",
+  "session.taskCosts": "read",
+  "usage.forecast": "read",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -718,6 +729,9 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (frame.sessionID !== undefined && !isSessionID(frame.sessionID)) return invalid()
   if (requireSession(operation) && frame.sessionID === undefined)
     return failRequest("session_required", "Operation requires a session")
+  if (operation === "usage.forecast" && (!isRecord(frame.input) ||
+    (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
+    return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
   if ((operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -778,12 +792,23 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
   if (operation === "usage.summary") return input === undefined
   if (operation === "usage.providers") return input === undefined || (isRecord(input) &&
     Object.keys(input).every((key) => key === "refresh") && (input.refresh === undefined || typeof input.refresh === "boolean"))
-  if (operation === "usage.report") {
-    if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group) ||
-      Object.keys(input).some((key) => !["group", "timeZone", "from", "to", "offset", "limit", "sort", "order"].includes(key))) return false
+  if (operation === "usage.forecast") return isRecord(input) && Object.keys(input).length === 1 &&
+    (input.localScope === "backend" || input.localScope === "location")
+  if (operation === "session.promptCosts" || operation === "session.taskCosts") {
+    const key = operation === "session.promptCosts" ? "inputIDs" : "sessionIDs"
+    if (!isRecord(input) || Object.keys(input).length !== 1 || !Array.isArray(input[key])) return false
+    const ids = input[key]
+    return ids.length >= 1 && ids.length <= 100 && new Set(ids).size === ids.length &&
+      ids.every((id) => typeof id === "string" && id.length <= 128 &&
+        (operation === "session.promptCosts" ? /^msg_[A-Za-z0-9_-]+$/.test(id) : isSessionID(id)))
+  }
+  if (operation === "usage.report" || operation === "session.usageReport") {
+    if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(input.group) ||
+      Object.keys(input).some((key) => !["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"].includes(key))) return false
     const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
       (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
     return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+      [input.providerID, input.profile, input.modelID, input.selectedEffort].every((value) => value === undefined || validName(value)) &&
       (input.timeZone === undefined || typeof input.timeZone === "string" && input.timeZone.length > 0 && input.timeZone.length <= 128) &&
       integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
       (input.from === undefined || input.to === undefined || (typeof input.from === "number" && typeof input.to === "number" && input.from < input.to)) &&
@@ -1314,24 +1339,66 @@ export type RemoteUsageProvider = { readonly providerID: string; readonly label:
 export type RemoteUsageProvidersValue = { readonly data: readonly RemoteUsageProvider[] }
 export type RemoteUsageMetrics = { readonly logical: number; readonly physical: number; readonly helpers: number;
   readonly continued: number; readonly fallback: number; readonly tokens: RemoteUsageTokens;
-  readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog"; readonly cacheReadReported?: boolean }
+  readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog"; readonly cacheReadReported?: boolean;
+  readonly costCoverage?: RemoteUsageCostCoverage }
+export type RemoteUsageCostCoverage = { readonly pricedRequests: number; readonly unpricedRequests: number }
 export type RemoteUsageSummaryValue = { readonly data: RemoteUsageMetrics & {
   readonly models?: readonly { readonly model: { readonly providerID: string; readonly id: string; readonly variant?: string };
     readonly requests: number; readonly tokens: RemoteUsageTokens; readonly cacheReadReported?: boolean;
     readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog" }[];
   readonly latestInvalidation?: string; readonly latestNamespace?: string;
   readonly latestTiming?: { readonly promptEvalDurationNs?: number; readonly generationDurationNs?: number; readonly loadDurationNs?: number } } }
-export type RemoteUsageGroup = "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+export type RemoteUsageGroup = "model" | "hour" | "day" | "month" | "session" | "project" | "agent" |
+  "provider" | "provider-profile-model" | "provider-model" | "model-id" | "profile" | "prompt" | "task"
 export type RemoteUsageReportInput = { readonly group: RemoteUsageGroup; readonly timeZone?: string; readonly from?: number; readonly to?: number;
+  readonly providerID?: string; readonly profile?: string; readonly modelID?: string; readonly selectedEffort?: string;
   readonly offset?: number; readonly limit?: number;
   readonly sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite";
   readonly order?: "asc" | "desc" }
+export type RemoteUsageAnchor = { readonly sessionID: string; readonly inputID: string }
+export type RemoteUsageDimensions =
+  | { readonly group: "provider"; readonly providerID: string }
+  | { readonly group: "provider-profile-model"; readonly providerID: string; readonly profile?: string; readonly profileState: "recorded" | "provider-default"; readonly modelID: string }
+  | { readonly group: "provider-model"; readonly providerID: string; readonly modelID: string }
+  | { readonly group: "model-id"; readonly modelID: string }
+  | { readonly group: "profile"; readonly providerID: string; readonly profile?: string; readonly profileState: "recorded" | "provider-default" }
+  | { readonly group: "prompt"; readonly anchor?: RemoteUsageAnchor; readonly attribution: "complete" | "partial" | "unattributed" }
+  | { readonly group: "task"; readonly sessionID?: string; readonly attribution: "complete" | "partial" | "unattributed" }
 export type RemoteUsageReportValue = { readonly data: { readonly group: RemoteUsageGroup;
   readonly rows: readonly (RemoteUsageMetrics & { readonly key: string; readonly label: string;
     readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string };
+    readonly dimensions?: RemoteUsageDimensions;
     readonly speed?: { readonly firstOutputP50Ms?: number; readonly firstOutputP95Ms?: number;
-      readonly totalP50Ms?: number; readonly totalP95Ms?: number; readonly outputTokensPerSecond?: number; readonly samples: number } })[];
+      readonly totalP50Ms?: number; readonly totalP95Ms?: number; readonly outputTokensPerSecond?: number; readonly samples: number;
+      readonly generationSamples: number; readonly generationP50TokensPerSecond?: number; readonly generationP90TokensPerSecond?: number;
+      readonly providerTimedSamples: number; readonly observedSamples: number } })[];
   readonly total: RemoteUsageMetrics; readonly rowCount: number; readonly nextOffset?: number } }
+
+export type RemoteUsageCost = RemoteUsageCostCoverage & { readonly total?: number; readonly known?: number; readonly provenance?: "recorded" | "current_catalog" }
+export type RemoteUsageBreakdown = { readonly requests: number; readonly tokens: RemoteUsageTokens; readonly cost: RemoteUsageCost }
+export type RemoteUsageHelper = RemoteUsageBreakdown & { readonly source: "step" | "title" | "goal" | "compaction" | "decision" | "prediction" | "prompt" }
+export type RemoteUsagePromptInput = { readonly inputIDs: readonly string[] }
+export type RemoteUsageTaskInput = { readonly sessionIDs: readonly string[] }
+export type RemoteUsagePromptCost = { readonly anchor: RemoteUsageAnchor; readonly status: "settled" | "so-far";
+  readonly attribution: "complete" | "partial" | "unattributed"; readonly history: "retained" | "partial";
+  readonly total: RemoteUsageBreakdown; readonly main: RemoteUsageBreakdown; readonly children: RemoteUsageBreakdown; readonly helpers: readonly RemoteUsageHelper[] }
+export type RemoteUsagePromptCostsValue = { readonly data: { readonly units: readonly RemoteUsagePromptCost[]; readonly unattributed: RemoteUsageBreakdown; readonly history: "retained" | "partial" } }
+export type RemoteUsageTaskCost = { readonly sessionID: string; readonly usageAnchor?: RemoteUsageAnchor; readonly status: "settled" | "so-far";
+  readonly attribution: "complete" | "partial" | "unattributed"; readonly history: "retained" | "partial";
+  readonly total: RemoteUsageBreakdown; readonly main: RemoteUsageBreakdown; readonly children: RemoteUsageBreakdown; readonly helpers: readonly RemoteUsageHelper[] }
+export type RemoteUsageTaskCostsValue = { readonly data: { readonly tasks: readonly RemoteUsageTaskCost[]; readonly total: RemoteUsageBreakdown; readonly history: "retained" | "partial" } }
+export type RemoteUsageForecastInput = { readonly localScope: "backend" | "location" }
+export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: "backend" | "location";
+  readonly localRates?: readonly { readonly providerID: string; readonly profile?: string; readonly modelID?: string;
+    readonly observedFrom: number; readonly observedTo: number; readonly tokensPerMinute: number; readonly tokensPerMinute5?: number;
+    readonly tokensPerMinute60?: number; readonly estimatedUSDPerHour?: number; readonly coverage: RemoteUsageCostCoverage }[];
+  readonly quotas?: readonly { readonly providerID: string; readonly profile?: string; readonly windowID: string;
+    readonly unit: RemoteUsageProvider["windows"][number]["unit"]; readonly source: RemoteUsageProvider["source"]; readonly stability: RemoteUsageProvider["stability"];
+    readonly updatedAt: number; readonly state: "estimated" | "insufficient" | "exhausted" | "unlimited";
+    readonly method?: "quota-delta-ema" | "window-mean"; readonly evidence: "low" | "medium" | "insufficient";
+    readonly reason?: string; readonly observedFrom?: number; readonly observedTo?: number; readonly ratePerHour?: number;
+    readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number }[] }
+export type RemoteUsageForecastValue = { readonly data: RemoteUsageForecast }
 
 export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {
   if (!isRecord(value) || !isRecord(value.keys)) return invalidBody()

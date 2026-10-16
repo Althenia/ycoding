@@ -927,6 +927,32 @@ describe("workspace inventory and Session creation", () => {
 })
 
 describe("operation mapping", () => {
+  test("maps frozen accounting and forecast reads at verified Session Locations and rejects invalid scopes", async () => {
+    const empty = { requests: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { pricedRequests: 0, unpricedRequests: 0 } }
+    const prompts = { units: [], unattributed: empty, history: "retained" }
+    const tasks = { tasks: [], total: empty, history: "retained" }
+    const forecast = { asOf: 1, localScope: "backend", localRates: [], quotas: [] }
+    const report = { group: "profile", rows: [], total: {}, rowCount: 0 }
+    const fixture = await harness({ results: { promptCosts: prompts, taskCosts: tasks, sessionUsageReport: report, usageForecast: { data: forecast } } })
+    const run = (operation: RemoteRequest["operation"], fields: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({ request: { ...request(operation, fields), ...(sessionID ? { sessionID } : {}) }, local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })
+    expect(valueOf(await run("session.promptCosts", { inputIDs: ["msg_original"] }, "ses_1"))).toEqual({ data: prompts })
+    expect(valueOf(await run("session.taskCosts", { sessionIDs: ["ses_1"] }, "ses_1"))).toEqual({ data: tasks })
+    expect(valueOf(await run("session.usageReport", { group: "profile", providerID: "openai", profile: "Work", modelID: "shared", selectedEffort: "high" }, "ses_1"))).toEqual({ data: report })
+    expect(valueOf(await run("usage.forecast", { localScope: "backend" }))).toEqual({ data: forecast })
+    expect(valueOf(await run("usage.forecast", { localScope: "location" }, "ses_1"))).toEqual({ data: forecast })
+    expect(fixture.calls.filter((call) => ["promptCosts", "taskCosts", "sessionUsageReport", "usageForecast"].includes(call.method))).toEqual([
+      { method: "promptCosts", args: ["ses_1", { directory: "/work" }, ["msg_original"]] },
+      { method: "taskCosts", args: ["ses_1", { directory: "/work" }, ["ses_1"]] },
+      { method: "sessionUsageReport", args: ["ses_1", { directory: "/work" }, { group: "profile", providerID: "openai", profile: "Work", modelID: "shared", selectedEffort: "high" }] },
+      { method: "usageForecast", args: ["backend"] }, { method: "usageForecast", args: ["location", { directory: "/work" }] },
+    ])
+    expect(errorOf(await run("usage.forecast", { localScope: "backend" }, "ses_1")).code).toBe("invalid_message")
+    expect(errorOf(await run("usage.forecast", { localScope: "location" })).code).toBe("invalid_message")
+    expect(errorOf(await run("session.promptCosts", { inputIDs: ["msg_original", "msg_original"] }, "ses_1")).code).toBe("invalid_message")
+    expect(errorOf(await run("session.taskCosts", { sessionIDs: Array.from({ length: 101 }, (_, index) => `ses_${index}`) }, "ses_1")).code).toBe("invalid_message")
+    expect(errorOf(await run("session.promptCosts", { inputIDs: ["msg_original"] }, "ses_foreign")).code).toBe("session_not_allowed")
+  })
+
   test("maps global usage reads to their exact local Protocol bodies without a browser Location", async () => {
     const providers = { location: { directory: "/work", project: { id: "prj_1", directory: "/work" } }, data: [{ providerID: "test", status: "available", source: "provider_api", stability: "stable", windows: [] }] }
     const summary = { logical: 1, physical: 1, tokens: { input: 2, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }

@@ -17,6 +17,7 @@ import { Session } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
+import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
@@ -178,7 +179,9 @@ function expectedMetrics(group: readonly Fixture[]) {
     const duration =
       row.timing?.generationDurationNs ?? (observed !== undefined && observed >= 1e9 ? observed : undefined)
     const tokens = row.timing?.generatedTokens
-    return duration !== undefined && duration > 0 && tokens !== undefined && tokens > 0 ? [{ duration, tokens }] : []
+    return duration !== undefined && duration > 0 && tokens !== undefined && tokens > 0
+      ? [{ duration, tokens, providerTimed: row.timing?.generationDurationNs !== undefined }]
+      : []
   })
   return {
     logical: group.length,
@@ -186,6 +189,10 @@ function expectedMetrics(group: readonly Fixture[]) {
     helpers: group.filter((row) => row.source !== "step").length,
     continued: group.filter((row) => row.continuation === "continued").length,
     fallback: group.filter((row) => row.continuation === "fallback").length,
+    costCoverage: {
+      pricedRequests: recorded.length + corrections.length,
+      unpricedRequests: group.length - recorded.length - corrections.length,
+    },
     tokens: {
       input: group.reduce((sum, row) => sum + row.tokens.input, 0),
       output: group.reduce((sum, row) => sum + row.tokens.output, 0),
@@ -206,6 +213,21 @@ function expectedMetrics(group: readonly Fixture[]) {
         ? undefined
         : {
             samples: first.length,
+            generationSamples: generation.length,
+            providerTimedSamples: generation.filter((sample) => sample.providerTimed).length,
+            observedSamples: generation.filter((sample) => !sample.providerTimed).length,
+            ...(generation.length === 0
+              ? {}
+              : {
+                  generationP50TokensPerSecond: nearestRank(
+                    generation.map((sample) => (sample.tokens * 1_000_000_000) / sample.duration),
+                    50,
+                  ),
+                  generationP90TokensPerSecond: nearestRank(
+                    generation.map((sample) => (sample.tokens * 1_000_000_000) / sample.duration),
+                    90,
+                  ),
+                }),
             ...(first.length === 0
               ? {}
               : { firstOutputP50Ms: nearestRank(first, 50), firstOutputP95Ms: nearestRank(first, 95) }),
@@ -395,11 +417,13 @@ const seeded = Layer.effect(
       )
       .run()
     yield* database.db.insert(SessionProviderRequestTable).values(rows).run()
+    yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
     return database
   }),
 ).pipe(Layer.provide(Database.layer({ path: ":memory:" })))
 
 const runtime = AppNodeBuilder.build(LayerNode.group([Database.node, Session.node, LocationServiceMap.node]), [
+  [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})],
   [Database.node, seeded],
   [SessionExecution.node, SessionExecution.noopLayer],
   [LocationServiceMap.node, locations],

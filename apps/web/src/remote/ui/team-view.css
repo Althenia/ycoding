@@ -48,9 +48,9 @@
 .team-view__actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--yc-space-1); }
 .team-view__meta { margin: 0; overflow: hidden; color: var(--yc-text-muted); font-size: var(--yc-size-2xs); line-height: var(--yc-leading-xs); overflow-wrap: anywhere; }
 
-.team-view__usage { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--yc-space-2); margin: var(--yc-space-1) 0 0; padding-block-start: var(--yc-space-2); border-block-start: var(--yc-border-width) solid var(--yc-border); }
+.team-view__usage { display: grid; grid-template-columns: repeat(2, minmax(0, 1.3fr)) repeat(2, minmax(0, 1fr)); gap: var(--yc-space-2); margin: var(--yc-space-1) 0 0; padding-block-start: var(--yc-space-2); border-block-start: var(--yc-border-width) solid var(--yc-border); }
 .team-view__usage-cell { display: grid; align-content: start; gap: 2px; min-inline-size: 0; }
-.team-view__usage dt { color: var(--yc-text-muted); font-size: var(--yc-size-2xs); line-height: 1; }
+.team-view__usage dt { overflow: hidden; color: var(--yc-text-muted); font-size: var(--yc-size-2xs); line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
 .team-view__usage dd { display: grid; gap: 4px; align-content: start; min-block-size: 24px; margin: 0; overflow-wrap: anywhere; font-family: var(--yc-font-mono); font-size: var(--yc-size-2xs); font-variant-numeric: tabular-nums; line-height: 16px; }
 .team-view__usage-cell[data-state="unreported"] dd { color: var(--yc-text-subtle); }
 .team-view__skeleton { display: block; inline-size: 70%; block-size: 10px; margin-block: 3px; border-radius: var(--yc-radius-pill); background: linear-gradient(100deg, var(--yc-surface-sunken) 30%, var(--yc-border) 50%, var(--yc-surface-sunken) 70%); background-size: 200% 100%; animation: yc-loading-sweep 1.8s linear infinite; }

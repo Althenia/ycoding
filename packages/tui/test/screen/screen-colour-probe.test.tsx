@@ -65,7 +65,6 @@ function sessionRoute(url: URL) {
     [
       `/api/session/${sessionID}/pending`,
       `/api/session/${sessionID}/permission`,
-      `/api/session/${sessionID}/subagent`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
       `/api/session/${sessionID}/guardrail/request`,
@@ -102,7 +101,7 @@ describe("screen chrome colour probes", () => {
     for (const width of [80, 60]) {
       const screen = await renderScreen({ width, height: 40, route: landingRoute, settle: "Message YCoding…" })
       try {
-        const footer = screen.lines()[38] ?? ""
+        const footer = screen.lines()[39] ?? ""
         expect(footer).toContain("usage")
         expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("commands"))
       } finally {

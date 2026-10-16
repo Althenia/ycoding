@@ -353,6 +353,29 @@ it.effect("always uses the existing text steer path for goal continuation", () =
   }),
 )
 
+it.effect("preserves a known zero helper price", () => Effect.gen(function* () {
+  const zero = Money.USDPerMillionTokens.make(0)
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => cost.splice(0, cost.length, { input: zero, output: zero, cache: { read: zero, write: zero } })),
+    () => Effect.gen(function* () {
+      requests = []
+      modelAvailable = true
+      yield* configureGoalAgent
+      const sessionID = Session.ID.make("ses_goal_zero_price")
+      yield* insertSession(sessionID)
+      yield* prompt(sessionID, "Inspect the build")
+      const store = yield* SessionStore.Service
+      const session = yield* store.get(sessionID)
+      if (!session) return yield* Effect.die("session missing")
+      const goal = yield* SessionGoal.Service
+      expect(yield* goal.synthesize({ session, text: "Repair the build" })).toBe("Repair the migration and verify the suite passes.")
+      const database = yield* Database.Service
+      expect(yield* database.db.select({ source: SessionProviderRequestTable.source, cost: SessionProviderRequestTable.cost }).from(SessionProviderRequestTable).where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toEqual({ source: "goal", cost: 0 })
+    }),
+    (previous) => Effect.sync(() => cost.splice(0, cost.length, ...previous)),
+  )
+}))
+
 it.effect("fails with goal.model_unavailable instead of falling back to the Session model", () =>
   Effect.gen(function* () {
     requests = []

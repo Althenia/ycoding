@@ -32,6 +32,8 @@ import type {
   SessionDiagnosticsOutput,
   SessionOrchestrationPage,
   SessionPendingInfo,
+  SessionPromptCostsOutput,
+  SessionTaskCostsOutput,
   SessionTodoInfo,
   ShellInfo,
   SkillInfo,
@@ -205,6 +207,10 @@ type Store = {
     prediction: Record<string, { sourceMessageID: string; text: string } | undefined>
     predictionDismissed: Record<string, string | undefined>
     usage: Record<string, ProviderRequestSummary>
+    promptCosts: Record<string, SessionPromptCostsOutput["units"]>
+    taskCosts: Record<string, SessionTaskCostsOutput["tasks"]>
+    promptCostState: Record<string, "loading" | "ready" | "unavailable">
+    taskCostState: Record<string, "loading" | "ready" | "unavailable">
     message: Record<string, SessionMessageInfo[]>
     history: Record<string, DataSessionHistory>
     compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
@@ -579,6 +585,7 @@ export function sessionMemoryLines(memory: DataSessionMemoryEstimate) {
 function createSync(settled: () => void) {
   type Load = (current: () => boolean) => Promise<void>
   type Entry = {
+    load?: Load
     generation: number
     requestGeneration: number
     loaded: boolean
@@ -586,30 +593,42 @@ function createSync(settled: () => void) {
     trailing?: Promise<void>
   }
   const state = new Map<string, Entry>()
+  let disposed = false
   function finish(key: string, entry: Entry) {
-    if (state.get(key) !== entry) return
+    if (disposed || state.get(key) !== entry) return
     if (!entry.pending && !entry.trailing && !entry.loaded) state.delete(key)
     settled()
   }
-  function run(key: string, load: Load): Promise<void> {
-    const entry: Entry = state.get(key) ?? { generation: 0, requestGeneration: 0, loaded: false }
+  function run(key: string, load: Load, refresh = false): Promise<void> {
+    if (disposed) return Promise.resolve()
+    const entry: Entry = state.get(key) ?? { load, generation: 0, requestGeneration: 0, loaded: false }
+    entry.load = load
     state.set(key, entry)
     if (entry.pending) {
-      if (entry.requestGeneration === entry.generation) return entry.pending
+      if (!refresh && entry.requestGeneration === entry.generation) return entry.pending
       if (entry.trailing) return entry.trailing
-      const refresh = () => (state.get(key) === entry ? run(key, load) : Promise.resolve())
-      const trailing = entry.pending.then(refresh, refresh).finally(() => {
+      const followUp = () => {
+        if (entry.trailing === trailing) entry.trailing = undefined
+        if (state.get(key) !== entry) return Promise.resolve()
+        entry.loaded = false
+        return run(key, entry.load!)
+      }
+      const trailing = entry.pending.then(followUp, followUp).finally(() => {
         if (entry.trailing === trailing) entry.trailing = undefined
         finish(key, entry)
       })
       entry.trailing = trailing
       return trailing
     }
+    if (refresh) entry.loaded = false
     if (entry.loaded) return Promise.resolve()
     const generation = entry.generation
     entry.requestGeneration = generation
-    const current = () => state.get(key) === entry && entry.generation === generation
+    const current = () => !disposed && state.get(key) === entry && entry.generation === generation
     const pending = load(current)
+      .catch((error: unknown) => {
+        if (!disposed) throw error
+      })
       .then(() => {
         if (current()) entry.loaded = true
       })
@@ -622,7 +641,12 @@ function createSync(settled: () => void) {
   }
   return {
     run,
+    dispose() {
+      disposed = true
+      state.clear()
+    },
     complete(key: string) {
+      if (disposed) return
       if (state.has(key)) return
       state.set(key, { generation: 0, requestGeneration: 0, loaded: true })
     },
@@ -657,6 +681,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     recordTelemetry?: (metric: TelemetryClientSample["metric"], durationMs: number, at?: number) => void
     selectedSessionID?: () => string | undefined
   }) => {
+    const promptCostInputs = new Map<string, string>()
+    const taskCostInputs = new Map<string, readonly string[]>()
     const [store, setStore] = createStore<Store>({
       session: {
         info: {},
@@ -666,6 +692,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         prediction: {},
         predictionDismissed: {},
         usage: {},
+        promptCosts: {},
+        taskCosts: {},
+        promptCostState: {},
+        taskCostState: {},
         message: {},
         history: {},
         compaction: {},
@@ -721,6 +751,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const metadataRecency = new Set<string>()
     const metadataReads = new Map<object, string>()
     const sync = createSync(pruneMetadata)
+    onCleanup(sync.dispose)
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
       submissions.reconcile(sessionID, messages, store.session.pending[sessionID] ?? [])
@@ -1104,6 +1135,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.forget(`session.compaction:${sessionID}`)
       sync.forget(`session.diagnostics:${sessionID}`)
       sync.forget(`session.usage:${sessionID}`)
+      sync.forget(`session.promptCosts:${sessionID}`)
+      sync.forget(`session.taskCosts:${sessionID}`)
+      promptCostInputs.delete(sessionID)
+      taskCostInputs.delete(sessionID)
       sync.forget(`session.todo:${sessionID}`)
       sync.forget(`session.permission:${sessionID}`)
       sync.forget(`session.guardrail:${sessionID}`)
@@ -1121,6 +1156,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.prediction[sessionID]
           delete draft.predictionDismissed[sessionID]
           delete draft.usage[sessionID]
+          delete draft.promptCosts[sessionID]
+          delete draft.taskCosts[sessionID]
+          delete draft.promptCostState[sessionID]
+          delete draft.taskCostState[sessionID]
           delete draft.pending[sessionID]
           delete draft.todo[sessionID]
           delete draft.subagent[sessionID]
@@ -1243,6 +1282,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         .catch((error) => console.error("Failed to refresh durable subagent tasks", error))
     }
 
+    function refreshAccounting(sessionID: string, parentID?: string) {
+      const selected = props.selectedSessionID?.()
+      if (!selected || resolveRoot(parentID ?? sessionID) !== resolveRoot(selected)) return
+      for (const id of new Set([selected, store.session.info[selected]?.parentID])) {
+        if (!id) continue
+        const ids = taskCostInputs.get(id)
+        if (ids) void result.session.taskCosts.sync(id, ids, true).catch(() => undefined)
+      }
+      if (promptCostInputs.has(selected)) void result.session.promptCosts.sync(selected, true).catch(() => undefined)
+    }
+
     function handleEvent(event: YCodingEvent) {
       switch (event.type) {
         case "session.created": {
@@ -1278,6 +1328,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           removeSession(event.data.sessionID)
           break
         case "session.task.updated": {
+          refreshAccounting(event.data.sessionID, event.data.change.type === "launched" ? event.data.change.parentID : undefined)
           const parentID =
             event.data.change.type === "launched"
               ? event.data.change.parentID
@@ -1297,6 +1348,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         }
         case "session.usage.updated":
+          refreshAccounting(event.data.sessionID)
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, {
               cost: event.data.cost,
@@ -1822,6 +1874,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.execution.failed":
         case "session.execution.interrupted":
           setSessionActive(event.data.sessionID, "idle")
+          refreshAccounting(event.data.sessionID)
           message.update(event.data.sessionID, (draft) => {
             const currentAssistant = draft.findLast(
               (item): item is SessionMessageAssistant => item.type === "assistant",
@@ -1863,6 +1916,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           void result.session.diagnostics.sync(event.data.sessionID).catch(() => undefined)
           break
         case "session.compaction.ended":
+          refreshAccounting(event.data.sessionID)
           updateCompaction(event.data.sessionID, {
             jobID: event.data.jobID,
             status: "completed",
@@ -1874,6 +1928,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           refreshCompactionHistory(event.data.sessionID)
           break
         case "session.compaction.failed":
+          refreshAccounting(event.data.sessionID)
           updateCompaction(event.data.sessionID, {
             jobID: event.data.jobID,
             status: "failed",
@@ -2177,6 +2232,61 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             sync.invalidate(`session.diagnostics:${sessionID}`)
           },
         },
+        promptCosts: {
+          get(sessionID: string, inputID: string) { return store.session.promptCosts[sessionID]?.find((unit) => unit.anchor.sessionID === sessionID && unit.anchor.inputID === inputID) },
+          state(sessionID: string) { return store.session.promptCostState[sessionID] },
+          invalidate(sessionID: string) { sync.invalidate(`session.promptCosts:${sessionID}`) },
+          sync(sessionID: string, refresh = false) {
+            const ids = (store.session.message[sessionID] ?? []).filter((message) => message.type === "user").map((message) => message.id)
+            const signature = JSON.stringify(ids)
+            if (promptCostInputs.get(sessionID) !== signature) { promptCostInputs.set(sessionID, signature); sync.invalidate(`session.promptCosts:${sessionID}`) }
+            return sync.run(`session.promptCosts:${sessionID}`, async (current) => {
+              if (!ids.length) return
+              setStore("session", "promptCostState", sessionID, "loading")
+              const units: SessionPromptCostsOutput["units"][number][] = []
+              for (let offset = 0; offset < ids.length; offset += 100) {
+                const first = ids[offset]
+                if (first === undefined || !current()) return
+                const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
+                const page = await client.api.session.promptCosts({ sessionID, inputIDs: pageIDs }).catch((error: unknown) => {
+                  if (current()) setStore("session", "promptCostState", sessionID, "unavailable")
+                  throw error
+                })
+                if (!current()) return
+                units.push(...page.units.filter((unit) => unit.anchor.sessionID === sessionID && pageIDs.includes(unit.anchor.inputID)))
+              }
+              if (!current()) return
+              setStore("session", "promptCosts", sessionID, units)
+              setStore("session", "promptCostState", sessionID, "ready")
+            }, refresh)
+          },
+        },
+        taskCosts: {
+          get(sessionID: string, childID: string) { return store.session.taskCosts[sessionID]?.find((task) => task.sessionID === childID) },
+          state(sessionID: string) { return store.session.taskCostState[sessionID] },
+          invalidate(sessionID: string) { sync.invalidate(`session.taskCosts:${sessionID}`) },
+          sync(sessionID: string, sessionIDs: readonly string[], refresh = false) {
+            const ids = [...new Set(sessionIDs)].sort()
+            const signature = JSON.stringify(ids)
+            if (JSON.stringify(taskCostInputs.get(sessionID)) !== signature) { taskCostInputs.set(sessionID, ids); sync.invalidate(`session.taskCosts:${sessionID}`) }
+            return sync.run(`session.taskCosts:${sessionID}`, async (current) => {
+              setStore("session", "taskCostState", sessionID, "loading")
+              const tasks: SessionTaskCostsOutput["tasks"][number][] = []
+              for (let offset = 0; offset < ids.length; offset += 100) {
+                const first = ids[offset]
+                if (first === undefined || !current()) return
+                const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
+                const page = await client.api.session.taskCosts({ sessionID, sessionIDs: pageIDs }).catch((error: unknown) => {
+                  if (current()) setStore("session", "taskCostState", sessionID, "unavailable")
+                  throw error
+                })
+                if (!current()) return
+                tasks.push(...page.tasks.filter((task) => pageIDs.includes(task.sessionID)))
+              }
+              if (current()) { setStore("session", "taskCosts", sessionID, tasks); setStore("session", "taskCostState", sessionID, "ready") }
+            }, refresh)
+          },
+        },
         usage: {
           get(sessionID: string) {
             return store.session.usage[sessionID]
@@ -2271,6 +2381,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             streamSequence.delete(sessionID)
             sync.forget(`session.message:${sessionID}`)
             sync.forget(`session.compaction:${sessionID}`)
+            sync.forget(`session.promptCosts:${sessionID}`)
+            promptCostInputs.delete(sessionID)
             setStore(
               "session",
               produce((draft) => {
@@ -2278,6 +2390,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 delete draft.history[sessionID]
                 delete draft.compaction[sessionID]
                 delete draft.compactionHistory[sessionID]
+                delete draft.promptCosts[sessionID]
+                delete draft.promptCostState[sessionID]
               }),
             )
             pruneMetadata()

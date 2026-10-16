@@ -90,7 +90,9 @@ test("200 actual-provider open and evict cycles retain a bounded inactive metada
     await data.session.form.sync("ses_metadata_000")
     await data.session.todo.sync("ses_metadata_000")
     await data.session.subagent.sync("ses_metadata_000")
-    expect(reads.slice(previous).filter((path) => path.startsWith("/api/session/ses_metadata_000"))).toHaveLength(10)
+    expect(reads.slice(previous).filter((path) => path.startsWith("/api/session/ses_metadata_000")).sort()).toEqual(
+      ["", "/snapshot", "/pending", "/diagnostics", "/usage", "/permission", "/guardrail/request", "/guardrail", "/form", "/todo", "/subagent"].map((suffix) => `/api/session/ses_metadata_000${suffix}`).sort(),
+    )
     expect(data.session.get("ses_metadata_000")?.id).toBe("ses_metadata_000")
     expect(data.session.subagent.page("ses_metadata_000")?.data).toEqual([])
   } finally {

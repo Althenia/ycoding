@@ -87,6 +87,7 @@ export type SubagentEconomics = {
   reads?: string
   writes?: string
   spent?: string
+  speed?: string
   rollsUpTo?: string
 }
 
@@ -95,7 +96,7 @@ function totalTokens(session: Pick<SessionInfo, "tokens">) {
 }
 
 export function subagentEconomics(
-  session: Pick<SessionInfo, "cost" | "tokens"> | undefined,
+  session: (Pick<SessionInfo, "cost" | "tokens"> & Partial<Pick<SessionInfo, "model">>) | undefined,
   diagnostics: SessionCacheDiagnostics | null | undefined,
   parentTitle: string | undefined,
 ): SubagentEconomics | undefined {
@@ -109,6 +110,10 @@ export function subagentEconomics(
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = money.format(session.cost)
+  const sample = diagnostics?.generationSpeed?.latest
+  const speed = sample && (!session.model || (session.model.providerID === sample.model.providerID && session.model.id === sample.model.id))
+    ? `${sample.estimated ? "≈ " : ""}${sample.tokensPerSecond >= 1 ? Math.round(sample.tokensPerSecond).toLocaleString("en-US") : sample.tokensPerSecond.toPrecision(2)} tok/s`
+    : undefined
   const summary = [
     tokens > 0 ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}` : undefined,
     hit,
@@ -117,6 +122,7 @@ export function subagentEconomics(
     .filter(Boolean)
     .join(" · ")
   const strip = [
+    speed,
     context ? `Context ${context}` : undefined,
     diagnostics && !hit ? "hit unreported" : undefined,
     diagnostics ? (reads ? `${reads} read` : "read unreported") : undefined,
@@ -133,6 +139,7 @@ export function subagentEconomics(
     reads,
     writes,
     spent,
+    speed,
     rollsUpTo: parentTitle,
   }
 }
@@ -325,6 +332,7 @@ export function SubagentFooterContent(props: {
 }
 
 export function SubagentFooter(props: { reviewing?: boolean }) {
+  const dimensions = useTerminalDimensions()
   const route = useRouteData("session")
   const navigation = useRoute()
   const data = useData()
@@ -372,15 +380,18 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
             <box width={21} flexShrink={0}>
               <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
             </box>
-            <box width={13} flexShrink={0}>
+            <Show when={dimensions().width >= 110}><box width={13} flexShrink={0}>
               <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
-            </box>
-            <box width={10} flexShrink={0}>
+            </box></Show>
+            <Show when={dimensions().width >= 110}><box width={10} flexShrink={0}>
               <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
-            </box>
-            <box flexShrink={0}>
+            </box></Show>
+            <Show when={economics()?.speed}>{(speed) => <box paddingRight={1} flexShrink={0}>
+              <text fg={theme.text.subdued} wrapMode="none">{speed()}</text>
+            </box>}</Show>
+            <Show when={dimensions().width >= 100}><box flexShrink={0}>
               <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
-            </box>
+            </box></Show>
             <box flexGrow={1} />
             <text
               fg={theme.text.action.primary.default}

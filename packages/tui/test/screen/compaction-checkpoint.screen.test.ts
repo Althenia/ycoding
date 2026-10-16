@@ -31,7 +31,7 @@ async function open(options: { prunedRoutes?: boolean } = {}) {
   let data!: ReturnType<typeof useData>
   const screen = await renderScreen({
     width: 120,
-    height: 36,
+    height: 44,
     args: { sessionID: fixture.sessionID },
     settle: "Synthetic response 5",
     state: "/tmp/ycoding-tui-perf/state",

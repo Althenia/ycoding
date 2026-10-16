@@ -157,13 +157,22 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/form/request")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (/^\/api\/session\/[^/]+\/guardrail\/request$/.test(url.pathname)) return json({ data: [] })
+    if (/^\/api\/session\/[^/]+\/guardrail$/.test(url.pathname))
+      return json({ data: { rootSessionID: url.pathname.split("/")[3], profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+    if (/^\/api\/session\/[^/]+\/subagent$/.test(url.pathname))
+      return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (/^\/api\/session\/[^/]+\/compaction$/.test(url.pathname))
       return json({ data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 })
     if (/^\/api\/session\/[^/]+\/diagnostics$/.test(url.pathname)) return json({ data: null })
     if (/^\/api\/session\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
+    if (/^\/api\/session\/[^/]+\/usage\/(prompts|tasks)$/.test(url.pathname)) {
+      const empty = { requests: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { pricedRequests: 0, unpricedRequests: 0 } }
+      return json({ data: url.pathname.endsWith("/prompts") ? { units: [], unattributed: empty, history: "partial" } : { tasks: [], total: empty, history: "partial" } })
+    }
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
     // fixture returns no payload rather than zeroed quota values.
     if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
+    if (url.pathname === "/api/provider/usage/forecast") return json({ data: { asOf: 0, localScope: "backend" } })
     if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal", yolo: 0 } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })
     if (

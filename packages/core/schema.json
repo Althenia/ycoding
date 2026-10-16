@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "e79849ed-0ee4-4048-90d6-a818c4f0205d",
+  "id": "ff0a739d-6b6f-4136-94bc-7a536e3498b4",
   "prevIds": [
-    "9ae0e8a4-51c4-47ec-bc90-ef6dc1e5a0ab"
+    "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
     {
@@ -12,6 +12,10 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_analytics_request",
       "entityType": "tables"
     },
     {
@@ -293,6 +297,216 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_updated",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_anchor",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_path",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempts",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "invalidation",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_cache_key",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read_reported",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tokens",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "timing",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
     },
     {
       "type": "text",
@@ -2492,6 +2706,16 @@
     },
     {
       "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_anchor",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
       "notNull": true,
       "autoincrement": false,
       "default": null,
@@ -3366,6 +3590,16 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "usage_anchor",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "assistant_message_id",
       "entityType": "columns",
       "table": "session_provider_request"
@@ -3851,6 +4085,16 @@
       "table": "session"
     },
     {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_pruned_through",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
       "type": "text",
       "notNull": false,
       "autoincrement": false,
@@ -4137,6 +4381,16 @@
       "default": null,
       "generated": null,
       "name": "input_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_anchor",
       "entityType": "columns",
       "table": "session_task"
     },
@@ -5865,6 +6119,15 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "usage_analytics_request_pk",
+      "table": "usage_analytics_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "credential_pk",
       "table": "credential",
       "entityType": "pks"
@@ -6174,6 +6437,24 @@
       "name": "web_latency_pk",
       "table": "web_latency",
       "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_analytics_request_time_created_id_idx",
+      "entityType": "indexes",
+      "table": "usage_analytics_request"
     },
     {
       "columns": [
@@ -7038,56 +7319,6 @@
       "where": null,
       "origin": "manual",
       "name": "session_provider_request_time_created_idx",
-      "entityType": "indexes",
-      "table": "session_provider_request"
-    },
-    {
-      "columns": [
-        {
-          "value": "time_created",
-          "isExpression": false
-        },
-        {
-          "value": "id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "session_provider_request_time_created_id_idx",
-      "entityType": "indexes",
-      "table": "session_provider_request"
-    },
-    {
-      "columns": [
-        {
-          "value": "id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": "\"session_provider_request\".\"cost\" is null and \"session_provider_request\".\"source\" <> 'decision'",
-      "origin": "manual",
-      "name": "session_provider_request_unpriced_idx",
-      "entityType": "indexes",
-      "table": "session_provider_request"
-    },
-    {
-      "columns": [
-        {
-          "value": "session_id",
-          "isExpression": false
-        },
-        {
-          "value": "id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": "\"session_provider_request\".\"cost\" is null and \"session_provider_request\".\"source\" <> 'decision'",
-      "origin": "manual",
-      "name": "session_provider_request_session_unpriced_idx",
       "entityType": "indexes",
       "table": "session_provider_request"
     },

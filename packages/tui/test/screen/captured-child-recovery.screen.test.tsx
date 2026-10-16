@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import type {
   SessionInfo,
   SessionMessageInfo,
@@ -212,15 +213,15 @@ function updated(childID: string, seq: number): YCodingEvent {
   }
 }
 
-async function text(screen: Awaited<ReturnType<typeof renderScreen>>, value: string) {
-  if (screen.frame().includes(value)) return
+async function text(screen: Awaited<ReturnType<typeof renderScreen>>, value: string, ready?: () => boolean) {
+  if (screen.frame().includes(value) && (!ready || ready())) return
   return new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timeout)
       screen.renderer.off("frame", check)
     }
     const check = () => {
-      if (!screen.frame().includes(value)) return
+      if (!screen.frame().includes(value) || (ready && !ready())) return
       cleanup()
       resolve()
     }
@@ -411,9 +412,13 @@ test("a partial child history keeps the incomplete label and omits the earlier-c
     expect(screen.frame()).not.toContain("Load earlier child changes")
     expect(screen.frame()).not.toContain("Child membership unavailable")
     screen.input.pressKey("p", { ctrl: true })
-    await text(screen, "Commands")
-    await text(screen, "Fork session")
+    await text(screen, "Commands", () => screen.renderer.currentFocusedRenderable instanceof InputRenderable)
+    screen.input.typeText("earlier child")
+    await text(screen, "No results found")
     expect(screen.frame()).not.toContain("Load earlier child changes")
+    screen.input.pressKey("u", { ctrl: true })
+    screen.input.typeText("fork")
+    await text(screen, "Fork session")
   } finally {
     await screen.dispose()
   }

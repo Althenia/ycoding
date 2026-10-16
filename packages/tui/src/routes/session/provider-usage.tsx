@@ -1,7 +1,8 @@
 import type {
-  ProviderRequestReport,
+  UsageReportOutput,
   ProviderRequestSummary,
   ProviderUsageListOutput,
+  ProviderUsageForecastOutput,
 } from "@ycoding-ai/client"
 import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -20,6 +21,8 @@ import {
 import { useTheme } from "../../context/theme"
 import { BrandMark } from "../../component/logo"
 import { Locale } from "../../util/locale"
+import { QuotaForecastBlock } from "./usage-cost"
+import { matchingQuotaForecast } from "../../util/usage-accounting"
 import {
   PROVIDER_USAGE_VIEWS,
   ProviderUsageReports,
@@ -70,6 +73,8 @@ export function ProviderUsageScreen() {
   const [snapshots, setSnapshots] = createSignal<ProviderUsageSnapshot[]>([])
   const [refreshing, setRefreshing] = createSignal(true)
   const [failed, setFailed] = createSignal(false)
+  const [forecast, setForecast] = createSignal<ProviderUsageForecastOutput["data"]>()
+  const [forecastFailed, setForecastFailed] = createSignal(false)
   const [backendUsage, setBackendUsage] = createSignal<ProviderRequestSummary>()
   const [backendUsageRefreshing, setBackendUsageRefreshing] = createSignal(true)
   const [backendUsageFailed, setBackendUsageFailed] = createSignal(false)
@@ -101,7 +106,13 @@ export function ProviderUsageScreen() {
         if (guard.current(token)) setFailed(true)
       })
       .finally(() => {
-        if (guard.current(token)) setRefreshing(false)
+        if (guard.current(token)) {
+          setRefreshing(false)
+          setForecastFailed(false)
+          void client.api.providerUsage.forecast({ localScope: "backend" }).then((result) => {
+            if (guard.current(token)) setForecast(result.data)
+          }, () => { if (guard.current(token)) setForecastFailed(true) })
+        }
       })
   }
   onMount(refresh)
@@ -119,6 +130,8 @@ export function ProviderUsageScreen() {
       backendUsageFailed={backendUsageFailed}
       refreshing={refreshing}
       failed={failed}
+      forecast={() => forecastFailed() ? undefined : forecast()}
+      forecastFailed={forecastFailed}
       onBack={back}
       onRefresh={refresh}
       loadReport={(input) => client.api.usage.report(input)}
@@ -134,10 +147,12 @@ export function ProviderUsageScreenContent(props: {
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
   failed?: Accessor<boolean>
+  forecast?: Accessor<ProviderUsageForecastOutput["data"] | undefined>
+  forecastFailed?: Accessor<boolean>
   onBack?: () => void
   onRefresh?: () => void
   initialTab?: ProviderUsageView
-  loadReport?: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>
+  loadReport?: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -267,9 +282,9 @@ export function ProviderUsageScreenContent(props: {
         <Show when={view() === "overview" && aggregateUsage()}>
           {(items) => <OverviewTable items={items()} width={dimensions().width} sorting={overviewSorting} onSort={changeOverviewSort} />}
         </Show>
-        <Show when={view() === "usage"}><For each={visibleProviderSnapshots(props.snapshots())}>
-          {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} />}
-        </For></Show>
+        <Show when={view() === "usage"}><Show when={props.forecast?.()?.quotas === undefined}><text fg={theme.text.subdued}>Quota forecasts unavailable</text></Show><For each={visibleProviderSnapshots(props.snapshots())}>
+          {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} asOf={props.forecast?.()?.asOf} forecasts={props.forecastFailed?.() ? undefined : props.forecast?.()?.quotas} forecastFailed={props.forecastFailed?.()} />}
+        </For><box flexDirection="column"><text fg={theme.text.feedback.info.default}>Recorded consumption · Backend</text><Show when={props.forecast?.()?.localRates} fallback={<text fg={theme.text.subdued}>Recorded consumption unavailable</text>}>{(rates) => <For each={rates()} fallback={<text fg={theme.text.subdued}>No recorded consumption</text>}>{(rate) => <text fg={theme.text.subdued} wrapMode="word">{rate.providerID}{rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}{rate.modelID ? ` · ${rate.modelID}` : ""}: {rate.tokensPerMinute.toFixed(1)} tokens/min · 5m {rate.tokensPerMinute5?.toFixed(1) ?? "unreported"} · 60m {rate.tokensPerMinute60?.toFixed(1) ?? "unreported"}{rate.estimatedUSDPerHour === undefined ? "" : ` · $${rate.estimatedUSDPerHour.toFixed(2)} estimated/hour`} · {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}</text>}</For>}</Show></box></Show>
         <Show when={view() === "usage" && visibleProviderSnapshots(props.snapshots()).length === 0}>
           <text fg={theme.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
         </Show>
@@ -297,7 +312,7 @@ export function ProviderUsageScreenContent(props: {
       </box>
       <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
         <text fg={theme.text.subdued}>
-          {reportView() ? "Local report cost · not a provider bill" : view() === "overview" ? "YCoding backend · All sessions · lifetime retained usage" : "Provider-reported quota windows"}
+          {reportView() ? "Retained analytics · not a bill" : view() === "overview" ? "Backend analytics · retained request history" : "Provider-reported quota windows"}
         </text>
         <box flexGrow={1} />
         <text fg={theme.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>
@@ -333,7 +348,7 @@ function OverviewTable(props: {
     })].filter((item): item is OverviewItem => item !== undefined)
   })
   return <box flexDirection="column" paddingTop={1}>
-    <text fg={theme.text.subdued}>LIFETIME MODEL BREAKDOWN · YCODING BACKEND</text>
+    <text fg={theme.text.subdued}>RETAINED MODEL BREAKDOWN · YCODING BACKEND</text>
     <text fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
     <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
     <For each={orderedItems()}>{(item, index) => {
@@ -410,7 +425,7 @@ function OverviewRow(props: {
   )
 }
 
-function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
+function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number; asOf?: number; forecasts?: ProviderUsageForecastOutput["data"]["quotas"]; forecastFailed?: boolean }) {
   const { theme } = useTheme()
   return (
     <box flexDirection="column" paddingBottom={1}>
@@ -442,6 +457,7 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
                 {formatWindowValue(window)}
                 {deadline ? ` · ${deadline}` : ""}
               </text>
+              <Show when={matchingQuotaForecast(props.snapshot, window, props.forecasts)} fallback={<text fg={theme.text.subdued}>Forecast unavailable · {props.forecastFailed ? "lookup failed" : props.forecasts === undefined ? "Not loaded" : "No matching quota observation"}</text>}>{(quota) => <QuotaForecastBlock forecast={quota()} now={props.now} asOf={props.asOf} />}</Show>
             </box>
           )
         }}
@@ -484,20 +500,20 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
     cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unknown",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
-    spent: money(summary.cost ?? 0),
+    spent: money(summary.cost),
     values: { steps: summary.logical, input: summary.tokens.input, output: summary.tokens.output, reasoning: summary.tokens.reasoning, cacheRead: summary.tokens.cache.read, cacheWrite: summary.tokens.cache.write, tokens: summary.tokens.input + summary.tokens.output + summary.tokens.reasoning + summary.tokens.cache.read + summary.tokens.cache.write, cost: summary.cost ?? 0 },
   }
 }
 
 function money(value: number | undefined) {
-  return `$${(value ?? 0).toFixed(2)}`
+  return value === undefined ? "unreported" : `Known $${value.toFixed(2)}`
 }
 
 function spendPresentation(
   spend: NonNullable<ProviderRequestSummary["models"]>[number],
 ): OverviewItem {
   return {
-    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? `#${spend.model.variant}` : ""}${spend.model.profile === undefined ? "" : ` · profile ${spend.model.profile}`}`,
+    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? ` · selected effort ${spend.model.variant}` : ""}${spend.model.profile === undefined ? "" : ` · profile ${spend.model.profile}`}`,
     steps: spend.requests.toLocaleString("en-US"),
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),

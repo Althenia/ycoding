@@ -25,8 +25,8 @@ const diagnostics: SessionCacheDiagnostics = {
 const speedDiagnostics: SessionCacheDiagnostics = {
   ...diagnostics,
   generationSpeed: {
-    latest: { model: diagnostics.model, tokens: 12,
-      durationNs: 2_000_000, tokensPerSecond: 6_000 },
+    latest: { model: diagnostics.model, tokens: 15,
+      durationNs: 3_000_000, tokensPerSecond: 5_000 },
     recent: [
       { model: diagnostics.model, tokens: 3,
         durationNs: 1_000_000, tokensPerSecond: 3_000 },
@@ -163,7 +163,7 @@ test("renders provider prompt cache without application artifact diagnostics", a
   }
 })
 
-test("renders latest generation speed and bounded trend, then hides it on model switch", async () => {
+test("renders weighted generation speed and bounded trend, then hides an unused model", async () => {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"), import("../../../src/context/theme"),
   ])
@@ -178,11 +178,11 @@ test("renders latest generation speed and bounded trend, then hides it on model 
     </TestTuiContexts>
   ), { width: 48, height: 40 })
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("6,000 tok/s"))
+  await app.waitForFrame((frame) => frame.includes("5,000 tok/s"))
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("Speed")
-    expect(frame).toContain("6,000 tok/s")
+    expect(frame).toContain("5,000 tok/s")
     expect(frame).not.toContain("≈")
     expect(frame).toContain("▄█")
     expect(frame.indexOf("Cache")).toBeLessThan(frame.indexOf("Speed"))
@@ -194,7 +194,7 @@ test("renders latest generation speed and bounded trend, then hides it on model 
   }
 })
 
-test("replaces live measured speed with interrupted estimates or failed unreported state and rejects a different profile", async () => {
+test("retains the model rate across profile changes and hides only an empty population", async () => {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"), import("../../../src/context/theme"),
   ])
@@ -206,19 +206,19 @@ test("replaces live measured speed with interrupted estimates or failed unreport
     </ThemeProvider></ConfigProvider></TestTuiContexts>, { width: 48, height: 40 })
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("6,000 tok/s"))
+    await app.waitForFrame((frame) => frame.includes("5,000 tok/s"))
     expect(app.captureCharFrame()).not.toContain("≈")
     update({ ...speedDiagnostics, generationSpeed: {
       latest: { ...speedDiagnostics.generationSpeed!.latest!, estimated: true }, recent: [] } })
-    await app.waitForFrame((frame) => frame.includes("≈ 6,000 tok/s"))
+    await app.waitForFrame((frame) => frame.includes("≈ 5,000 tok/s"))
     expect(app.captureCharFrame()).not.toContain("▄█")
     select({ ...diagnostics.model, profile: "other" })
-    await app.waitForFrame((frame) => !frame.includes("Speed"))
+    await app.waitForFrame((frame) => frame.includes("≈ 5,000 tok/s"))
+    select({ ...diagnostics.model, variant: "low" })
+    await app.waitForFrame((frame) => frame.includes("≈ 5,000 tok/s"))
     select(diagnostics.model)
-    update({ ...diagnostics, generationSpeed: { model: diagnostics.model, recent: speedDiagnostics.generationSpeed!.recent,
-      unreportedReason: "No streamed output" } })
-    await app.waitForFrame((frame) => frame.includes("unreported"))
-    expect(app.captureCharFrame()).toContain("No streamed output")
+    update({ ...diagnostics, generationSpeed: { model: diagnostics.model, recent: [] } })
+    await app.waitForFrame((frame) => !frame.includes("Speed"))
     expect(app.captureCharFrame()).not.toContain("tok/s")
   } finally { app.renderer.destroy() }
 })
@@ -241,7 +241,7 @@ test("keeps the latest speed on one narrow row without a wrapping trend", async 
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("Speed")
-    expect(frame).toContain("6,000 tok/s")
+    expect(frame).toContain("5,000 tok/s")
     expect(frame).not.toContain("▄█")
     expect(frame.split("\n").find((line) => line.includes("Speed"))?.length).toBeLessThanOrEqual(18)
   } finally {

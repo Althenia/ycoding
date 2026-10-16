@@ -7,7 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
-import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory, type RemoteUsagePromptCost } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
 import type { Guardrail } from "../../../../packages/schema/src/guardrail"
 
@@ -103,16 +103,16 @@ const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefin
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed
   const latest = history?.latest
-  if (!history || !sameModel(latest?.model ?? history.model, selected)) return undefined
-  if (!latest) return { label: "unreported", description: history.unreportedReason ?? "No usable generation measurement" }
+  const model = latest?.model ?? history?.model
+  if (!latest || !model || !selected || model.providerID !== selected.providerID || model.id !== selected.id) return undefined
   const rate = latest.tokensPerSecond
   const label = `${latest.estimated ? "≈ " : ""}${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
-  const recent = history.recent.filter((sample) => !sample.estimated && sameModel(sample.model, latest.model))
+  const recent = history.recent.filter((sample) => !sample.estimated && sample.model.providerID === model.providerID && sample.model.id === model.id)
   const peak = Math.max(...recent.map((sample) => sample.tokensPerSecond))
   const levels = "▁▂▃▄▅▆▇█"
   const trend = latest.estimated || recent.length < 2 ? undefined
     : recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
-  const description = latest.estimated ? "Estimated generation speed from received text, thinking and tool-input deltas" : "Latest provider-counted generation speed"
+  const description = latest.estimated ? "Estimated generation speed across recent output samples" : "Generation speed across recent provider-counted output samples"
   return { label, description, ...(trend === undefined ? {} : { trend }) }
 }
 
@@ -337,6 +337,8 @@ export type SessionView = {
   readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
+  readonly promptCosts?: readonly RemoteUsagePromptCost[]
+  readonly promptCostState?: "loading" | "ready" | "unavailable"
   readonly unhandledEvents: number
   readonly updatedAt?: number
   readonly activeAt?: number
@@ -997,7 +999,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.compaction.ended":
       return stringField(data.jobID) === undefined ? view : {
         ...withCompaction(view, data, "completed", event.created ?? now),
-        generationSpeed: undefined, contextWindow: undefined,
+        contextWindow: undefined,
       }
     case "session.compaction.failed":
       return withCompaction(view, data, "failed", event.created ?? now, readError(data.error)?.message)
@@ -1030,7 +1032,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       return pushNotice(view, "revert", "Revert cleared", now)
     case "session.revert.committed":
       return { ...pushNotice(view, "revert", `Revert committed to ${stringField(data.to) ?? "boundary"}`, now),
-        generationSpeed: undefined, contextWindow: undefined }
+        contextWindow: undefined }
     case "permission.asked":
       return pushRequest(view, {
         kind: "permission",

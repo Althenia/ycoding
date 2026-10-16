@@ -220,7 +220,7 @@ function assertProviderUsageScreen(rows: string[], quotas: boolean) {
     expect(frame).toContain("Not reported")
     return
   }
-  expect(frame).toContain("LIFETIME MODEL BREAKDOWN · YCODING BACKEND")
+  expect(frame).toContain("RETAINED MODEL BREAKDOWN · YCODING BACKEND")
   expect(frame).toContain("247,996/14,184")
   expect(frame).not.toContain("Provider capture")
 }
@@ -261,7 +261,7 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
   expectAt(rows, choose.row + 3, title.column + 3, "Allow once")
   expectAt(rows, choose.row + 5, title.column + 3, "Allow for this session")
   expectAt(rows, choose.row + 8, title.column + 3, "pgup/pgdn review")
-  expectAt(rows, choose.row + 9, title.column + 3, "guardrails apply even in YOLO")
+  expectAt(rows, choose.row + 9, title.column + 3, "ordinary reviews auto-approve")
   expect(choose.row + 9).toBeLessThan(rows.length)
   expectCenteredSelectionBand(panel, root, "session.guardrail.action.reject")
 }

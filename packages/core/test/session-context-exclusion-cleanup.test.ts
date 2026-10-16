@@ -42,8 +42,8 @@ const it = testEffect(
 )
 
 const now = 31 * 24 * 60 * 60 * 1000
-const stale = now - 30 * 24 * 60 * 60 * 1000 - 1
-const recent = now - 30 * 24 * 60 * 60 * 1000
+const stale = now - 7 * 24 * 60 * 60 * 1000 - 1
+const recent = now - 7 * 24 * 60 * 60 * 1000
 const manifestDigest = "a".repeat(64)
 
 const insert = (id: Session.ID, timeUpdated = stale) =>

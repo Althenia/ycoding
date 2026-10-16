@@ -83,6 +83,19 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
 
 const helperText = (index = 0) => requests[index]?.messages[0]?.content.find((part) => part.type === "text")?.text
 
+it.effect("preserves a known zero helper price", () => Effect.gen(function* () {
+  const zero = Money.USDPerMillionTokens.make(0)
+  yield* Effect.acquireUseRelease(
+    Effect.sync(() => cost.splice(0, cost.length, { input: zero, output: zero, cache: { read: zero, write: zero } })),
+    () => Effect.gen(function* () {
+      const f = yield* setup()
+      expect((yield* f.generator.request(f.sessionID, { mode: "start", intent: "Fix the build", memory: [] })).status).toBe("generated")
+      expect(yield* f.db.select({ source: SessionProviderRequestTable.source, cost: SessionProviderRequestTable.cost }).from(SessionProviderRequestTable).where(eq(SessionProviderRequestTable.session_id, f.sessionID)).get()).toEqual({ source: "prompt", cost: 0 })
+    }),
+    (previous) => Effect.sync(() => cost.splice(0, cost.length, ...previous)),
+  )
+}))
+
 const setup = (options: { child?: boolean; goal?: boolean; pending?: boolean; running?: boolean; reply?: boolean; user?: string; assistant?: string; directory?: string } = {}) => Effect.gen(function* () {
   requests.length = 0; searches.length = 0; accessChecks.length = 0
   requestInterruptions = 0

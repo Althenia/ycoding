@@ -4,7 +4,8 @@ import { Deferred, Effect } from "effect"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { YCoding } from "@ycoding-ai/client"
 import { Global } from "@ycoding-ai/core/global"
-import { ClipboardProvider, useClipboard } from "./context/clipboard"
+import { ClipboardProvider, useClipboard, type ClipboardService } from "./context/clipboard"
+import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { LogProvider, useLog, type LogSink } from "./context/log"
 import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
@@ -80,7 +81,7 @@ import { parse } from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { Config, ConfigProvider, useConfig } from "./config"
-import { createPluginRuntime, PluginRuntimeProvider, usePluginRuntime } from "./plugin/runtime"
+import { createPluginRuntime, PluginRuntimeProvider, usePluginRuntime, type PluginRuntime } from "./plugin/runtime"
 import { PluginProvider, PluginRoute, PluginSlot, usePlugin, type PackageResolver } from "./plugin/context"
 import { CommandPaletteDialog } from "./component/command-palette"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/keymap"
@@ -160,6 +161,10 @@ export type TuiInput = {
   updateNotice?: Promise<string | undefined>
   config: Config.Interface
   packages: PackageResolver
+  pluginRuntime?: PluginRuntime
+  builtins?: readonly Plugin.Definition[]
+  clipboard?: ClipboardService
+  onData?: (data: ReturnType<typeof useData>) => void
   terminalHandoff?: () => Promise<
     | {
         readonly renderer: CliRenderer
@@ -256,7 +261,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         () => Effect.sync(() => process.off("SIGHUP", onSighup)),
       )
       renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
-      const pluginRuntime = createPluginRuntime()
+      const pluginRuntime = input.pluginRuntime ?? createPluginRuntime()
 
       yield* Effect.tryPromise(async () => {
         const appStarted = performance.now()
@@ -322,7 +327,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                               skipInitialLoading: Boolean(process.env.YCODING_FAST_BOOT),
                             }}
                           >
-                            <ClipboardProvider>
+                            <ClipboardProvider value={input.clipboard}>
                               <ArgsProvider {...input.args}>
                                 <ConfigProvider
                                   config={config}
@@ -348,8 +353,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                             <PromptHistoryProvider>
                                                               <PromptRefProvider>
                                                                 <EditorContextProvider>
-                                                                  <PluginProvider packages={input.packages}>
+                                                                  <PluginProvider packages={input.packages} builtins={input.builtins}>
                                                                     <App
+                                                                      onData={input.onData}
                                                                       started={appStarted}
                                                                       pair={
                                                                         input.server.endpoint.auth
@@ -426,7 +432,7 @@ export function UpdateNotice(props: { message?: Promise<string | undefined> }) {
   return null
 }
 
-function App(props: { pair?: DialogPairCredentials; started: number }) {
+function App(props: { pair?: DialogPairCredentials; started: number; onData?: TuiInput["onData"] }) {
   const sessionViewports: SessionViewportStore = new Map()
   const log = useLog({ component: "app" })
   const config = useConfig()
@@ -444,6 +450,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const themeState = useTheme()
   const { theme, mode, supports, setMode, locked, lock, unlock } = themeState
   const data = useData()
+  onMount(() => props.onData?.(data))
   const location = useLocation()
   const exit = useExit()
   const promptRef = usePromptRef()

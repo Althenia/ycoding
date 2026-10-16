@@ -45,6 +45,7 @@ import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import {
   SessionCompactionJobTable,
   SessionMessageTable,
@@ -351,7 +352,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
-  [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
+  [Location.node, Location.boundNode({ directory: AbsolutePath.make(process.cwd()) })],
   [SkillInstructions.node, skillInstructions],
   [ReferenceInstructions.node, referenceInstructions],
   [McpInstructions.node, mcpInstructions],
@@ -398,7 +399,7 @@ const it = testEffect(
       [SessionRunnerModel.node, models],
       [InstructionBuiltIns.node, systemContext],
       [InstructionDiscovery.node, instructionContext],
-      [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
+      [Location.node, Location.boundNode({ directory: AbsolutePath.make(process.cwd()) })],
       [SkillInstructions.node, skillInstructions],
       [ReferenceInstructions.node, referenceInstructions],
       [McpInstructions.node, mcpInstructions],
@@ -508,6 +509,32 @@ const pendingRows = (sessionID: Session.ID) =>
   })
 
 describe("Session.switchModel context validation", () => {
+  it.effect("publishes the reselected model's retained speed without provider work", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* Session.Service
+      const ledger = yield* SessionProviderRequest.Service
+      const events = yield* EventRuntime.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      for (const model of [haiku, sonnet]) {
+        const tracker = yield* ledger.next({ sessionID, source: "step", agent: Agent.defaultID, model,
+          routeID: "anthropic-messages", promptCacheKey: "speed", systemDigest: "system", toolDigest: "tools" })
+        yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+          timing: { generatedTokens: 20, observedGenerationDurationNs: model === haiku ? 100_000_000 : 200_000_000 } })
+      }
+      const published: SessionEvent.DiagnosticsUpdated["data"][] = []
+      const stop = yield* events.listen((event) => Effect.sync(() => {
+        if (Schema.is(SessionEvent.DiagnosticsUpdated)(event) && event.data.sessionID === sessionID) published.push(event.data)
+      }))
+      yield* session.switchModel({ sessionID, model: haiku })
+      yield* stop
+      expect(published).toHaveLength(1)
+      expect(published[0]?.diagnostics.generationSpeed?.latest).toMatchObject({ model: haiku, tokensPerSecond: 200 })
+      expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(published[0]?.diagnostics.generationSpeed)
+      expect(yield* ledger.list(sessionID)).toHaveLength(2)
+      expect(requests).toHaveLength(0)
+    }),
+  )
   it.effect("applies a fitting switch without compaction, preserving the visible summary and recent transcript", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()

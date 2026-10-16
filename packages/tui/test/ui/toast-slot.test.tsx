@@ -402,7 +402,6 @@ function toastRoute(url: URL) {
     [
       "/api/session/ses_toast/pending",
       "/api/session/ses_toast/permission",
-      "/api/session/ses_toast/subagent",
       "/api/session/ses_toast/todo",
       "/api/session/ses_toast/skills",
       "/api/session/ses_toast/guardrail/request",

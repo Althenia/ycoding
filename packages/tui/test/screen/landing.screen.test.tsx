@@ -127,7 +127,8 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(lines[footer]?.indexOf("main")).toBe(3)
       expect(lines[footer]?.indexOf("goal off")! - (lines[footer]?.indexOf("main")! + "main".length)).toBe(3)
       expect(lines[footer]?.indexOf("YOLO off")! - (lines[footer]?.indexOf("goal off")! + "goal off".length)).toBe(3)
-      expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("YOLO off")! + "YOLO off".length)).toBe(3)
+      expect(lines[footer]?.indexOf("guardrail decision off")! - (lines[footer]?.indexOf("YOLO off")! + "YOLO off".length)).toBe(3)
+      expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("guardrail decision off")! + "guardrail decision off".length)).toBe(3)
     }
 
     // The reference places no agent or model row between the placeholder and the footer.

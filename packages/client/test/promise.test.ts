@@ -178,7 +178,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
-  expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+  expect(Object.keys(client.providerUsage)).toEqual(["forecast", "list", "get"])
   expect(Object.keys(client.browser)).toEqual([
     "status",
     "tabs",

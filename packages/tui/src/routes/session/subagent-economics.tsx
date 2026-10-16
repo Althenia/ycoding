@@ -8,16 +8,18 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
   const dimensions = useTerminalDimensions()
   const columns = () => [
     ["Context", props.economics?.context],
+    ["Speed", props.economics?.speed],
     ["Cache hit", props.economics?.cacheHit],
     ["Reads", props.economics?.reads],
     ["Writes", props.economics?.writes],
     ["Spent", props.economics?.spent],
     ["Rolls up to", props.economics?.rollsUpTo],
-  ] as const
+  ].filter(([label, value]) => label !== "Speed" || value !== undefined)
+  const columnWidth = () => Math.floor((dimensions().width - 6) / Math.max(1, Math.min(7, Math.floor((dimensions().width - 6) / 22))))
 
   return (
     <Show when={props.economics}>
-      <box height={7} flexDirection="column" flexShrink={0}>
+      <box flexDirection="column" flexShrink={0}>
         <text fg={theme.border.default} wrapMode="none">
           {"─".repeat(dimensions().width)}
         </text>
@@ -26,28 +28,12 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
             <b>SUBAGENT ECONOMICS</b>
           </text>
           <box height={1} />
-          <box flexDirection="row">
+          <box flexDirection="row" flexWrap="wrap">
             <For each={columns()}>
-              {([label], index) => (
-                <box
-                  width={index() === 0 || index() === 4 ? 28 : index() < 5 ? 27 : undefined}
-                  flexGrow={index() === 5 ? 1 : 0}
-                  flexShrink={0}
-                >
+              {([label, value]) => (
+                <box width={columnWidth()} flexDirection="column" paddingBottom={1} flexShrink={0}>
                   <text fg={theme.text.subdued} wrapMode="none">{label}</text>
-                </box>
-              )}
-            </For>
-          </box>
-          <box height={1} />
-          <box flexDirection="row">
-            <For each={columns()}>
-              {([, value], index) => (
-                <box
-                  width={index() === 0 || index() === 4 ? 28 : index() < 5 ? 27 : undefined}
-                  flexGrow={index() === 5 ? 1 : 0}
-                  flexShrink={0}
-                >
+                  <box height={1} />
                   <text fg={theme.text.default} wrapMode="none">{value ?? "unreported"}</text>
                 </box>
               )}

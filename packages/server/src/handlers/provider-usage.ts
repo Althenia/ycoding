@@ -18,6 +18,10 @@ export const getProviderUsage = (
 
 export const ProviderUsageHandler = HttpApiBuilder.group(Api, "server.providerUsage", (handlers) =>
   handlers
+    .handle("providerUsage.forecast", Effect.fn(function* (ctx) {
+      const usage = yield* ProviderUsageRuntime.Service
+      return yield* response(usage.forecast({ localScope: ctx.query.localScope }))
+    }))
     .handle(
       "providerUsage.list",
       Effect.fn(function* (ctx) {

@@ -803,6 +803,7 @@ async function run(input: OperationInput) {
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
+  if (validated.kind === "usage.forecast" && validated.localScope === "backend") return { data: (await input.local.usageForecast("backend")).data }
   if (validated.kind === "latency.append") return input.local.latencyAppend(validated.samples)
   if (validated.kind === "latency.list") return input.local.latencyList(validated.input)
   if (validated.kind === "keepAwake.get") return { data: await input.local.keepAwakeGet() }
@@ -828,6 +829,14 @@ async function run(input: OperationInput) {
     return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
   }
   switch (validated.kind) {
+    case "session.usageReport":
+      return { data: await input.local.sessionUsageReport(sessionID, location, validated.input) }
+    case "session.promptCosts":
+      return { data: await input.local.promptCosts(sessionID, location, validated.ids) }
+    case "session.taskCosts":
+      return { data: await input.local.taskCosts(sessionID, location, validated.ids) }
+    case "usage.forecast":
+      return { data: (await input.local.usageForecast("location", location)).data }
     case "get":
       return { data: verified }
     case "pending.list": {
@@ -1060,6 +1069,9 @@ type Validated =
   | { readonly kind: "usage.providers"; readonly refresh?: boolean }
   | { readonly kind: "usage.summary" }
   | { readonly kind: "usage.report"; readonly input: RemoteUsageReportInput }
+  | { readonly kind: "session.usageReport"; readonly input: RemoteUsageReportInput }
+  | { readonly kind: "session.promptCosts" | "session.taskCosts"; readonly ids: readonly [string, ...string[]] }
+  | { readonly kind: "usage.forecast"; readonly localScope: "backend" | "location" }
   | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection }
   | { readonly kind: "workspace.catalog"; readonly workspace: string }
   | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
@@ -1184,12 +1196,29 @@ function validate(request: RemoteRequest): Validated {
   if (request.operation === "usage.providers") return { kind: "usage.providers",
     ...(fields.refresh === undefined ? {} : { refresh: requireBoolean(fields.refresh, "refresh") }) }
   if (request.operation === "usage.summary") return { kind: "usage.summary" }
-  if (request.operation === "usage.report") {
-    const group = literal(fields.group, ["model", "hour", "day", "month", "session", "project", "agent"], "group")
+  if (request.operation === "usage.forecast") {
+    const localScope = literal(fields.localScope, ["backend", "location"], "localScope")
+    if ((localScope === "location") !== (request.sessionID !== undefined)) throw new OperationError("invalid_message", "Forecast scope requires the owning Session Location")
+    return { kind: "usage.forecast", localScope }
+  }
+  if (request.operation === "session.promptCosts" || request.operation === "session.taskCosts") {
+    const ids = request.operation === "session.promptCosts" ? fields.inputIDs : fields.sessionIDs
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 100 || new Set(ids).size !== ids.length) throw new OperationError("invalid_message", "Accounting lookup requires 1–100 distinct IDs")
+    const parsed = ids.map((id) => request.operation === "session.promptCosts" ? messageID(id) : sessionID(id, "sessionIDs"))
+    const first = parsed[0]
+    if (first === undefined) throw new OperationError("invalid_message", "Accounting lookup requires an ID")
+    return { kind: request.operation, ids: [first, ...parsed.slice(1)] }
+  }
+  if (request.operation === "usage.report" || request.operation === "session.usageReport") {
+    const group = literal(fields.group, ["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"], "group")
     const from = optionalInteger(fields.from, "from", 0, Number.MAX_SAFE_INTEGER)
     const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
     if (from !== undefined && to !== undefined && from >= to) throw new OperationError("invalid_message", "Usage report from must precede to")
-    return { kind: "usage.report", input: { group,
+    return { kind: request.operation, input: { group,
+      ...(fields.providerID === undefined ? {} : { providerID: requireString(fields.providerID, "providerID", 128) }),
+      ...(fields.profile === undefined ? {} : { profile: requireString(fields.profile, "profile", 128) }),
+      ...(fields.modelID === undefined ? {} : { modelID: requireString(fields.modelID, "modelID", 128) }),
+      ...(fields.selectedEffort === undefined ? {} : { selectedEffort: requireString(fields.selectedEffort, "selectedEffort", 128) }),
       ...(fields.timeZone === undefined ? {} : { timeZone: requireString(fields.timeZone, "timeZone", 128) }),
       ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
       ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
@@ -1372,7 +1401,7 @@ async function requireOwnedForm(
 }
 
 function scopedOperation(operation: RemoteOperation) {
-  return !unscopedOperations.has(operation) && requireSession(operation)
+  return operation === "usage.forecast" || !unscopedOperations.has(operation) && requireSession(operation)
 }
 
 async function requireFamilyMember(input: OperationInput, root: SessionInfo, memberID: string, managed = false): Promise<SessionInfo> {
@@ -1802,7 +1831,11 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.active": [],
   "usage.providers": ["refresh"],
   "usage.summary": [],
-  "usage.report": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order"],
+  "usage.report": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"],
+  "session.usageReport": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"],
+  "session.promptCosts": ["inputIDs"],
+  "session.taskCosts": ["sessionIDs"],
+  "usage.forecast": ["localScope"],
   "session.status": [],
   "session.catalog": [],
   "workspace.catalog": ["workspace"],

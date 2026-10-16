@@ -318,3 +318,19 @@ test("unreadable usage stays an error and report paging does not reuse a differe
     expect(relay.requests.filter((request) => request.operation === "usage.report")).toHaveLength(2)
   } finally { store.dispose(); await relay.stop() }
 })
+
+test("an older connector's invalid_message for a new report group or filter is an update prompt, not a generic error", async () => {
+  const relay = await startRelayDouble({ handler: (request) => request.operation === "usage.report" && (request.input?.group === "prompt" || request.input?.providerID !== undefined)
+    ? { ok: false, code: "invalid_message", message: "Unknown usage report field" } : "default" })
+  const { store, queries, scope, usage } = await connected(relay)
+  try {
+    const grouped = { group: "prompt" as const, limit: 25 }
+    const filtered = { group: "model" as const, providerID: "openai", limit: 25 }
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, grouped))
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, filtered))
+    expect(usage(remoteKeys.usageReport(scope(), grouped))).toEqual({ status: "unsupported" })
+    expect(usage(remoteKeys.usageReport(scope(), filtered))).toEqual({ status: "unsupported" })
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, { group: "model", limit: 25 }))
+    expect(usage(remoteKeys.usageReport(scope(), { group: "model", limit: 25 })).status).toBe("ready")
+  } finally { store.dispose(); await relay.stop() }
+})

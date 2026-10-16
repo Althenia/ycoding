@@ -1,6 +1,7 @@
 import { Location } from "@ycoding-ai/schema/location"
 import { Provider } from "@ycoding-ai/schema/provider"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
+import { UsageForecast } from "@ycoding-ai/schema/usage-forecast"
 import { Schema, SchemaGetter } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { ServiceUnavailableError } from "../errors.js"
@@ -19,6 +20,15 @@ const Query = Schema.Struct({
 }).annotate({ identifier: "ProviderUsageQuery" })
 
 export const ProviderUsageGroup = HttpApiGroup.make("server.providerUsage")
+  .add(
+    HttpApiEndpoint.get("providerUsage.forecast", "/api/provider/usage/forecast", {
+      query: Schema.Struct({ ...LocationQuery.fields, ...UsageForecast.Input.fields }),
+      success: Location.response(UsageForecast.Info),
+      error: ServiceUnavailableError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(OpenApi.annotations({ identifier: "providerUsage.forecast", summary: "Read local consumption and quota forecasts" })),
+  )
   .add(
     HttpApiEndpoint.get("providerUsage.list", "/api/provider/usage", {
       query: Query,

@@ -209,7 +209,7 @@ test("surfaces a pending root guardrail review that arrives as a live event", as
 
 test("surfaces a pending subagent guardrail review from the durable list", async () => {
   listed = [childRequest]
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("1 of 1", childID)
   try {
     await waitForFrameText(screen, "Guardrail blocked")
     expect(screen.frame()).toContain("Subagent ses_guardrail_child in ses_guardrail_parent")
@@ -220,12 +220,13 @@ test("surfaces a pending subagent guardrail review from the durable list", async
 
 test("surfaces a pending subagent guardrail review that arrives as a live event", async () => {
   listed = []
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("1 of 1", childID)
   try {
     expect(screen.frame()).not.toContain("Guardrail blocked")
     await screen.waitForEventStream()
     screen.events.emit(asked(childRequest, "evt_child_asked"))
     await waitForFrameText(screen, "Guardrail blocked")
+    await waitForFrameText(screen, "needs approval")
   } finally {
     await screen.dispose()
   }
@@ -235,10 +236,11 @@ test("renders a transcript row for a subagent review and replies against the roo
   listed = [childRequest]
   replies.length = 0
   repliedTo.length = 0
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("1 of 1", childID)
   try {
     await waitForFrameText(screen, "Guardrail blocked")
     expect(screen.frame()).toContain("rm -rf packages/one packages/two")
+    await waitForFrameText(screen, "needs approval")
     expect(screen.frame()).toContain("needs approval")
     // The only surface for a subagent review is the transcript row plus this prompt; without it the
     // subagent blocks invisibly until the Session is interrupted. Option selection itself is covered

@@ -44,7 +44,7 @@ test("a running session never reports ready", async () => {
           ], { session })
       if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
-      if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [] })
+      if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (url.pathname === `/api/session/${sessionID}/todo`) return json({ data: [] })
       if (url.pathname === `/api/session/${sessionID}/skills`) return json({ data: [] })
       if (url.pathname === "/path")

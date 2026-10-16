@@ -2,7 +2,7 @@ export * as SessionCacheDiagnostics from "./cache-diagnostics"
 
 import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { Effect, Schema } from "effect"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, lt, sql } from "drizzle-orm"
 import { Session } from "@ycoding-ai/schema/session"
 import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { Money } from "@ycoding-ai/schema/money"
@@ -17,7 +17,7 @@ import type { Database } from "../database/database"
 import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
 import { SessionEvent } from "./event"
-import { SessionMessageTable, SessionProviderRequestTable } from "./sql"
+import { SessionMessageTable, SessionProviderRequestTable, SessionTable } from "./sql"
 import { MessageDecodeError } from "./error"
 
 export interface CalculateInput {
@@ -153,33 +153,31 @@ export function generationSpeed(
   records: readonly Pick<ProviderRequest.Record, "model" | "timing">[],
   current?: Pick<ProviderRequest.Record, "model" | "timing">,
 ): DiagnosticsSchema.GenerationSpeedHistory | undefined {
-  const recentRecords = [...records, ...(current === undefined ? [] : [current])].slice(-8)
-  const samples = recentRecords.map((record) => {
-    const sample = generationSample(record.timing)
-    return sample === undefined ? undefined : { model: record.model, ...sample }
-  })
+  const recentRecords = [...records, ...(current === undefined ? [] : [current])]
   const newest = recentRecords.at(-1)?.model
-  const recent = samples.filter((sample): sample is NonNullable<typeof sample> =>
-    sample !== undefined && !sample.estimated && newest !== undefined && sample.model.providerID === newest.providerID &&
-    sample.model.id === newest.id && sample.model.variant === newest.variant && sample.model.profile === newest.profile)
   if (!newest) return undefined
-  const latest = samples.at(-1)
-  return { model: newest, ...(latest === undefined
-    ? { unreportedReason: "No usable provider measurement or streamed output window of at least one second" }
-    : { latest }), recent }
+  const recent = recentRecords.flatMap((record) => {
+    if (record.model.providerID !== newest.providerID || record.model.id !== newest.id) return []
+    const sample = generationSample(record.timing)
+    return sample === undefined ? [] : [{ model: record.model, ...sample }]
+  }).slice(-8)
+  const tokens = recent.reduce((sum, sample) => sum + sample.tokens, 0)
+  const durationNs = recent.reduce((sum, sample) => sum + sample.durationNs, 0)
+  return { model: newest, recent, ...(recent.length === 0 ? {} : { latest: {
+    model: newest, tokens, durationNs, tokensPerSecond: tokens * 1_000_000_000 / durationNs,
+    ...(recent.some((sample) => sample.estimated) ? { estimated: true } : {}),
+  } }) }
 }
 
 export function generationSample(timing: ProviderRequest.Timing | undefined) {
   const candidates = [
-    { tokens: timing?.generatedTokens, durationNs: timing?.generationDurationNs ?? timing?.observedGenerationDurationNs,
-      reliable: timing?.generationDurationNs !== undefined || (timing?.observedGenerationDurationNs ?? 0) >= SessionUsage.minimumObservedGenerationDurationNs },
-    { tokens: timing?.estimatedTokens, durationNs: timing?.estimatedGenerationDurationNs, estimated: true,
-      reliable: (timing?.estimatedGenerationDurationNs ?? 0) >= SessionUsage.minimumObservedGenerationDurationNs },
+    { tokens: timing?.generatedTokens, durationNs: timing?.observedGenerationDurationNs ?? timing?.generationDurationNs },
+    { tokens: timing?.estimatedTokens, durationNs: timing?.estimatedGenerationDurationNs, estimated: true },
   ]
   for (const sample of candidates) {
     const tokens = sample.tokens
     const durationNs = sample.durationNs
-    if (!sample.reliable || !Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
       !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) continue
     const tokensPerSecond = tokens * 1_000_000_000 / durationNs
     if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) continue
@@ -187,6 +185,31 @@ export function generationSample(timing: ProviderRequest.Timing | undefined) {
   }
   return undefined
 }
+
+export const recentGenerationRecords = Effect.fn("SessionCacheDiagnostics.recentGenerationRecords")(function* (
+  db: Database.Interface["db"],
+  sessionID: Session.ID,
+  model: CatalogModel.Ref,
+  before = Number.MAX_SAFE_INTEGER,
+) {
+  const samples: (typeof SessionProviderRequestTable.$inferSelect)[] = []
+  let cursor = before
+  while (samples.length < 8) {
+    const rows = yield* db.select().from(SessionProviderRequestTable).where(and(
+      eq(SessionProviderRequestTable.session_id, sessionID), lt(SessionProviderRequestTable.request, cursor),
+    )).orderBy(desc(SessionProviderRequestTable.request)).limit(10_000).all().pipe(Effect.orDie)
+    for (const row of rows) {
+      if (row.source !== "step" || row.model.providerID !== model.providerID || row.model.id !== model.id ||
+        !generationSample(row.timing ?? undefined)) continue
+      samples.push(row)
+      if (samples.length === 8) break
+    }
+    if (rows.length < 10_000 || samples.length === 8) break
+    cursor = rows[rows.length - 1].request
+    yield* Effect.yieldNow
+  }
+  return samples.toReversed()
+})
 
 export function latestAssistant(
   messages: ReadonlyArray<SessionMessage.Info>,
@@ -243,33 +266,36 @@ export const read = Effect.fn("SessionCacheDiagnostics.read")(function* (
     FROM settlement JOIN ${SessionMessageTable} AS message ON message.id = settlement.assistantMessageID
     WHERE message.session_id = ${sessionID} AND message.type = 'assistant'
   `).pipe(Effect.orDie)
-  if (!row) return undefined
-  const assistant = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({
+  const assistant = row ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({
     id: SessionMessage.ID,
     model: SessionMessage.Assistant.fields.model,
     tokens: SessionMessage.Assistant.fields.tokens,
     cost: SessionMessage.Assistant.fields.cost,
     diagnostics: SessionMessage.Assistant.fields.diagnostics,
-  })))(row.data).pipe(Effect.mapError(() => new MessageDecodeError({ sessionID, messageID: SessionMessage.ID.make(row.id) })))
-  const records = (yield* db.select({
-    model: SessionProviderRequestTable.model,
-    timing: SessionProviderRequestTable.timing,
-    request: SessionProviderRequestTable.request,
-    assistantMessageID: SessionProviderRequestTable.assistant_message_id,
-  }).from(SessionProviderRequestTable).where(and(
-    eq(SessionProviderRequestTable.session_id, sessionID), eq(SessionProviderRequestTable.source, "step"),
-  )).orderBy(desc(SessionProviderRequestTable.request)).limit(8).all().pipe(Effect.orDie)).toReversed()
-  const latest = records.findLast((record) => record.assistantMessageID === assistant.id)
+  })))(row.data).pipe(Effect.mapError(() => new MessageDecodeError({ sessionID, messageID: SessionMessage.ID.make(row.id) }))) : undefined
+  const selected = boundary ? undefined : yield* db.select({ model: SessionTable.model }).from(SessionTable)
+    .where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+  const newest = !selected?.model && !assistant ? yield* db.select({ model: SessionProviderRequestTable.model })
+    .from(SessionProviderRequestTable).where(and(eq(SessionProviderRequestTable.session_id, sessionID),
+      eq(SessionProviderRequestTable.source, "step")))
+    .orderBy(desc(SessionProviderRequestTable.request)).limit(1).get().pipe(Effect.orDie) : undefined
+  const model = selected?.model ?? assistant?.model ?? newest?.model
+  if (!model) return undefined
+  const bound = boundary && assistant ? yield* db.select({ request: SessionProviderRequestTable.request })
+    .from(SessionProviderRequestTable).where(and(eq(SessionProviderRequestTable.session_id, sessionID),
+      eq(SessionProviderRequestTable.assistant_message_id, assistant.id)))
+    .orderBy(desc(SessionProviderRequestTable.request)).get().pipe(Effect.orDie) : undefined
+  const records = yield* recentGenerationRecords(db, sessionID, model, boundary ? (bound?.request ?? 0) + 1 : undefined)
   return calculate({
-    model: assistant.model,
-    tokens: assistant.tokens ?? SessionUsage.tokens(undefined),
-    estimatedCost: assistant.cost ?? Money.USD.zero,
-    contextLimit: assistant.diagnostics?.contextLimit,
-    contextBreakdown: assistant.diagnostics?.contextBreakdown,
-    providerCache: assistant.diagnostics?.providerCache,
+    model: assistant?.model ?? model,
+    tokens: assistant?.tokens ?? SessionUsage.tokens(undefined),
+    estimatedCost: assistant?.cost ?? Money.USD.zero,
+    contextLimit: assistant?.diagnostics?.contextLimit,
+    contextBreakdown: assistant?.diagnostics?.contextBreakdown,
+    providerCache: assistant?.diagnostics?.providerCache,
     generationSpeed: generationSpeed(
-      latest ? records.filter((record) => record.request < latest.request).map((record) => ({ model: record.model, timing: record.timing ?? undefined })) : [],
-      { model: latest?.model ?? assistant.model, timing: latest?.timing ?? undefined },
+      records.map((record) => ({ model: record.model, timing: record.timing ?? undefined })),
+      { model },
     ),
   })
 })

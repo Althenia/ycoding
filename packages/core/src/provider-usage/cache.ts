@@ -7,6 +7,7 @@ export interface GetInput {
   readonly key: string
   readonly ttlMs: number
   readonly refresh?: boolean
+  readonly generation?: number
   readonly load: Effect.Effect<ProviderUsage.Snapshot, Error>
 }
 
@@ -17,6 +18,7 @@ export interface Interface {
 }
 
 interface Entry {
+  readonly generation: number
   readonly value?: ProviderUsage.Snapshot
   readonly expiresAt: number
   readonly pending?: Promise<ProviderUsage.Snapshot>
@@ -25,6 +27,11 @@ interface Entry {
 export function make(input: { readonly now?: () => number } = {}): Interface {
   const now = input.now ?? Date.now
   const entries = new Map<string, Entry>()
+  const store = (key: string, entry: Entry) => {
+    entries.delete(key)
+    entries.set(key, entry)
+    while (entries.size > 256) entries.delete(entries.keys().next().value!)
+  }
 
   const stale = (value: ProviderUsage.Snapshot) =>
     new ProviderUsage.Snapshot({
@@ -43,20 +50,27 @@ export function make(input: { readonly now?: () => number } = {}): Interface {
       Effect.tryPromise({
         try: async () => {
           const current = entries.get(request.key)
-          if (!request.refresh && current?.value && current.expiresAt > now()) return current.value
-          if (current?.pending) return current.pending
+          const generation = request.generation ?? 0
+          if (current && current.generation >= generation) {
+            store(request.key, current)
+            if (current.pending) return current.pending
+            if (current.value && (current.generation > generation || (!request.refresh && current.expiresAt > now())))
+              return current.value
+          }
 
           let pending: Promise<ProviderUsage.Snapshot>
           pending = Effect.runPromise(request.load)
             .then((value) => {
-              entries.set(request.key, { value, expiresAt: now() + request.ttlMs })
+              if (entries.get(request.key)?.pending === pending)
+                store(request.key, { generation, value, expiresAt: now() + request.ttlMs })
               return value
             })
             .catch((cause) => {
-              const previous = entries.get(request.key)?.value ?? current?.value
+              const previous = current?.value
               if (previous) {
                 const value = stale(previous)
-                entries.set(request.key, { value: previous, expiresAt: now() + Math.min(request.ttlMs, 30_000) })
+                if (entries.get(request.key)?.pending === pending)
+                  store(request.key, { generation, value, expiresAt: now() + Math.min(request.ttlMs, 30_000) })
                 return value
               }
               throw cause
@@ -64,9 +78,10 @@ export function make(input: { readonly now?: () => number } = {}): Interface {
             .finally(() => {
               const latest = entries.get(request.key)
               if (latest?.pending === pending)
-                entries.set(request.key, { value: latest.value, expiresAt: latest.expiresAt })
+                store(request.key, { generation: latest.generation, value: latest.value, expiresAt: latest.expiresAt })
             })
-          entries.set(request.key, {
+          store(request.key, {
+            generation,
             value: current?.value,
             expiresAt: current?.expiresAt ?? 0,
             pending,
@@ -77,7 +92,7 @@ export function make(input: { readonly now?: () => number } = {}): Interface {
       }),
     put: (key, value, ttlMs) =>
       Effect.sync(() => {
-        entries.set(key, { value, expiresAt: now() + ttlMs })
+        store(key, { generation: 0, value, expiresAt: now() + ttlMs })
       }),
     clear: (key) =>
       Effect.sync(() => {

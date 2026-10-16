@@ -18,6 +18,8 @@ import { SessionHelperPolicy } from "./session/helper-policy"
 import { SessionMessage } from "./session/message"
 import { SessionModelHeaders } from "./session/model-headers"
 import { SessionProviderRequest } from "./session/provider-request"
+import { SessionUsageAttribution } from "./session/usage-attribution"
+import { Database } from "./database/database"
 import { SessionRunnerCache } from "./session/runner/cache"
 import { SessionSchema } from "./session/schema"
 import { SessionStore } from "./session/store"
@@ -53,8 +55,10 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
   const requests = yield* SessionProviderRequest.Service
   const events = yield* EventRuntime.Service
   const llm = yield* LLMClient.Service
+  const database = yield* Database.Service
   return Service.of({
     evaluate: Effect.fn("DecisionAgent.evaluate")(function* (input, context) {
+      const usageAnchor = yield* SessionUsageAttribution.dispatch(database.db, context.sessionID)
       const session = yield* store.get(context.sessionID)
       const agent = yield* agents.get(Agent.ID.make("decision"))
       if (!session || !agent) return yield* new Error({ reason: "unavailable" })
@@ -97,6 +101,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       })
       const tracker = yield* requests.next({
         sessionID: session.id, inputID: context.inputID, source: "decision", agent: agent.id, model: resolved.ref,
+        usageAnchor: usageAnchor ?? null,
         connectionIdentityDigest: resolved.accountIdentityDigest,
         routeID: resolved.model.route.id, promptCacheKey: cache.promptCacheKey,
         systemDigest: cache.systemDigest, toolDigest: cache.toolDigest,
@@ -152,11 +157,11 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       return { model: resolved.ref, semantics: "model-estimate" as const, ...parsed.success.decisions,
         ...(usage === undefined ? {} : { usage: usage.tokens }),
       }
-    }),
+    }, (effect, _input, context) => SessionUsageAttribution.contribute(database.db, context.sessionID, effect)),
   })
 }))
 
 export const node = makeLocationNode({
   service: Service, layer,
-  deps: [Agent.node, SessionHelperPolicy.node, SessionStore.node, Config.node, SessionProviderRequest.node, EventRuntime.node, llmClient],
+  deps: [Agent.node, SessionHelperPolicy.node, SessionStore.node, Config.node, SessionProviderRequest.node, EventRuntime.node, Database.node, llmClient],
 })

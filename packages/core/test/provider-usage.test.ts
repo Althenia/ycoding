@@ -85,6 +85,19 @@ describe("ProviderUsageCache", () => {
     expect(stale).toMatchObject({ status: "stale", windows: [{ used: 25 }] })
     expect(stale.message).toBe("Provider usage refresh failed")
     expect(JSON.stringify(stale)).not.toContain("secret upstream body")
+    expect(
+      await Effect.runPromise(
+        cache.get({
+          key: "provider:credential",
+          ttlMs: 60_000,
+          load: Effect.die("cached stale data must not refresh before expiry"),
+        }),
+      ),
+    ).toMatchObject({
+      status: "stale",
+      updatedAt: 1_000,
+      windows: [{ used: 25 }],
+    })
   })
 
   test("isolates cache entries by credential identity", async () => {
@@ -97,6 +110,103 @@ describe("ProviderUsageCache", () => {
     )
     expect(first.windows[0]?.used).toBe(10)
     expect(second.windows[0]?.used).toBe(80)
+  })
+
+  test("retains stale windows after a credential generation rotates", async () => {
+    const cache = ProviderUsageCache.make({ now: () => 1_000 })
+    await Effect.runPromise(
+      cache.get({
+        key: "provider:credential:account",
+        generation: 0,
+        ttlMs: 60_000,
+        load: Effect.succeed(snapshot(25, 1_000)),
+      }),
+    )
+    const value = await Effect.runPromise(
+      cache.get({
+        key: "provider:credential:account",
+        generation: 1,
+        ttlMs: 60_000,
+        load: Effect.fail(new Error("fixture refreshed token rejected")),
+      }),
+    )
+    expect(value).toMatchObject({ status: "stale", updatedAt: 1_000, windows: [{ used: 25 }] })
+  })
+
+  test("bounds credential entries while rotations preserve other accounts' cached data", async () => {
+    const cache = ProviderUsageCache.make({ now: () => 1_000 })
+    for (let index = 0; index < 256; index++)
+      await Effect.runPromise(
+        cache.get({ key: `account-${index}`, ttlMs: 60_000, load: Effect.succeed(snapshot(index, 1_000)) }),
+      )
+    for (let generation = 1; generation <= 300; generation++)
+      await Effect.runPromise(
+        cache.get({
+          key: "account-0",
+          generation,
+          ttlMs: 60_000,
+          load: Effect.succeed(snapshot(generation, 1_000)),
+        }),
+      )
+    for (let index = 1; index < 256; index++)
+      expect(
+        (
+          await Effect.runPromise(
+            cache.get({
+              key: `account-${index}`,
+              ttlMs: 60_000,
+              load: Effect.die("rotation must not evict another account"),
+            }),
+          )
+        ).windows[0].used,
+      ).toBe(index)
+    await Effect.runPromise(cache.get({ key: "overflow", ttlMs: 60_000, load: Effect.succeed(snapshot(400, 1_000)) }))
+    expect(
+      (
+        await Effect.runPromise(
+          cache.get({ key: "account-0", generation: 300, ttlMs: 60_000, load: Effect.succeed(snapshot(500, 1_000)) }),
+        )
+      ).windows[0].used,
+    ).toBe(500)
+  })
+
+  test("a rotated generation does not join or get overwritten by an older pending refresh", async () => {
+    const cache = ProviderUsageCache.make({ now: () => 1_000 })
+    const entered = Deferred.makeUnsafe<void>()
+    const release = Deferred.makeUnsafe<void>()
+    const pending = Effect.runFork(
+      cache.get({
+        key: "account",
+        generation: 0,
+        ttlMs: 60_000,
+        load: Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(snapshot(10, 1_000)),
+        ),
+      }),
+    )
+    await Effect.runPromise(Deferred.await(entered))
+    expect(
+      (
+        await Effect.runPromise(
+          cache.get({ key: "account", generation: 1, ttlMs: 60_000, load: Effect.succeed(snapshot(50, 1_000)) }),
+        )
+      ).windows[0].used,
+    ).toBe(50)
+    await Effect.runPromise(Deferred.succeed(release, undefined))
+    await Effect.runPromise(Fiber.join(pending))
+    expect(
+      (
+        await Effect.runPromise(
+          cache.get({
+            key: "account",
+            generation: 1,
+            ttlMs: 60_000,
+            load: Effect.die("new generation is already cached"),
+          }),
+        )
+      ).windows[0].used,
+    ).toBe(50)
   })
 })
 
@@ -258,12 +368,9 @@ describe("ProviderUsageRuntime", () => {
     const now = new Date(2026, 8, 27, 12).getTime()
     const values = ProviderUsageRuntime.localSpendSnapshots(
       [
-        { model: { providerID: "anthropic" }, cost: 0, timeCreated: now },
-        { model: { providerID: "anthropic" }, cost: 0.75, timeCreated: now - 1_000 },
-        { model: { providerID: "anthropic" }, cost: 2, timeCreated: now },
-        { model: { providerID: "openai" }, cost: null, timeCreated: now },
-        { model: { providerID: "opencode" }, cost: 0.25, timeCreated: now },
-        { model: { providerID: "xai" }, cost: 1, timeCreated: now - 86_400_000 },
+        { providerID: Provider.ID.make("anthropic"), knownUSD: 2.75, pricedRequests: 3, unpricedRequests: 1 },
+        { providerID: Provider.ID.make("openai"), pricedRequests: 0, unpricedRequests: 1 },
+        { providerID: Provider.ID.make("opencode"), knownUSD: 0.25, pricedRequests: 1, unpricedRequests: 0 },
       ],
       now,
     )
@@ -274,6 +381,12 @@ describe("ProviderUsageRuntime", () => {
         source: "local_session",
         stability: "stable",
         windows: [{ id: "today", label: "Today", unit: "usd", used: 2.75 }],
+        message: "Known local spend excludes unreported prices",
+      },
+      {
+        providerID: "openai",
+        windows: [{ id: "today", unit: "usd" }],
+        message: "Local request prices are unreported",
       },
       {
         providerID: "opencode",
@@ -283,7 +396,14 @@ describe("ProviderUsageRuntime", () => {
         windows: [{ used: 0.25 }],
       },
     ])
-    expect(values).toHaveLength(2)
+    expect(values).toHaveLength(3)
+    expect(values[1].windows[0].used).toBeUndefined()
+    expect(
+      ProviderUsageRuntime.localSpendSnapshots(
+        [{ providerID: Provider.ID.make("anthropic"), knownUSD: 0, pricedRequests: 1, unpricedRequests: 0 }],
+        now,
+      )[0].windows[0].used,
+    ).toBe(0)
   })
 
   test("lists local spend separately from a provider's account windows", async () => {
@@ -315,7 +435,10 @@ describe("ProviderUsageRuntime", () => {
             }),
           ),
       },
-      localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 0.5, timeCreated: now }]),
+      localSpend: () =>
+        Effect.succeed([
+          { providerID: Provider.ID.make("anthropic"), knownUSD: 0.5, pricedRequests: 1, unpricedRequests: 0 },
+        ]),
       now: () => now,
     })
     expect(
@@ -337,7 +460,10 @@ describe("ProviderUsageRuntime", () => {
       providers: { available: () => Effect.succeed([]) },
       adapters: {},
       now: () => now,
-      localSpend: () => Effect.succeed([{ model: { providerID: "anthropic" }, cost: 2, timeCreated: now }]),
+      localSpend: () =>
+        Effect.succeed([
+          { providerID: Provider.ID.make("anthropic"), knownUSD: 2, pricedRequests: 1, unpricedRequests: 0 },
+        ]),
     })
     expect(await Effect.runPromise(service.list())).toEqual([])
   })

@@ -449,11 +449,15 @@ describe("compacted history pruning", () => {
         db.all(sql`SELECT * FROM session_provider_request WHERE session_id = ${fixture.sessionID}`).pipe(Effect.orDie)
       const usageBefore = yield* totals()
       const ledgerBefore = yield* ledger()
+      const session = yield* Session.Service
+      const costsBefore = yield* session.promptCosts({ sessionID: fixture.sessionID, inputIDs: [fixture.ids.firstUser] })
+      expect(costsBefore.units[0]!.total.cost.known).toBe(Money.USD.make(0.5))
       expect(usageBefore?.cost).toBeGreaterThan(0)
       expect(ledgerBefore).toHaveLength(1)
       expect((yield* retention.prune(fixture.sessionID)).messages).toBeGreaterThan(0)
       expect(yield* totals()).toEqual(usageBefore)
       expect(yield* ledger()).toEqual(ledgerBefore)
+      expect(yield* session.promptCosts({ sessionID: fixture.sessionID, inputIDs: [fixture.ids.firstUser] })).toEqual(costsBefore)
     }),
   )
 

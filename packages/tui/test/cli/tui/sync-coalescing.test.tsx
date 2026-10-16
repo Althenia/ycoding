@@ -23,6 +23,7 @@ test("explicit and integration-event refreshes coalesce into one active and one 
     counts.set(url.pathname, count)
     if (paths.every((path) => (counts.get(path) ?? 0) >= 1)) started.resolve()
     if (paths.every((path) => (counts.get(path) ?? 0) >= 2)) trailing.resolve()
+    if (url.pathname === "/api/model/default") return response(url.pathname, count > 1)
     return (count === 1 ? first : second).get(url.pathname)?.promise
   }, events)
   let data!: ReturnType<typeof useData>
@@ -190,6 +191,33 @@ test("a failed trailing refresh releases its cache entry for an explicit retry",
   }
 })
 
+test("disposing the data owner ignores a late read failure and starts no further reads", async () => {
+  const response = Promise.withResolvers<Response>()
+  let requests = 0
+  const fixture = await mount((url) => {
+    if (url.pathname !== "/api/provider") return undefined
+    requests++
+    return response.promise
+  })
+  const ref = { directory: "/tmp/ycoding-sync-disposed" }
+  const settled = fixture.data.location.provider.sync(ref).then(() => "settled", () => "failed")
+  fixture.data.location.provider.invalidate(ref)
+  const trailing = fixture.data.location.provider.sync(ref)
+  try {
+    expect(requests).toBe(1)
+    fixture.destroy()
+    response.resolve(json({ message: "Owner closed" }, { status: 503 }))
+    expect(await settled).toBe("settled")
+    await trailing
+    expect(fixture.data.location.provider.list(ref)).toBeUndefined()
+    await fixture.data.location.provider.sync(ref)
+    expect(requests).toBe(1)
+  } finally {
+    response.resolve(json({ data: [] }))
+    fixture.destroy()
+  }
+})
+
 async function mount(handler: FetchHandler) {
   const events = createEventStream()
   const calls = createFetch(handler, events)
@@ -213,7 +241,7 @@ async function mount(handler: FetchHandler) {
   return {
     data,
     destroy() {
-      screen.renderer.destroy()
+      if (!screen.renderer.isDestroyed) screen.renderer.destroy()
       events.disconnect()
     },
   }

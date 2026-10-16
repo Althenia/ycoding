@@ -24,6 +24,31 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`usage_analytics_request\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`project_id\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`workspace_id\` text,
+          \`session_updated\` integer NOT NULL,
+          \`agent\` text NOT NULL,
+          \`source\` text NOT NULL,
+          \`model\` text NOT NULL,
+          \`usage_anchor\` text,
+          \`task_path\` text NOT NULL,
+          \`request\` integer NOT NULL,
+          \`attempts\` integer NOT NULL,
+          \`continuation\` text NOT NULL,
+          \`invalidation\` text NOT NULL,
+          \`prompt_cache_key\` text NOT NULL,
+          \`cache_read_reported\` integer,
+          \`tokens\` text NOT NULL,
+          \`cost\` real,
+          \`timing\` text,
+          \`time_created\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`credential\` (
           \`id\` text PRIMARY KEY,
           \`integration_id\` text,
@@ -457,6 +482,7 @@ export default {
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
           \`legacy_input_id\` text,
+          \`usage_anchor\` text,
           \`trigger\` text NOT NULL,
           \`requested_through_message_id\` text NOT NULL,
           \`requested_through_seq\` integer NOT NULL,
@@ -640,6 +666,7 @@ export default {
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
           \`input_id\` text,
+          \`usage_anchor\` text,
           \`assistant_message_id\` text,
           \`connection_identity_digest\` text,
           \`source\` text NOT NULL,
@@ -716,6 +743,7 @@ export default {
           \`tokens_reasoning\` integer DEFAULT 0 NOT NULL,
           \`tokens_cache_read\` integer DEFAULT 0 NOT NULL,
           \`tokens_cache_write\` integer DEFAULT 0 NOT NULL,
+          \`usage_pruned_through\` integer,
           \`revert\` text,
           \`permission\` text,
           \`autonomy\` text,
@@ -756,6 +784,7 @@ export default {
           \`parent_assistant_message_id\` text NOT NULL,
           \`tool_call_id\` text NOT NULL,
           \`input_id\` text NOT NULL UNIQUE,
+          \`usage_anchor\` text,
           \`description\` text NOT NULL,
           \`agent\` text NOT NULL,
           \`model\` text NOT NULL,
@@ -854,6 +883,9 @@ export default {
           \`sample\` text NOT NULL
         );
       `)
+      yield* tx.run(
+        `CREATE INDEX \`usage_analytics_request_time_created_id_idx\` ON \`usage_analytics_request\` (\`time_created\`,\`id\`);`,
+      )
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
@@ -982,15 +1014,6 @@ export default {
       )
       yield* tx.run(
         `CREATE INDEX \`session_provider_request_time_created_idx\` ON \`session_provider_request\` (\`time_created\`);`,
-      )
-      yield* tx.run(
-        `CREATE INDEX \`session_provider_request_time_created_id_idx\` ON \`session_provider_request\` (\`time_created\`,\`id\`);`,
-      )
-      yield* tx.run(
-        `CREATE INDEX \`session_provider_request_unpriced_idx\` ON \`session_provider_request\` (\`id\`) WHERE "session_provider_request"."cost" is null and "session_provider_request"."source" <> 'decision';`,
-      )
-      yield* tx.run(
-        `CREATE INDEX \`session_provider_request_session_unpriced_idx\` ON \`session_provider_request\` (\`session_id\`,\`id\`) WHERE "session_provider_request"."cost" is null and "session_provider_request"."source" <> 'decision';`,
       )
       yield* tx.run(
         `CREATE INDEX \`session_provider_state_link_blob_idx\` ON \`session_provider_state_link\` (\`blob_digest\`);`,

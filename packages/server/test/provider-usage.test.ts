@@ -27,6 +27,7 @@ const snapshot = new ProviderUsage.Snapshot({
 test("provider usage handlers forward refresh and return normalized snapshots", async () => {
   const calls: unknown[] = []
   const service = ProviderUsageRuntime.Service.of({
+    forecast: () => Effect.die("unused"),
     get: (input) =>
       Effect.sync(() => {
         calls.push(["get", input])
@@ -55,6 +56,10 @@ test("provider usage HTTP routes decode refresh and encode normalized quota with
     directory: AbsolutePath.make("/fixture"),
     project: { id: Project.ID.make("prj_usage"), directory: AbsolutePath.make("/fixture") },
   })).pipe(Context.add(ProviderUsageRuntime.Service, ProviderUsageRuntime.Service.of({
+    forecast: (input) => Effect.sync(() => {
+      calls.push(["forecast", input])
+      return { asOf: 100, localScope: input.localScope, localRates: [], quotas: [] }
+    }),
     list: (input) => Effect.sync(() => { calls.push(input); return [snapshot] }),
     get: (input) => Effect.sync(() => { calls.push(input); return snapshot }),
     observe: () => Effect.die("unused"),
@@ -80,5 +85,10 @@ test("provider usage HTTP routes decode refresh and encode normalized quota with
   const get = await http.request(`/api/provider/${openai}/usage?refresh=false`)
   expect(get.status).toBe(200)
   expect(await get.json()).toMatchObject({ location: { directory: "/fixture" }, data: Schema.encodeSync(ProviderUsage.Snapshot)(snapshot) })
-  expect(calls).toEqual([{ refresh: true }, { providerID: openai, refresh: false }])
+  for (const localScope of ["backend", "location"] as const) {
+    const forecast = await http.request(`/api/provider/usage/forecast?localScope=${localScope}`)
+    expect(forecast.status).toBe(200)
+    expect(await forecast.json()).toMatchObject({ location: { directory: "/fixture" }, data: { asOf: 100, localScope, localRates: [], quotas: [] } })
+  }
+  expect(calls).toEqual([{ refresh: true }, { providerID: openai, refresh: false }, ["forecast", { localScope: "backend" }], ["forecast", { localScope: "location" }]])
 })

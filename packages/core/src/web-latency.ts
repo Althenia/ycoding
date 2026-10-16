@@ -8,7 +8,6 @@ import { WebLatencyTable } from "./web-latency/sql"
 import { TelemetryConsent } from "./telemetry-consent"
 
 type Db = Database.Interface["db"]
-const retentionMs = 30 * 24 * 60 * 60 * 1_000
 const maxRows = 10_000
 
 export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorError>()(
@@ -16,7 +15,8 @@ export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorErr
   {},
 ) {}
 
-export const prune = Effect.fn("WebLatency.prune")(function* (db: Db) {
+export const prune = Effect.fn("WebLatency.prune")(function* (db: Db, days = 30) {
+  const retentionMs = days * 86_400_000
   const receivedAt = yield* Clock.currentTimeMillis
   yield* db
     .delete(WebLatencyTable)
@@ -25,7 +25,8 @@ export const prune = Effect.fn("WebLatency.prune")(function* (db: Db) {
     .pipe(Effect.orDie)
 })
 
-export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples: readonly Telemetry.Sample[]) {
+export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples: readonly Telemetry.Sample[], days = 30) {
+  const retentionMs = days * 86_400_000
   const receivedAt = yield* Clock.currentTimeMillis
   yield* db
     .transaction((tx) =>
@@ -58,10 +59,12 @@ export const append = Effect.fn("WebLatency.append")(function* (db: Db, samples:
 export const list = Effect.fn("WebLatency.list")(function* (
   db: Db,
   input: { readonly limit?: number; readonly before?: string },
+  days = 30,
 ) {
+  const retentionMs = days * 86_400_000
   const before = input.before === undefined ? undefined : parseCursor(input.before)
   if (input.before !== undefined && before === undefined) return yield* new InvalidCursorError()
-  yield* prune(db)
+  yield* prune(db, days)
   const receivedAt = yield* Clock.currentTimeMillis
   const limit = input.limit ?? 60
   const rows = yield* db

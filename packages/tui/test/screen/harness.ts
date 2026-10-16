@@ -1,5 +1,4 @@
-import { mock } from "bun:test"
-import { createComponent } from "solid-js"
+import { createPluginRuntime } from "../../src/plugin/runtime"
 import type { useData } from "../../src/context/data"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
@@ -51,65 +50,11 @@ export async function renderScreen(input: {
     useThread: false,
     kittyKeyboard: input.kittyKeyboard ?? false,
   })
-  // A module mock persists for the whole Bun process, so installing it only when a caller asks for
-  // plugin status leaks that status into every file loaded afterwards and makes optional rail
-  // sections appear where later tests assert their absence. Always install a freshly seeded runtime.
-  const runtime = await import("../../src/plugin/runtime")
-  const originalRuntime = { ...runtime }
-  const pluginRuntime = runtime.createPluginRuntime()
+  const pluginRuntime = createPluginRuntime()
   pluginRuntime.update({ status: input.pluginStatus ?? [] })
-  mock.module("../../src/plugin/runtime", () => ({ ...originalRuntime, createPluginRuntime: () => pluginRuntime }))
-  let restoreClipboard: (() => void) | undefined
-  if (input.clipboard) {
-    const clipboard = await import("../../src/context/clipboard")
-    const original = { ...clipboard }
-    mock.module("../../src/context/clipboard", () => ({
-      ClipboardProvider: (props: { children: unknown }) => props.children,
-      useClipboard: () => input.clipboard,
-    }))
-    restoreClipboard = () => {
-      mock.module("../../src/context/clipboard", () => original)
-    }
-  }
 
   const events = createEventStream()
-  let restoreData: (() => void) | undefined
-  if (input.data) {
-    const data = await import("../../src/context/data")
-    const original = { ...data }
-    function Probe() {
-      input.data?.(data.useData())
-      return null
-    }
-    mock.module("../../src/context/data", () => ({
-      ...data,
-      DataProvider: (props: Parameters<typeof data.DataProvider>[0]) =>
-        createComponent(original.DataProvider, {
-          get recordTelemetry() {
-            return props.recordTelemetry
-          },
-          get selectedSessionID() {
-            return props.selectedSessionID
-          },
-          get children() {
-            return [createComponent(Probe, {}), props.children]
-          },
-        }),
-    }))
-    restoreData = () => {
-      mock.module("../../src/context/data", () => original)
-    }
-  }
   const calls = createFetch(input.route, events)
-  let restoreBuiltins: (() => void) | undefined
-  if (input.builtins) {
-    const builtinModule = await import("../../src/plugin/builtins")
-    const original = { ...builtinModule }
-    mock.module("../../src/plugin/builtins", () => ({ builtins: input.builtins }))
-    restoreBuiltins = () => {
-      mock.module("../../src/plugin/builtins", () => original)
-    }
-  }
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
   const { run } = await import("../../src/app")
 
@@ -118,6 +63,10 @@ export async function renderScreen(input: {
       server: { endpoint: { url: server.url.toString() } },
       config: { get: async () => input.config ?? {}, update: async () => ({}) },
       packages: input.packages ?? { resolve: async () => undefined },
+      pluginRuntime,
+      clipboard: input.clipboard,
+      onData: input.data,
+      builtins: input.builtins,
       args: input.args ?? {},
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
       log: () => {},
@@ -178,16 +127,9 @@ export async function renderScreen(input: {
         .find((span) => span.text.includes(text))
         ?.fg.toInts(),
     async dispose() {
-      try {
-        if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-        await task.catch(() => {})
-        await server.stop()
-      } finally {
-        restoreData?.()
-        restoreBuiltins?.()
-        restoreClipboard?.()
-        mock.module("../../src/plugin/runtime", () => originalRuntime)
-      }
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      await task.catch(() => {})
+      await server.stop()
     },
   }
 }
