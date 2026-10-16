@@ -392,7 +392,7 @@ Session titles are local by default; explicit goal calculation uses a model:
 
 - local title generation selects one sanitized line from the first user prompt and makes no provider request;
 - `/goal <text>` calculates an objective through the hidden goal agent and its configured system pre-prompt;
-- `efficiency.title: "model"` enables model-generated titles; goal calculation has no local-only mode;
+- `efficiency.title: "model"` enables model-generated titles. An unavailable helper, provider failure, empty output, filtered response, or obvious refusal uses the sanitized first-prompt title instead. Provider failures are logged, and reported usage is retained. Goal calculation has no local-only mode;
 - `title: "off"` keeps the initial generated Session title;
 - selective-compaction selectors and manifest structure are trusted Core output. The optional helper emits only strict checkpoint TOON content; timeout or provider failure stops later helper calls, while empty, malformed, or oversized output is also replaced by a local canonical checkpoint;
 - Soft context pressure is runtime-owned. The context hook durably admits compaction through the latest complete-message boundary and starts or joins exactly one process-global worker without asking the model to call a tool. Request preparation continues after admission and worker start rather than waiting for settlement; the explicit manual endpoint and mandatory hard-limit gate wait for durable settlement. All three paths share one per-Session admission gate, so exactly one compaction is admitted for a Session at a time.

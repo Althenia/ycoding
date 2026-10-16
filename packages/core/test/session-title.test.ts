@@ -1,6 +1,7 @@
-import { expect } from "bun:test"
-import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
-import { OpenAIChat } from "@ycoding-ai/ai/protocols"
+import { afterEach, expect } from "bun:test"
+import { LLMClient, LLMError, LLMEvent, LLMRequest, Model, TransportReason } from "@ycoding-ai/ai"
+import { AnthropicMessages, OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
+import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
@@ -23,11 +24,16 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Money } from "@ycoding-ai/schema/money"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Logger, Stream } from "effect"
+import { HttpClientResponse } from "effect/unstable/http"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 let requests: LLMRequest[] = []
+let response: ((request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>) | undefined
+afterEach(() => {
+  response = undefined
+})
 const model = Model.make({
   id: "title-model",
   provider: "test",
@@ -47,6 +53,7 @@ const client = Layer.mock(LLMClient.Service)({
   prepare: () => Effect.die("unused"),
   stream: (request: LLMRequest) => {
     requests.push(request)
+    if (response) return response(request)
     return Stream.make(
       LLMEvent.textDelta({ id: "title", text: "Generated Title\n" }),
       LLMEvent.stepFinish({
@@ -76,7 +83,8 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 let titleMode: SessionHelperPolicy.TitleMode = "local"
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ diagnostics: () => Effect.succeed([]),
+  Config.Service.of({
+    diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
@@ -217,8 +225,13 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
     expect(renamed?.tokens).toEqual({ input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } })
     expect(renamed?.cost).toBeCloseTo(0.0000248)
     const { db } = yield* Database.Service
-    expect(yield* db.select({ timing: SessionProviderRequestTable.timing }).from(SessionProviderRequestTable)
-      .where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toMatchObject({
+    expect(
+      yield* db
+        .select({ timing: SessionProviderRequestTable.timing })
+        .from(SessionProviderRequestTable)
+        .where(eq(SessionProviderRequestTable.session_id, sessionID))
+        .get(),
+    ).toMatchObject({
       timing: { promptEvalDurationNs: 4_000_000 },
     })
     const promptCacheKey = requests[0]?.providerOptions?.openai?.promptCacheKey
@@ -374,3 +387,216 @@ it.effect("falls back to local title in model mode when the title agent is remov
     expect(untouched?.title).toBe("Help me debug the failing build")
   }),
 )
+
+const generateModelTitle = Effect.gen(function* () {
+  requests = []
+  titleMode = "model"
+  const agents = yield* Agent.Service
+  yield* agents.transform((editor) => {
+    editor.update(Agent.ID.make("title"), (agent) => {
+      agent.mode = "primary"
+      agent.hidden = true
+      agent.system = "Output only a conversation title."
+    })
+  })
+  const sessionID = Session.ID.create()
+  yield* insertSession(sessionID)
+  yield* prompt(sessionID, "# Help me debug the failing build\nKeep the details private")
+  const store = yield* SessionStore.Service
+  const session = yield* store.get(sessionID)
+  if (!session) return yield* Effect.die("session missing")
+  const title = yield* SessionTitle.Service
+  yield* title.generateForFirstPrompt(session)
+  return (yield* store.get(sessionID))!
+})
+
+const titleOutput = (text: string, stepReason: "stop" | "content-filter" = "stop", finishReason = stepReason) =>
+  Stream.make(
+    LLMEvent.textDelta({ id: "title", text }),
+    LLMEvent.stepFinish({
+      index: 0,
+      reason: stepReason,
+      usage: { inputTokens: 10, nonCachedInputTokens: 10, outputTokens: 5 },
+    }),
+    LLMEvent.finish({ reason: finishReason }),
+  )
+
+for (const scenario of [
+  { name: "a filtered Step finish", stream: titleOutput("A plausible title", "content-filter", "stop") },
+  { name: "a filtered request finish", stream: titleOutput("A plausible title", "stop", "content-filter") },
+  { name: "a plain cannot refusal", stream: titleOutput("I cannot help with that request.") },
+  { name: "a plain contraction refusal", stream: titleOutput("I can't assist with this request.") },
+  { name: "a curly-apostrophe refusal", stream: titleOutput("I can’t provide that information.") },
+  { name: "an apologetic refusal", stream: titleOutput("I'm sorry, but I cannot assist with that.") },
+  { name: "an inability refusal", stream: titleOutput("I am unable to fulfill this request.") },
+  { name: "a contracted inability refusal", stream: titleOutput("I’m unable to fulfill this request.") },
+  { name: "a plural inability refusal", stream: titleOutput("We’re not able to assist with that request.") },
+  { name: "an explicit declining response", stream: titleOutput("I decline to assist with that request.") },
+  { name: "a refusal with a preamble", stream: titleOutput("Unfortunately, I cannot help with that request.") },
+  { name: "a policy refusal", stream: titleOutput("As an AI assistant, I must decline this request.") },
+  { name: "a quoted refusal", stream: titleOutput('"I cannot help with that request."') },
+  {
+    name: "a refusal split across chunks",
+    stream: Stream.make(
+      LLMEvent.textDelta({ id: "title", text: "\n  I can" }),
+      LLMEvent.textDelta({ id: "title", text: "not help with that request." }),
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        usage: { inputTokens: 10, nonCachedInputTokens: 10, outputTokens: 5 },
+      }),
+      LLMEvent.finish({ reason: "stop" }),
+    ),
+  },
+])
+  it.effect(`uses the local title for ${scenario.name} without losing reported usage`, () =>
+    Effect.gen(function* () {
+      response = () => scenario.stream
+      const session = yield* generateModelTitle
+      expect(session.title).toBe("Help me debug the failing build")
+      expect(requests).toHaveLength(1)
+      expect(session.tokens).toEqual({ input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } })
+      expect(session.cost).toBeCloseTo(0.00002)
+      const { db } = yield* Database.Service
+      expect(
+        yield* db
+          .select()
+          .from(SessionProviderRequestTable)
+          .where(eq(SessionProviderRequestTable.session_id, session.id))
+          .all(),
+      ).toMatchObject([{ source: "title", tokens: { input: 10, output: 5 }, cost: 0.00002 }])
+    }),
+  )
+
+for (const text of ["Investigate model refusals", "Cannot connect to the database", "Repair the build\nMore details"])
+  it.effect(`keeps the valid model title ${JSON.stringify(text)}`, () =>
+    Effect.gen(function* () {
+      response = () => titleOutput(text)
+      const session = yield* generateModelTitle
+      expect(session.title).toBe(text.split("\n")[0])
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+for (const scenario of [
+  {
+    name: "Anthropic's refusal stop reason",
+    model: AnthropicMessages.route.model({ id: "claude-sonnet-4-5" }),
+    body: [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_title",
+          role: "assistant",
+          model: "claude-sonnet-4-5",
+          content: [],
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "A plausible title" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "refusal", stop_sequence: null }, usage: { output_tokens: 5 } },
+      { type: "message_stop" },
+    ],
+  },
+  {
+    name: "OpenAI Chat's refusal field",
+    model: OpenAIChat.route.model({ id: "gpt-title" }),
+    body: [
+      { choices: [{ delta: { refusal: "I cannot help with that request." }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+    ],
+  },
+  {
+    name: "OpenAI Responses' refusal content",
+    model: OpenAIResponses.route.model({ id: "gpt-title" }),
+    body: [
+      {
+        type: "response.refusal.delta",
+        item_id: "msg_title",
+        content_index: 0,
+        delta: "I cannot help with that request.",
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_title",
+          output: [
+            {
+              type: "message",
+              id: "msg_title",
+              role: "assistant",
+              content: [{ type: "refusal", refusal: "I cannot help with that request." }],
+            },
+          ],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+    ],
+  },
+])
+  it.effect(`uses the local title for native ${scenario.name}`, () =>
+    Effect.gen(function* () {
+      response = (request) =>
+        LLMClient.stream(LLMRequest.update(request, { model: scenario.model })).pipe(
+          Stream.provide(
+            LLMClient.layer.pipe(
+              Layer.provide(
+                Layer.succeed(RequestExecutor.Service, {
+                  execute: (request) =>
+                    Effect.succeed(
+                      HttpClientResponse.fromWeb(
+                        request,
+                        new Response(
+                          scenario.body.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") +
+                            "data: [DONE]\n\n",
+                          { headers: { "content-type": "text/event-stream" } },
+                        ),
+                      ),
+                    ),
+                }),
+              ),
+            ),
+          ),
+        )
+      const session = yield* generateModelTitle
+      expect(session.title).toBe("Help me debug the failing build")
+      expect(requests).toHaveLength(1)
+      expect(session.tokens).toEqual({ input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } })
+    }),
+  )
+
+for (const scenario of [
+  {
+    name: "a provider error event",
+    stream: Stream.make(
+      LLMEvent.textDelta({ id: "title", text: "Do not save this partial title" }),
+      LLMEvent.providerError({ message: "Synthetic title provider unavailable" }),
+    ),
+  },
+  {
+    name: "a thrown provider error",
+    stream: Stream.fail(
+      new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new TransportReason({ message: "Synthetic title provider unavailable" }),
+      }),
+    ),
+  },
+])
+  it.effect(`keeps ${scenario.name} observable while using the local title`, () =>
+    Effect.gen(function* () {
+      response = () => scenario.stream
+      const logs: string[] = []
+      const session = yield* generateModelTitle.pipe(
+        Effect.provide(
+          Logger.layer([Logger.make((entry) => logs.push(Bun.inspect(entry.message)))], { mergeWithExisting: false }),
+        ),
+      )
+      expect(session.title).toBe("Help me debug the failing build")
+      expect(logs.join("\n")).toContain("Synthetic title provider unavailable")
+      expect(requests).toHaveLength(1)
+    }),
+  )

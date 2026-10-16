@@ -4,6 +4,10 @@ Protocol owns public operations, Schema owns public shapes and durable events, a
 
 `Session.Info.time.updated` is the Session record update and list order/cursor key. Optional `Session.Info.time.active` is the millisecond creation time of the latest terminal `session.step.ended.1`, `session.step.failed.1`, `session.execution.succeeded.1`, `session.execution.failed.1`, or `session.execution.interrupted.1` event. Terminal projection updates `time.active` without changing `time.updated`; existing records are backfilled from those events and remain without activity when none exists. The remote connector forwards this optional field in Session list/get data and forwards the original event creation time on live events.
 
+## Session titles
+
+Automatic title generation applies to a root Session while its first user message is the only user message. `efficiency.title` defaults to `local`, which selects one sanitized line from that prompt without a provider request. `off` preserves the initial Session title. `model` accepts the first nonempty output line, truncated to 100 characters; an unavailable helper, provider failure, empty output, filtered finish, or obvious refusal uses the same local title. Provider failures are logged without failing the Session, and reported helper usage remains accounted under source `title`.
+
 ## Next-message prediction event
 
 `session.prediction.updated` is a public ephemeral event with exactly `{ sessionID: Session.ID, sourceMessageID: SessionMessage.ID, text: string }` as data. It belongs in the Protocol live-event manifest, not the durable manifest or Session log; it never creates a transcript message, instruction, or model-visible history entry. Optional envelope properties are omitted when absent.

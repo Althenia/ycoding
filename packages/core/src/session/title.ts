@@ -21,6 +21,8 @@ import { SessionSchema } from "./schema"
 import { SessionUsage } from "./usage"
 
 const MAX_LENGTH = 100
+const REFUSAL =
+  /^(?:["'“‘`]\s*)?(?:unfortunately[,:]?\s+)?(?:(?:i|we)\s+(?:cannot|can['’]t|won['’]t|will not|(?:am|are)\s+(?:unable|not able)|(?:(?:must|have to)\s+)?(?:decline|refuse))\b|(?:i['’]m|we['’]re|i am|we are)\s+(?:sorry|unable|not able)\b|sorry\b|as an (?:ai|assistant)\b)/iu
 
 type Dependencies = {
   readonly headers?: SessionModelHeaders.Options
@@ -173,19 +175,36 @@ const make = (dependencies: Dependencies) => {
           Stream.tap(tracker.observeEvent),
           Stream.onExit(() => tracker.settle()),
           Stream.runForEach((event) => {
-            if (LLMEvent.is.providerError(event)) failed = true
+            if (LLMEvent.is.providerError(event)) {
+              failed = true
+              return Effect.logWarning("Session title provider request failed", {
+                sessionID: session.id,
+                message: event.message,
+              })
+            }
+            if ((LLMEvent.is.stepFinish(event) || LLMEvent.is.finish(event)) && event.reason === "content-filter")
+              failed = true
             if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
             if (LLMEvent.is.stepFinish(event)) {
               timing = SessionUsage.timing(event.usage)
               const step = SessionUsage.record(event.usage, resolved.cost)
               usage = usage ? SessionUsage.add(usage, step) : step
-              if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)) !== undefined)
+              if (
+                SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)) !==
+                undefined
+              )
                 recordedCost = usage.cost
             }
             return Effect.void
           }),
           Effect.as(true),
-          Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
+          Effect.catchTag("LLM.Error", (error) =>
+            Effect.logWarning("Session title provider request failed", {
+              sessionID: session.id,
+              reason: error.reason._tag,
+              message: error.reason.message,
+            }).pipe(Effect.as(false)),
+          ),
           Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest), Effect.asVoid)),
         )
         yield* recordUsage
@@ -202,7 +221,7 @@ const make = (dependencies: Dependencies) => {
           .split("\n")
           .map((line) => line.trim())
           .find((line) => line.length > 0)
-        if (!title) {
+        if (!title || REFUSAL.test(title)) {
           yield* dependencies.events.publish(SessionEvent.Renamed, {
             sessionID: session.id,
             title: dependencies.helpers.localTitle(firstUser.text),
