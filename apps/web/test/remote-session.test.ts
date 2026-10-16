@@ -1086,7 +1086,7 @@ describe("remote store integration", () => {
       expect(test.store.state().sessionRowsStale).toBe(false)
       test.relay.pushStatus(["ses_unlisted"], [])
       await test.runUntil(() => workspaceReads >= 2)
-      expect(test.store.state().sessionListStatus).toBe("loading")
+      expect(test.store.state().sessionListStatus).toBe("ready")
       expect(test.store.state().sessionRowsStale).toBe(false)
       expect(test.store.state().sessions).toHaveLength(2)
       release()
@@ -3328,6 +3328,7 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
+      await test.runUntil(() => test.store.state().view?.capturedChanges !== undefined)
       let notifications = 0
       const unsubscribe = test.store.subscribe(() => (notifications += 1))
 

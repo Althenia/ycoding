@@ -362,6 +362,28 @@ describe("remote navigation", () => {
     }
   }, 180_000)
 
+  test("workspace warm-up leaves Usage unread until its route opens", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&theme=light`)
+      await until(page, `window.remoteOperationReport().operations['keepAwake.get'] === 1`)
+      const operations = await page.evaluate<Record<string, number>>(`window.remoteOperationReport().operations`)
+      expect(operations["providerUsage.list"] ?? 0).toBe(0)
+      expect(operations["usage.get"] ?? 0).toBe(0)
+      expect(operations["usage.report"] ?? 0).toBe(0)
+      await page.evaluate(
+        `[...document.querySelectorAll('a')].find(link => link.textContent.trim() === 'Usage' && link.getBoundingClientRect().width > 0).click()`,
+      )
+      await until(page, `document.querySelectorAll('.usage-provider').length === 3`)
+      const opened = await page.evaluate<Record<string, number>>(`window.remoteOperationReport().operations`)
+      expect(opened["providerUsage.list"]).toBe(1)
+      expect(opened["usage.get"]).toBe(1)
+      expect(opened["usage.report"]).toBe(3)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
   test("opens Usage with the connected machine's quotas, balance, and spend through the real store", async () => {
     const page = await requireBrowser().openPage()
     try {

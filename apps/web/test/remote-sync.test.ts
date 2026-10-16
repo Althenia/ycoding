@@ -312,6 +312,21 @@ describe("windowed history", () => {
     let promoted = false
     const test = await harness({
       handler: (request) => {
+        if (request.operation === "session.log")
+          return {
+            ok: true,
+            value: {
+              data: promoted
+                ? [
+                    {
+                      type: "session.renamed",
+                      durable: { aggregateID: "ses_a", seq: 4, version: 1 },
+                      data: { sessionID: "ses_a", title: "Promoted" },
+                    },
+                  ]
+                : [],
+            },
+          }
         if (request.operation === "session.snapshot")
           return { ok: true, value: page("ses_a", promoted ? [message("msg_9")] : [], undefined, promoted ? 4 : 1) }
         if (request.operation === "session.pending.list")
@@ -358,8 +373,24 @@ describe("windowed history", () => {
   test("a gap during a machine resync schedules a second authoritative window", async () => {
     const gate = Promise.withResolvers<void>()
     let snapshots = 0
+    let advanced = false
     const test = await harness({
       handler: async (request) => {
+        if (request.operation === "session.log")
+          return {
+            ok: true,
+            value: {
+              data: advanced
+                ? [
+                    {
+                      type: "session.renamed",
+                      durable: { aggregateID: "ses_a", seq: 2, version: 1 },
+                      data: { sessionID: "ses_a", title: "Changed" },
+                    },
+                  ]
+                : [],
+            },
+          }
         if (request.operation === "session.snapshot") {
           snapshots += 1
           if (snapshots === 2) await gate.promise
@@ -376,6 +407,7 @@ describe("windowed history", () => {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
+      advanced = true
       test.relay.pushSessions(["ses_a"])
       await waitFor(() => snapshots === 2)
       test.relay.pushEvent("ses_a", {
@@ -734,6 +766,7 @@ describe("snapshot synchronization", () => {
       await test.store.selectSession("ses_a")
       expect(test.store.state().view?.generationSpeed?.latest?.tokensPerSecond).toBe(6_000)
       expect(test.store.state().view?.contextWindow).toMatchObject({ used: 74_000, limit: 258_000 })
+      await test.runUntil(() => test.store.state().view?.capturedChanges !== undefined)
       const requestCount = test.relay.requests.length
       const updated = { ...speed, tokens: 15, durationNs: 3_000_000, tokensPerSecond: 5_000 }
       test.relay.pushEvent("ses_a", {

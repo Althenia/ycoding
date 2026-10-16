@@ -507,6 +507,7 @@ async fn connect(
                         Decision::Request(request) => {
                             driver.consume(ordinal)?;
                             let descriptor = dispatcher.descriptor(request.operation_id).ok_or(Error::Incompatible)?;
+                            driver.stash_log(&request, &descriptor.diagnostic_name)?;
                             let mutation = descriptor.mutation == v5::MutationClass::Mutation as i32;
                             let cancelled = Arc::new(AtomicBool::new(false));
                             let cancellation = cancelled.clone();

@@ -17,6 +17,11 @@ import {
   session_todo_list_ResultSchema,
   session_snapshot_RequestSchema,
   session_snapshot_ResultSchema,
+  session_log_RequestSchema,
+  session_log_ResultSchema,
+  SessionLogItemSchema,
+  session_capturedChanges_list_RequestSchema,
+  session_capturedChanges_list_ResultSchema,
   session_message_RequestSchema,
   session_message_ResultSchema,
   PublicEventSchema,
@@ -563,6 +568,62 @@ try {
     (await subscribe(peers[1]!, owner.sourceEpoch)) === accepted,
     "Subscriptions do not share the backend observer identity",
   )
+  const logID = peers[0]!.request(
+    "session.log",
+    session,
+    encodeStrict(
+      session_log_RequestSchema,
+      create(session_log_RequestSchema, {
+        params: { sessionID: encodeLossless("ses_real_connector") },
+        query: { follow: false },
+      }),
+    ),
+  )
+  const logResult = await peers[0]!.next("settled", logID)
+  expect(logResult.status === "success", "Native watermark log was rejected by the real relay")
+  const logSubscription = decodeLossless(
+    decodeStrict(session_log_ResultSchema, logResult.payload!.payload).subscriptionId!,
+  )
+  peers[0]!.connection.acceptSubscription(
+    logID,
+    logSubscription,
+    session,
+    performance.now(),
+    "receive",
+    owner.sourceEpoch,
+  )
+  for (;;) {
+    const batch = await peers[0]!.next("events")
+    expect(
+      batch.batch.subscriptionId === logSubscription && batch.batch.sourceEpoch === owner.sourceEpoch,
+      "Native log identity changed",
+    )
+    const synchronized = batch.batch.events.some(
+      (record) => decodeStrict(SessionLogItemSchema, record.event!.payload).kind.case === "value52",
+    )
+    peers[0]!.connection.consume(LedgerClass.EVENT, batch.ordinal!, performance.now())
+    peers[0]!.flush()
+    if (synchronized) break
+  }
+  for (let read = 0; read < 2; read++) {
+    const id = peers[0]!.request(
+      "session.capturedChanges.list",
+      session,
+      encodeStrict(
+        session_capturedChanges_list_RequestSchema,
+        create(session_capturedChanges_list_RequestSchema, { payload: {} }),
+      ),
+    )
+    const result = await peers[0]!.next("settled", id)
+    expect(result.status === "success", "Native captured read failed through the real relay")
+    const captured = decodeStrict(session_capturedChanges_list_ResultSchema, result.payload!.payload)
+    expect(
+      captured.data?.items.length === 1 &&
+        decodeLossless(captured.data.items[0]!.path!) === "relay.txt" &&
+        captured.data.items[0]!.additions === 1n,
+      "Native captured result changed across cold and warm real-relay reads",
+    )
+  }
   console.log(JSON.stringify({ phase: "subscribed" }))
   await command()
   for (const peer of peers) {

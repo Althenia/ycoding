@@ -55,6 +55,7 @@ export type RemoteRequestTiming = {
   readonly totalMs: number
 }
 export type RemoteTransportHandlers = {
+  readonly onResync?: (sessionID: string) => void
   readonly onStatus?: (status: RemoteTransportStatus) => void
   readonly onSessions?: () => void
   readonly onSessionStatus?: (status: {
@@ -108,6 +109,7 @@ export function clientFrameDelay(sentAt: number[], now: number): number {
 
 type Pending = {
   readonly operation: string
+  readonly admissionRequestID?: string
   readonly scope: Scope
   readonly resolve: (outcome: RemoteRequestOutcome) => void
   readonly timeout: number
@@ -119,6 +121,8 @@ type Owner = {
   readonly socket: WebSocket
   readonly connection: Connection
   readonly pending: Map<string, Pending>
+  readonly logs: Map<string, { readonly requestID: string; readonly entry: Pending }>
+  readonly snapshots: Map<string, string>
   readonly subscriptions: Map<string, { readonly id: string; hydration: "active" | "idle" | "invalidated" }>
   readonly sentAt: number[]
   readonly assets: ReservationBudget
@@ -186,6 +190,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       )
     }
     value.pending.clear()
+    value.logs.clear()
+    value.snapshots.clear()
     value.subscriptions.clear()
     value.connection.close(FailureCategory.EPOCH)
     if (owner !== value) return
@@ -235,7 +241,18 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             decoded,
           )
         })
-        handlers.onEvents?.(decision.batch.scope.target.value, events)
+        const log = value.logs.get(decision.batch.subscriptionId)
+        if (log) {
+          const synced = events.find(
+            (event): event is object =>
+              typeof event === "object" && event !== null && Reflect.get(event, "type") === "log.synced",
+          )
+          if (synced !== undefined) {
+            value.logs.delete(decision.batch.subscriptionId)
+            log.entry.cancel()
+            log.entry.resolve({ status: "ok", value: { watermark: Reflect.get(synced, "seq") } })
+          }
+        } else handlers.onEvents?.(decision.batch.scope.target.value, events)
         if (decision.ordinal !== undefined)
           process(value, value.connection.consume(LedgerClass.EVENT, decision.ordinal, now()))
         continue
@@ -244,8 +261,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         if (decision.scope.target.case === "session") {
           const subscription = value.subscriptions.get(decision.scope.target.value)
           if (subscription) subscription.hydration = "invalidated"
+          handlers.onResync?.(decision.scope.target.value)
         }
-        handlers.onSessions?.()
         continue
       }
       if (decision.type === "control") {
@@ -323,15 +340,43 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
           continue
         }
         const fields = result as Record<string, unknown>
-        if (entry.operation === "event.subscribe" || entry.operation === "session.log") {
+        if (entry.operation === "session.log") {
+          if (typeof fields.subscription_id !== "string") throw new Error("Missing log subscription identity")
+          const subscriptionID = fields.subscription_id
+          value.logs.set(subscriptionID, { requestID: decision.requestID, entry })
+          entry.cancel = schedule(() => {
+            value.logs.delete(subscriptionID)
+            process(value, value.connection.releaseSubscription(subscriptionID, now()))
+            if (currentOwner(value) && entry.scope.target.case === "session")
+              void request("event.unsubscribe", {
+                sessionID: entry.scope.target.value,
+                input: { subscription_id: subscriptionID },
+              })
+            entry.resolve({
+              status: "unknown",
+              error: { code: "outcome_unknown", message: "The log stream did not synchronize" },
+            })
+            pump(value)
+          }, entry.timeout)
+          process(value, value.connection.acceptSubscription(decision.requestID, subscriptionID, entry.scope, now()))
+          continue
+        }
+        if (entry.operation === "event.subscribe") {
           if (typeof fields.subscription_id !== "string") throw new Error("Missing subscription identity")
           process(
             value,
             value.connection.acceptSubscription(decision.requestID, fields.subscription_id, entry.scope, now()),
           )
           value.connection.beginHydration(fields.subscription_id)
-          if (entry.scope.target.case === "session")
+          if (entry.scope.target.case === "session") {
             value.subscriptions.set(entry.scope.target.value, { id: fields.subscription_id, hydration: "active" })
+            const epoch = value.snapshots.get(decision.requestID)
+            if (epoch !== undefined) {
+              value.snapshots.delete(decision.requestID)
+              value.subscriptions.set(entry.scope.target.value, { id: fields.subscription_id, hydration: "idle" })
+              process(value, value.connection.completeHydration(fields.subscription_id, epoch, now()))
+            }
+          }
         }
         if (entry.operation === "session.snapshot" && entry.scope.target.case === "session") {
           const subscription = value.subscriptions.get(entry.scope.target.value)
@@ -339,7 +384,12 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
           if (subscription && projection.sourceEpoch) {
             subscription.hydration = "idle"
             process(value, value.connection.completeHydration(subscription.id, projection.sourceEpoch, now()))
-          }
+          } else if (
+            projection.sourceEpoch &&
+            entry.admissionRequestID !== undefined &&
+            value.pending.has(entry.admissionRequestID)
+          )
+            value.snapshots.set(entry.admissionRequestID, projection.sourceEpoch)
         }
         entry.resolve({ status: "ok", value: result })
         continue
@@ -454,6 +504,8 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         budgets: { pendingRequests: options.maxInFlight ?? 32, pingIntervalMs: options.pingIntervalMs ?? 20_000 },
       }),
       pending: new Map(),
+      logs: new Map(),
+      snapshots: new Map(),
       subscriptions: new Map(),
       sentAt: [],
       assets: new ReservationBudget(32 * 1024 * 1024),
@@ -525,6 +577,15 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     if (!value || current.kind !== "open" || !currentOwner(value)) return unavailable("not-connected")
     if (value.pending.size >= (options.maxInFlight ?? 32)) return unavailable("in-flight-limit")
     const prepared = prepareRemoteRequest(operation, input)
+    const admissionRequestID =
+      operation === "session.snapshot" && prepared.scope.target.case === "session"
+        ? [...value.pending].findLast(
+            ([, pending]) =>
+              pending.operation === "event.subscribe" &&
+              pending.scope.target.case === "session" &&
+              pending.scope.target.value === prepared.scope.target.value,
+          )?.[0]
+        : undefined
     const admitted = value.connection.request(
       prepared.codec.operation.operationId,
       prepared.scope,
@@ -545,6 +606,16 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         const entry = value.pending.get(id)
         if (!entry) return
         value.pending.delete(id)
+        for (const [key, log] of value.logs)
+          if (log.requestID === id) {
+            value.logs.delete(key)
+            process(value, value.connection.releaseSubscription(key, now()))
+            if (currentOwner(value) && log.entry.scope.target.case === "session")
+              void request("event.unsubscribe", {
+                sessionID: log.entry.scope.target.value,
+                input: { subscription_id: key },
+              })
+          }
         entry.cancel()
         process(value, value.connection.cancel(id, now()))
         entry.resolve(
@@ -559,6 +630,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       }
       const entry: Pending = {
         operation,
+        admissionRequestID,
         scope: prepared.scope,
         sent: false,
         timeout: input.timeoutMs ?? options.requestTimeoutMs ?? 30_000,
@@ -567,6 +639,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
           if (settled) return
           settled = true
           value.pending.delete(id)
+          if (operation === "event.subscribe" && outcome.status !== "ok") value.snapshots.delete(id)
           input.signal?.removeEventListener("abort", abort)
           if (
             operation === "session.snapshot" &&
@@ -579,7 +652,13 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             if (subscription?.hydration === "active" && value.sourceEpoch) {
               subscription.hydration = "idle"
               process(value, value.connection.completeHydration(subscription.id, value.sourceEpoch, now()))
-            }
+            } else if (
+              !subscription &&
+              value.sourceEpoch &&
+              admissionRequestID !== undefined &&
+              value.pending.has(admissionRequestID)
+            )
+              value.snapshots.set(admissionRequestID, value.sourceEpoch)
           }
           resolve(outcome)
           const totalMs = Math.max(0, Math.round(now() - started))

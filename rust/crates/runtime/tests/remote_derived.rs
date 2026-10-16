@@ -2,7 +2,7 @@ mod connector_support;
 mod remote_derived_support;
 mod support;
 
-use connector_support::{Opening, Relay};
+use connector_support::{Command, Opening, Relay};
 use prost::{Message, Name};
 use remote_derived_support::{Access, Fixture, Saved, activate, create, message, stop, world};
 use std::{
@@ -1262,6 +1262,437 @@ fn assistant(content: JsonValue, completed: bool) -> String {
 }
 fn patch_tool(path: &str) -> JsonValue {
     parse_json(&format!(r#"{{"type":"tool","id":"patch_call","name":"patch","state":{{"status":"completed","input":{{}},"content":[],"structured":{{"files":[{{"file":"{path}","patch":"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+new\n"}}]}}}},"time":{{"created":1,"completed":2}}}}"#)).unwrap()
+}
+
+#[derive(Clone, Default)]
+struct CapturedTrace(
+    Arc<std::sync::Mutex<Vec<u8>>>,
+    Arc<std::sync::Mutex<Option<Arc<CapturedGate>>>>,
+    Arc<tokio::sync::Notify>,
+);
+struct CapturedGate {
+    session: String,
+    started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    released: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+impl CapturedGate {
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+struct CapturedRelease(Arc<CapturedGate>);
+impl Drop for CapturedRelease {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+impl std::io::Write for CapturedTrace {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        self.2.notify_waiters();
+        let gate = self.1.lock().unwrap().clone();
+        if let Some(gate) = gate
+            && String::from_utf8_lossy(bytes).contains("captured input page read")
+            && String::from_utf8_lossy(bytes).contains(&gate.session)
+            && let Some(started) = gate.started.lock().unwrap().take()
+        {
+            let _ = started.send(());
+            let mut released = gate.released.lock().unwrap();
+            while !*released {
+                released = gate.changed.wait(released).unwrap();
+            }
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedTrace {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn captured_native_relay_reuses_unchanged_inputs_and_rejects_moved_ownership() {
+    let trace = CapturedTrace::default();
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(trace.clone())
+        .try_init()
+        .unwrap();
+    let fixture = Fixture::new().await;
+    message(
+        &fixture.root,
+        "input",
+        "user",
+        1,
+        r#"{"text":"Task","time":{"created":1,"consumed":1}}"#,
+    )
+    .await;
+    let launch = parse_json(&format!(r#"{{"type":"tool","id":"launch","name":"subagent","state":{{"status":"completed","input":{{}},"content":[],"structured":{{"sessionID":"{}"}}}},"time":{{"created":1,"completed":2}}}}"#, fixture.child)).unwrap();
+    message(
+        &fixture.root,
+        "launch",
+        "assistant",
+        2,
+        &assistant(JsonValue::Array(vec![launch]), true),
+    )
+    .await;
+    message(
+        &fixture.child,
+        "input",
+        "user",
+        1,
+        r#"{"text":"Task","time":{"created":1,"consumed":1}}"#,
+    )
+    .await;
+    message(
+        &fixture.child,
+        "edit",
+        "assistant",
+        2,
+        &assistant(JsonValue::Array(vec![patch_tool("child.txt")]), true),
+    )
+    .await;
+    let mut harness = Harness::new(fixture.environment(true)).await;
+    let request = || v5::SessionCapturedChangesListRequest {
+        payload: v5::SessionCapturedChangesListRequestPayload { cursor: None },
+    };
+    let reads = || {
+        String::from_utf8(trace.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .filter(|line| {
+                line.contains("captured input page read")
+                    && (line.contains(&fixture.root) || line.contains(&fixture.child))
+            })
+            .count()
+    };
+    let cold: v5::SessionCapturedChangesListResult = harness
+        .ask(NAMES[9], session_scope(&fixture.root), request())
+        .await;
+    assert_eq!(cold.data.items.len(), 1);
+    assert_eq!(units(&cold.data.items[0].path), "child.txt");
+    assert_eq!(reads(), 2);
+    let warm: v5::SessionCapturedChangesListResult = harness
+        .ask(NAMES[9], session_scope(&fixture.root), request())
+        .await;
+    assert_eq!(cold, warm);
+    assert_eq!(
+        reads(),
+        2,
+        "warm captured read must not scan either transcript again"
+    );
+    harness
+        .opening
+        .commands
+        .send(Command::Body(v5::frame::Body::Control(v5::Control {
+            kind: Some(v5::control::Kind::SubscriptionSnapshot(
+                v5::SubscriptionSnapshot {
+                    client_id: "captured-client".into(),
+                    session_ids: vec![fixture.root.clone()],
+                },
+            )),
+        })))
+        .await
+        .unwrap();
+    harness
+        .relay
+        .matching(harness.opening.generation, |frame| {
+            matches!(
+                &frame.body,
+                Some(v5::frame::Body::Control(v5::Control {
+                    kind: Some(v5::control::Kind::ResyncRequired(_))
+                }))
+            )
+        })
+        .await;
+    let _: v5::EventSubscribeResult = harness
+        .ask(
+            "event.subscribe",
+            session_scope(&fixture.root),
+            v5::EventSubscribeRequest {
+                scope: session_scope(&fixture.root),
+            },
+        )
+        .await;
+    let log: v5::SessionLogResult = harness
+        .ask(
+            "session.log",
+            session_scope(&fixture.root),
+            v5::SessionLogRequest {
+                params: v5::SessionLogRequestParams {
+                    session_id: text(&fixture.root),
+                },
+                query: v5::SessionLogRequestQuery {
+                    after: None,
+                    follow: Some(false),
+                },
+            },
+        )
+        .await;
+    let log_id = units(&log.subscription_id);
+    let mut logged = 0;
+    loop {
+        let frame = harness.relay.matching(harness.opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::EventBatch(batch)) if batch.subscription_id == log_id)).await;
+        let Some(v5::frame::Body::EventBatch(batch)) = frame.body else {
+            unreachable!()
+        };
+        assert_eq!(
+            batch.source_epoch,
+            harness.environment.services.identity.source_epoch
+        );
+        let mut synced = false;
+        for record in batch.events {
+            let item = decode_strict::<v5::SessionLogItem>(&record.event.payload).unwrap();
+            if let Some(v5::session_log_item::Kind::Value52(mark)) = item.kind {
+                assert!(mark.seq.is_some());
+                synced = true;
+            } else {
+                logged += 1;
+            }
+        }
+        if synced {
+            break;
+        }
+    }
+    assert!(logged > 0);
+    let followed: v5::SessionLogResult = harness
+        .ask(
+            "session.log",
+            session_scope(&fixture.root),
+            v5::SessionLogRequest {
+                params: v5::SessionLogRequestParams {
+                    session_id: text(&fixture.root),
+                },
+                query: v5::SessionLogRequestQuery {
+                    after: Some(2),
+                    follow: Some(true),
+                },
+            },
+        )
+        .await;
+    let followed_id = units(&followed.subscription_id);
+    harness.relay.matching(harness.opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::EventBatch(batch)) if batch.subscription_id == followed_id)).await;
+    world()
+        .core
+        .sessions
+        .change(
+            &session::Id::new(fixture.root.as_str()).unwrap(),
+            ycoding_core::session::lifecycle::Change::Rename("Followed log".into()),
+        )
+        .await
+        .unwrap();
+    let frame = harness.relay.matching(harness.opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::EventBatch(batch)) if batch.subscription_id == followed_id)).await;
+    let Some(v5::frame::Body::EventBatch(batch)) = frame.body else {
+        unreachable!()
+    };
+    assert!(batch.events.iter().any(|record| {
+        matches!(
+            decode_strict::<v5::SessionLogItem>(&record.event.payload)
+                .unwrap()
+                .kind,
+            Some(v5::session_log_item::Kind::Value7(_))
+        )
+    }));
+    let _: v5::EventUnsubscribeResult = harness
+        .ask(
+            "event.unsubscribe",
+            session_scope(&fixture.root),
+            v5::EventUnsubscribeRequest {
+                subscription_id: followed_id.clone(),
+            },
+        )
+        .await;
+    harness.relay.matching(harness.opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::StreamEnd(end)) if end.subscription_id == followed_id)).await;
+    harness.close().await;
+    let mut environment = fixture.environment(true);
+    Arc::get_mut(&mut environment)
+        .unwrap()
+        .services
+        .identity
+        .source_epoch = "derived-reset".into();
+    let mut harness = Harness::new(environment).await;
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let gate = Arc::new(CapturedGate {
+        session: fixture.root.clone(),
+        started: std::sync::Mutex::new(Some(started)),
+        released: std::sync::Mutex::new(false),
+        changed: std::sync::Condvar::new(),
+    });
+    *trace.1.lock().unwrap() = Some(gate.clone());
+    let _release = CapturedRelease(gate.clone());
+    let first = harness
+        .opening
+        .request(
+            operation(NAMES[9]).operation_id,
+            session_scope(&fixture.root),
+            request().encode_to_vec(),
+        )
+        .await;
+    tokio::time::timeout(connector_support::WAIT, waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    let second = harness
+        .opening
+        .request(
+            operation(NAMES[9]).operation_id,
+            session_scope(&fixture.root),
+            request().encode_to_vec(),
+        )
+        .await;
+    tokio::time::timeout(connector_support::WAIT, async {
+        loop {
+            let changed = trace.2.notified();
+            let requests = String::from_utf8(trace.0.lock().unwrap().clone())
+                .unwrap()
+                .lines()
+                .filter(|line| {
+                    line.contains("captured read requested") && line.contains(&fixture.root)
+                })
+                .count();
+            if requests >= 4 {
+                break;
+            }
+            changed.await;
+        }
+    })
+    .await
+    .unwrap();
+    harness.opening.cancel(first).await;
+    gate.release();
+    let delivered = harness.relay.matching(harness.opening.generation, |frame| matches!(&frame.body, Some(v5::frame::Body::Result(result)) if result.request_id == second)).await;
+    let Some(v5::frame::Body::Result(result)) = delivered.body else {
+        unreachable!()
+    };
+    let Some(v5::result::Outcome::Success(payload)) = result.outcome else {
+        panic!("remaining captured waiter must succeed");
+    };
+    assert_eq!(
+        decode_strict::<v5::SessionCapturedChangesListResult>(&payload.payload).unwrap(),
+        cold
+    );
+    assert_eq!(
+        reads(),
+        4,
+        "epoch reset rereads both inputs once, shared by independently cancelled callers"
+    );
+    message(
+        &fixture.child,
+        "changed",
+        "assistant",
+        3,
+        &assistant(JsonValue::Array(vec![patch_tool("changed.txt")]), true),
+    )
+    .await;
+    world()
+        .core
+        .sessions
+        .publish(tables::NewEvent {
+            id: format!("evt_changed_{}", fixture.child).into(),
+            aggregate_id: fixture.child.as_str().into(),
+            created: 4,
+            type_: "session.renamed.1".into(),
+            data: ObjectEncoder::new()
+                .field("sessionID", fixture.child.as_str())
+                .field("title", "Changed")
+                .finish(),
+        })
+        .await
+        .unwrap();
+    let changed: v5::SessionCapturedChangesListResult = harness
+        .ask(NAMES[9], session_scope(&fixture.root), request())
+        .await;
+    assert_eq!(
+        changed
+            .data
+            .items
+            .iter()
+            .map(|group| units(&group.path))
+            .collect::<Vec<_>>(),
+        ["child.txt", "changed.txt"]
+    );
+    assert_eq!(reads(), 5, "only changed child inputs are reread");
+    for index in 0..32 {
+        let id = format!("ses_eviction_{}_{index}", std::process::id());
+        create(
+            &id,
+            &fixture.project,
+            fixture.path.to_str().unwrap(),
+            None,
+            "build",
+        )
+        .await;
+        let empty: v5::SessionCapturedChangesListResult =
+            harness.ask(NAMES[9], session_scope(&id), request()).await;
+        assert!(empty.data.items.is_empty());
+    }
+    let evicted: v5::SessionCapturedChangesListResult = harness
+        .ask(NAMES[9], session_scope(&fixture.root), request())
+        .await;
+    assert_eq!(evicted, changed);
+    assert_eq!(
+        reads(),
+        7,
+        "the 32-entry cache evicts the oldest family without changing its output"
+    );
+    let child = fixture.child.clone();
+    world()
+        .store
+        .submit(move |tx| {
+            let mut row = tx
+                .get::<tables::SessionTable>(&ycoding_core::ycoding_store::tuple_key(&[
+                    ycoding_core::ycoding_store::KeyPart::String(&child.into()),
+                ]))?
+                .unwrap();
+            row.parent_id = None;
+            tables::SessionTable::put(tx, &row)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    harness
+        .refuse(NAMES[9], session_scope(&fixture.root), request(), 15)
+        .await;
+    let child = fixture.child.clone();
+    let root = fixture.root.clone();
+    world()
+        .store
+        .submit(move |tx| {
+            let mut row = tx
+                .get::<tables::SessionTable>(&ycoding_core::ycoding_store::tuple_key(&[
+                    ycoding_core::ycoding_store::KeyPart::String(&child.into()),
+                ]))?
+                .unwrap();
+            row.parent_id = Some(root.into());
+            tables::SessionTable::put(tx, &row)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let restored: v5::SessionCapturedChangesListResult = harness
+        .ask(NAMES[9], session_scope(&fixture.root), request())
+        .await;
+    assert_eq!(restored, changed);
+    world()
+        .core
+        .sessions
+        .remove(&session::Id::new(fixture.child.as_str()).unwrap())
+        .await
+        .unwrap();
+    harness
+        .refuse(NAMES[9], session_scope(&fixture.root), request(), 5)
+        .await;
+    harness.close().await;
+    fixture.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

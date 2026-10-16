@@ -3,7 +3,14 @@ use crate::{
     Core, convert,
     dispatch::{Failure, Invocation},
 };
-use std::collections::BTreeMap;
+use futures_util::{
+    FutureExt,
+    future::{BoxFuture, Shared, WeakShared},
+};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::{Arc, Mutex, PoisonError},
+};
 use ycoding_core::{
     regexp::{Budget, RegExp},
     session::{orchestration, prompt_cache::sha256},
@@ -18,89 +25,141 @@ use ycoding_protocol::v5;
 const MAX_CHARS: usize = 512_000;
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+type ReadFuture = BoxFuture<'static, Result<Arc<Captured>, Failure>>;
+type Flight = Shared<ReadFuture>;
+
+#[derive(Default)]
+pub(crate) struct Cache(Mutex<State>);
+
+#[derive(Default)]
+struct State {
+    clock: u64,
+    floor: u64,
+    activity: BTreeMap<LosslessString, u64>,
+    entries: BTreeMap<session::Id, Arc<Captured>>,
+    order: VecDeque<session::Id>,
+    flights: BTreeMap<(session::Id, String), WeakShared<ReadFuture>>,
+}
+
+impl State {
+    fn mark(&mut self, id: LosslessString) {
+        self.clock += 1;
+        self.activity.insert(id, self.clock);
+        if self.activity.len() > 4096
+            && let Some((id, at)) = self
+                .activity
+                .iter()
+                .min_by_key(|(_, at)| *at)
+                .map(|(id, at)| (id.clone(), *at))
+        {
+            self.activity.remove(&id);
+            self.floor = self.floor.max(at);
+        }
+    }
+    fn changed(&self, id: &session::Id, read_at: u64) -> bool {
+        self.activity
+            .get(id.as_lossless())
+            .copied()
+            .unwrap_or(self.floor)
+            > read_at
+    }
+}
+
+impl Cache {
+    pub(crate) fn attach(client: &ycoding_core::ycoding_store::Client) -> Arc<Self> {
+        let cache = Arc::new(Self::default());
+        let weak = Arc::downgrade(&cache);
+        client.observe_events(move |events| {
+            let Some(cache) = weak.upgrade() else {
+                return false;
+            };
+            let mut state = cache.0.lock().unwrap_or_else(PoisonError::into_inner);
+            for event in events {
+                state.mark(event.aggregate_id.clone());
+            }
+            true
+        });
+        cache
+    }
+    fn flight(&self, core: Core, owner: session::Info, epoch: String) -> Flight {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.flights.retain(|_, flight| flight.upgrade().is_some());
+        let key = (owner.id.clone(), epoch.clone());
+        if let Some(flight) = state.flights.get(&key).and_then(WeakShared::upgrade) {
+            return flight;
+        }
+        let id = owner.id.clone();
+        let read_at = state.clock;
+        let cached = state.entries.get(&id).cloned();
+        let flight = async move { load(&core, owner, epoch, read_at, cached).await }
+            .boxed()
+            .shared();
+        if let Some(weak) = flight.downgrade() {
+            state.flights.insert(key, weak);
+        }
+        flight
+    }
+    fn invalidate(&self, id: &session::Id) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.entries.remove(id);
+        state.order.retain(|entry| entry != id);
+    }
+}
+
+struct Member {
+    info: session::Info,
+    position: Option<i64>,
+    inputs: Arc<Vec<Input>>,
+}
+
+struct Captured {
+    epoch: String,
+    read_at: u64,
+    owner: session::Info,
+    parent_position: Option<i64>,
+    parent: Arc<Vec<Input>>,
+    members: BTreeMap<session::Id, Member>,
+    groups: Arc<Vec<v5::ConnectorCapturedGroup>>,
+    digest: String,
+}
+
 pub async fn list(
     invocation: Invocation,
     request: v5::SessionCapturedChangesListRequest,
 ) -> Result<v5::SessionCapturedChangesListResult, Failure> {
     let (owner, _) = target::session(&invocation)?;
     let core = invocation.core()?;
-    let parent_position = position(core, &owner.id)?;
-    let parent = read(core, &owner.id)?;
-    let mut children = BTreeMap::new();
-    let mut positions = Vec::new();
-    if owner.parent_id.is_none() {
-        for id in parent
-            .iter()
-            .filter(|input| input.kind == InputType::Assistant)
-            .flat_map(|input| {
-                input
-                    .content
-                    .iter()
-                    .flatten()
-                    .filter_map(|tool| dispatch(tool).map(|dispatch| dispatch.child))
-            })
-        {
-            if children.contains_key(&id) {
-                continue;
-            }
-            let child = match target::verify(core, &id) {
-                Ok((child, _)) => child,
-                Err(Failure::Connector { code: 5, .. }) => continue,
-                Err(error) => return Err(error),
-            };
-            if child.parent_id.as_ref() != Some(&owner.id)
-                || child
-                    .agent
-                    .as_ref()
-                    .is_some_and(|agent| agent.as_str() == Some("btw"))
-            {
-                continue;
-            }
-            let mark = position(core, &id)?;
-            children.insert(id.clone(), read(core, &id)?);
-            positions.push((child, mark));
-        }
-    }
-    let mut groups = summarize(&owner.id, &parent, &children)?;
-    for group in &mut groups {
-        if chars(&group_json(group)) > MAX_CHARS {
-            group.additions = 0;
-            group.deletions = 0;
-            group.files.items = vec![v5::ConnectorCapturedFile {
-                path: group.path.clone(),
-                diff: convert::text(""),
-                additions: 0,
-                deletions: 0,
-                status: group.status,
-                unavailable: Some(true),
-            }];
-        }
-    }
-    let current = target::verify(core, &owner.id)?.0;
-    if current.parent_id != owner.parent_id
-        || current.location != owner.location
-        || position(core, &owner.id)? != parent_position
+    tracing::debug!(session = %convert::readable(owner.id.as_lossless()), "captured read requested");
+    let captured = match core
+        .captured
+        .flight(
+            core.clone(),
+            owner.clone(),
+            invocation
+                .environment
+                .services
+                .identity
+                .source_epoch
+                .clone(),
+        )
+        .await
     {
-        return Err(target::error(15, "Captured changes changed while reading"));
-    }
-    for (child, mark) in positions {
-        let current = target::verify(core, &child.id)?.0;
-        if current.parent_id != child.parent_id
-            || current.location != child.location
-            || position(core, &child.id)? != mark
-        {
-            return Err(target::error(15, "Captured changes changed while reading"));
+        Ok(captured) => captured,
+        Err(error) => {
+            core.captured.invalidate(&owner.id);
+            return Err(error);
         }
+    };
+    if let Err(error) = stable(core, &captured) {
+        core.captured.invalidate(&owner.id);
+        return Err(error);
     }
-    let digest = sha256(&format!(
-        "{}{}",
-        convert::readable(owner.id.as_lossless()),
-        stringify_json(&JsonValue::Array(groups.iter().map(group_json).collect()))
-    ));
+    let groups = &captured.groups;
+    let digest = &captured.digest;
     let offset = match request.payload.cursor {
         Some(cursor) => decode_cursor(
             &convert::readable(&convert::domain(&cursor)?),
-            &digest,
+            digest,
             groups.len(),
         )?,
         None => 0,
@@ -137,6 +196,190 @@ pub async fn list(
     })
 }
 
+async fn load(
+    core: &Core,
+    owner: session::Info,
+    epoch: String,
+    read_at: u64,
+    cached: Option<Arc<Captured>>,
+) -> Result<Arc<Captured>, Failure> {
+    let parent_position = position(core, &owner.id)?;
+    let cached = cached.filter(|entry| entry.epoch == epoch);
+    if let Some(entry) = &cached
+        && (entry.owner.parent_id != owner.parent_id || entry.owner.location != owner.location)
+    {
+        return Err(target::error(15, "Captured ownership changed"));
+    }
+    let parent = match &cached {
+        Some(entry) if entry.parent_position == parent_position => entry.parent.clone(),
+        _ => Arc::new(read(core, &owner.id).await?),
+    };
+    let mut members = BTreeMap::new();
+    if owner.parent_id.is_none() {
+        let ids = parent
+            .iter()
+            .filter(|input| input.kind == InputType::Assistant)
+            .flat_map(|input| {
+                input
+                    .content
+                    .iter()
+                    .flatten()
+                    .filter_map(|tool| dispatch(tool).map(|dispatch| dispatch.child))
+            })
+            .collect::<Vec<_>>();
+        for id in ids {
+            if members.contains_key(&id) {
+                continue;
+            }
+            let child = match target::verify(core, &id) {
+                Ok((child, _)) => child,
+                Err(Failure::Connector { code: 5, .. })
+                    if cached
+                        .as_ref()
+                        .is_none_or(|entry| !entry.members.contains_key(&id)) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if child.parent_id.as_ref() != Some(&owner.id)
+                || child
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.as_str() == Some("btw"))
+            {
+                if cached
+                    .as_ref()
+                    .is_some_and(|entry| entry.members.contains_key(&id))
+                {
+                    return Err(target::error(15, "Captured ownership changed"));
+                }
+                continue;
+            }
+            let mark = position(core, &id)?;
+            let previous = cached.as_ref().and_then(|entry| entry.members.get(&id));
+            if previous.is_some_and(|member| {
+                member.info.location != child.location || member.info.parent_id != child.parent_id
+            }) {
+                return Err(target::error(15, "Captured ownership changed"));
+            }
+            let inputs = match previous {
+                Some(member) if member.position == mark => member.inputs.clone(),
+                _ => Arc::new(read(core, &id).await?),
+            };
+            members.insert(
+                id,
+                Member {
+                    info: child,
+                    position: mark,
+                    inputs,
+                },
+            );
+        }
+    }
+    let unchanged = cached.as_ref().filter(|entry| {
+        entry.parent_position == parent_position
+            && entry.members.len() == members.len()
+            && members.iter().all(|(id, member)| {
+                entry
+                    .members
+                    .get(id)
+                    .is_some_and(|previous| previous.position == member.position)
+            })
+    });
+    let (groups, digest) = match unchanged {
+        Some(entry) => (entry.groups.clone(), entry.digest.clone()),
+        None => {
+            tracing::debug!(session = %convert::readable(owner.id.as_lossless()), "captured summary built");
+            let children = members
+                .iter()
+                .map(|(id, member)| (id.clone(), member.inputs.as_ref().clone()))
+                .collect();
+            let mut groups = summarize(&owner.id, &parent, &children)?;
+            for group in &mut groups {
+                if chars(&group_json(group)) > MAX_CHARS {
+                    group.additions = 0;
+                    group.deletions = 0;
+                    group.files.items = vec![v5::ConnectorCapturedFile {
+                        path: group.path.clone(),
+                        diff: convert::text(""),
+                        additions: 0,
+                        deletions: 0,
+                        status: group.status,
+                        unavailable: Some(true),
+                    }];
+                }
+            }
+            let digest = sha256(&format!(
+                "{}{}",
+                convert::readable(owner.id.as_lossless()),
+                stringify_json(&JsonValue::Array(groups.iter().map(group_json).collect()))
+            ));
+            (Arc::new(groups), digest)
+        }
+    };
+    let captured = Arc::new(Captured {
+        epoch,
+        read_at,
+        owner,
+        parent_position,
+        parent,
+        members,
+        groups,
+        digest,
+    });
+    stable(core, &captured)?;
+    let mut state = core
+        .captured
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    state.order.retain(|id| id != &captured.owner.id);
+    state.order.push_back(captured.owner.id.clone());
+    state
+        .entries
+        .insert(captured.owner.id.clone(), captured.clone());
+    if state.entries.len() > 32
+        && let Some(oldest) = state.order.pop_front()
+    {
+        state.entries.remove(&oldest);
+    }
+    Ok(captured)
+}
+
+fn stable(core: &Core, captured: &Captured) -> Result<(), Failure> {
+    for (info, mark) in std::iter::once((&captured.owner, captured.parent_position)).chain(
+        captured
+            .members
+            .values()
+            .map(|member| (&member.info, member.position)),
+    ) {
+        let current = target::verify(core, &info.id)?.0;
+        if current.parent_id != info.parent_id
+            || current.location != info.location
+            || current.project_id != info.project_id
+            || current.agent != info.agent
+            || position(core, &info.id)? != mark
+        {
+            return Err(target::error(15, "Captured changes changed while reading"));
+        }
+    }
+    let state = core
+        .captured
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if state.changed(&captured.owner.id, captured.read_at)
+        || captured
+            .members
+            .keys()
+            .any(|id| state.changed(id, captured.read_at))
+    {
+        return Err(target::error(15, "Captured changes changed while reading"));
+    }
+    Ok(())
+}
+
 fn position(core: &Core, id: &session::Id) -> Result<Option<i64>, Failure> {
     let snapshot = core
         .sessions
@@ -145,10 +388,37 @@ fn position(core: &Core, id: &session::Id) -> Result<Option<i64>, Failure> {
     Ok(snapshot.watermark)
 }
 
-fn read(core: &Core, id: &session::Id) -> Result<Vec<Input>, Failure> {
+#[cfg(test)]
+mod cache_tests {
+    use super::State;
+    #[test]
+    fn activity_is_bounded_and_eviction_retains_an_invalidation_floor() {
+        let mut state = State::default();
+        state.mark("ses_changed".into());
+        for index in 0..4096 {
+            state.mark(format!("ses_other_{index}").into());
+        }
+        assert_eq!(state.activity.len(), 4096);
+        assert!(!state.activity.contains_key(&"ses_changed".into()));
+        assert!(state.changed(
+            &ycoding_core::ycoding_schema::session::Id::new("ses_changed").unwrap(),
+            0
+        ));
+        let read_at = state.clock;
+        state.mark("ses_new".into());
+        assert!(!state.changed(
+            &ycoding_core::ycoding_schema::session::Id::new("ses_unrelated").unwrap(),
+            read_at
+        ));
+    }
+}
+
+async fn read(core: &Core, id: &session::Id) -> Result<Vec<Input>, Failure> {
     let mut output = Vec::new();
     let mut after = None;
     loop {
+        tokio::task::yield_now().await;
+        tracing::debug!(session = %convert::readable(id.as_lossless()), "captured input page read");
         let page = core
             .sessions
             .captured_inputs(id, after, 200)

@@ -952,6 +952,13 @@ function createFixtureStore(): Fixture {
   const providerAuth = createProviderAuthFixture()
   Object.assign(window, { providerAuthFixture: providerAuth })
   let handlers: RemoteTransportHandlers | undefined
+  let reportedStatus:
+    | {
+        readonly running: readonly string[]
+        readonly attention: readonly string[]
+        readonly failed?: readonly string[]
+      }
+    | undefined
   let open = true
   let streamed = false
   let nextSeq = 43
@@ -1156,6 +1163,7 @@ function createFixtureStore(): Fixture {
     if (operation === "event.subscribe")
       return { status: "ok", value: { subscription_id: `fixture-${targetSessionID}` } }
     if (operation === "event.unsubscribe") return { status: "ok", value: {} }
+    if (operation === "session.log") return { status: "ok", value: { watermark: input?.after } }
     if (operation === "session.attachment.upload") {
       const uploaded: RemoteRequestOutcome = {
         status: "ok",
@@ -1275,8 +1283,10 @@ function createFixtureStore(): Fixture {
       return {
         status: "ok",
         value: {
-          running: emptyBackend ? [] : [...statusRunning],
-          attention: unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [],
+          ...(reportedStatus ?? {
+            running: emptyBackend ? [] : [...statusRunning],
+            attention: unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [],
+          }),
         },
       }
     if (operation === "providerUsage.list")
@@ -2076,6 +2086,7 @@ function createFixtureStore(): Fixture {
 
   const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => {
     statusRunning = new Set(running)
+    reportedStatus = { running, attention, ...(failed === undefined ? {} : { failed }) }
     const next = { running: new Set(running), attention: new Set(attention) }
     const added = [
       ...attention
@@ -2177,6 +2188,18 @@ function createFixtureStore(): Fixture {
     transcriptRefresh: async () => {
       probeClock += 11_000
       probeCaptured = "fresh"
+      snapshotWatermark = nextSeq++
+      emitEvent(sessionID, {
+        type: "session.step.ended",
+        durable: { aggregateID: sessionID, seq: snapshotWatermark, version: 1 },
+        data: {
+          sessionID,
+          assistantMessageID: "probe_tail",
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      })
       handlers?.onSessions?.()
       await store.reloadMessages()
     },
@@ -2287,10 +2310,28 @@ function createFixtureStore(): Fixture {
     responseSnapshot: async (projected, captured, running) => {
       messages = projected
       responseCaptured = captured
-      snapshotWatermark = nextSeq++
       probeClock += 11_000
+      const assistant = projected.findLast(
+        (value) => typeof value === "object" && value !== null && Reflect.get(value, "type") === "assistant",
+      )
+      const assistantID = typeof assistant === "object" && assistant !== null ? Reflect.get(assistant, "id") : undefined
+      if (typeof assistantID === "string") {
+        emitEvent(sessionID, {
+          type: "session.step.ended",
+          durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 },
+          data: {
+            sessionID,
+            assistantMessageID: assistantID,
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        })
+      }
+      snapshotWatermark = nextSeq++
       emitEvent(sessionID, {
         type: running ? "session.execution.started" : "session.execution.succeeded",
+        durable: { aggregateID: sessionID, seq: snapshotWatermark, version: 1 },
         data: { sessionID },
       })
       status(running ? [sessionID] : [], [])

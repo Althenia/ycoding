@@ -40,6 +40,7 @@ pub struct Identity {
 
 #[derive(Clone)]
 pub struct Core {
+    pub(crate) captured: Arc<crate::remote_derived::captured::Cache>,
     pub integrations: Option<IntegrationResolver>,
     pub mcp: Option<McpResolver>,
     pub catalogs: Option<CatalogProvider>,
@@ -141,6 +142,7 @@ impl Core {
         let autonomy = autonomy::Service::new(client.clone());
         let credentials = credential::Service::new(client.clone());
         Self {
+            captured: crate::remote_derived::captured::Cache::attach(&client),
             publisher,
             integrations: None,
             mcp: None,

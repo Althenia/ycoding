@@ -549,6 +549,7 @@ impl Core {
             )
             .await?;
         Ok(Self {
+            captured: crate::remote_derived::captured::Cache::attach(&client),
             integrations: Some(integrations),
             mcp: Some(mcp),
             catalogs: Some(catalogs),

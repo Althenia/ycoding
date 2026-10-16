@@ -1,5 +1,5 @@
 mod auth;
-mod captured;
+pub(crate) mod captured;
 mod catalog;
 mod session;
 pub(crate) mod target;

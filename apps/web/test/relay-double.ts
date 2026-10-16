@@ -23,7 +23,7 @@ import {
   type NoticeRequestView,
   type RelayRequestView,
 } from "../src/remote/wire-views"
-import { BinarySocket, fixtureSession } from "./wire-peer"
+import { BinarySocket, fixtureSession, requestView } from "./wire-peer"
 
 export const pacedFlowTimeoutMs = WebLimits.clientRateWindowMs + 5_000
 
@@ -215,6 +215,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         ok: true,
         value: { data: [], truncated: false, completedBefore: 0, completedCount: 0, totalSavedTokens: 0 },
       }
+    if (request.operation === "session.log") return { ok: true, value: { data: [] } }
     if (request.operation === "telemetry.consent.get")
       return {
         ok: true,
@@ -774,6 +775,20 @@ function respond(peer: BinarySocket, dispatch: Extract<Decision, { type: "dispat
     return
   }
   try {
+    if (dispatch.operation.diagnosticName === "session.log") {
+      const request = requestView(dispatch)
+      const events =
+        typeof result.value === "object" && result.value !== null ? Reflect.get(result.value, "data") : undefined
+      const subscription = `log-${dispatch.requestID}`
+      peer.result(dispatch, { subscription_id: subscription })
+      peer.log(
+        request.sessionID!,
+        subscription,
+        Array.isArray(events) ? events : [],
+        typeof request.input?.after === "number" ? request.input.after : 0,
+      )
+      return
+    }
     peer.result(
       dispatch,
       fixtureResult(

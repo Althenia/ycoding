@@ -770,14 +770,21 @@ describe("remote shell layout", () => {
       try {
         await page.setViewport(width, height)
         await page.navigate(
-          `http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=1800`,
+          `http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListGate=1`,
         )
         for (
           let attempt = 0;
+          attempt < 80 && !(await page.evaluate<boolean>(`typeof window.remoteReleaseSessionList === 'function'`));
+          attempt++
+        )
+          await Bun.sleep(50)
+        await page.evaluate(`window.remoteReleaseSessionList()`)
+        for (
+          let attempt = 0;
           attempt < 80 &&
-          (await page.evaluate<number>(
-            `(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`,
-          )) < 25;
+          !(await page.evaluate<boolean>(
+            `(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1) >= 25 && window.providerAuthState().history?.status === 'idle' && window.providerAuthState().view?.capturedChanges !== undefined && window.remoteInventoryReport().listStatus === 'ready'`,
+          ));
           attempt += 1
         )
           await Bun.sleep(50)
@@ -789,12 +796,12 @@ describe("remote shell layout", () => {
           `({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`,
         )
         expect(before.rows).toBeGreaterThanOrEqual(25)
-        await page.evaluate(`window.remoteInvalidateSessions()`)
+        await page.evaluate(`window.remoteHoldSessionLists(); window.remoteInvalidateSessions()`)
         for (
           let attempt = 0;
           attempt < 80 &&
           !(await page.evaluate<boolean>(
-            `window.remoteInventoryReport().listStatus === 'loading' && window.remoteInventoryReport().workspaceRequests > ${before.requests}`,
+            `window.remotePendingSessionLists() > 0 && window.remoteInventoryReport().workspaceRequests > ${before.requests}`,
           ));
           attempt += 1
         )
@@ -809,7 +816,8 @@ describe("remote shell layout", () => {
           }>(
             `({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', loading: window.remoteInventoryReport().listStatus === 'loading', placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`,
           ),
-        ).toEqual({ rows: before.rows, title: before.title, loading: true, placeholder: false, fits: true })
+        ).toEqual({ rows: before.rows, title: before.title, loading: false, placeholder: false, fits: true })
+        await page.evaluate(`window.remoteReleaseSessionList()`)
       } finally {
         await page.close()
       }

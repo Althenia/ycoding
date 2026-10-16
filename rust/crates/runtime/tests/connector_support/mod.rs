@@ -359,10 +359,10 @@ async fn drive(mut socket: ws::WebSocket, shared: Arc<Shared>) {
                     match decision {
                         Decision::Forward(frame) => {
                             if let Some(v5::frame::Body::Result(result)) = &frame.body
-                                && result.operation_id == 4000
+                                && matches!(result.operation_id, 4000 | 4039)
                                 && let Some(v5::result::Outcome::Success(payload)) = &result.outcome {
-                                let accepted = decode_strict::<v5::EventSubscribeResult>(&payload.payload).unwrap();
-                                let id = String::from_utf16(&ycoding_protocol::decode_lossless(&accepted.subscription_id, 1024).unwrap()).unwrap();
+                                let subscription_id = if result.operation_id == 4039 { decode_strict::<v5::SessionLogResult>(&payload.payload).unwrap().subscription_id } else { decode_strict::<v5::EventSubscribeResult>(&payload.payload).unwrap().subscription_id };
+                                let id = String::from_utf16(&ycoding_protocol::decode_lossless(&subscription_id, 1024).unwrap()).unwrap();
                                 let scope = scopes.get(&result.request_id).unwrap().clone();
                                 let session = match &scope.target { Some(v5::scope::Target::Session(id)) => id, _ => panic!("Session subscription") };
                                 machine.accept_subscription(&result.request_id, id, scope.clone(), started.elapsed().as_millis() as u64, ycoding_protocol::connection::Direction::Receive, Some(epochs.get(session).unwrap().clone())).unwrap();

@@ -13,6 +13,113 @@ test("Ready, rather than native WebSocket open, establishes the binary runtime",
   }
 })
 
+test("a finite log check consumes its own typed stream without replacing the live subscription", async () => {
+  const f = transportFixture()
+  try {
+    const subscribed = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-browser" })
+    await subscribed
+    const snapshot = f.transport.request("session.snapshot", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    await snapshot
+    const log = f.transport.request("session.log", { sessionID: "ses_browser", input: { after: 0, follow: false } })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-log" })
+    f.sockets[0]!.log(
+      "ses_browser",
+      "sub-log",
+      [
+        {
+          id: "evt_rename",
+          created: 1,
+          type: "session.renamed",
+          data: { sessionID: "ses_browser", title: "Logged" },
+          durable: { aggregateID: "ses_browser", seq: 2, version: 1 },
+        },
+      ],
+      0,
+    )
+    f.advance(50)
+    expect(await log).toEqual({ status: "ok", value: { watermark: 2 } })
+    expect(f.batches).toEqual([])
+    const event = {
+      id: "evt_live",
+      created: 3,
+      type: "session.text.delta",
+      data: { sessionID: "ses_browser", assistantMessageID: "msg_browser", ordinal: 0, delta: "live" },
+    }
+    f.sockets[0]!.events("ses_browser", [event])
+    f.advance(50)
+    expect(f.batches).toEqual([{ sessionID: "ses_browser", events: [event] }])
+    expect(f.sockets[0]!.failures).toEqual([])
+  } finally {
+    f.transport.close()
+  }
+})
+
+test("a refused superseded subscription preserves a newer parallel snapshot's hydration", async () => {
+  const f = transportFixture()
+  try {
+    const first = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+    const firstRequest = f.sockets[0]!.dispatches.at(-1)!
+    const firstSnapshot = f.transport.request("session.snapshot", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    await firstSnapshot
+    const second = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
+    const secondRequest = f.sockets[0]!.dispatches.at(-1)!
+    const secondSnapshot = f.transport.request("session.snapshot", { sessionID: "ses_browser" })
+    f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, fixtureSnapshot("ses_browser"))
+    await secondSnapshot
+    f.sockets[0]!.error(firstRequest, "ycoding.v5.InvalidRequestError", {
+      _tag: "InvalidRequestError",
+      message: "refused",
+      kind: "payload",
+      ref: "fixture",
+    })
+    expect((await first).status).toBe("failed")
+    f.sockets[0]!.result(secondRequest, { subscription_id: "sub-new" })
+    expect((await second).status).toBe("ok")
+    const event = {
+      id: "evt_new",
+      created: 3,
+      type: "session.text.delta",
+      data: { sessionID: "ses_browser", assistantMessageID: "msg_browser", ordinal: 0, delta: "new" },
+    }
+    f.sockets[0]!.events("ses_browser", [event])
+    f.advance(50)
+    expect(f.batches).toEqual([{ sessionID: "ses_browser", events: [event] }])
+  } finally {
+    f.transport.close()
+  }
+})
+
+for (const settlement of ["timeout", "abort", "close"] as const)
+  test(`an admitted log check releases its waiter on ${settlement}`, async () => {
+    const f = transportFixture()
+    try {
+      const controller = new AbortController()
+      const log = f.transport.request("session.log", {
+        sessionID: "ses_browser",
+        input: { after: 0, follow: false },
+        timeoutMs: 10,
+        signal: controller.signal,
+      })
+      f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-log" })
+      if (settlement === "timeout") f.advance(10)
+      if (settlement === "abort") controller.abort()
+      if (settlement === "close") f.transport.close()
+      expect((await log).status).toBe("unknown")
+      if (settlement !== "close")
+        expect(
+          f.sockets[0]!.requests()
+            .filter((request) => request.operation === "event.unsubscribe")
+            .map((request) => request.input),
+        ).toEqual([{ subscription_id: "sub-log" }])
+      expect(f.sockets[0]!.failures).toEqual([])
+    } finally {
+      f.transport.close()
+    }
+  })
+
 test("canonical typed events are delivered as one ordered Session batch after snapshot hydration", async () => {
   const f = transportFixture()
   try {
@@ -94,7 +201,7 @@ for (const settlement of ["rejected", "timed-out", "cancelled"] as const)
 
 test("a successful resync snapshot clears invalidation without requesting another resync", async () => {
   let resyncs = 0
-  const f = transportFixture({ handlers: { onSessions: () => resyncs++ } })
+  const f = transportFixture({ handlers: { onResync: () => resyncs++ } })
   try {
     const subscribed = f.transport.request("event.subscribe", { sessionID: "ses_browser" })
     f.sockets[0]!.result(f.sockets[0]!.dispatches.at(-1)!, { subscription_id: "sub-browser" })

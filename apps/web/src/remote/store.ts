@@ -698,6 +698,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let cancelStatusReload: (() => void) | undefined
   let cancelSearch: (() => void) | undefined
   let inventoryRead: { readonly owner: RemoteTransport; trailing: boolean } | undefined
+  let cancelSessionsFrameWindow: (() => void) | undefined
+  let sessionsFrameQueued = false
   /**
    * Account generation. A `/api/me` read may apply only while the account context it
    * was issued for still owns the store, so a read that settles after sign-out, a
@@ -724,12 +726,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let resyncRead: Promise<void> | undefined
   let resyncTarget: { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number } | undefined
   let resyncAgain = false
+  let watermarkRead: { readonly sessionID: string; readonly token: number } | undefined
   /**
    * Live file changes that arrive while a ledger read is pending. The read describes
    * the device's ledger at one instant; a record this client applied after the read was
    * issued is newer, so it is re-applied over the read instead of being replaced by it.
    */
-  let capturedRead: { readonly sessionID: string; readonly owner: RemoteTransport; readonly token: number } | undefined
+  let capturedRead:
+    | {
+        readonly sessionID: string
+        readonly owner: RemoteTransport
+        readonly token: number
+        readonly controller: AbortController
+      }
+    | undefined
+  let capturedRefreshPending = false
   let cancelCapturedRefresh: (() => void) | undefined
   let lastCapturedRead = -Infinity
   let capturedUnsupported = false
@@ -1967,6 +1978,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
     }
     if (opened) {
+      cancelSessionsFrameWindow?.()
+      cancelSessionsFrameWindow = undefined
+      sessionsFrameQueued = false
       cancelStatusReload?.()
       cancelStatusReload = undefined
       statusReloadLocal = false
@@ -2370,11 +2384,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return next
   }
 
-  const loadTodos = async (owner: RemoteTransport, sessionID: string, token: number) => {
+  const loadTodos = async (owner: RemoteTransport, sessionID: string, token: number, admitted?: Promise<boolean>) => {
     const read = { sessionID, live: undefined as readonly TodoView[] | undefined }
     todoRead = read
     try {
       const outcome = await owner.request("session.todo.list", { sessionID, timeoutMs: 5_000 }).catch(() => undefined)
+      if (admitted !== undefined && !(await admitted)) return
       if (
         token !== selectionToken ||
         !isCurrentConnection(owner) ||
@@ -2398,7 +2413,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  const loadPendingInputs = async (owner: RemoteTransport, sessionID: string, token: number) => {
+  const loadPendingInputs = async (
+    owner: RemoteTransport,
+    sessionID: string,
+    token: number,
+    admitted?: Promise<boolean>,
+  ) => {
     const read = {
       sessionID,
       token,
@@ -2415,6 +2435,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     pendingRead = read
     try {
       const outcome = await owner.request("session.pending.list", { sessionID })
+      if (admitted !== undefined && !(await admitted)) return
       if (
         token !== selectionToken ||
         !isCurrentConnection(owner) ||
@@ -2474,12 +2495,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  const loadSessionReads = async (sessionID: string, token: number, notice?: string) => {
+  const loadSessionReads = async (sessionID: string, token: number, notice?: string, admitted?: Promise<boolean>) => {
     const active = transport
     if (!active) return
     const requestsDuringRead = { sessionID, live: [] as { readonly event: unknown; readonly at: number }[] }
     requestReads.add(requestsDuringRead)
-    void loadTodos(active, sessionID, token)
+    void loadTodos(active, sessionID, token, admitted)
     try {
       const [autonomy, permissions, guardrails, forms] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
@@ -2487,6 +2508,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         active.request("session.guardrail.request.list", { sessionID }),
         active.request("session.form.list", { sessionID }),
       ])
+      if (admitted !== undefined && !(await admitted)) return
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
       const view = container.state.view
       if (!view) return
@@ -2530,47 +2552,64 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const loadCapturedChanges = async (owner: RemoteTransport, sessionID: string, token: number) => {
     if (capturedUnsupported) return
-    const read = { owner, sessionID, token }
-    capturedRead = read
-    lastCapturedRead = now()
-    const groups = [] as NonNullable<SessionView["capturedChanges"]>[number][]
-    const seen = new Set<string>()
-    let cursor: string | undefined
-    for (;;) {
-      const outcome = await owner.request("session.capturedChanges.list", {
-        sessionID,
-        ...(cursor === undefined ? {} : { input: { cursor } }),
-      })
-      if (
-        capturedRead !== read ||
-        token !== selectionToken ||
-        !isCurrentConnection(owner) ||
-        container.state.activeSessionID !== sessionID
-      )
-        return
-      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") capturedUnsupported = true
-      const page = outcome.status === "ok" ? readCapturedChangesPage(outcome.value) : undefined
-      if (page === undefined) {
-        setState({
-          view:
-            container.state.view?.id === sessionID
-              ? { ...container.state.view, capturedChanges: undefined }
-              : container.state.view,
-        })
-        if (capturedRead === read) capturedRead = undefined
-        return
-      }
-      groups.push(...page.data)
-      cursor = page.cursor?.next
-      if (cursor === undefined || seen.has(cursor)) break
-      seen.add(cursor)
+    if (capturedRead?.owner === owner && capturedRead.sessionID === sessionID && capturedRead.token === token) {
+      capturedRefreshPending = true
+      return
     }
-    if (capturedRead === read) capturedRead = undefined
-    if (cursor !== undefined || container.state.view?.id !== sessionID) return
-    setState({ view: { ...container.state.view, capturedChanges: groups } })
+    const read = { owner, sessionID, token, controller: new AbortController() }
+    capturedRead = read
+    try {
+      const groups = [] as NonNullable<SessionView["capturedChanges"]>[number][]
+      const seen = new Set<string>()
+      let cursor: string | undefined
+      for (;;) {
+        const outcome = await owner.request("session.capturedChanges.list", {
+          sessionID,
+          signal: read.controller.signal,
+          ...(cursor === undefined ? {} : { input: { cursor } }),
+        })
+        if (
+          capturedRead !== read ||
+          token !== selectionToken ||
+          !isCurrentConnection(owner) ||
+          container.state.activeSessionID !== sessionID
+        )
+          return
+        if (outcome.status === "failed" && outcome.error.code === "unknown_operation") capturedUnsupported = true
+        const page = outcome.status === "ok" ? readCapturedChangesPage(outcome.value) : undefined
+        if (page === undefined) {
+          setState({
+            view:
+              container.state.view?.id === sessionID
+                ? { ...container.state.view, capturedChanges: undefined }
+                : container.state.view,
+          })
+          return
+        }
+        groups.push(...page.data)
+        cursor = page.cursor?.next
+        if (cursor === undefined || seen.has(cursor)) break
+        seen.add(cursor)
+      }
+      if (cursor !== undefined || container.state.view?.id !== sessionID) return
+      setState({ view: { ...container.state.view, capturedChanges: groups } })
+    } finally {
+      if (capturedRead === read) {
+        capturedRead = undefined
+        lastCapturedRead = now()
+        if (capturedRefreshPending) {
+          capturedRefreshPending = false
+          scheduleCapturedRefresh()
+        }
+      }
+    }
   }
 
   const scheduleCapturedRefresh = () => {
+    if (capturedRead !== undefined) {
+      capturedRefreshPending = true
+      return
+    }
     if (
       capturedUnsupported ||
       cancelCapturedRefresh ||
@@ -2589,6 +2628,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       },
       Math.max(0, 10_000 - (now() - lastCapturedRead)),
     )
+  }
+
+  const resetCapturedRefresh = () => {
+    cancelCapturedRefresh?.()
+    cancelCapturedRefresh = undefined
+    capturedRead?.controller.abort()
+    capturedRead = undefined
+    capturedRefreshPending = false
+    lastCapturedRead = -Infinity
   }
 
   /**
@@ -3082,7 +3130,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     loadingPageToken = token
     setState({
       sessionPageLoading: cursor !== undefined,
-      ...(cursor === undefined ? { sessionListStatus: "loading" as const } : {}),
+      ...(cursor === undefined && container.state.sessions.length === 0
+        ? { sessionListStatus: "loading" as const }
+        : {}),
     })
     const listed = await active.request("session.list", {
       input: {
@@ -3198,7 +3248,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       ...(sameWorkspace
         ? {}
         : { sessions: [], advertised: [], sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false }),
-      sessionListStatus: selectedWorkspaceID === undefined ? "ready" : "loading",
+      sessionListStatus:
+        selectedWorkspaceID === undefined || (sameWorkspace && container.state.sessions.length > 0)
+          ? "ready"
+          : "loading",
     })
     if (selectedWorkspaceID !== undefined) await loadSessions(token)
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
@@ -3219,10 +3272,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const selectSession = async (sessionID: string, verified?: SessionInfoView) => {
-    cancelCapturedRefresh?.()
-    cancelCapturedRefresh = undefined
-    capturedRead = undefined
-    lastCapturedRead = -Infinity
+    resetCapturedRefresh()
     if (container.state.activeSessionID !== sessionID) clearImageSources()
     if (activeUpload) cancelUpload("Attachment upload was cancelled by Session selection. Files were not sent.")
     const active = transport
@@ -3345,12 +3395,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       void loadSessions(sessionsToken)
     }
-    // Subscribe before the snapshot so events during the read are queued and then
-    // reconciled against the snapshot watermark instead of being lost.
     if (subscribedSessionID === sessionID) releaseSubscription(active, sessionID)
-    const subscribed = await active.request("event.subscribe", { sessionID })
+    const subscribing = active.request("event.subscribe", { sessionID })
+    const snapshotRead = readSnapshotPayload(sessionID)
+    const admitted = subscribing.then((outcome) => outcome.status === "ok")
+    const snapshotStage = Promise.withResolvers<boolean>()
+    const sessionReads = loadSessionReads(sessionID, token, undefined, admitted)
+    const pendingInputs = loadPendingInputs(active, sessionID, token, snapshotStage.promise)
+    const subscribed = await subscribing
     registerSubscription(active, sessionID, subscribed)
     if (subscribed.status !== "ok") {
+      snapshotStage.resolve(false)
       // The selection left the previous session behind, so its stream ends even when
       // this one is not available.
       if (subscribedSessionID !== undefined && subscribedSessionID !== sessionID) {
@@ -3372,6 +3427,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     if (token !== selectionToken || container.state.activeSessionID !== sessionID) {
+      snapshotStage.resolve(false)
       // A superseded selection registered a subscription this store no longer shows.
       releaseSubscription(active, sessionID)
       return
@@ -3397,10 +3453,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
-      await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
+      snapshotStage.resolve(true)
+      await Promise.all([sessionReads, pendingInputs])
     }
     try {
-      const outcome = await readSnapshotPayload(sessionID)
+      const outcome = await snapshotRead
       if (token !== selectionToken || container.state.activeSessionID !== sessionID || outcome === undefined) return
       if (outcome.status !== "ok") {
         return await continueWithoutHistory(historyFailure(outcome))
@@ -3446,13 +3503,67 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
+      void confirmWatermark(active, sessionID, token)
       if (teamWatching && (!retained || container.state.team?.status !== "ready"))
         void loadTeam(active, token, teamRootID)
       if (retained && activityWatching) void loadFamilyActivity(active, teamRootID)
     } finally {
+      snapshotStage.resolve(true)
       if (hydration === owned) hydration = undefined
     }
-    await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(active, sessionID, token)])
+    await Promise.all([sessionReads, pendingInputs])
+  }
+
+  const confirmWatermark = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    const asked = container.state.view?.watermark
+    if (asked === undefined) return
+    if (watermarkRead?.sessionID === sessionID && watermarkRead.token === token) return
+    const read = { sessionID, token }
+    watermarkRead = read
+    try {
+      const outcome = await owner.request("session.log", { sessionID, input: { after: asked, follow: false } })
+      if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
+      if (outcome.status !== "ok") {
+        void resyncSelected()
+        return
+      }
+      const watermark =
+        typeof outcome.value === "object" && outcome.value !== null
+          ? Reflect.get(outcome.value, "watermark")
+          : undefined
+      const applied = container.state.view?.watermark
+      if (watermark === undefined || (typeof watermark === "number" && applied !== undefined && watermark <= applied))
+        return
+      void resyncSelected()
+    } finally {
+      if (watermarkRead === read) watermarkRead = undefined
+    }
+  }
+
+  const applySessionsFrame = (owner: RemoteTransport) => {
+    if (!isCurrentConnection(owner)) return
+    if (cancelSessionsFrameWindow !== undefined) {
+      sessionsFrameQueued = true
+      return
+    }
+    cancelSessionsFrameWindow = schedule(() => {
+      cancelSessionsFrameWindow = undefined
+      if (!sessionsFrameQueued) return
+      sessionsFrameQueued = false
+      applySessionsFrame(owner)
+    }, 750)
+    signalRecovery()
+    if (container.state.sessionListStatus === "ready" || (container.state.carouselSessions?.length ?? 0) > 0) {
+      carouselRevision += 1
+      carouselRefreshPending = true
+    }
+    cancelSearch?.()
+    cancelSearch = undefined
+    sessionsToken += 1
+    void refreshSessionGroups(owner)
+    if (selectionReadyToken === selectionToken && subscribedSessionID === container.state.activeSessionID) {
+      void confirmWatermark(owner, container.state.activeSessionID!, selectionToken)
+    }
   }
 
   const resyncSelected = (): Promise<void> => {
@@ -3871,6 +3982,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   }
 
   const disconnectDevice = (retainMachineOffline = false) => {
+    resetCapturedRefresh()
+    cancelSessionsFrameWindow?.()
+    cancelSessionsFrameWindow = undefined
+    sessionsFrameQueued = false
     clearPendingLatency()
     latency.clear()
     goalsInFlight.clear()
@@ -4258,13 +4373,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return result
     },
     connect: (deviceID) => {
+      cancelSessionsFrameWindow?.()
+      cancelSessionsFrameWindow = undefined
+      sessionsFrameQueued = false
       writeRememberedMachine(storage, deviceID)
       goalsInFlight.clear()
       capturedUnsupported = false
-      cancelCapturedRefresh?.()
-      cancelCapturedRefresh = undefined
-      capturedRead = undefined
-      lastCapturedRead = -Infinity
+      resetCapturedRefresh()
       const switching = container.state.activeDeviceID !== deviceID
       if (switching && container.state.activeDeviceID !== undefined) {
         clearPendingLatency()
@@ -4366,23 +4481,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         },
         onStatus: (status) => handleStatus(created, status),
         onSessionStatus: (status) => applyStatusFrame(created, status),
-        onNotices: (frame) => applyNotices(created, frame, deviceID),
-        onSessions: () => {
-          if (!isCurrentConnection(created)) return
-          scheduleCapturedRefresh()
-          signalRecovery()
-          if (container.state.sessionListStatus === "ready" || (container.state.carouselSessions?.length ?? 0) > 0) {
-            carouselRevision += 1
-            carouselRefreshPending = true
-          }
-          cancelSearch?.()
-          cancelSearch = undefined
-          sessionsToken += 1
-          setState({ sessionListStatus: "loading" })
-          void refreshSessionGroups(created)
-          if (selectionReadyToken === selectionToken && subscribedSessionID === container.state.activeSessionID)
-            void resyncSelected()
+        onResync: (sessionID) => {
+          if (isCurrentConnection(created) && container.state.activeSessionID === sessionID) void resyncSelected()
         },
+        onNotices: (frame) => applyNotices(created, frame, deviceID),
+        onSessions: () => applySessionsFrame(created),
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
           for (const event of events) {
@@ -5531,6 +5634,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({ view: { ...view, autonomy } })
     },
     dispose: () => {
+      resetCapturedRefresh()
+      cancelSessionsFrameWindow?.()
+      cancelSessionsFrameWindow = undefined
+      sessionsFrameQueued = false
       clearPendingLatency()
       latency.dispose()
       goalsInFlight.clear()

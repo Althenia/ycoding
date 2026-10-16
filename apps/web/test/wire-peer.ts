@@ -11,6 +11,7 @@ import {
   ScopeSchema,
   ControlSchema,
   PublicEventSchema,
+  SessionLogItemSchema,
   EventRecordSchema,
   BulkStartSchema,
   BulkPieceSchema,
@@ -304,7 +305,8 @@ export class BinarySocket extends EventTarget {
         "send",
         this.backendEpoch,
       )
-      this.subscriptions.set(dispatch.request.scope!.target.value as string, fields.subscription_id)
+      if (dispatch.operation.diagnosticName === "event.subscribe")
+        this.subscriptions.set(dispatch.request.scope!.target.value as string, fields.subscription_id)
     }
   }
   error(dispatch: Extract<Decision, { type: "dispatch" }>, typeName: string, value: unknown) {
@@ -430,6 +432,47 @@ export class BinarySocket extends EventTarget {
       if (decisions.some((decision) => decision.type === "closed")) throw new Error("Fixture event was rejected")
     }
     this.flush()
+  }
+  log(sessionID: string, subscriptionID: string, events: readonly unknown[], after: number) {
+    const records = events.map((event, index) => {
+      if (typeof event !== "object" || event === null) throw new Error("Expected a log event object")
+      return {
+        id: `log-${index}`,
+        created: 1,
+        sourceEpoch: this.backendEpoch,
+        ...event,
+      }
+    })
+    const watermark = Math.max(after, ...records.map((event) => Reflect.get(event, "durable")?.seq ?? 0))
+    for (const event of [
+      ...records,
+      { type: "log.synced", aggregateID: sessionID, sourceEpoch: this.backendEpoch, seq: watermark },
+    ]) {
+      const durable = Reflect.get(event, "durable")
+      this.connection.enqueueEvent(
+        create(EventRecordSchema, {
+          eventId: Reflect.get(event, "id") ?? `log-synced-${watermark}`,
+          createdMs: BigInt(Reflect.get(event, "created") ?? 1),
+          durable: {
+            aggregateId: sessionID,
+            sequence: BigInt(durable?.seq ?? watermark),
+            version: durable?.version ?? 1,
+          },
+          event: {
+            typeName: SessionLogItemSchema.typeName,
+            payload: encodeStrict(SessionLogItemSchema, writeWireMessage(SessionLogItemSchema, event)),
+          },
+        }),
+        {
+          scope: create(ScopeSchema, { target: { case: "session", value: sessionID } }),
+          subscriptionID,
+          sourceEpoch: this.backendEpoch,
+        },
+        this.now(),
+      )
+    }
+    this.flush()
+    this.body({ case: "streamEnd", value: { $typeName: "ycoding.v5.StreamEnd", subscriptionId: subscriptionID } })
   }
   control(kind: NonNullable<Parameters<typeof create<typeof ControlSchema>>[1]>["kind"]) {
     this.body({ case: "control", value: create(ControlSchema, { kind }) })

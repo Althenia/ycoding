@@ -124,6 +124,27 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
         .unwrap();
     support::insert_session("ses_real_connector", scratch.to_str().unwrap(), None).await;
     support::insert_session("ses_real_other", scratch.to_str().unwrap(), None).await;
+    support::insert_message(
+        "ses_real_connector",
+        "msg_relay_input",
+        "user",
+        1,
+        r#"{"text":"Task","time":{"created":1,"consumed":1}}"#,
+    )
+    .await;
+    support::insert_message("ses_real_connector", "msg_relay_edit", "assistant", 2, r#"{"agent":"build","model":{"providerID":"fixture","id":"model"},"content":[{"type":"tool","id":"relay_edit","name":"patch","state":{"status":"completed","input":{},"content":[],"structured":{"files":[{"file":"relay.txt","patch":"--- /dev/null\n+++ b/relay.txt\n@@ -0,0 +1 @@\n+new\n"}]}},"time":{"created":1,"completed":2}}],"cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":2,"completed":3}}"#).await;
+    world()
+        .store
+        .submit(|tx| {
+            ycoding_core::ycoding_store::session::reserve_sequence(
+                tx,
+                &"ses_real_connector".into(),
+                2,
+            )
+        })
+        .unwrap()
+        .await
+        .unwrap();
     let feed = world().core.events.clone();
     let mut services = services(LocalAuth::disabled(), true);
     services.core.as_mut().unwrap().events = feed.clone();

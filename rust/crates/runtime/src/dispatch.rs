@@ -448,7 +448,10 @@ impl Dispatcher {
         let outcome = match authorized {
             Ok(())
                 if entry.descriptor.streaming == v5::Streaming::Events as i32
-                    && entry.descriptor.diagnostic_name != "event.subscribe" =>
+                    && !matches!(
+                        entry.descriptor.diagnostic_name.as_str(),
+                        "event.subscribe" | "session.log"
+                    ) =>
             {
                 Err(Failure::Unavailable(
                     "Canonical remote stream binding is not ready".into(),
