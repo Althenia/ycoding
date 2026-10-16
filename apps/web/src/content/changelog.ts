@@ -52,6 +52,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Changed", text: "When no queued command is running, the next queued command starts even if memory or CPU is short, so the queue never stalls." },
       { tag: "Changed", text: "A queued command takes one of its Session family's shell slots only when it starts, so waiting commands leave those slots free for ordinary shell commands." },
       { tag: "Changed", text: "A repeated queued command needs only as much free memory as its recent runs used: the highest peak of its last five recorded runs for the same command and working directory, capped by its memory limit. Only a run that exits successfully after at least one measurement can lower that amount; other runs can only raise it." },
+      { tag: "Fixed", text: "`/suggest` accepts predictions in languages written without spaces between words, such as Japanese and Chinese, instead of discarding them as one-word replies." },
       { tag: "Fixed", text: "Prompts that were already consumed no longer stay marked Queued in the terminal transcript after the transcript reloads or reconnects." },
       { tag: "Fixed", text: "A tool call cut off by the model's output limit fails with a retryable error instead of leaving the call open, so the run continues instead of the next request being rejected by the provider." },
       { tag: "Fixed", text: "Streamed provider errors retain readable messages and failure classifications instead of displaying `[object Object]`." },

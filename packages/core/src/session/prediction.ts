@@ -27,9 +27,11 @@ import { SessionSchema } from "./schema"
 import { SessionStore } from "./store"
 import { SessionUsage } from "./usage"
 
+const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" })
+
 export const accept = (output: string, previous: string) => {
   const text = output.trim()
-  const words = text.split(/\s+/).length
+  const words = Array.from(wordSegmenter.segment(text)).filter((segment) => segment.isWordLike).length
   if (!text || words < 2 || words > 40 || text.length > 400 || /[\p{Cc}\p{Bidi_Control}\u2028\u2029]/u.test(text))
     return
   if (

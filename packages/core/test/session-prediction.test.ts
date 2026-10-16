@@ -362,6 +362,7 @@ test.each([
   ["x".repeat(397) + " yz", true], ["x".repeat(398) + " yz", false],
   ["Run \u200ethe tests", false], ["Run \u200fthe tests", false], ["Run \u061cthe tests", false],
   ["Run the\u2028tests", false], ["Run the\u2029tests", false],
+  ["計算した平均を棒グラフで可視化する方法を教えてください。", true], ["如何用柱状图可视化每列的平均值？", true], ["ありがとう", false],
 ])("filters helper output %j", (value, accepted) => {
   expect(SessionPrediction.accept(value, "Fix the failing build") !== undefined).toBe(accepted)
 })

@@ -14,7 +14,7 @@ describe("release entries", () => {
     const text = release?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["`model_fallbacks`", "Model incidents", "Continue or Stop", "`auto_answer`", "`guardrails.decide_reviews`", "off by default"])
       expect(text).toContain(fragment)
-    expect(release?.changes.length).toBe(52)
+    expect(release?.changes.length).toBe(53)
   })
 
   test("retains v0.10.10 shell command queue, self-contained commits, and waiting for another database writer", () => {
