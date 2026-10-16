@@ -20,7 +20,7 @@ export type SessionHeaderOperationalState =
   | { type: "thinking"; elapsed?: number; startedAt?: number }
   | { type: "tool-running"; elapsed?: number; startedAt?: number }
   | { type: "waiting"; count: number }
-  | { type: "awaiting-input"; count: number; elapsed?: number }
+  | { type: "awaiting-input"; count: number; elapsed?: number; startedAt?: number }
   | { type: "provider-error"; message?: string; code?: number }
   // A retry is two phases with opposite indicator rules. `retry-scheduled` is the backoff worker:
   // the next attempt has not started, so it shows only the countdown to `at` and no animation.
@@ -34,7 +34,7 @@ export type SessionHeaderState =
 
 type SessionHeaderTimedState = Extract<
   SessionHeaderOperationalState,
-  { type: "working" } | { type: "thinking" } | { type: "tool-running" }
+  { type: "working" } | { type: "thinking" } | { type: "tool-running" } | { type: "awaiting-input" }
 >
 
 export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "profile" | "model" | "daybreak" | "variant"
@@ -215,10 +215,17 @@ export function Header(
   })
   const timed = createMemo<SessionHeaderTimedState | undefined>(() => {
     const current = operational()
-    if (current.type === "working" || current.type === "thinking" || current.type === "tool-running") return current
+    if (
+      current.type === "working" ||
+      current.type === "thinking" ||
+      current.type === "tool-running" ||
+      current.type === "awaiting-input"
+    )
+      return current
+    return undefined
   })
   createEffect(() => {
-    // The shared `now` tick drives the retry countdown and the working/thinking/tool-running elapsed;
+    // The shared `now` tick drives the retry countdown and active elapsed states;
     // terminal states (ready/waiting/provider-error/cancelled/completed/failed/lost) freeze elapsed and stop the tick.
     const active = timed()
     const op = operational()

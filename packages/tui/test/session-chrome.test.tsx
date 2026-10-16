@@ -25,6 +25,7 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/resolve"
 import { getGlyph } from "../src/ui/glyph"
+import { SubagentBlockedSurface } from "../src/routes/session/subagent-blocked"
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -935,6 +936,68 @@ describe("header rendering", () => {
     await app.waitForFrame((frame) => frame.includes("ready"))
     const settled = app.captureCharFrame()
     await Bun.sleep(200)
+    expect(app.captureCharFrame()).toBe(settled)
+    app.renderer.destroy()
+  })
+
+  test("updates the waiting-question timer with the blocked surface and stops after settlement", async () => {
+    const config = createTuiResolvedConfig()
+    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+      import("../src/config"),
+      import("../src/context/theme"),
+    ])
+    let setState!: (state: SessionHeaderState) => void
+    function LiveHeader() {
+      const questionTime = Date.now() - 242_000
+      const [state, set] = createSignal<SessionHeaderState>({
+        type: "awaiting-input",
+        count: 1,
+        startedAt: questionTime,
+      })
+      const [blockedAt, setBlockedAt] = createSignal<number | undefined>(questionTime)
+      setState = (next) => {
+        set(next)
+        if (next.type !== "awaiting-input") setBlockedAt(undefined)
+      }
+      return (
+        <>
+          <Header {...identity} state={state()} />
+          <SubagentBlockedSurface title="Build" blockedAt={blockedAt()} question="Waiting for a decision" />
+        </>
+      )
+    }
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider config={config}>
+                <LiveHeader />
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 160, height: 20, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    await app.waitForFrame(
+      (frame) => frame.match(/\? awaiting input · (4m\d{2}s)/)?.[1] === frame.match(/blocked (4m\d{2}s)/)?.[1],
+    )
+    const initial = app.captureCharFrame()
+    const initialWait = initial.match(/\? awaiting input · (4m\d{2}s)/)?.[1]
+    const next = await app.waitForFrame((frame) => {
+      const headerWait = frame.match(/\? awaiting input · (4m\d{2}s)/)?.[1]
+      const blockedWait = frame.match(/blocked (4m\d{2}s)/)?.[1]
+      return headerWait !== initialWait && headerWait === blockedWait
+    })
+    expect(next).not.toBe(initial)
+    setState({ type: "ready" })
+    await app.waitForFrame((frame) => frame.includes("ready"))
+    const settled = app.captureCharFrame()
+    expect(settled).not.toContain("awaiting input")
+    expect(settled).not.toContain("blocked 4m")
+    await Bun.sleep(1_100)
     expect(app.captureCharFrame()).toBe(settled)
     app.renderer.destroy()
   })

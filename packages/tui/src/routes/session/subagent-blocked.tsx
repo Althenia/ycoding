@@ -18,13 +18,20 @@ export function SubagentBlockedSurface(props: {
   question: string
 }) {
   const { theme } = useTheme()
+  const [now, setNow] = createSignal(Date.now())
   const activity = createMemo(() => {
     const match = /^(.*?)\s{2,}(\d+\s+\S+)$/.exec(props.activity ?? "")
     return { description: match?.[1] ?? props.activity, result: match?.[2] }
   })
   const blocked = createMemo(() =>
-    props.blockedAt === undefined ? undefined : Locale.duration(Math.max(0, Date.now() - props.blockedAt)),
+    props.blockedAt === undefined ? undefined : Locale.duration(Math.max(0, now() - props.blockedAt)),
   )
+  createEffect(() => {
+    if (props.blockedAt === undefined) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    onCleanup(() => clearInterval(timer))
+  })
 
   return (
     <box flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={1} flexShrink={0}>

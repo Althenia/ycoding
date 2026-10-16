@@ -61,7 +61,8 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(output).toContain("awaiting decision")
     expect(output.match(/TEST-TRIAGE SUBAGENT/g)).toHaveLength(1)
     expect(output.match(/Two provider tests fail on main before my changes\./g)).toHaveLength(1)
-    expect(output).toMatch(/blocked 3m\d{2}s/)
+    const blockedWait = output.match(/blocked (4m\d{2}s)/)?.[1]
+    expect(blockedWait).toBeDefined()
     expect(output).not.toContain("─")
     expect(output).not.toContain("│")
     expect(rows[9]?.indexOf("TEST-TRIAGE SUBAGENT")).toBe(3)
@@ -69,7 +70,7 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(rows[15]?.indexOf("ok")).toBe(3)
     expect(rows[18]?.indexOf("?")).toBe(3)
     expect(rows[24]?.indexOf("Should I mark the pre-existing failures as expected, or fix them?")).toBe(6)
-    expect(rows[1]).toContain("? awaiting input · 4m02s")
+    expect(rows[1]).toContain(`? awaiting input · ${blockedWait}`)
     expect(rows[62]?.indexOf("Enter answer")).toBe(3)
     expect(rows[62]).not.toContain("Esc leave blocked")
     expect(rows[4]?.indexOf("↑ Provider cache audit")).toBe(3)
@@ -79,7 +80,7 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
 function route(url: URL) {
   const now = Date.now()
   const parent = session(parentID, "Provider cache audit", now)
-  const child = { ...session(sessionID, "test-triage", now), parentID, agent: "general" }
+  const child = { ...session(sessionID, "test-triage", now - 8 * 60 * 60 * 1000), parentID, agent: "general" }
   const siblings = [
     task("ses_docs", "docs-sync", "running", 1, now),
     task(
@@ -205,7 +206,7 @@ function task(
     model: { providerID: "anthropic", id: "claude-sonnet-5" },
     background: true,
     state,
-    ...(question ? { question: { id: "qst_blocked", text: question, time: now - 221_000 } } : {}),
+    ...(question ? { question: { id: "qst_blocked", text: question, time: now - 242_000 } } : {}),
     revision: 1,
     time: { created: now - (5 - order) * 60_000, updated: now },
   }
