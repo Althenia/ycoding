@@ -140,6 +140,39 @@ failures do not suppress pruning. Per-Session pruning failures are logged withou
 stopping other Sessions. Shutdown stops scheduling and joins an active sweep before
 the Store closes, together with the other cleanup owners.
 
+Before the first deleting retention or compacted-history pass, the file-backed
+Store creates `<database>.pre-prune-backup` and its `.complete` sidecar. The
+gate runs only after a retention candidate or a valid local checkpoint exists;
+an empty startup sweep does not seal a backup. Atomic publication uses a
+same-directory, no-replace hard link. The backup worker holds one redb MVCC read
+snapshot and copies every catalog table,
+including indexes and storage identity, into a separate redb database. It checks
+native integrity, catalog and identity, and compares every copied key/value
+against that snapshot before closing, syncing and atomically publishing the
+backup. The synced completion sidecar binds the backup size to the database
+identity and generation without changing the Store catalog or record format.
+
+The first copy requires free space of at least the current database file size
+plus 1 GiB. Space-query, copy, verification or publication failures leave
+deletion paused and retry on a later pass; a diagnostic is emitted at most once
+per hour per Store owner. A published backup without its sidecar is verified
+before completing publication. An invalid backup, mismatched sidecar or missing
+completed backup blocks deletion rather than overwriting the recovery artifact.
+Reopening verifies the completed backup before admitting pruning; a completed
+backup does not require the first-copy space check again. In-memory Stores have
+no disk backup or space requirement. Backup work runs outside async runtime and
+Store writer threads, so ordinary reads and writes remain available.
+
+Compacted-history batches examine at most 50 messages or 100 events and 2 MiB of
+encoded records. A batch always examines at least one available row, including
+an oversized row; retained rows count toward the limits. Monotonic cursors pass
+survivors without rescanning them. The sweep yields between batches and Sessions.
+After a Session loses history or a family-retention sweep deletes Sessions,
+two separately awaited durable native commits allow redb to recycle freed pages
+and apply its normal tail-shrink policy. Held
+snapshots continue to pin their pages. Reclaim does not run an unbounded exclusive
+full-file compaction or promise a smaller file after every sweep.
+
 The compacted-history retention service prunes rows strictly below a valid local
 summary checkpoint with a matching ended job. Each bounded transaction rechecks
 Session existence, execution activity, staged revert, unchanged checkpoint

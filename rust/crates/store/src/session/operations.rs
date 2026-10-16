@@ -223,7 +223,7 @@ pub fn prune_messages(
         session,
         below,
         after,
-        limit.min(200),
+        limit.min(50),
         retain,
     )
 }
@@ -242,7 +242,7 @@ pub fn prune_events(
         aggregate,
         below,
         after,
-        limit.min(1000),
+        limit.min(100),
         retain,
     )
 }
@@ -261,24 +261,40 @@ fn prune_below<T: TableSpec>(
     }
     let prefix = key(owner);
     let upper = tuple_key(&[KeyPart::String(owner), KeyPart::I64(below)]);
-    let rows = tx.index_range::<T>(
-        index,
-        IndexQuery {
-            lower: Bound::Unbounded,
-            upper: Bound::Excluded(&upper),
-            prefix: Some(&prefix),
-            order: IndexOrder::Ascending,
-            after,
-            limit,
-        },
-    )?;
-    let next = (rows.len() == limit)
-        .then(|| rows.last().map(|row| row.cursor.clone()))
-        .flatten();
+    let mut next = after.cloned();
     let mut deleted = 0;
-    for row in rows.into_iter().filter(|row| !retain(&row.record)) {
-        tx.delete::<T>(&T::primary_key(&row.record))?;
-        deleted += 1;
+    let mut bytes = 0usize;
+    for count in 0..limit {
+        let Some(row) = tx
+            .index_range::<T>(
+                index,
+                IndexQuery {
+                    lower: Bound::Unbounded,
+                    upper: Bound::Excluded(&upper),
+                    prefix: Some(&prefix),
+                    order: IndexOrder::Ascending,
+                    after: next.as_ref(),
+                    limit: 1,
+                },
+            )?
+            .into_iter()
+            .next()
+        else {
+            return Ok(PruneBatch {
+                deleted,
+                next: None,
+            });
+        };
+        let size = T::encode(&row.record)?.len();
+        if count > 0 && bytes.saturating_add(size) > 2 * 1024 * 1024 {
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        next = Some(row.cursor);
+        if !retain(&row.record) {
+            tx.delete::<T>(&T::primary_key(&row.record))?;
+            deleted += 1;
+        }
     }
     Ok(PruneBatch { deleted, next })
 }

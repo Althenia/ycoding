@@ -1,5 +1,6 @@
 pub mod analytics;
 pub mod artifacts;
+pub mod backup;
 mod catalog;
 mod engine;
 mod error;

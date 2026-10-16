@@ -375,6 +375,22 @@ async fn production_flow() {
     std::fs::create_dir_all(&other_meeting).unwrap();
     let foreign_lock = format!(r#"{{"pid":{}}}"#, std::process::id());
     std::fs::write(other_meeting.join("runtime.lock"), &foreign_lock).unwrap();
+    let backup_source = root.join("store.redb");
+    let backed_up_before_deletion = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed_backup = backed_up_before_deletion.clone();
+    store.observe_events(move |events| {
+        if events
+            .iter()
+            .any(|event| event.type_.as_str() == Some("session.deleted.2"))
+        {
+            observed_backup.store(
+                ycoding_core::ycoding_store::backup::path(&backup_source).is_file()
+                    && ycoding_core::ycoding_store::backup::marker(&backup_source).is_file(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+        true
+    });
     let retention = Feed::attach(&store.client());
     let notified = Arc::new(Notify::new());
     let wake = notified.clone();
@@ -665,6 +681,22 @@ async fn production_flow() {
             .is_none(),
         "boot retention must use global days, not project days"
     );
+    assert!(ycoding_core::ycoding_store::backup::marker(&root.join("store.redb")).is_file());
+    assert!(backed_up_before_deletion.load(std::sync::atomic::Ordering::Acquire));
+    let restored_path = root.join("restored.redb");
+    std::fs::copy(
+        ycoding_core::ycoding_store::backup::path(&root.join("store.redb")),
+        &restored_path,
+    )
+    .unwrap();
+    let restored = Store::open(&restored_path, Options::core(), store.catalog()).unwrap();
+    assert!(
+        SessionStore::new(restored.client())
+            .get(&session::Id::new("ses_idle").unwrap())
+            .unwrap()
+            .is_some()
+    );
+    restored.shutdown().unwrap();
     let mut host = support::services(LocalAuth::disabled(), false);
     host.core = Some(core.clone());
     let server = support::start(host, ycoding_runtime::standard().unwrap()).await;

@@ -86,6 +86,7 @@ impl Observers {
 }
 
 struct Shared {
+    backup: Mutex<crate::backup::State>,
     analytics: Mutex<crate::analytics::Link>,
     observers: Arc<Observers>,
     database: Mutex<Option<Arc<Database>>>,
@@ -113,7 +114,7 @@ impl Store {
             .read(true)
             .write(true)
             .create_new(true)
-            .open(path)?;
+            .open(path.as_ref())?;
         Self::start(
             Database::builder()
                 .set_cache_size(options.cache_bytes)
@@ -121,6 +122,7 @@ impl Store {
             options,
             catalog,
             Some(metadata),
+            Some(std::fs::canonicalize(path)?),
         )
     }
 
@@ -130,10 +132,11 @@ impl Store {
         Self::start(
             Database::builder()
                 .set_cache_size(options.cache_bytes)
-                .open(path)?,
+                .open(path.as_ref())?,
             options,
             catalog,
             None,
+            Some(std::fs::canonicalize(path)?),
         )
     }
 
@@ -152,6 +155,7 @@ impl Store {
             options,
             catalog,
             Some(metadata),
+            None,
         )
     }
 
@@ -160,6 +164,7 @@ impl Store {
         options: Options,
         catalog: Catalog,
         initial: Option<Metadata>,
+        path: Option<std::path::PathBuf>,
     ) -> Result<Self, Error> {
         let database = Arc::new(database);
         let fenced = Arc::new(AtomicBool::new(false));
@@ -208,6 +213,7 @@ impl Store {
         };
         Ok(Self {
             client: Client(Arc::new(Shared {
+                backup: Mutex::new(crate::backup::State::new(path)),
                 analytics: Mutex::default(),
                 observers: Arc::default(),
                 database: Mutex::new(Some(database)),
@@ -302,6 +308,24 @@ impl Deref for Store {
 }
 
 impl Client {
+    pub fn prepare_pruning(
+        &self,
+        now: i64,
+        free_bytes: impl FnOnce(&Path) -> Result<u64, Error>,
+    ) -> Result<crate::backup::Status, Error> {
+        let mut state = self
+            .0
+            .backup
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.prepare(now, free_bytes, self.0.catalog, &self.0.metadata, || {
+            self.snapshot()
+        })
+    }
+
+    pub fn reclaim(&self) -> Result<Receipt<()>, Error> {
+        self.submit(|_| Ok(()))
+    }
     pub(crate) fn attach_analytics(&self, link: crate::analytics::Link) {
         *self
             .0
@@ -890,7 +914,7 @@ impl Drop for SnapshotPermit {
 }
 
 pub struct Snapshot {
-    read: ReadTransaction,
+    pub(crate) read: ReadTransaction,
     _permit: SnapshotPermit,
     _database: Arc<Database>,
     catalog: Catalog,
@@ -1220,8 +1244,14 @@ mod tests {
             .set_cache_size(options.cache_bytes)
             .create_with_backend(backend)
             .unwrap();
-        let store =
-            Store::start(db, options, Catalog::EMPTY, Some(Metadata::new([9; 16], 1))).unwrap();
+        let store = Store::start(
+            db,
+            options,
+            Catalog::EMPTY,
+            Some(Metadata::new([9; 16], 1)),
+            None,
+        )
+        .unwrap();
         let (reached, started) = mpsc::channel();
         let (release, barrier) = mpsc::channel();
         let receipt = store

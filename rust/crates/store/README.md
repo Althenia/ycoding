@@ -4,13 +4,34 @@
 
 `session::prune_messages` and `prune_events` delete typed rows strictly below a
 sequence while applying the caller's retention predicate. Limits are capped at
-200 messages and 1,000 events; zero is rejected. `PruneBatch` reports committed
+50 messages and 100 events, with a 2 MiB encoded-record budget; zero is rejected.
+Every nonempty batch examines at least one row, including an oversized row.
+Retained rows count toward the budget and advance the cursor. `PruneBatch` reports committed
 deletion counts and an exclusive resumable index cursor, including when the
 cursor row was deleted. Primary rows and all index memberships are removed in
 the same transaction; aggregate sequences, Session metadata, usage and unrelated
 tables remain unchanged. Core owns checkpoint eligibility and reference keeps.
 Failed transactions roll back the whole page. The helpers perform no database
 file compaction and require no catalog or record-codec changes.
+
+Call blocking `Client::prepare_pruning(now, free_bytes)` on a worker before
+destructive history maintenance. Core admits this work after finding a retention
+candidate or valid local checkpoint, not for an empty startup sweep. The Store
+copies one MVCC snapshot's catalog tables into a separate redb database, checks
+native integrity and complete key/value equality, then atomically publishes
+`<database>.pre-prune-backup` with a no-replace hard link and a synced `.complete`
+sidecar bound to database identity, generation and backup size. The first copy
+requires database file size plus 1 GiB of free space. Failed preparation returns
+`Status::Blocked` with at most one diagnostic notice per hour; callers must skip
+deletion. Reopening re-verifies the backup, and failed artifact checks invalidate
+cached verification. Published backups without a sidecar are verified before
+completion; missing completed backups and mismatched artifacts fail closed.
+Disposable Stores have no disk gate. Backup work does not use the Store writer.
+
+`Client::reclaim()` submits one empty Immediate durable commit to recycle native
+freed pages under redb's snapshot fences and normal shrink policy. Core awaits
+two passes with yields after deletion. It does not request exclusive full-file
+compaction or guarantee a reduced file size; retained snapshots can pin pages.
 
 ## Derived Session cleanup transactions
 
@@ -575,9 +596,9 @@ After the canonical receipt, notify delivery or call `handle.purge()`. Reconstru
 | Concurrent delivery/rebuild source snapshots              | One                                                                                                                                                                                                                      | `src/analytics/worker.rs`: one serialized `Worker` captures and releases each source snapshot                                                   |
 | DuckDB instances/connections and native query concurrency | One process owner, one connection and one active native operation; reports serialize with delivery                                                                                                                       | `src/analytics/mod.rs`: `INSTANCE`, `Engine::start`; `src/analytics/worker.rs`: `run`, `Worker::execute`                                        |
 | Native call nesting                                       | One top-level operation; recursive worker-thread requests fail `analytics::Error::Busy` without queueing or waiting; advisory wakes coalesce                                                                             | `src/analytics/mod.rs`: `Shared::writer`, `Handle::send`, `Handle::notify`                                                                      |
-| SQL expression nesting                                    | DuckDB `max_expression_depth = 1000`, preserving its native default; native depth-limit rejection returns `analytics::Error::Duck`                                                                                         | `src/analytics/numeric.rs`: `open` sets and locks native configuration                                                                          |
-| Analytics report worker stack                             | 8 MiB per Rust analytics writer thread                                                                                                                                                                                    | `src/analytics/mod.rs`: `REPORT_STACK_BYTES`, `Engine::start`                                                                                   |
-| Native query threads                                      | One; no DuckDB-owned worker threads, so all native execution uses the sized analytics writer stack                                                                                                                         | `src/analytics/numeric.rs`: `open`, locked `threads = 1`                                                                                        |
+| SQL expression nesting                                    | DuckDB `max_expression_depth = 1000`, preserving its native default; native depth-limit rejection returns `analytics::Error::Duck`                                                                                       | `src/analytics/numeric.rs`: `open` sets and locks native configuration                                                                          |
+| Analytics report worker stack                             | 8 MiB per Rust analytics writer thread                                                                                                                                                                                   | `src/analytics/mod.rs`: `REPORT_STACK_BYTES`, `Engine::start`                                                                                   |
+| Native query threads                                      | One; no DuckDB-owned worker threads, so all native execution uses the sized analytics writer stack                                                                                                                       | `src/analytics/numeric.rs`: `open`, locked `threads = 1`                                                                                        |
 | Engine memory / owned temporary spill                     | 256 MiB each                                                                                                                                                                                                             | `src/analytics/numeric.rs`: `open`, locked `max_memory` and `max_temp_directory_size`; native exhaustion returns `analytics::Error::Duck`       |
 | Accepted analytics queue                                  | 256 operations excluding the active operation; new non-wake requests fail `analytics::Error::Busy`; wakes coalesce                                                                                                       | `src/analytics/mod.rs`: `Engine::start`, `Handle::send`, `Handle::notify`                                                                       |
 | Report catch-up/query freshness wait                      | Five seconds including analytics queue wait; expiration returns `analytics::Error::Deadline`, not stale rows                                                                                                             | `src/analytics/mod.rs`: `REPORT_DEADLINE`, `Handle::call`, `Cancellation::check`; `src/analytics/worker.rs`: `DeadlineGuard`, `Worker::execute` |

@@ -49,6 +49,33 @@ fn none() -> Vec<session::Id> {
     Vec::new()
 }
 
+fn file_store(path: &std::path::Path, identity: u8) -> Store {
+    let fixture = support::store();
+    let projects = fixture
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::project::ProjectTable>(Bound::Unbounded, Bound::Unbounded, 10)
+        .unwrap();
+    let store = Store::initialize(
+        path,
+        ycoding_store::Options::core(),
+        fixture.catalog(),
+        ycoding_store::Metadata::new([identity; 16], 1),
+    )
+    .unwrap();
+    store
+        .submit(move |tx| {
+            for project in projects {
+                ycoding_store::project::ProjectTable::insert(tx, &project)?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    store
+}
+
 fn rows(store: &Store, session: &str) -> Vec<ycoding_store::session::Message> {
     ycoding_store::session::messages(
         &store.snapshot().unwrap(),
@@ -597,11 +624,11 @@ async fn pruning_rechecks_active_revert_job_and_digest_per_batch() {
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 3);
-    assert_eq!(first_batch.messages, 199);
+    assert_eq!(first_batch.messages, 49);
     assert_eq!(first_batch.events, 0);
     assert_eq!(
         counts(&store, "ses_bulk"),
-        (bulk_before.0 - 199, bulk_before.1)
+        (bulk_before.0 - 49, bulk_before.1)
     );
 
     let rest = service.prune_compacted(&bulk, 2, none).await.unwrap();
@@ -918,8 +945,161 @@ async fn every_batch_rechecks_checkpoint_and_session_fences() {
             .await
             .unwrap();
         writer.join().unwrap();
-        assert_eq!(pruned.messages, 199, "{fence}");
+        assert_eq!(pruned.messages, 49, "{fence}");
         assert_eq!(pruned.events, 0, "{fence}");
         assert_eq!(events(&store, "ses_bulk").len(), before.1, "{fence}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn file_pruning_waits_for_backup_without_blocking_runtime_or_writer_and_restores() {
+    use ycoding_store::{Options, backup};
+    let directory =
+        std::env::temp_dir().join(format!("ycoding-core-prune-backup-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("core.redb");
+    let store = file_store(&path, 42);
+    let client = store.client();
+    let service = Service::new(client.clone());
+    let scenario = checkpoint::scenario(&client, &service, "ses_backup", 1).await;
+    let before = counts(&store, "ses_backup");
+    let original_messages = rows(&store, "ses_backup");
+    let original_events = events(&store, "ses_backup");
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let backup_client = client.clone();
+    let worker = std::thread::spawn(move || {
+        backup_client
+            .prepare_pruning(2, |_| {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+                Ok(u64::MAX)
+            })
+            .unwrap()
+    });
+    started.await.unwrap();
+    let pruning = service.prune_compacted(&scenario.session, 2, none);
+    tokio::pin!(pruning);
+    tokio::select! {
+        result = &mut pruning => panic!("pruning settled before backup: {result:?}"),
+        result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::task::yield_now().await;
+            client.submit(|_| Ok(())).unwrap().await.unwrap();
+        }) => result.unwrap(),
+    }
+    assert_eq!(counts(&store, "ses_backup"), before);
+    assert!(!backup::path(&path).exists());
+    assert!(!backup::marker(&path).exists());
+    release.send(()).unwrap();
+    let pruned = tokio::time::timeout(std::time::Duration::from_secs(10), &mut pruning)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(worker.join().unwrap(), backup::Status::Ready);
+    assert!(pruned.messages > 0 && pruned.events > 0);
+    assert!(backup::marker(&path).is_file());
+    let restored_path = directory.join("restored.redb");
+    std::fs::copy(backup::path(&path), &restored_path).unwrap();
+    let restored = Store::open(&restored_path, Options::core(), store.catalog()).unwrap();
+    assert_eq!(counts(&restored, "ses_backup"), before);
+    assert_eq!(rows(&restored, "ses_backup"), original_messages);
+    assert_eq!(events(&restored, "ses_backup"), original_events);
+    restored.shutdown().unwrap();
+    store.shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn invalid_backup_keeps_all_compacted_rows_until_retry() {
+    use ycoding_store::backup;
+    let directory = std::env::temp_dir().join(format!(
+        "ycoding-core-refused-backup-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("core.redb");
+    let store = file_store(&path, 43);
+    let service = Service::new(store.client());
+    let scenario = checkpoint::scenario(&store.client(), &service, "ses_backup", 1).await;
+    let before = counts(&store, "ses_backup");
+    std::fs::write(backup::path(&path), b"invalid backup").unwrap();
+    assert_eq!(
+        service
+            .prune_compacted(&scenario.session, 2, none)
+            .await
+            .unwrap(),
+        history_pruning::Pruned::default()
+    );
+    assert_eq!(
+        service.prune_history(3, none).await.unwrap().pruned,
+        history_pruning::Pruned::default()
+    );
+    assert_eq!(counts(&store, "ses_backup"), before);
+    assert_eq!(service.retain(30 * DAY, 7, none).await.unwrap().deleted, 0);
+    assert_eq!(counts(&store, "ses_backup"), before);
+    assert!(!backup::marker(&path).exists());
+    std::fs::remove_file(backup::path(&path)).unwrap();
+    assert!(
+        service
+            .prune_history(4, none)
+            .await
+            .unwrap()
+            .pruned
+            .messages
+            > 0
+    );
+    assert!(backup::marker(&path).is_file());
+    drop(service);
+    store.shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn empty_sweeps_do_not_seal_backup_and_first_retention_deletion_is_restorable() {
+    use ycoding_store::{Options, backup};
+    let directory =
+        std::env::temp_dir().join(format!("ycoding-core-lazy-backup-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("core.redb");
+    let store = file_store(&path, 44);
+    let service = Service::new(store.client());
+    assert_eq!(
+        service.prune_history(30 * DAY, none).await.unwrap().pruned,
+        history_pruning::Pruned::default()
+    );
+    assert_eq!(service.retain(30 * DAY, 7, none).await.unwrap().deleted, 0);
+    assert!(
+        service
+            .remove_idle(&checkpoint::id("ses_absent"), 30 * DAY, 23 * DAY, none)
+            .await
+            .unwrap()
+            .members
+            .is_empty()
+    );
+    assert!(!backup::path(&path).exists());
+    assert!(!backup::marker(&path).exists());
+    checkpoint::session(&store.client(), "ses_idle");
+    let original = service.get(&checkpoint::id("ses_idle")).unwrap().unwrap();
+    std::fs::write(backup::path(&path), b"invalid backup").unwrap();
+    assert_eq!(service.retain(30 * DAY, 7, none).await.unwrap().deleted, 0);
+    assert_eq!(
+        service.get(&checkpoint::id("ses_idle")).unwrap(),
+        Some(original.clone())
+    );
+    std::fs::remove_file(backup::path(&path)).unwrap();
+    assert_eq!(service.retain(30 * DAY, 7, none).await.unwrap().deleted, 1);
+    assert!(service.get(&checkpoint::id("ses_idle")).unwrap().is_none());
+    assert!(backup::marker(&path).is_file());
+    let restored_path = directory.join("restored.redb");
+    std::fs::copy(backup::path(&path), &restored_path).unwrap();
+    let restored = Store::open(&restored_path, Options::core(), store.catalog()).unwrap();
+    assert_eq!(
+        Service::new(restored.client())
+            .get(&checkpoint::id("ses_idle"))
+            .unwrap(),
+        Some(original)
+    );
+    restored.shutdown().unwrap();
+    store.shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
 }

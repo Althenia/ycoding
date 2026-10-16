@@ -233,8 +233,8 @@ fn ended_jobs(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<(Job, i64)>, 
 const DAY: i64 = 24 * 60 * 60 * 1000;
 pub const ERROR_RETENTION: i64 = 7 * DAY;
 const SESSION_PAGE: usize = 200;
-const MESSAGE_BATCH: usize = 200;
-const EVENT_BATCH: usize = 1000;
+const MESSAGE_BATCH: usize = 50;
+const EVENT_BATCH: usize = 100;
 const CONTEXT_OBSERVED: &str = "session.context.observed.1";
 const LATEST_TYPES: [&str; 8] = [
     CONTEXT_OBSERVED,
@@ -277,6 +277,42 @@ const ERROR_EVENT_TYPES: [&str; 4] = [
     "session.compaction.failed.2",
 ];
 
+#[cfg(unix)]
+fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
+    use std::os::unix::ffi::OsStrExt;
+    let directory = std::ffi::CString::new(directory.as_os_str().as_bytes())
+        .map_err(|_| Error::Rejected("invalid backup directory"))?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(directory.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let stats = unsafe { stats.assume_init() };
+    Ok(u64::try_from(u128::from(stats.f_bavail) * u128::from(stats.f_frsize)).unwrap_or(u64::MAX))
+}
+
+#[cfg(windows)]
+fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
+    use std::os::windows::ffi::OsStrExt;
+    let directory = directory
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let mut available = 0;
+    if unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            directory.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(available)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pruned {
     pub messages: usize,
@@ -308,6 +344,30 @@ struct EventPlan {
 }
 
 impl Service {
+    pub async fn prepare_history_pruning(&self, now: i64) -> Result<bool, Error> {
+        let client = self.client.clone();
+        let status = tokio::task::spawn_blocking(move || client.prepare_pruning(now, free_bytes))
+            .await
+            .map_err(|_| Error::WriterPanicked)??;
+        match status {
+            ycoding_store::backup::Status::Ready => Ok(true),
+            ycoding_store::backup::Status::Blocked { notice } => {
+                if let Some(reason) = notice {
+                    tracing::warn!(%reason, "Session history pruning paused: verified backup unavailable");
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    pub(crate) async fn reclaim_history(&self) -> Result<(), Error> {
+        for _ in 0..2 {
+            tokio::task::yield_now().await;
+            self.client.reclaim()?.await?;
+        }
+        Ok(())
+    }
+
     pub async fn prune_history<F>(&self, now: i64, active: F) -> Result<Sweep, Error>
     where
         F: Fn() -> Vec<session::Id> + Clone + Send + 'static,
@@ -336,6 +396,7 @@ impl Service {
                     }
                     Err(error) => sweep.failures.push((id, error)),
                 }
+                tokio::task::yield_now().await;
             }
         }
     }
@@ -367,6 +428,9 @@ impl Service {
             return Ok(Pruned::default());
         };
         drop(snapshot);
+        if !self.prepare_history_pruning(now).await? {
+            return Ok(Pruned::default());
+        }
         let target = Arc::new(Target {
             session: id.as_lossless().clone(),
             digest: checkpoint.manifest_digest,
@@ -408,6 +472,9 @@ impl Service {
                 )
             })
             .await?;
+        if messages > 0 || events > 0 {
+            self.reclaim_history().await?;
+        }
         Ok(Pruned { messages, events })
     }
 

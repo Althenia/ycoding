@@ -59,6 +59,7 @@ impl Service {
         }
         if sweep.deleted > 0 {
             self.remove_unreferenced_instructions(instructions).await?;
+            self.reclaim_history().await?;
         }
         Ok(sweep)
     }
@@ -100,6 +101,9 @@ impl Service {
     where
         F: Fn() -> Vec<session::Id> + Send + 'static,
     {
+        if self.get(root)?.is_none() || !self.prepare_history_pruning(now).await? {
+            return Ok(Removal::default());
+        }
         let root = root.as_lossless().clone();
         let (family, instructions) = self
             .client

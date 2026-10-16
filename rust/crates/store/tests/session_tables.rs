@@ -633,7 +633,7 @@ fn pruning_batches_bound_resume_roll_back_and_preserve_the_sequence() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!((messages.deleted, events.deleted), (200, 1000));
+    assert_eq!((messages.deleted, events.deleted), (50, 100));
     assert!(messages.next.is_some() && events.next.is_some());
     let rest = store
         .submit(move |tx| {
@@ -659,8 +659,35 @@ fn pruning_batches_bound_resume_roll_back_and_preserve_the_sequence() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!((rest.0.deleted, rest.1.deleted), (4, 4));
-    assert!(rest.0.next.is_none() && rest.1.next.is_none());
+    assert_eq!((rest.0.deleted, rest.1.deleted), (50, 100));
+    let (mut messages, mut events) = rest;
+    while messages.next.is_some() || events.next.is_some() {
+        (messages, events) = store
+            .submit(move |tx| {
+                Ok((
+                    session::prune_messages(
+                        tx,
+                        &"s".into(),
+                        205,
+                        messages.next.as_ref(),
+                        usize::MAX,
+                        |_| false,
+                    )?,
+                    session::prune_events(
+                        tx,
+                        &"s".into(),
+                        1004,
+                        events.next.as_ref(),
+                        usize::MAX,
+                        |_| false,
+                    )?,
+                ))
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(messages.deleted <= 50 && events.deleted <= 100);
+    }
     assert_eq!(count(), (1, 1));
     assert_eq!(
         session::latest_sequence(&store.snapshot().unwrap(), &"s".into()).unwrap(),
@@ -676,6 +703,53 @@ fn pruning_batches_bound_resume_roll_back_and_preserve_the_sequence() {
         Error::Rejected("pruning batch limit must be positive")
     ));
     assert_eq!(count(), (1, 1));
+}
+
+#[test]
+fn pruning_byte_budget_advances_over_survivors_and_an_oversized_row() {
+    let store = store();
+    store
+        .submit(|tx| {
+            session::SessionTable::insert(tx, &record("s"))?;
+            for seq in 1..=5 {
+                let mut row = message(&format!("msg_{seq}"), seq);
+                row.data = ycoding_schema::JsonValue::String(
+                    "x".repeat(if seq == 1 {
+                        3 * 1024 * 1024
+                    } else {
+                        700 * 1024
+                    })
+                    .into(),
+                );
+                session::MessageTable::insert(tx, &row)?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let mut after = None;
+    for expected in [0, 1, 1, 1] {
+        let batch = store
+            .submit(move |tx| {
+                session::prune_messages(tx, &"s".into(), 6, after.as_ref(), 50, |row| row.seq == 1)
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(batch.deleted, expected);
+        assert!(batch.next.is_some());
+        after = batch.next;
+    }
+    let batch = store
+        .submit(move |tx| {
+            session::prune_messages(tx, &"s".into(), 6, after.as_ref(), 50, |_| false)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(batch.deleted, 1);
+    assert!(batch.next.is_none());
 }
 
 #[test]
