@@ -41,14 +41,51 @@ describe("built public pages in Safari", () => {
           await navigate(route)
           const view = await command("POST", `/session/${sessionID}/execute/async`, {
             script: `const done = arguments[arguments.length - 1];
-            Promise.all([document.fonts.ready, ...document.getAnimations()
-              .filter(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity)
-              .map(animation => animation.finished.catch(() => {}))])
-              .then(() => done({ path: location.pathname, width: innerWidth, scroll: document.documentElement.scrollWidth,
+            const animations = document.getAnimations()
+              .filter(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);
+            const settled = Promise.all([document.fonts.ready, ...animations.map(animation => animation.finished.catch(() => {}))])
+              .then(() => ({ path: location.pathname, width: innerWidth, scroll: document.documentElement.scrollWidth,
                 theme: document.documentElement.dataset.theme,
-                main: !!document.querySelector("main"), entry: document.querySelector("script[type=module]")?.getAttribute("src") }));`,
+                main: !!document.querySelector("main"), entry: document.querySelector("script[type=module]")?.getAttribute("src") }));
+            let timer;
+            const stalled = new Promise(resolve => {
+              timer = setTimeout(() => resolve({
+                stalled: true,
+                route: location.pathname,
+                width: innerWidth,
+                theme: document.documentElement.dataset.theme,
+                visibilityState: document.visibilityState,
+                readyState: document.readyState,
+                fontsStatus: document.fonts.status,
+                animations: animations.map(animation => {
+                  const timing = animation.effect?.getComputedTiming();
+                  const target = animation.effect?.target;
+                  return {
+                    id: animation.id,
+                    animationName: animation.animationName ?? null,
+                    playState: animation.playState,
+                    currentTime: animation.currentTime,
+                    effectTiming: {
+                      duration: timing?.duration ?? null,
+                      iterations: timing?.iterations ?? null,
+                      delay: timing?.delay ?? null,
+                      endTime: timing?.endTime ?? null,
+                    },
+                    targetSelector: target instanceof Element
+                      ? target.id ? "#" + CSS.escape(target.id)
+                        : target.tagName.toLowerCase() + Array.from(target.classList, name => "." + CSS.escape(name)).join("")
+                      : null,
+                  };
+                }),
+              }), 20_000);
+            });
+            Promise.race([settled, stalled]).then(view => {
+              clearTimeout(timer);
+              done(view);
+            });`,
             args: [],
           })
+          if (isRecord(view) && view.stalled === true) throw new Error(`Safari layout stalled: ${JSON.stringify(view)}`)
           if (!isRecord(view) || typeof view.width !== "number" || typeof view.scroll !== "number")
             throw new Error(`Safari returned no layout for ${route} at ${width}px`)
           expect(view.path, `${route} at ${width}px measures the requested document`).toBe(route)
