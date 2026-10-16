@@ -95,6 +95,9 @@ impl Worker {
     ) -> Result<ReportRows, Error> {
         cancellation.check(deadline)?;
         match operation {
+            Operation::SnapshotReport(captured, snapshot, names, queries) => {
+                self.snapshot_report(captured, *snapshot, names, queries, cancellation, deadline)
+            }
             Operation::Wake => {
                 self.synchronize(cancellation, deadline)?;
                 if self.read_state()?.pending_purge() {
@@ -145,6 +148,77 @@ impl Worker {
                 Ok(result)
             }
         }
+    }
+
+    fn snapshot_report(
+        &self,
+        captured: Delivery,
+        snapshot: Snapshot,
+        names: &[&str],
+        queries: Vec<Query>,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<ReportRows, Error> {
+        let current = self.read_state()?;
+        if current.pending_purge() || current.privacy != captured.privacy {
+            return Err(Error::Privacy);
+        }
+        private_root(&self.root)?;
+        let mut connection = numeric::open(Path::new(":memory:"), &self.root.join("spill"))?;
+        cancellation.attach(&connection);
+        cancellation.querying();
+        let transaction = connection.transaction()?;
+        let mut seen = BTreeSet::new();
+        for name in names {
+            if !seen.insert(name) {
+                return Err(Error::Configuration);
+            }
+            let source = self
+                .sources
+                .iter()
+                .find(|source| source.name == *name)
+                .ok_or(Error::Configuration)?;
+            let table = format!("report_{name}");
+            create_source(&transaction, source, &table, true)?;
+            let mut after = None::<Vec<u8>>;
+            loop {
+                cancellation.check(deadline)?;
+                let rows = (source.page)(&snapshot, after.as_deref(), BATCH_SIZE)?;
+                if rows.len() > BATCH_SIZE {
+                    return Err(Error::Limit);
+                }
+                if rows.is_empty() {
+                    break;
+                }
+                let mut appender = transaction.appender(&table)?;
+                for row in rows {
+                    if after.as_ref().is_some_and(|after| row.identity <= *after) {
+                        return Err(Error::Configuration);
+                    }
+                    validate_row(source, &row)?;
+                    after = Some(row.identity.clone());
+                    if !(source.allowed)(&snapshot, &row.scope)? {
+                        continue;
+                    }
+                    let values = values(row, captured.order);
+                    appender.append_row(appender_params_from_iter(values.iter()))?;
+                }
+                appender.flush()?;
+                drop(appender);
+                std::thread::yield_now();
+            }
+        }
+        let result = read_queries(&transaction, queries, cancellation, deadline)?;
+        transaction.commit()?;
+        cancellation.check(deadline)?;
+        let current = self.read_state()?;
+        if current.pending_purge() || current.privacy != captured.privacy {
+            return Err(Error::Privacy);
+        }
+        if !current.matches(self.store.metadata()) {
+            return Err(Error::Invalid);
+        }
+        Ok(result)
     }
 
     fn read_state(&self) -> Result<Delivery, Error> {
@@ -625,26 +699,36 @@ fn read_queries(
 fn create(connection: &Connection, sources: &[Source]) -> Result<(), Error> {
     connection.execute_batch("CREATE TABLE analytics_checkpoint(singleton BOOLEAN PRIMARY KEY, identity BLOB NOT NULL, source_generation UBIGINT NOT NULL, generation UBIGINT NOT NULL, source_order UBIGINT NOT NULL, schema BLOB NOT NULL)")?;
     for source in sources {
-        let columns = source
-            .columns
-            .iter()
-            .map(|column| {
-                format!(
-                    "{} {}",
-                    column.name,
-                    match column.kind {
-                        ColumnType::Boolean => "BOOLEAN",
-                        ColumnType::Integer => "BIGINT",
-                        ColumnType::Unsigned => "UBIGINT",
-                        ColumnType::Double => "DOUBLE",
-                        ColumnType::Text => "VARCHAR",
-                    }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        connection.execute_batch(&format!("CREATE TABLE {}(source_id BLOB PRIMARY KEY, scope BLOB NOT NULL, source_version UBIGINT NOT NULL,{columns})", source.name))?;
+        create_source(connection, source, source.name, false)?;
     }
+    Ok(())
+}
+
+fn create_source(
+    connection: &Connection,
+    source: &Source,
+    name: &str,
+    temporary: bool,
+) -> Result<(), Error> {
+    let columns = source
+        .columns
+        .iter()
+        .map(|column| {
+            format!(
+                "{} {}",
+                column.name,
+                match column.kind {
+                    ColumnType::Boolean => "BOOLEAN",
+                    ColumnType::Integer => "BIGINT",
+                    ColumnType::Unsigned => "UBIGINT",
+                    ColumnType::Double => "DOUBLE",
+                    ColumnType::Text => "VARCHAR",
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    connection.execute_batch(&format!("CREATE {} TABLE {name}(source_id BLOB PRIMARY KEY, scope BLOB NOT NULL, source_version UBIGINT NOT NULL,{columns})", if temporary { "TEMP" } else { "" }))?;
     Ok(())
 }
 fn schema(sources: &[Source]) -> Vec<u8> {

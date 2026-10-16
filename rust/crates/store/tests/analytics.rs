@@ -16,6 +16,8 @@ use ycoding_store::{
 static SERIAL: Mutex<()> = Mutex::new(());
 static PAGE_BARRIER: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
 static NESTED_REPORT: Mutex<Option<analytics::Handle>> = Mutex::new(None);
+static SOURCE_ROWS: AtomicU64 = AtomicU64::new(0);
+static SOURCE_PAGE: AtomicU64 = AtomicU64::new(0);
 
 struct Facts;
 #[derive(Clone)]
@@ -95,6 +97,7 @@ fn load(snapshot: &Snapshot, key: &[u8]) -> Result<Option<SourceRow>, Error> {
     Ok(result)
 }
 fn page(snapshot: &Snapshot, after: Option<&[u8]>, limit: usize) -> Result<Vec<SourceRow>, Error> {
+    SOURCE_PAGE.fetch_max(limit as u64, Ordering::Relaxed);
     let nested = NESTED_REPORT.lock().unwrap().take();
     if let Some(handle) = nested {
         assert!(matches!(
@@ -117,7 +120,7 @@ fn page(snapshot: &Snapshot, after: Option<&[u8]>, limit: usize) -> Result<Vec<S
         reached.send(()).unwrap();
         release.recv_timeout(Duration::from_secs(20)).unwrap();
     }
-    Ok(snapshot
+    let rows = snapshot
         .scan::<Facts>(
             after.map_or(Bound::Unbounded, Bound::Excluded),
             Bound::Unbounded,
@@ -125,7 +128,122 @@ fn page(snapshot: &Snapshot, after: Option<&[u8]>, limit: usize) -> Result<Vec<S
         )?
         .into_iter()
         .map(normalized)
-        .collect())
+        .collect::<Vec<_>>();
+    SOURCE_ROWS.fetch_add(rows.len() as u64, Ordering::Relaxed);
+    Ok(rows)
+}
+
+#[test]
+fn snapshot_reports_stage_bounded_source_pages_and_keep_one_read_boundary() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    store
+        .submit(|tx| {
+            for id in 0..10_017 {
+                tx.put::<Facts>(&Fact {
+                    id,
+                    amount: id as i64,
+                    scope: b"scope".to_vec(),
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let snapshot = store.snapshot().unwrap();
+    put(&store, 10_017, 10_017);
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    SOURCE_PAGE.store(0, Ordering::Relaxed);
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), sum(amount)::BIGINT FROM report_test_metrics WHERE amount >= 10015",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let result = engine
+        .report_snapshot(snapshot, &["test_metrics"], query())
+        .unwrap();
+    assert_eq!(
+        result,
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(20_031)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 10_017);
+    assert!(SOURCE_PAGE.load(Ordering::Relaxed) <= 10_000);
+    let result = engine
+        .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+        .unwrap();
+    assert_eq!(
+        result,
+        vec![vec![vec![Value::BigInt(3), Value::BigInt(30_048)]]]
+    );
+    assert!(matches!(
+        engine.report(vec![Query {
+            sql: "SELECT * FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1
+        }]),
+        Err(analytics::Error::Duck(_))
+    ));
+}
+
+#[test]
+fn snapshot_report_staging_keeps_canonical_writes_free_and_rechecks_privacy() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let (reached, entered) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    *PAGE_BARRIER.lock().unwrap() = Some((reached, held));
+    let handle = engine.handle();
+    std::thread::scope(|scope| {
+        let report = scope.spawn(move || {
+            handle.report_snapshot(
+                snapshot,
+                &["test_metrics"],
+                vec![Query {
+                    sql: "SELECT sum(amount)::BIGINT FROM report_test_metrics",
+                    parameters: vec![],
+                    max_rows: 1,
+                }],
+            )
+        });
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            store
+                .snapshot()
+                .unwrap()
+                .get::<Facts>(&1_u64.to_be_bytes())
+                .unwrap()
+                .unwrap()
+                .amount,
+            10
+        );
+        put(&store, 2, 20);
+        store
+            .submit(|tx| {
+                tx.put::<Consent>(&false)?;
+                analytics::privacy_changed(tx, b"scope".to_vec(), true)
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            report.join().unwrap(),
+            Err(analytics::Error::Privacy)
+        ));
+    });
 }
 static SOURCES: &[Source] = &[Source {
     name: "test_metrics",

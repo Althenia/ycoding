@@ -295,6 +295,7 @@ enum Operation {
     Rebuild,
     Purge,
     Report(Delivery, Vec<Query>),
+    SnapshotReport(Delivery, Box<Snapshot>, &'static [&'static str], Vec<Query>),
 }
 struct Command {
     operation: Operation,
@@ -303,6 +304,34 @@ struct Command {
     reply: Option<mpsc::SyncSender<Result<ReportRows, Error>>>,
 }
 impl Handle {
+    pub fn report_snapshot(
+        &self,
+        snapshot: Snapshot,
+        sources: &'static [&'static str],
+        queries: Vec<Query>,
+    ) -> Result<ReportRows, Error> {
+        let state = snapshot
+            .get::<DeliveryTable>(&[])?
+            .unwrap_or_else(|| Delivery::initial(self.0.store.metadata()));
+        if !state.matches(self.0.store.metadata()) {
+            return Err(Error::Invalid);
+        }
+        if state.pending_purge() {
+            return Err(Error::Privacy);
+        }
+        if sources.is_empty()
+            || sources.len() > 64
+            || sources.iter().any(|source| !identifier(source))
+        {
+            return Err(Error::Configuration);
+        }
+        validate_queries(&queries)?;
+        self.call(
+            Operation::SnapshotReport(state, Box::new(snapshot), sources, queries),
+            Cancellation::default(),
+        )
+    }
+
     pub fn notify(&self) -> Result<(), Error> {
         let command = Command {
             operation: Operation::Wake,
@@ -339,27 +368,7 @@ impl Handle {
         if state.pending_purge() {
             return Err(Error::Privacy);
         }
-        if queries.is_empty()
-            || queries.len() > 16
-            || queries.iter().any(|query| {
-                query.max_rows == 0
-                    || query.max_rows > REPORT_ROWS
-                    || query.sql.len() > ROW_BYTES
-                    || query.parameters.len() > 64
-            })
-        {
-            return Err(Error::Configuration);
-        }
-        let bytes = queries
-            .iter()
-            .flat_map(|query| &query.parameters)
-            .map(worker::scalar_bytes)
-            .collect::<Result<Vec<_>, _>>()?
-            .iter()
-            .sum::<usize>();
-        if bytes > REPORT_BYTES {
-            return Err(Error::Limit);
-        }
+        validate_queries(&queries)?;
         self.call(Operation::Report(state, queries), cancellation)
     }
     fn send(&self, command: Command) -> Result<(), Error> {
@@ -412,6 +421,31 @@ impl Handle {
             }
         }
     }
+}
+
+fn validate_queries(queries: &[Query]) -> Result<(), Error> {
+    if queries.is_empty()
+        || queries.len() > 16
+        || queries.iter().any(|query| {
+            query.max_rows == 0
+                || query.max_rows > REPORT_ROWS
+                || query.sql.len() > ROW_BYTES
+                || query.parameters.len() > 64
+        })
+    {
+        return Err(Error::Configuration);
+    }
+    let bytes = queries
+        .iter()
+        .flat_map(|query| &query.parameters)
+        .map(worker::scalar_bytes)
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .sum::<usize>();
+    if bytes > REPORT_BYTES {
+        return Err(Error::Limit);
+    }
+    Ok(())
 }
 
 fn identifier(value: &str) -> bool {

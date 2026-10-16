@@ -535,6 +535,12 @@ async fn credentials_are_shared_profiles_are_strict_and_pricing_stays_unreported
             .unwrap_err(),
         Error::ProfileUnavailable
     );
+    f.factory
+        .credentials
+        .remove(credential.id().clone(), crate::ids::now_millis())
+        .await
+        .unwrap();
+    assert!(locations.pricing(&reference).is_none());
     assert!(
         locations
             .pricing(&PricingRef {

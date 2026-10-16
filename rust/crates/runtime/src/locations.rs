@@ -69,6 +69,7 @@ struct Inner {
     feed: Feed,
     autonomy: autonomy::Service,
     services: Mutex<BTreeMap<Key, Cached>>,
+    pricing: Mutex<crate::usage::PricingCache>,
     retired: Mutex<Vec<Arc<ServiceSet>>>,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -239,6 +240,7 @@ impl Locations {
             feed,
             autonomy,
             services: Mutex::new(BTreeMap::new()),
+            pricing: Mutex::new(crate::usage::PricingCache::default()),
             retired: Mutex::new(Vec::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
         }))
@@ -259,8 +261,19 @@ impl Locations {
             .location(&reference.directory, reference.workspace_id.as_ref())
             .ok()?;
         let composed = services.production.as_ref()?;
+        let catalog = composed.models.catalog();
         let saved = composed.credentials.all().ok()?;
-        let model = composed.models.catalog().get(
+        let accounts = crate::usage::accounts_identity(&saved);
+        if let Some(pricing) = self
+            .0
+            .pricing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&catalog, &accounts, reference)
+        {
+            return Some(pricing);
+        }
+        let model = catalog.get(
             &ycoding_core::ycoding_schema::provider::Id(reference.provider.clone()),
             &reference.model,
             reference
@@ -270,10 +283,16 @@ impl Locations {
                 .as_ref(),
             &saved,
         )?;
-        Some(ycoding_core::session::usage_read::Pricing {
+        let pricing = ycoding_core::session::usage_read::Pricing {
             provider: model.cost,
             router: vec![],
-        })
+        };
+        self.0
+            .pricing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .store(&catalog, &accounts, reference, pricing.clone());
+        Some(pricing)
     }
 
     pub(crate) fn evict_idle(&self, now: Instant) -> Result<usize, Failure> {

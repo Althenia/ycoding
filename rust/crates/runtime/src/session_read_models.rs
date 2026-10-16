@@ -49,10 +49,15 @@ pub async fn usage(
 ) -> Result<v5::SessionUsageResult, Failure> {
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
-    let summary = core
-        .sessions
-        .usage(&id, core.usage_pricer.as_deref().map(|pricer| pricer as &_))
-        .map_err(|error| failure(error, &id))?;
+    let sessions = core.sessions.clone();
+    let pricer = core.usage_pricer.clone();
+    let read_id = id.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        sessions.usage(&read_id, pricer.as_deref().map(|pricer| pricer as &_))
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageResult {
         data: convert::provider_summary(&summary).map_err(|_| unrepresentable())?,
     })
@@ -65,14 +70,19 @@ pub async fn usage_report(
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
     let input = report_input(&request.query)?;
-    let report = core
-        .sessions
-        .usage_report(
-            &id,
+    let sessions = core.sessions.clone();
+    let pricer = core.usage_pricer.clone();
+    let read_id = id.clone();
+    let report = tokio::task::spawn_blocking(move || {
+        sessions.usage_report(
+            &read_id,
             &input,
-            core.usage_pricer.as_deref().map(|pricer| pricer as &_),
+            pricer.as_deref().map(|pricer| pricer as &_),
         )
-        .map_err(|error| failure(error, &id))?;
+    })
+    .await
+    .map_err(|_| Failure::Unavailable("Usage read worker unavailable".into()))?
+    .map_err(|error| failure(error, &id))?;
     Ok(v5::SessionUsageReportResult {
         data: wire_report(&report)?,
     })

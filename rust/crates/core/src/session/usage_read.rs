@@ -1,7 +1,7 @@
 use super::{key, projector::record_error, store::Service, usage};
 use chrono::{DateTime, Offset, Utc};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, VecDeque},
     ops::Bound,
 };
 use ycoding_schema::{
@@ -19,6 +19,7 @@ use ycoding_store::{
 const PAGE: usize = 128;
 const DEFAULT_LIMIT: usize = 100;
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct PricingRef {
     pub directory: LosslessString,
     pub workspace_id: Option<LosslessString>,
@@ -27,6 +28,7 @@ pub struct PricingRef {
     pub profile: Option<LosslessString>,
 }
 
+#[derive(Clone)]
 pub struct Pricing {
     pub provider: Vec<model::Cost>,
     pub router: Vec<model::Cost>,
@@ -41,8 +43,7 @@ impl Service {
         pricer: Pricer<'_>,
     ) -> Result<provider_request::Summary, Error> {
         let snapshot = self.client.snapshot()?;
-        let (_, samples) = load(&snapshot, Some(id), None, None, pricer)?;
-        provider_request::Summary::decode(&summary(&samples)).map_err(record_error)
+        read_summary(&snapshot, Some(id), pricer)
     }
 
     pub fn usage_report(
@@ -51,20 +52,12 @@ impl Service {
         input: &provider_request::ReportInput,
         pricer: Pricer<'_>,
     ) -> Result<provider_request::Report, Error> {
-        self.client
-            .snapshot()?
-            .get::<SessionTable>(&key(id.as_lossless()))?
-            .ok_or(Error::Domain {
-                kind: "not_found",
-                message: "Session not found",
-            })?;
         analytics_report(&self.client, Some(id), input, pricer)
     }
 
     pub fn usage_all(&self, pricer: Pricer<'_>) -> Result<provider_request::Summary, Error> {
         let snapshot = self.client.snapshot()?;
-        let (_, samples) = load(&snapshot, None, None, None, pricer)?;
-        provider_request::Summary::decode(&summary(&samples)).map_err(record_error)
+        read_summary(&snapshot, None, pricer)
     }
 
     pub fn usage_report_all(
@@ -80,23 +73,6 @@ fn analytics_error(error: ycoding_store::analytics::Error) -> Error {
     Error::Record(Box::new(error))
 }
 
-const CHECKPOINT: &str = "SELECT source_order FROM analytics_checkpoint";
-const PRICING_REFS: &str = "WITH RECURSIVE family(id) AS (
-    SELECT id FROM session WHERE id = $1 UNION SELECT s.id FROM session s JOIN family f ON s.parent_id = f.id
-    WHERE EXISTS (SELECT 1 FROM session WHERE id = $1 AND parent_id IS NULL))
-    SELECT DISTINCT s.directory, s.workspace_id, r.provider, r.model, r.profile,
-        hex(s.directory) || ':' || coalesce(hex(s.workspace_id), '~') || ':' || hex(r.provider) || ':' || hex(r.model) || ':' || coalesce(hex(r.profile), '~') AS reference
-    FROM session_provider_request r JOIN session s ON s.id = r.session_id
-    WHERE ($1 IS NULL OR s.id IN (SELECT id FROM family)) AND ($2 IS NULL OR r.time_created >= $2) AND ($3 IS NULL OR r.time_created < $3)
-        AND r.cost IS NULL AND r.source <> 'decision'
-    GROUP BY ALL HAVING ($4 IS NULL OR reference > $4) ORDER BY reference LIMIT 200";
-const TIMES: &str = "WITH RECURSIVE family(id) AS (
-    SELECT id FROM session WHERE id = $1 UNION SELECT s.id FROM session s JOIN family f ON s.parent_id = f.id
-    WHERE EXISTS (SELECT 1 FROM session WHERE id = $1 AND parent_id IS NULL))
-    SELECT DISTINCT r.time_created FROM session_provider_request r JOIN session s ON s.id = r.session_id
-    WHERE ($1 IS NULL OR s.id IN (SELECT id FROM family)) AND ($2 IS NULL OR r.time_created >= $2) AND ($3 IS NULL OR r.time_created < $3)
-        AND ($4 IS NULL OR r.time_created > $4) ORDER BY r.time_created LIMIT 200";
-
 fn analytics_report(
     client: &ycoding_store::Client,
     id: Option<&session::Id>,
@@ -104,6 +80,11 @@ fn analytics_report(
     pricer: Pricer<'_>,
 ) -> Result<provider_request::Report, Error> {
     let zone = zone(input)?;
+    let snapshot = client.snapshot()?;
+    let sessions = match id {
+        Some(id) => family(&snapshot, id)?,
+        None => all_sessions(&snapshot)?,
+    };
     let handle = client.analytics().map_err(analytics_error)?;
     let selection = vec![
         id.map(|id| Value::Text(text(id.as_lossless())))
@@ -117,122 +98,47 @@ fn analytics_report(
             .map(|value| Value::BigInt(value.get()))
             .unwrap_or(Value::Null),
     ];
-    let checkpoint_query = || Query {
-        sql: CHECKPOINT,
-        parameters: Vec::new(),
-        max_rows: 1,
-    };
-    let checkpoint = handle
-        .report(vec![checkpoint_query()])
-        .map_err(analytics_error)?
-        .remove(0)
-        .remove(0)
-        .remove(0);
     let mut prices = Vec::new();
-    if let Some(pricer) = pricer {
-        let mut after = Value::Null;
-        loop {
-            let mut result = handle
-                .report(vec![
-                    checkpoint_query(),
-                    Query {
-                        sql: PRICING_REFS,
-                        parameters: selection.iter().cloned().chain([after]).collect(),
-                        max_rows: 200,
-                    },
-                ])
-                .map_err(analytics_error)?;
-            if result[0][0][0] != checkpoint {
-                return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
-            }
-            let rows = result.remove(1);
-            for row in &rows {
-                let reference = PricingRef {
-                    directory: reports::value_text(&row[0])?.into(),
-                    workspace_id: (!matches!(row[1], Value::Null))
-                        .then(|| reports::value_text(&row[1]).map(Into::into))
-                        .transpose()?,
-                    provider: reports::value_text(&row[2])?.into(),
-                    model: reports::value_text(&row[3])?.into(),
-                    profile: (!matches!(row[4], Value::Null))
-                        .then(|| reports::value_text(&row[4]).map(Into::into))
-                        .transpose()?,
-                };
-                if let Some(pricing) = pricer(&reference) {
-                    for (priority, costs) in
-                        [pricing.provider, pricing.router].into_iter().enumerate()
-                    {
-                        for (ordinal, cost) in costs.into_iter().enumerate() {
-                            prices.push(format!(
-                                "{}|{priority}|{}|{ordinal}|{}|{}|{}|{}",
-                                reports::value_text(&row[5])?,
-                                cost.tier
-                                    .map_or("~".to_string(), |tier| tier.size.get().to_string()),
-                                cost.input.get(),
-                                cost.output.get(),
-                                cost.cache.read.get(),
-                                cost.cache.write.get()
-                            ));
-                        }
+    let mut resolved = std::collections::BTreeSet::new();
+    let mut first = None::<i64>;
+    let mut last = None::<i64>;
+    scan(&snapshot, &sessions, |_, session, row| {
+        if input.from.is_some_and(|from| row.time_created < from.get())
+            || input.to.is_some_and(|to| row.time_created >= to.get())
+        {
+            return Ok(());
+        }
+        first = Some(first.map_or(row.time_created, |time| time.min(row.time_created)));
+        last = Some(last.map_or(row.time_created, |time| time.max(row.time_created)));
+        if let Some(pricer) = pricer
+            && row.cost.is_none()
+            && row.source.as_str() != Some("decision")
+        {
+            let model = row.model.domain()?;
+            let reference = pricing_ref(session, &model);
+            let identity = price_identity(&reference);
+            if resolved.insert(identity.clone())
+                && let Some(pricing) = pricer(&reference)
+            {
+                for (priority, costs) in [pricing.provider, pricing.router].into_iter().enumerate()
+                {
+                    for (ordinal, cost) in costs.into_iter().enumerate() {
+                        prices.push(format!(
+                            "{identity}|{priority}|{}|{ordinal}|{}|{}|{}|{}",
+                            cost.tier
+                                .map_or("~".to_string(), |tier| tier.size.get().to_string()),
+                            cost.input.get(),
+                            cost.output.get(),
+                            cost.cache.read.get(),
+                            cost.cache.write.get()
+                        ));
                     }
                 }
             }
-            if rows.len() < 200 {
-                break;
-            }
-            after = rows
-                .last()
-                .ok_or(Error::Rejected("missing usage price cursor"))?[5]
-                .clone();
         }
-    }
-    let mut offsets = Vec::new();
-    if let Some(zone) = &zone {
-        match zone {
-            Zone::Fixed(seconds) => {
-                offsets.push(format!("{}|{seconds}|{}", i64::MIN, offset_label(*seconds)))
-            }
-            Zone::Iana(zone) => {
-                let mut after = Value::Null;
-                let mut previous = None;
-                loop {
-                    let mut result = handle
-                        .report(vec![
-                            checkpoint_query(),
-                            Query {
-                                sql: TIMES,
-                                parameters: selection.iter().cloned().chain([after]).collect(),
-                                max_rows: 200,
-                            },
-                        ])
-                        .map_err(analytics_error)?;
-                    if result[0][0][0] != checkpoint {
-                        return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
-                    }
-                    let rows = result.remove(1);
-                    for row in &rows {
-                        let Value::BigInt(time) = row[0] else {
-                            return Err(Error::Rejected("invalid usage time"));
-                        };
-                        let utc = DateTime::<Utc>::from_timestamp_millis(time)
-                            .ok_or(Error::Rejected("invalid usage time"))?;
-                        let seconds = utc.with_timezone(zone).offset().fix().local_minus_utc();
-                        if previous != Some(seconds) {
-                            offsets.push(format!("{time}|{seconds}|{}", offset_label(seconds)));
-                            previous = Some(seconds);
-                        }
-                    }
-                    if rows.len() < 200 {
-                        break;
-                    }
-                    after = rows
-                        .last()
-                        .ok_or(Error::Rejected("missing usage time cursor"))?[0]
-                        .clone();
-                }
-            }
-        }
-    }
+        Ok(())
+    })?;
+    let offsets = time_zone_offsets(zone.as_ref(), first.zip(last))?;
     let offset = input.offset.map_or(0, |value| value.get());
     let limit = input
         .limit
@@ -261,19 +167,17 @@ fn analytics_report(
         ])
         .collect();
     let mut result = handle
-        .report(vec![
-            checkpoint_query(),
-            Query {
+        .report_snapshot(
+            snapshot,
+            &["session", "project", "session_provider_request"],
+            vec![Query {
                 sql: include_str!("usage_report.sql"),
                 parameters,
                 max_rows: limit as usize + 1,
-            },
-        ])
+            }],
+        )
         .map_err(analytics_error)?;
-    if (pricer.is_some() || matches!(zone, Some(Zone::Iana(_)))) && result[0][0][0] != checkpoint {
-        return Err(analytics_error(ycoding_store::analytics::Error::Invalid));
-    }
-    let mut result = result.remove(1).into_iter();
+    let mut result = result.remove(0).into_iter();
     let total = result
         .next()
         .ok_or(Error::Rejected("missing usage totals"))?;
@@ -366,6 +270,94 @@ fn offset_label(seconds: i32) -> String {
     )
 }
 
+fn time_zone_offsets(zone: Option<&Zone>, range: Option<(i64, i64)>) -> Result<Vec<String>, Error> {
+    let Some(zone) = zone else {
+        return Ok(Vec::new());
+    };
+    if let Zone::Fixed(seconds) = zone {
+        return Ok(vec![format!(
+            "{}|{seconds}|{}",
+            i64::MIN,
+            offset_label(*seconds)
+        )]);
+    }
+    let Zone::Iana(zone) = zone else {
+        unreachable!()
+    };
+    let Some((first, last)) = range else {
+        return Ok(Vec::new());
+    };
+    let offset = |time| {
+        DateTime::<Utc>::from_timestamp_millis(time)
+            .map(|utc| utc.with_timezone(zone).offset().fix().local_minus_utc())
+            .ok_or(Error::Rejected("invalid usage time"))
+    };
+    let mut seconds = offset(first)?;
+    let mut result = vec![format!("{first}|{seconds}|{}", offset_label(seconds))];
+    let mut start = first;
+    while start < last {
+        let end = start.saturating_add(86_400_000).min(last);
+        if offset(end)? == seconds {
+            start = end;
+            std::thread::yield_now();
+            continue;
+        }
+        let mut before = start;
+        let mut after = end;
+        while after - before > 1 {
+            let middle = before + (after - before) / 2;
+            if offset(middle)? == seconds {
+                before = middle;
+            } else {
+                after = middle;
+            }
+        }
+        seconds = offset(after)?;
+        result.push(format!("{after}|{seconds}|{}", offset_label(seconds)));
+        start = after;
+        std::thread::yield_now();
+    }
+    Ok(result)
+}
+
+fn pricing_ref(session: &Session, model: &model::Ref) -> PricingRef {
+    PricingRef {
+        directory: session.directory.clone(),
+        workspace_id: session.workspace_id.clone(),
+        provider: model.provider_id.0.clone(),
+        model: model.id.clone(),
+        profile: model.profile.as_ref().map(|profile| profile.0.clone()),
+    }
+}
+
+fn price_identity(reference: &PricingRef) -> String {
+    [
+        Some(&reference.directory),
+        reference.workspace_id.as_ref(),
+        Some(&reference.provider),
+        Some(&reference.model),
+        reference.profile.as_ref(),
+    ]
+    .into_iter()
+    .map(|value| {
+        value.map_or_else(
+            || "~".to_string(),
+            |value| {
+                value
+                    .to_utf8()
+                    .unwrap_or_else(|_| {
+                        String::from_utf16_lossy(&value.code_units().collect::<Vec<_>>())
+                    })
+                    .bytes()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect()
+            },
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(":")
+}
+
 enum Zone {
     Fixed(i32),
     Iana(chrono_tz::Tz),
@@ -391,40 +383,36 @@ struct Sample {
 
 #[derive(Default)]
 struct Acc {
-    first: usize,
     logical: u64,
     physical: u64,
     helpers: u64,
     continued: u64,
     fallback: u64,
-    input: f64,
-    output: f64,
-    reasoning: f64,
-    read: f64,
-    write: f64,
-    cost: f64,
+    input: Sum,
+    output: Sum,
+    reasoning: Sum,
+    read: Sum,
+    write: Sum,
+    cost: Sum,
     priced: u64,
     correction: Option<f64>,
     unreported: bool,
 }
 
 impl Acc {
-    fn add(&mut self, index: usize, sample: &Sample) {
-        if self.logical == 0 {
-            self.first = index;
-        }
+    fn add(&mut self, sample: &Sample) {
         self.logical += 1;
         self.physical += sample.attempts as u64;
         self.helpers += u64::from(!sample.step);
         self.continued += u64::from(sample.continued);
         self.fallback += u64::from(sample.fallback);
-        self.input += sample.tokens.input.get();
-        self.output += sample.tokens.output.get();
-        self.reasoning += sample.tokens.reasoning.get();
-        self.read += sample.tokens.cache.read.get();
-        self.write += sample.tokens.cache.write.get();
+        self.input.add(sample.tokens.input.get());
+        self.output.add(sample.tokens.output.get());
+        self.reasoning.add(sample.tokens.reasoning.get());
+        self.read.add(sample.tokens.cache.read.get());
+        self.write.add(sample.tokens.cache.write.get());
         if let Some(cost) = sample.cost {
-            self.cost += cost;
+            self.cost.add(cost);
             self.priced += 1;
         }
         if let Some(estimate) = sample.estimate {
@@ -438,19 +426,19 @@ impl Acc {
     }
 
     fn cost(&self) -> f64 {
-        self.cost + self.correction.unwrap_or(0.0)
+        self.cost.get() + self.correction.unwrap_or(0.0)
     }
 
     fn tokens(&self) -> JsonValue {
         ObjectEncoder::new()
-            .field("input", &self.input)
-            .field("output", &self.output)
-            .field("reasoning", &self.reasoning)
+            .field("input", &self.input.get())
+            .field("output", &self.output.get())
+            .field("reasoning", &self.reasoning.get())
             .field(
                 "cache",
                 &ObjectEncoder::new()
-                    .field("read", &self.read)
-                    .field("write", &self.write)
+                    .field("read", &self.read.get())
+                    .field("write", &self.write.get())
                     .finish(),
             )
             .finish()
@@ -482,20 +470,37 @@ impl Acc {
     }
 }
 
-fn load(
+#[derive(Default)]
+struct Sum {
+    value: f64,
+    error: f64,
+}
+
+impl Sum {
+    fn add(&mut self, value: f64) {
+        let next = self.value + value;
+        self.error += if self.value.abs() > value.abs() {
+            (self.value - next) + value
+        } else {
+            (value - next) + self.value
+        };
+        self.value = next;
+    }
+
+    fn get(&self) -> f64 {
+        if self.value.is_infinite() {
+            return self.value;
+        }
+        self.value + self.error
+    }
+}
+
+fn scan(
     snapshot: &Snapshot,
-    id: Option<&session::Id>,
-    from: Option<i64>,
-    to: Option<i64>,
-    pricer: Pricer<'_>,
-) -> Result<(Vec<Session>, Vec<Sample>), Error> {
-    let family = match id {
-        Some(id) => family(snapshot, id)?,
-        None => all_sessions(snapshot)?,
-    };
-    let mut prices: HashMap<String, Option<Pricing>> = HashMap::new();
-    let mut samples = Vec::new();
-    for (index, session) in family.iter().enumerate() {
+    sessions: &[Session],
+    mut visit: impl FnMut(usize, &Session, Request) -> Result<(), Error>,
+) -> Result<(), Error> {
+    for (index, session) in sessions.iter().enumerate() {
         let mut after = None;
         loop {
             let page = requests(
@@ -511,16 +516,12 @@ fn load(
             after = Some(last.cursor.clone());
             for entry in page {
                 let row = entry.record;
-                if from.is_some_and(|from| row.time_created < from)
-                    || to.is_some_and(|to| row.time_created >= to)
-                {
-                    continue;
-                }
-                samples.push(sample(index, session, row, pricer, &mut prices)?);
+                visit(index, session, row)?;
             }
+            std::thread::yield_now();
         }
     }
-    Ok((family, samples))
+    Ok(())
 }
 
 fn all_sessions(snapshot: &Snapshot) -> Result<Vec<Session>, Error> {
@@ -537,6 +538,7 @@ fn all_sessions(snapshot: &Snapshot) -> Result<Vec<Session>, Error> {
         };
         cursor = Some(SessionTable::primary_key(last));
         sessions.extend(page);
+        std::thread::yield_now();
     }
     sessions.sort_by(|left, right| {
         left.time_updated
@@ -559,12 +561,20 @@ fn family(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<Session>, Error> 
     }
     let mut current = 0;
     while current < sessions.len() {
-        let mut children = snapshot.index::<SessionTable>(
-            "session_parent_idx",
-            &tuple_key(&[KeyPart::String(&sessions[current].id)]),
-            None,
-            usize::MAX,
-        )?;
+        let mut children = Vec::new();
+        let mut after = None;
+        loop {
+            let page = snapshot.index::<SessionTable>(
+                "session_parent_idx",
+                &tuple_key(&[KeyPart::String(&sessions[current].id)]),
+                after.as_deref(),
+                PAGE,
+            )?;
+            let Some(last) = page.last() else { break };
+            after = Some(SessionTable::primary_key(last));
+            children.extend(page);
+            std::thread::yield_now();
+        }
         children.sort_by(|left, right| {
             right
                 .time_updated
@@ -586,33 +596,24 @@ fn sample(
     session: &Session,
     row: Request,
     pricer: Pricer<'_>,
-    prices: &mut HashMap<String, Option<Pricing>>,
+    prices: &mut VecDeque<(PricingRef, Option<Pricing>)>,
 ) -> Result<Sample, Error> {
     let model = row.model.domain()?;
     let tokens = row.tokens.domain()?;
     let estimate = match pricer {
         Some(pricer) if row.cost.is_none() && row.source.as_str() != Some("decision") => {
-            let reference = PricingRef {
-                directory: session.directory.clone(),
-                workspace_id: session.workspace_id.clone(),
-                provider: model.provider_id.0.clone(),
-                model: model.id.clone(),
-                profile: model.profile.as_ref().map(|profile| profile.0.clone()),
-            };
-            let identity = format!(
-                "{:?}",
-                (
-                    text(&reference.directory),
-                    reference.workspace_id.as_ref().map(text),
-                    text(&reference.provider),
-                    text(&reference.model),
-                    reference.profile.as_ref().map(text),
-                )
-            );
+            let reference = pricing_ref(session, &model);
+            if !prices.iter().any(|(key, _)| key == &reference) {
+                if prices.len() == 256 {
+                    prices.pop_front();
+                }
+                let pricing = pricer(&reference);
+                prices.push_back((reference.clone(), pricing));
+            }
             let pricing = prices
-                .entry(identity)
-                .or_insert_with(|| pricer(&reference))
-                .as_ref();
+                .iter()
+                .find(|(key, _)| key == &reference)
+                .and_then(|(_, value)| value.as_ref());
             pricing.and_then(|pricing| {
                 let encoded = tokens.encode();
                 usage::estimated_cost(&pricing.provider, &encoded, None)
@@ -640,11 +641,22 @@ fn sample(
     })
 }
 
-fn summary(samples: &[Sample]) -> JsonValue {
+fn read_summary(
+    snapshot: &Snapshot,
+    id: Option<&session::Id>,
+    pricer: Pricer<'_>,
+) -> Result<provider_request::Summary, Error> {
+    let sessions = match id {
+        Some(id) => family(snapshot, id)?,
+        None => all_sessions(snapshot)?,
+    };
     let mut total = Acc::default();
-    let mut groups: BTreeMap<String, Acc> = BTreeMap::new();
-    for (index, sample) in samples.iter().enumerate() {
-        total.add(index, sample);
+    let mut groups: BTreeMap<String, (model::Ref, Acc)> = BTreeMap::new();
+    let mut latest = None::<Sample>;
+    let mut prices = VecDeque::new();
+    scan(snapshot, &sessions, |index, session, row| {
+        let sample = sample(index, session, row, pricer, &mut prices)?;
+        total.add(&sample);
         let identity = format!(
             "{:?}",
             (
@@ -658,11 +670,21 @@ fn summary(samples: &[Sample]) -> JsonValue {
                     .map(|profile| text(&profile.0)),
             )
         );
-        groups.entry(identity).or_default().add(index, sample);
-    }
+        groups
+            .entry(identity)
+            .or_insert_with(|| (sample.model.clone(), Acc::default()))
+            .1
+            .add(&sample);
+        if latest.as_ref().is_none_or(|latest| {
+            (sample.time, sample.family, sample.request)
+                > (latest.time, latest.family, latest.request)
+        }) {
+            latest = Some(sample);
+        }
+        Ok(())
+    })?;
     let mut models = groups.into_values().collect::<Vec<_>>();
-    models.sort_by(|left, right| {
-        let (left_model, right_model) = (&samples[left.first].model, &samples[right.first].model);
+    models.sort_by(|(left_model, left), (right_model, right)| {
         right
             .priced()
             .then(|| right.cost())
@@ -670,10 +692,8 @@ fn summary(samples: &[Sample]) -> JsonValue {
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| model_order(left_model).cmp(&model_order(right_model)))
     });
-    let latest = samples
-        .iter()
-        .max_by_key(|sample| (sample.time, sample.family, sample.request));
-    total
+    let latest = latest.as_ref();
+    let value = total
         .metrics(ObjectEncoder::new())
         .optional(
             "models",
@@ -681,9 +701,9 @@ fn summary(samples: &[Sample]) -> JsonValue {
                 JsonValue::Array(
                     models
                         .iter()
-                        .map(|group| {
+                        .map(|(model, group)| {
                             ObjectEncoder::new()
-                                .field("model", &samples[group.first].model)
+                                .field("model", model)
                                 .field("requests", &(group.logical as f64))
                                 .field("tokens", &group.tokens())
                                 .optional("cacheReadReported", &group.cache_read_reported())
@@ -712,7 +732,8 @@ fn summary(samples: &[Sample]) -> JsonValue {
                 .and_then(|sample| sample.timing.as_ref())
                 .map(DomainEncode::encode),
         )
-        .finish()
+        .finish();
+    provider_request::Summary::decode(&value).map_err(record_error)
 }
 
 fn model_order(model: &model::Ref) -> (String, String, String, String) {

@@ -3,12 +3,12 @@ args AS (SELECT $1::VARCHAR AS root, $2::BIGINT AS from_time, $3::BIGINT AS to_t
     $4::VARCHAR AS grouping, $5::VARCHAR AS sorting, $6::BOOLEAN AS descending,
     $7::BIGINT AS page_offset, $8::BIGINT AS page_limit, $9::VARCHAR AS offsets,
     $10::VARCHAR AS prices),
-children AS (SELECT id, parent_id, row_number() OVER (PARTITION BY parent_id ORDER BY time_updated DESC, id DESC) AS child_order FROM session),
+children AS (SELECT id, parent_id, row_number() OVER (PARTITION BY parent_id ORDER BY time_updated DESC, id DESC) AS child_order FROM report_session),
 family(id, depth, position) AS (
-    SELECT s.id, 0, [0::BIGINT] FROM session s, args a WHERE s.id = a.root
+    SELECT s.id, 0, [0::BIGINT] FROM report_session s, args a WHERE s.id = a.root
     UNION ALL
     SELECT s.id, f.depth + 1, list_append(f.position, s.child_order) FROM children s JOIN family f ON s.parent_id = f.id, args a
-    WHERE EXISTS (SELECT 1 FROM session root WHERE root.id = a.root AND root.parent_id IS NULL)
+    WHERE EXISTS (SELECT 1 FROM report_session root WHERE root.id = a.root AND root.parent_id IS NULL)
 ),
 offsets AS (SELECT split_part(value, '|', 1)::BIGINT AS start,
     split_part(value, '|', 2)::INTEGER AS seconds, split_part(value, '|', 3) AS label
@@ -25,8 +25,8 @@ candidates AS MATERIALIZED (
         coalesce(o.seconds, 0) AS seconds, o.label AS zone_label,
         TIMESTAMP '1970-01-01' + (r.time_created::DOUBLE / 1000 + coalesce(o.seconds, 0)) * INTERVAL '1 second' AS local_time,
         estimated.amount AS estimate
-    FROM session_provider_request r JOIN session s ON s.id = r.session_id
-    LEFT JOIN project p ON p.id = s.project_id
+    FROM report_session_provider_request r JOIN report_session s ON s.id = r.session_id
+    LEFT JOIN report_project p ON p.id = s.project_id
     LEFT JOIN family f ON f.id = s.id, args a
     LEFT JOIN LATERAL (SELECT seconds, label FROM offsets WHERE start <= r.time_created ORDER BY start DESC LIMIT 1) o ON true
     LEFT JOIN LATERAL (

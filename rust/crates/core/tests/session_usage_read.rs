@@ -461,6 +461,10 @@ fn reports_preserve_sqlite_compensated_decimal_cost_totals() {
     assert_eq!(number(&result, "rows.0.cost"), 1.0);
     assert_eq!(number(&result, "total.tokens.input"), 1.0);
     assert_eq!(number(&result, "rows.0.tokens.input"), 1.0);
+    let summary = service.usage_all(None).unwrap().encode();
+    assert_eq!(number(&summary, "cost"), 1.0);
+    assert_eq!(number(&summary, "models.0.cost"), 1.0);
+    assert_eq!(number(&summary, "tokens.input"), 1.0);
 }
 
 #[test]
@@ -1079,6 +1083,115 @@ fn a_read_holds_one_coherent_snapshot_while_pricing_resolves() {
             "logical"
         ),
         4.0
+    );
+}
+
+#[test]
+fn a_report_excludes_writes_during_pricing_and_the_next_read_includes_them() {
+    let (store, service) = setup();
+    unpriced(&store);
+    let calls = Cell::new(0);
+    let pricer = |_: &PricingRef| {
+        calls.set(calls.get() + 1);
+        assert_eq!(
+            service.get(&id("ses_one")).unwrap().unwrap().id,
+            id("ses_one")
+        );
+        let mut late = Spec::new("ses_one", "prq_report_late", 9);
+        late.cost = Some(7.0);
+        insert(&store, vec![late]);
+        Some(catalog(2.0))
+    };
+    let input = report_input(r#"{"group":"model","timeZone":"Europe/Berlin"}"#);
+    let result = service
+        .usage_report(&id("ses_one"), &input, Some(&pricer))
+        .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(result.total.logical.get(), 3);
+    assert!((result.total.cost.unwrap().get() - 0.004).abs() < 1e-12);
+    let next = service.usage_report(&id("ses_one"), &input, None).unwrap();
+    assert_eq!(next.total.logical.get(), 4);
+    assert_eq!(next.total.cost.unwrap().get(), 7.0);
+}
+
+#[test]
+fn sparse_report_filters_and_unpriced_references_cross_source_pages() {
+    let (store, service) = setup();
+    insert(
+        &store,
+        (0..10_017)
+            .map(|index| {
+                let mut spec = Spec::new("ses_one", &format!("prq_sparse_{index:05}"), index + 1);
+                spec.time = index;
+                spec.cost = None;
+                spec.model = if index == 10_016 { "missing" } else { "priced" };
+                spec.timing = Some(r#"{"firstOutputMs":10,"totalMs":20}"#);
+                spec
+            })
+            .collect(),
+    );
+    let calls = Cell::new(0);
+    let pricer = |reference: &PricingRef| {
+        calls.set(calls.get() + 1);
+        (reference.model.as_str() == Some("priced")).then(|| catalog(2.0))
+    };
+    let result = service
+        .usage_report_all(
+            &report_input(r#"{"group":"model","from":10015,"to":10017,"limit":1}"#),
+            Some(&pricer),
+        )
+        .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(result.total.logical.get(), 2);
+    assert_eq!(result.row_count.get(), 2);
+    assert_eq!(result.next_offset.unwrap().get(), 1);
+    assert_eq!(result.rows[0].metrics.cost, None);
+    assert_eq!(result.rows[0].metrics.cost_provenance, None);
+    assert_eq!(
+        result.rows[0]
+            .speed
+            .as_ref()
+            .unwrap()
+            .first_output_p95_ms
+            .unwrap()
+            .get(),
+        10
+    );
+    let summary = service.usage_all(Some(&pricer)).unwrap();
+    assert_eq!(summary.logical.get(), 10_017);
+    assert_eq!(summary.models.unwrap().len(), 2);
+}
+
+#[test]
+fn known_prices_follow_the_native_text_projection_for_lossless_profiles() {
+    let (store, service) = setup();
+    let mut row = Spec::new("ses_one", "prq_lossless_price", 1).row();
+    row.cost = None;
+    row.model = Document::new(json(
+        r#"{"providerID":"openai","id":"gpt","profile":"Work\ud800"}"#,
+    ))
+    .unwrap();
+    store
+        .submit(move |tx| RequestTable::insert(tx, &row))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let pricer = |_: &PricingRef| Some(catalog(2.0));
+    let summary = service.usage_all(Some(&pricer)).unwrap();
+    let result = service
+        .usage_report_all(&report_input(r#"{"group":"model"}"#), Some(&pricer))
+        .unwrap();
+    assert_eq!(result.total.cost, summary.cost);
+    assert_eq!(result.total.cost.unwrap().get(), 0.00002);
+    assert_eq!(
+        result.rows[0]
+            .metrics
+            .cost_provenance
+            .as_ref()
+            .unwrap()
+            .0
+            .as_str(),
+        Some("current_catalog")
     );
 }
 
