@@ -80,6 +80,23 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     Spec.make("mcp", {
       description: "Manage MCP (Model Context Protocol) servers",
       commands: [
+        Spec.make("serve", {
+          description: "Serve a single-owner OAuth-protected task MCP endpoint on localhost",
+          params: {
+            directory: Flag.string("directory").pipe(Flag.withDescription("Approved Git repository directory")),
+            workspaceRoot: Flag.string("workspace-root").pipe(
+              Flag.withDescription("Parent directory for isolated task worktrees"),
+            ),
+            issuer: Flag.string("issuer").pipe(Flag.withDescription("Trusted OAuth issuer URL")),
+            jwksUrl: Flag.string("jwks-url").pipe(Flag.withDescription("Trusted issuer JWKS URL")),
+            resource: Flag.string("resource").pipe(Flag.withDescription("Public HTTPS URL ending in /mcp")),
+            subject: Flag.string("subject").pipe(Flag.withDescription("Only accepted OAuth subject")),
+            port: Flag.integer("port").pipe(Flag.withDefault(4097)),
+            maxConcurrent: Flag.integer("max-concurrent").pipe(Flag.withDefault(4)),
+            agent: Flag.string("agent").pipe(Flag.optional),
+            model: Flag.string("model").pipe(Flag.optional),
+          },
+        }),
         Spec.make("list", { description: "List configured MCP servers and their status" }),
         Spec.make("add", {
           description: "Add an MCP server to your configuration",

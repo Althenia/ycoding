@@ -1406,3 +1406,7 @@ The direct interactive Mini view derives its colors from the terminal palette, r
 - Session execution placement is process-local; clustering is not implemented.
 - Resident transcript memory excludes canonical message rows through completed compaction boundaries for each open Session.
 - Only the current runtime paths are supported.
+
+## Inbound MCP tasks
+
+The task MCP gateway admits each coding prompt to a dedicated root Session in a separate Git worktree. It retains an ownership/admission index and reads the existing runtime lifecycle rather than running a second agent loop. Root Session restart, permission, review, and retention rules still apply. Cancellation interrupts active execution; retained idle pending input remains explicitly unresolved. See [Task MCP lifecycle](./task-mcp.md#tools-and-lifecycle).

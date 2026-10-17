@@ -154,3 +154,7 @@ A product change is complete only when:
 - TUI-visible behavior is verified in the terminal path;
 - documentation matches the final behavior;
 - no placeholder, mock-only path, stale product reference, or invented external endpoint is presented as production behavior.
+
+## Task MCP surface
+
+An opt-in single-owner MCP gateway exposes bounded task start, status, result, list, and cancellation operations over the existing local runtime. Each task uses a separate Git worktree and durable Session. The gateway requires externally issued OAuth tokens and preserves local permission and review decisions. See [Task MCP](./task-mcp.md).
