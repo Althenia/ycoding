@@ -1654,3 +1654,7 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.
 - Run with `--log-level all` and `YCODING_PRINT_LOGS=1` when investigating configuration discovery.
 - Each `location services booted` log line records the Location `directory`, total `durationMs`, and a `stages` map of per-service construction milliseconds; use it to identify a slow Location boot stage.
+
+## Inbound task MCP
+
+`ycoding mcp serve` is an opt-in localhost task endpoint with an external OAuth issuer, JWKS URL, exact public resource URL, and one approved subject. It is separate from configured outbound MCP servers and from the primary API listener. See [Task MCP configuration and Cloudflare Tunnel setup](./task-mcp.md) for all flags, access controls, limits, and lifecycle behavior.

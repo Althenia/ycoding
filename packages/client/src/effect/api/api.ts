@@ -1194,6 +1194,15 @@ export type Endpoint17_6Input = {
 export type Endpoint17_6Output = EffectValue<ReturnType<RawClient["server.permission"]["session.permission.reply"]>>
 export type PermissionReplyOperation<E = never> = (input: Endpoint17_6Input) => Effect.Effect<Endpoint17_6Output, E>
 
+type Endpoint17_7Request = Parameters<RawClient["server.permission"]["session.permission.reject"]>[0]
+export type Endpoint17_7Input = {
+  readonly sessionID: Endpoint17_7Request["params"]["sessionID"]
+  readonly requestID: Endpoint17_7Request["params"]["requestID"]
+  readonly message?: Endpoint17_7Request["payload"]["message"]
+}
+export type Endpoint17_7Output = EffectValue<ReturnType<RawClient["server.permission"]["session.permission.reject"]>>
+export type PermissionRejectOperation<E = never> = (input: Endpoint17_7Input) => Effect.Effect<Endpoint17_7Output, E>
+
 export interface PermissionApi<E = never> {
   readonly request: { readonly list: PermissionRequestListOperation<E> }
   readonly saved: { readonly list: PermissionSavedListOperation<E>; readonly remove: PermissionSavedRemoveOperation<E> }
@@ -1201,6 +1210,7 @@ export interface PermissionApi<E = never> {
   readonly list: PermissionListOperation<E>
   readonly get: PermissionGetOperation<E>
   readonly reply: PermissionReplyOperation<E>
+  readonly reject: PermissionRejectOperation<E>
 }
 
 type Endpoint18_0Request = Parameters<RawClient["server.fs"]["fs.list"]>[0]

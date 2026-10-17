@@ -1477,6 +1477,18 @@ const Endpoint17_6 = (raw: RawClient["server.permission"]) => (input: Endpoint17
     payload: { reply: input["reply"], message: input["message"] },
   }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint17_7Request = Parameters<RawClient["server.permission"]["session.permission.reject"]>[0]
+type Endpoint17_7Input = {
+  readonly sessionID: Endpoint17_7Request["params"]["sessionID"]
+  readonly requestID: Endpoint17_7Request["params"]["requestID"]
+  readonly message?: Endpoint17_7Request["payload"]["message"]
+}
+const Endpoint17_7 = (raw: RawClient["server.permission"]) => (input: Endpoint17_7Input) =>
+  raw["session.permission.reject"]({
+    params: { sessionID: input["sessionID"], requestID: input["requestID"] },
+    payload: { message: input["message"] },
+  }).pipe(Effect.mapError(mapClientError))
+
 const adaptGroup17 = (raw: RawClient["server.permission"]) => ({
   request: { list: Endpoint17_0(raw) },
   saved: { list: Endpoint17_1(raw), remove: Endpoint17_2(raw) },
@@ -1484,6 +1496,7 @@ const adaptGroup17 = (raw: RawClient["server.permission"]) => ({
   list: Endpoint17_4(raw),
   get: Endpoint17_5(raw),
   reply: Endpoint17_6(raw),
+  reject: Endpoint17_7(raw),
 })
 
 type Endpoint18_0Request = Parameters<RawClient["server.fs"]["fs.list"]>[0]

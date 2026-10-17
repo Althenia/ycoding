@@ -130,3 +130,7 @@ See [contributing guidance](./AGENTS.md) for targeted tests, repository checks, 
 ## License
 
 YCoding is licensed under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](./LICENSE) for the full text and [NOTICE](./NOTICE) for the upstream MIT notice it retains.
+
+### Remote task MCP
+
+`ycoding mcp serve` exposes an opt-in, single-owner OAuth-protected task interface through a separate localhost listener. Start, inspect, list, and cancel durable coding Sessions in isolated Git worktrees. See [Task MCP setup](docs/task-mcp.md) for external OAuth and Cloudflare Tunnel requirements.

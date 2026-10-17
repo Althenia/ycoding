@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -92,13 +92,16 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
     const service = yield* Permission.Service
     const events = yield* EventRuntime.Service
     const asked = yield* Deferred.make<Permission.Request>()
+    const value = assertion(input)
     const unsubscribe = yield* events.listen((event) =>
-      event.type === Permission.Event.Asked.type
+      event.type === Permission.Event.Asked.type &&
+      Schema.is(Permission.Request)(event.data) &&
+      event.data.id === value.id
         ? Deferred.succeed(asked, event.data as Permission.Request).pipe(Effect.asVoid)
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion(input)).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(value).pipe(Effect.forkScoped)
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
@@ -127,7 +130,10 @@ describe("Permission", () => {
       const service = yield* Permission.Service
       for (const yolo of [0, 1, 2]) {
         yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo })
-        expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: yolo === 0 ? "ask" : "allow" })
+        expect(yield* service.ask(assertion())).toEqual({
+          id: Permission.ID.create("per_test"),
+          effect: yolo === 0 ? "ask" : "allow",
+        })
         if (yolo === 0) {
           yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
           continue
@@ -173,9 +179,7 @@ describe("Permission", () => {
       yield* db
         .update(SessionTable)
         .set({
-          permission: SessionPermissionCeiling.denyOnly([
-            { action: "read", resource: "src/*", effect: "deny" },
-          ]),
+          permission: SessionPermissionCeiling.denyOnly([{ action: "read", resource: "src/*", effect: "deny" }]),
         })
         .where(eq(SessionTable.id, Session.ID.make("ses_test")))
         .run()
@@ -230,9 +234,7 @@ describe("Permission", () => {
       yield* db
         .update(SessionTable)
         .set({
-          permission: SessionPermissionCeiling.denyOnly([
-            { action: "read", resource: "src/*", effect: "deny" },
-          ]),
+          permission: SessionPermissionCeiling.denyOnly([{ action: "read", resource: "src/*", effect: "deny" }]),
         })
         .where(eq(SessionTable.id, Session.ID.make("ses_test")))
         .run()
@@ -283,9 +285,7 @@ describe("Permission", () => {
       yield* db
         .update(SessionTable)
         .set({
-          permission: SessionPermissionCeiling.denyOnly([
-            { action: "subagent", resource: "reviewer", effect: "deny" },
-          ]),
+          permission: SessionPermissionCeiling.denyOnly([{ action: "subagent", resource: "reviewer", effect: "deny" }]),
         })
         .where(eq(SessionTable.id, sessionID))
         .run()
@@ -430,6 +430,73 @@ describe("Permission", () => {
       expect(yield* service.list()).toEqual([])
     }),
   )
+
+  it.effect("rejects only the selected concurrent request when request scope is explicit", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const first = yield* waitForRequest()
+      const second = yield* waitForRequest({ id: Permission.ID.create("per_second") })
+      const events = yield* EventRuntime.Service
+      const replied: Permission.ID[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Permission.Event.Replied.type)
+            replied.push(Schema.decodeUnknownSync(Schema.Struct({ requestID: Permission.ID }))(event.data).requestID)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      yield* first.service.reply({ requestID: first.request.id, reply: "reject", rejectScope: "request" })
+
+      const exit = yield* Fiber.await(first.fiber)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure")
+        expect(
+          exit.cause.reasons.some(
+            (reason) => Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError,
+          ),
+        ).toBe(true)
+      expect(yield* first.service.list()).toEqual([second.request])
+      expect(replied).toEqual([first.request.id])
+      yield* second.service.reply({ requestID: second.request.id, reply: "once" })
+      yield* Fiber.join(second.fiber)
+      expect(yield* first.service.list()).toEqual([])
+    }),
+  )
+
+  for (const rejectScope of [undefined, "session"] as const) {
+    it.effect(`rejects every same-Session request with ${rejectScope ?? "default"} scope`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const database = yield* Database.Service
+        yield* database.db
+          .insert(SessionTable)
+          .values({
+            id: Session.ID.make("ses_other"),
+            project_id: Project.ID.global,
+            directory: "/project",
+            title: "other",
+            agent: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const first = yield* waitForRequest()
+        const second = yield* waitForRequest({ id: Permission.ID.create("per_second") })
+        const other = yield* waitForRequest({
+          id: Permission.ID.create("per_other"),
+          sessionID: Session.ID.make("ses_other"),
+        })
+
+        yield* first.service.reply({ requestID: first.request.id, reply: "reject", rejectScope })
+
+        expect((yield* Fiber.await(first.fiber))._tag).toBe("Failure")
+        expect((yield* Fiber.await(second.fiber))._tag).toBe("Failure")
+        expect(yield* first.service.list()).toEqual([other.request])
+        yield* other.service.reply({ requestID: other.request.id, reply: "once" })
+        yield* Fiber.join(other.fiber)
+      }),
+    )
+  }
 
   it.effect("clears a pending permission when the Session switches agents", () =>
     Effect.gen(function* () {

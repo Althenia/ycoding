@@ -85,3 +85,5 @@ Write product documentation as specifications of current behavior, configuration
 - Never present proposals, historical plans, or unverified behavior as current capabilities; keep proposals separate from current product guides.
 
 Documents that record history or proposals (`ycoding-migration.md`, `tui-redesign-backlog.md`, `specs/schema-changelog.md`, and the decision records under `specs`) are exempt and are not current product guides.
+
+- [Task MCP gateway](./task-mcp.md): single-owner OAuth, task tools, and Cloudflare Tunnel setup.
