@@ -3,8 +3,6 @@ import { expect, test } from "bun:test"
 import type { KeepAwakeStatus } from "../../src/keep-awake"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
-import { DEFAULT_THEMES } from "../../src/theme/builtins"
-import { resolveThemeFile } from "../../src/theme/resolve"
 import { saveScreenCapture } from "../fixture/screen-capture"
 
 const sessionID = "ses_keep_awake_chrome"
@@ -66,34 +64,29 @@ async function frame(screen: Awaited<ReturnType<typeof renderScreen>>, check: (v
   })
 }
 
-const cases: { name: string; status: KeepAwakeStatus; detail?: string; ink?: "success" | "error" | "warning" }[] = [
-  { name: "manual", status: { state: "on", manual: true, lid: "off" }, detail: "on · idle + lid off", ink: "success" },
+const cases: { name: string; status: KeepAwakeStatus }[] = [
+  { name: "manual", status: { state: "on", manual: true, lid: "off" } },
   {
     name: "sleep-held",
     status: { state: "on", manual: false, lid: "on", sleepHold: true },
-    detail: "on · idle + lid + sleep held",
-    ink: "success",
   },
   {
     name: "lid-held",
     status: { state: "on", manual: false, lid: "held", sleepHold: true },
-    detail: "on · idle + lid held elsewhere + sleep held",
-    ink: "success",
   },
   { name: "off", status: { state: "off", lid: "off" } },
-  { name: "error", status: { state: "error", lid: "error" }, detail: "error · lid error", ink: "error" },
+  { name: "error", status: { state: "error", lid: "error" } },
   {
     name: "unsupported",
     status: { state: "unsupported", lid: "unsupported" },
-    detail: "unsupported · lid unsupported",
-    ink: "warning",
   },
 ]
 
 for (const mode of ["dark", "light"] as const) {
   for (const width of [32, 50]) {
     for (const item of cases) {
-      test(`keep-awake chrome ${item.name} at ${width} columns in ${mode}`, async () => {
+      test(`keep-awake ${item.name} adds no footer line at ${width} columns in ${mode}`, async () => {
+        const initial = Promise.withResolvers<KeepAwakeStatus>()
         const screen = await renderScreen({
           width,
           height: 36,
@@ -102,43 +95,32 @@ for (const mode of ["dark", "light"] as const) {
           settle: "Ask first · ready",
           config: { animations: false, theme: { mode } },
           keepAwake: {
-            get: async () => item.status,
+            get: () => initial.promise,
             set: async () => {
               throw new Error("Read-only render")
             },
           },
         })
         try {
-          if (!item.detail) {
-            expect(screen.frame()).not.toContain("keep awake")
-            expect(screen.frame()).toContain("Message YCoding…")
-            await saveScreenCapture(`keep-awake-off-${width}-${mode}`, screen)
-            return
-          }
-          await frame(screen, (value) => value.includes("keep awake"))
+          initial.resolve(item.status)
+          await initial.promise
+          await screen.renderOnce()
+          expect(screen.frame()).not.toContain("keep awake")
           const lines = screen.lines()
-          const start = lines.findIndex((line) => line.includes("keep awake"))
-          const status = lines
-            .slice(start, start + 4)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim()
-          expect(status).toContain(`keep awake ${item.detail}`)
-          expect(screen.colorOf("keep awake")).toEqual(
-            resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback[item.ink!].default.toInts(),
-          )
-          expect(lines.filter((line) => line.includes("keep awake"))).toHaveLength(1)
           expect(lines.every((line) => line.trimEnd().length <= width)).toBe(true)
           expect(screen.frame()).toContain("Message YCoding…")
           await saveScreenCapture(`keep-awake-${item.name}-${width}-${mode}`, screen)
         } finally {
+          initial.resolve(item.status)
           await screen.dispose()
         }
       }, 30_000)
     }
 
-    test(`/keep-awake updates chrome without a poll at ${width} columns in ${mode}`, async () => {
+    test(`/keep-awake toggles without adding a footer line at ${width} columns in ${mode}`, async () => {
       const initial = Promise.withResolvers<KeepAwakeStatus>()
+      const enabledWrite = Promise.withResolvers<void>()
+      const disabledWrite = Promise.withResolvers<void>()
       const writes: boolean[] = []
       let reads = 0
       const screen = await renderScreen({
@@ -152,6 +134,8 @@ for (const mode of ["dark", "light"] as const) {
           get: () => (++reads === 1 ? initial.promise : new Promise<KeepAwakeStatus>(() => {})),
           set: async (enabled) => {
             writes.push(enabled)
+            if (enabled) enabledWrite.resolve()
+            if (!enabled) disabledWrite.resolve()
             return { state: enabled ? "on" : "off", manual: enabled, lid: enabled ? "on" : "off" }
           },
         },
@@ -160,16 +144,20 @@ for (const mode of ["dark", "light"] as const) {
         expect(screen.frame()).not.toContain("keep awake")
         await saveScreenCapture(`keep-awake-loading-${width}-${mode}`, screen)
         initial.resolve({ state: "off", manual: false, lid: "off" })
-        await frame(screen, (value) => value.includes("Ask first"))
+        await screen.renderOnce()
         await screen.input.typeText("/keep-awake")
         screen.input.pressEnter()
-        await frame(screen, (value) => value.includes("keep awake on"))
+        await enabledWrite.promise
+        await frame(screen, (value) => value.includes("Idle and lid-closed"))
         expect(writes).toEqual([true])
+        expect(screen.frame()).not.toContain("keep awake")
         expect(screen.frame()).not.toContain("/keep-awake")
         await screen.input.typeText("/keep-awake")
         screen.input.pressEnter()
-        await frame(screen, (value) => !value.includes("keep awake on"))
+        await disabledWrite.promise
+        await screen.renderOnce()
         expect(writes).toEqual([true, false])
+        expect(screen.frame()).not.toContain("keep awake")
       } finally {
         initial.resolve({ state: "off" })
         await screen.dispose()
