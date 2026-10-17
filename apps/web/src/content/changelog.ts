@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.13",
+    date: "2026-10-17",
+    title: "Selected subagent context, clearer Usage, and Meeting recovery",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Start a subagent with selected historical context using `shared_context.message_ids`. Choose up to eight distinct parent user messages without files or agent mentions, or completed text-only assistant messages. The rendered prefix is limited to 32 KiB and the complete prompt to 64 KiB; larger selections are rejected instead of truncated. The first admitted snapshot is immutable and retries reuse it. The text is added before the task as ordinary user evidence; it does not grant permissions or activate skills. Fresh child context remains the default." },
+      { tag: "Added", text: "`efficiency.prompt_cache.family_scope` defaults to `session`. The opt-in `family-experiment` uses a compatible family cache key only for eligible direct public OpenAI HTTP Responses requests with GPT-5.6-or-later generated breakpoints, verified account identity and selected context. Codex, WebSocket, OpenRouter and other routes keep Session-scoped keys. The experiment reports no live cache-hit or savings guarantee." },
+      { tag: "Changed", text: "Web Usage quota cards show concise forecast status and move source, stability, exact update time and full forecast diagnostics into an accessible Details dialog that preserves card positions. Recorded consumption on the backend uses aligned provider/model/profile, token-rate and estimated-cost rows, with exact rates, coverage and observation times in Details. Missing prices remain unreported." },
+      { tag: "Changed", text: "TUI Usage shows concise quota forecasts and compact recorded-consumption rows; press `d` to expand exact quota and consumption details. Narrow terminals stack long identities instead of clipping the rate and cost columns." },
+      { tag: "Changed", text: "Date-filtered Usage reports apply time bounds within indexed time-and-ID page seeks, preserving exact accounting totals without rescanning the full date range." },
+      { tag: "Changed", text: "The Meeting page separates Setup, Live, Finalizing, Recovery and Review. Finalizing distinguishes audio processing from analysis. Retry processes retained failed audio without restarting capture; Review retained transcript keeps the recovery warning and Retry available without discarding audio or restarting capture." },
+      { tag: "Changed", text: "TUI autonomy rows use concise decision labels for permission, guardrail and question requests. The Questions row reflects the Session's effective auto-answer behavior; `/auto-answer` remains separate from YOLO." },
+      { tag: "Fixed", text: "Git HEAD monitoring is ready when Location initialization completes, including symlinked .git directories, so immediate branch updates are observed." },
+      { tag: "Fixed", text: "Closing the custom-provider dialog cancels deferred focus; adding a model replaces its earlier focus target, and destroyed inputs are ignored." },
+    ],
+  },
+  {
     version: "0.10.12",
     date: "2026-10-17",
     title: "Named autonomy levels, per-Session auto-answer, and Meeting owner settings",

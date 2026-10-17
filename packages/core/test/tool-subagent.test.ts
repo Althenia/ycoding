@@ -44,7 +44,7 @@ import { ShellLedger } from "@ycoding-ai/core/shell/ledger"
 import { ChildProcess } from "effect/unstable/process"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
-import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
+import { SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
@@ -211,6 +211,126 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
         expect((yield* sessions.autonomy.get(child.sessionID)).sleep).toEqual({})
         const awake = yield* KeepAwake.Service
         expect((yield* awake.get).sleepHold).toBe(true)
+      }),
+    ),
+  ),
+)
+
+it.live("rejects missing, foreign, and oversized shared-context sources before creating a child", () =>
+  Effect.acquireRelease(
+    Effect.promise(() => tmpdir()),
+    (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  ).pipe(
+    Effect.flatMap((directory) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }),
+          model: parentModel,
+        })
+        yield* withSubagent(parent.location)
+        const foreign = yield* sessions.create({ location: parent.location, model: parentModel })
+        const foreignMessageID = SessionMessage.ID.make("msg_foreign_shared_source")
+        yield* sessions.prompt({ id: foreignMessageID, sessionID: foreign.id, text: "Other Session evidence.", resume: false })
+        const database = yield* Database.Service
+        const events = yield* EventRuntime.Service
+        yield* SessionPending.promoteSteers(database.db, events, foreign.id)
+        const oversizedMessageID = SessionMessage.ID.make("msg_oversized_shared_source")
+        yield* sessions.prompt({ id: oversizedMessageID, sessionID: parent.id, text: "é".repeat(17 * 1024), resume: false })
+        yield* SessionPending.promoteSteers(database.db, events, parent.id)
+        const prepared = yield* SessionOrchestration.preflight(parent, {
+          agent: Agent.ID.make("reviewer"),
+          caller: toolIdentity.agent,
+        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+        const orchestration = (yield* PluginRuntime.Service).orchestration
+        for (const [messageID, suffix] of [
+          [SessionMessage.ID.make("msg_missing_shared_source"), "missing"],
+          [foreignMessageID, "foreign"],
+          [oversizedMessageID, "oversized"],
+        ] as const) {
+          const result = yield* Effect.exit(orchestration.launch({
+            parentID: parent.id,
+            parentAssistantMessageID: SessionMessage.ID.make(`msg_${suffix}_shared_parent`),
+            toolCallID: `call_${suffix}_shared`,
+            agent: Agent.ID.make("reviewer"),
+            description: "invalid shared context",
+            prompt: "Complete the task",
+            background: true,
+            prepared,
+            sharedContext: { messageIDs: [messageID] },
+          }))
+          expect(result).toMatchObject({ _tag: "Failure" })
+        }
+        expect((yield* sessions.list({ parentID: parent.id })).data).toEqual([])
+        expect(yield* orchestration.list(parent.id)).toEqual([])
+      }),
+    ),
+  ),
+)
+
+it.live("reuses admitted shared context after its parent source is unavailable and sends without repeating it", () =>
+  Effect.acquireRelease(
+    Effect.promise(() => tmpdir()),
+    (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  ).pipe(
+    Effect.flatMap((directory) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }),
+          model: parentModel,
+        })
+        yield* withSubagent(parent.location)
+        const sourceID = SessionMessage.ID.make("msg_frozen_context_source")
+        yield* sessions.prompt({ id: sourceID, sessionID: parent.id, text: "$audit appears here as historical evidence.", resume: false })
+        const database = yield* Database.Service
+        const events = yield* EventRuntime.Service
+        yield* SessionPending.promoteSteers(database.db, events, parent.id)
+        expect(yield* sessions.message({ sessionID: parent.id, messageID: sourceID })).toBeDefined()
+
+        const prepared = yield* SessionOrchestration.preflight(parent, {
+          agent: Agent.ID.make("reviewer"),
+          caller: toolIdentity.agent,
+        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+        const orchestration = (yield* PluginRuntime.Service).orchestration
+        const launch = {
+          parentID: parent.id,
+          parentAssistantMessageID: SessionMessage.ID.make("msg_frozen_context_launch"),
+          toolCallID: "call_frozen_context_launch",
+          agent: Agent.ID.make("reviewer"),
+          description: "review frozen context",
+          prompt: "Review the selected evidence.",
+          background: true,
+          prepared,
+          sharedContext: { messageIDs: [sourceID] },
+        }
+        const child = yield* orchestration.launch(launch)
+        const inputID = SessionOrchestrationIdentity.launch(parent.id, launch.parentAssistantMessageID, launch.toolCallID).inputID
+        const admitted = (yield* sessions.pending(child.sessionID)).find((item) => item.id === inputID)
+        expect(admitted?.type).toBe("user")
+        if (admitted?.type !== "user") throw new Error("Initial child prompt was not admitted")
+        const initialText = admitted.data.text
+        expect(initialText).toContain("<shared-context>")
+        expect(initialText).toContain("$audit appears here as historical evidence.")
+        expect(admitted.data.metadata?.sharedContext).toMatchObject({ version: 1, messageIDs: [sourceID] })
+
+        yield* SessionPending.promoteSteers(database.db, events, child.sessionID)
+        const originalMessage = yield* sessions.message({ sessionID: child.sessionID, messageID: inputID })
+        expect(originalMessage?.type).toBe("user")
+        yield* database.db.delete(SessionMessageTable).where(eq(SessionMessageTable.id, sourceID)).run().pipe(Effect.orDie)
+        expect(yield* sessions.message({ sessionID: parent.id, messageID: sourceID })).toBeUndefined()
+
+        const retry = yield* orchestration.launch(launch)
+        expect(retry.sessionID).toBe(child.sessionID)
+        expect((yield* sessions.message({ sessionID: child.sessionID, messageID: inputID }))?.type).toBe("user")
+        const sentID = SessionMessage.ID.make("msg_frozen_context_incremental")
+        yield* orchestration.send({ parentID: parent.id, childID: child.sessionID, messageID: sentID, text: "Incremental direction.", delivery: "steer" })
+        yield* SessionPending.promoteSteers(database.db, events, child.sessionID)
+        const history = yield* sessions.context(child.sessionID)
+        const tagged = history.filter((message) => message.type === "user" && message.metadata?.sharedContext !== undefined)
+        expect(tagged).toHaveLength(1)
+        expect(history.find((message) => message.id === inputID)).toMatchObject({ type: "user", text: initialText })
+        expect(history.find((message) => message.id === sentID)).toMatchObject({ type: "synthetic", text: expect.stringContaining("Incremental direction.") })
       }),
     ),
   ),
@@ -950,6 +1070,11 @@ describe("SubagentTool", () => {
           })
           expect(launched[0]?.sessionID).toBe(launched[1]?.sessionID)
           expect(yield* orchestration.list(parent.id)).toHaveLength(1)
+          const selectionMismatch = yield* orchestration.launch({
+            ...input,
+            sharedContext: { messageIDs: [SessionMessage.ID.make("msg_retry_context")] },
+          }).pipe(Effect.catchTag("SessionOrchestration.ConflictError", (error) => Effect.succeed(error._tag)))
+          expect(selectionMismatch).toBe("SessionOrchestration.ConflictError")
           expect(yield* Effect.exit(orchestration.launch({ ...input, prompt: "different prompt" }))).toMatchObject({
             _tag: "Failure",
           })

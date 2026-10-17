@@ -67,6 +67,8 @@ import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionContext } from "@ycoding-ai/core/session/context"
 import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
+import { SessionSharedContext } from "@ycoding-ai/core/session/shared-context"
+import { InstructionState } from "@ycoding-ai/core/session/instruction-state"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Job } from "@ycoding-ai/core/job"
@@ -2834,6 +2836,122 @@ describe("SessionRunnerLLM", () => {
       expect(requests.map((request) => request.cache)).toEqual(
         Array.from({ length: 3 }, () => ({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })),
       )
+    }),
+  )
+
+  it.effect("prepares opt-in family keys from stored ancestry while preserving default request identity", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const contexts = yield* SessionContext.Service
+      const modelRequests = yield* SessionModelRequest.Service
+      const otherRoot = Session.ID.make("ses_cache_other_root")
+      const intermediate = Session.ID.make("ses_cache_intermediate")
+      const children = [
+        Session.ID.make("ses_cache_child_a"),
+        Session.ID.make("ses_cache_child_b"),
+        Session.ID.make("ses_cache_child_c"),
+      ]
+      yield* insertSession(otherRoot)
+      yield* insertSession(intermediate)
+      yield* database.db.update(SessionTable).set({ parent_id: sessionID })
+        .where(eq(SessionTable.id, intermediate)).run().pipe(Effect.orDie)
+      const sourceID = SessionMessage.ID.make("msg_cache_evidence")
+      const snapshot = yield* SessionSharedContext.resolve(sessionID, { messageIDs: [sourceID] }, () =>
+        Effect.succeed(SessionMessage.User.make({
+          id: sourceID,
+          type: "user",
+          text: "Selected evidence for related work.",
+          files: [],
+          agents: [],
+          time: { created: DateTime.makeUnsafe(0) },
+        })),
+      )
+      for (const [index, childID] of children.entries()) {
+        yield* insertSession(childID)
+        yield* database.db.update(SessionTable)
+          .set({ parent_id: index === 2 ? otherRoot : index === 1 ? intermediate : sessionID })
+          .where(eq(SessionTable.id, childID)).run().pipe(Effect.orDie)
+        yield* session.prompt({
+          sessionID: childID,
+          text: `Task ${index}`,
+          origin: "subagent",
+          sharedContext: snapshot,
+          metadata: { rootSessionID: sessionID, familyRoot: sessionID },
+          resume: false,
+        })
+        yield* SessionPending.promoteSteers(database.db, events, childID)
+      }
+      const prepare = (childID: Session.ID) => Effect.gen(function* () {
+        const selected = yield* contexts.select(childID)
+        yield* InstructionState.prepare(database.db, events, selected.instructions, childID)
+        const loaded = yield* contexts.load(selected)
+        return yield* modelRequests.prepare({ context: loaded, step: 1 })
+      })
+      const isolated = yield* Effect.forEach(children, prepare)
+      expect(new Set(isolated.map((item) => item.request.providerOptions?.openai?.promptCacheKey)).size).toBe(3)
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ family_scope: "family-experiment" }),
+      })
+      const shared = yield* Effect.forEach(children, prepare)
+      expect(shared[0]!.request.providerOptions?.openai?.promptCacheKey).toBeDefined()
+      expect(shared[0]!.request.providerOptions?.openai?.promptCacheKey)
+        .toBe(shared[1]!.request.providerOptions?.openai?.promptCacheKey)
+      expect(shared[0]!.request.providerOptions?.openai?.promptCacheKey)
+        .not.toBe(shared[2]!.request.providerOptions?.openai?.promptCacheKey)
+      expect(shared.map((item) => item.cache)).toEqual(isolated.map((item) => item.cache))
+      expect(shared.map((item) => item.continuation)).toEqual(isolated.map((item) => item.continuation))
+      expect(shared.map((item) => item.request.messages)).toEqual(isolated.map((item) => item.request.messages))
+      efficiencyConfig = undefined
+      const restored = yield* Effect.forEach(children, prepare)
+      expect(restored.map((item) => item.request)).toEqual(isolated.map((item) => item.request))
+      currentModel = Model.update(storedOpenAIResponsesModel, {
+        route: storedOpenAIResponsesModel.route.with({
+          endpoint: { ...storedOpenAIResponsesModel.route.endpoint, baseURL: "https://gateway.example/v1" },
+        }),
+      })
+      const gatewayIsolated = yield* Effect.forEach(children, prepare)
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ family_scope: "family-experiment" }),
+      })
+      const gatewayExperiment = yield* Effect.forEach(children, prepare)
+      expect(gatewayExperiment.map((item) => item.request)).toEqual(gatewayIsolated.map((item) => item.request))
+      expect(new Set(gatewayExperiment.map((item) => item.request.providerOptions?.openai?.promptCacheKey)).size).toBe(3)
+    }),
+  )
+
+  it.effect("retains the experimental family key when applying stored response continuation", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ family_scope: "family-experiment" }),
+      })
+      const sourceID = SessionMessage.ID.make("msg_family_continuation_source")
+      const snapshot = yield* SessionSharedContext.resolve(sessionID, { messageIDs: [sourceID] }, () =>
+        Effect.succeed(SessionMessage.User.make({
+          id: sourceID,
+          type: "user",
+          text: "Shared evidence retained across continuation.",
+          files: [],
+          agents: [],
+          time: { created: DateTime.makeUnsafe(0) },
+        })),
+      )
+      responses = [
+        reply.textWithResponse("First", "family-first", "resp_family_first"),
+        reply.textWithResponse("Second", "family-second", "resp_family_second"),
+      ]
+      yield* session.prompt({ sessionID, text: "First task", sharedContext: snapshot, origin: "subagent", resume: false })
+      yield* session.resume(sessionID)
+      yield* admit(session, "Continue the task")
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.providerOptions?.openai?.previousResponseId).toBe("resp_family_first")
+      expect(requests[1]?.providerOptions?.openai?.promptCacheKey)
+        .toBe(requests[0]?.providerOptions?.openai?.promptCacheKey)
     }),
   )
 

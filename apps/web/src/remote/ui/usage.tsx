@@ -8,7 +8,8 @@ import type { RemoteUsageForecast } from "@ycoding-ai/remote"
 import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
 import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
 import { ModelIncidents } from "./model-incidents"
-import { QuotaForecastBlock, UsageStatisticsDetails } from "./usage-cost"
+import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
+import { consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
@@ -218,7 +219,11 @@ export function UsagePage() {
     </section>
 
     <Show when={forecastData()}><section class="usage-breakdown-section" aria-label="Recorded token consumption"><h2>Recorded consumption · Backend</h2>
-      <For each={forecastData()?.localRates}>{(rate) => <p class="usage-message">{rate.providerID}{rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}{rate.modelID ? ` · ${rate.modelID}` : ""}: {count(rate.tokensPerMinute)} tokens/min · 5m {rate.tokensPerMinute5 === undefined ? "unreported" : count(rate.tokensPerMinute5)} · 60m {rate.tokensPerMinute60 === undefined ? "unreported" : count(rate.tokensPerMinute60)}<Show when={rate.estimatedUSDPerHour !== undefined}> · {money(rate.estimatedUSDPerHour!)} estimated/hour</Show> · {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}</p>}</For>
+      <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
+        const row = consumptionRow(rate)
+        return <li class="usage-consumption__row"><span class="usage-consumption__identity">{row.identity}</span><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span>
+          <UsageDetails label={row.identity} groups={[{ lines: row.details }]} /></li>
+      }}</For></ul></Show>
       <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
       <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
     </section></Show>
@@ -344,27 +349,36 @@ export function UsagePage() {
 function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number; readonly forecasts?: RemoteUsageForecast["quotas"]; readonly forecastAsOf?: number; readonly forecastState: string }) {
   const label = (value: string) => value.replaceAll("_", " ")
   const heading = () => providerHeading(props.provider())
-  const updated = () => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(props.provider().updatedAt)
-  const provenance = () => `Updated ${updated()} — source: ${label(props.provider().source).replace("api", "API")}, stability: ${label(props.provider().stability)}`
+  const forecastFor = (window: UsageWindow) => matchingQuotaForecast(props.provider(), window, props.forecasts)
+  const detailGroups = () => [
+    { lines: providerProvenanceLines(props.provider()) },
+    ...props.provider().windows.flatMap((window) => {
+      const forecast = forecastFor(window)
+      return forecast === undefined ? [] : [{ title: window.label, lines: forecastDetails(forecast, props.now, props.forecastAsOf) }]
+    }),
+  ]
   return <article class="usage-provider">
     <header class="usage-provider__head"><div class="usage-provider__identity"><span class={`usage-status usage-status--${props.provider().status}`} title={label(props.provider().status)} aria-label={`${label(props.provider().status)} quota status`} /><h3>{heading().name}</h3><Show when={heading().plan}><span class="usage-provider__plan">{heading().plan}</span></Show><Show when={props.provider().status !== "available"}><span class="usage-provider__state">{label(props.provider().status)}</span></Show></div>
-      <span class="usage-provider__freshness">{props.provider().status === "error" ? "Checked" : "Synced"} <time datetime={new Date(props.provider().updatedAt).toISOString()} title={provenance()} aria-label={provenance()}>{relativeFreshness(props.provider().updatedAt, props.now)}</time></span></header>
+      <span class="usage-provider__freshness">{props.provider().status === "error" ? "Checked" : "Synced"} <time datetime={new Date(props.provider().updatedAt).toISOString()}>{relativeFreshness(props.provider().updatedAt, props.now)}</time></span></header>
     <Show when={props.provider().windows.length > 0} fallback={<p class="usage-provider__empty">{props.provider().message ?? "This provider has not reported any quota metrics."}</p>}>
       <div class="usage-provider__windows"><For each={props.provider().windows.map((window) => window.id)}>{(id) => {
         const initial = props.provider().windows.find((window) => window.id === id)!
-        return <QuotaRow window={() => props.provider().windows.find((window) => window.id === id) ?? initial} now={props.now} forecast={matchingQuotaForecast(props.provider(), props.provider().windows.find((window) => window.id === id) ?? initial, props.forecasts)} forecastAsOf={props.forecastAsOf} forecastState={props.forecastState} />
+        const window = () => props.provider().windows.find((item) => item.id === id) ?? initial
+        return <QuotaRow window={window} now={props.now} forecast={forecastFor(window())} forecastAsOf={props.forecastAsOf} forecastState={props.forecastState} />
       }}</For></div>
     </Show>
+    <UsageDetails label={heading().name} groups={detailGroups()} />
   </article>
 }
 
 function QuotaRow(props: { readonly window: () => UsageWindow; readonly now: number; readonly forecast?: NonNullable<RemoteUsageForecast["quotas"]>[number]; readonly forecastAsOf?: number; readonly forecastState: string }) {
   const quota = () => quotaWindow(props.window(), props.now)
-  return <div class="usage-window"><div class="usage-window__top"><span><strong>{props.window().label}</strong><Show when={quota().used}> <b>{quota().used} used</b></Show><Show when={quota().limit}> of {quota().limit}</Show><Show when={quota().remaining && !quota().used}> <b>{quota().remaining} remaining</b></Show></span>
-      <Show when={quota().pace}><span class={`usage-pace usage-pace--${quota().pace === "Ahead of pace" ? "ahead" : quota().pace === "Below pace" ? "below" : "on"}`}>{quota().pace?.toLowerCase()}</span></Show>
+  const exhausted = () => quota().exhausted || props.forecast?.state === "exhausted"
+  return <div class="usage-window" classList={{ "usage-window--exhausted": exhausted() }}><div class="usage-window__top"><span><strong>{props.window().label}</strong><Show when={quota().used}> <b>{quota().used} used</b></Show><Show when={quota().limit}> of {quota().limit}</Show><Show when={quota().remaining && !quota().used}> <b>{quota().remaining} remaining</b></Show></span>
+      <Show when={exhausted()} fallback={<Show when={quota().pace}><span class={`usage-pace usage-pace--${quota().pace === "Ahead of pace" ? "ahead" : quota().pace === "Below pace" ? "below" : "on"}`}>{quota().pace?.toLowerCase()}</span></Show>}><span class="usage-pace usage-pace--exhausted">exhausted</span></Show>
     </div>
     <Show when={quota().fill !== undefined}><div class="usage-meter" role="progressbar" aria-label={`${props.window().label} used`} aria-valuenow={quota().fill} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${quota().fill}%` }} /></div></Show>
     <div class="usage-window__details"><Show when={quota().reset}><span>{quota().reset}</span></Show><Show when={quota().remaining && quota().used}><span>{quota().remaining} {props.window().unit === "usd" ? "remaining" : "left"}</span></Show><Show when={props.window().unlimited}><span>Unlimited</span></Show></div>
-    <Show when={props.forecast} fallback={<p class="usage-window__details">Forecast {props.forecastState === "loading" || props.forecastState === "idle" ? "loading" : "unavailable"}{props.forecastState === "unsupported" ? " · Update YCoding on this machine" : props.forecastState === "error" ? " · lookup failed; refresh quotas to retry" : props.forecastState === "ready" ? " · No matching quota observation" : ""}</p>}>{(value) => <QuotaForecastBlock forecast={value()} now={props.now} asOf={props.forecastAsOf} />}</Show>
+    <Show when={props.forecast} fallback={<p class="usage-window__details">Forecast {props.forecastState === "loading" || props.forecastState === "idle" ? "loading" : "unavailable"}{props.forecastState === "unsupported" ? " · Update YCoding on this machine" : props.forecastState === "error" ? " · lookup failed; refresh quotas to retry" : props.forecastState === "ready" ? " · No matching quota observation" : ""}</p>}>{(value) => <QuotaForecastStatus forecast={value()} asOf={props.forecastAsOf ?? props.now} />}</Show>
   </div>
 }

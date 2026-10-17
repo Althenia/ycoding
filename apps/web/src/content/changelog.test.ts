@@ -4,8 +4,37 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
-  test("lists v0.10.12 named autonomy levels, per-Session auto-answer, and Meeting owner settings first", () => {
+  test("lists v0.10.13 selected subagent context, Usage details, and Meeting recovery first", () => {
     const release = RELEASES[0]
+    expect(release).toMatchObject({
+      version: "0.10.13",
+      date: "2026-10-17",
+      tags: ["Added", "Changed", "Fixed"],
+    })
+    const text = release?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "shared_context.message_ids",
+      "32 KiB",
+      "64 KiB",
+      "family_scope",
+      "family-experiment",
+      "Details",
+      "Recorded consumption",
+      "time bounds",
+      "Finalizing",
+      "Review retained transcript",
+      "TUI",
+      "Git HEAD",
+      "symlinked .git",
+      "deferred focus",
+      "destroyed input",
+    ])
+      expect(text).toContain(fragment)
+    expect(RELEASES[1]?.version).toBe("0.10.12")
+  })
+
+  test("lists v0.10.12 named autonomy levels, per-Session auto-answer, and Meeting owner settings first", () => {
+    const release = RELEASES[1]
     expect(release).toMatchObject({
       version: "0.10.12",
       date: "2026-10-17",
@@ -15,11 +44,11 @@ describe("release entries", () => {
     const text = release?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["Background result lost", "Ask first", "Allow tools", "Tools + reviews", "`/auto-answer`", "`auto_answer`", "Meeting owner", "future Ask AI questions", "Hard guardrail reviews"])
       expect(text).toContain(fragment)
-    expect(RELEASES[1]?.version).toBe("0.10.11")
+    expect(RELEASES[2]?.version).toBe("0.10.11")
   })
 
   test("retains v0.10.11 fallback models, model incidents, restart recovery, and opt-in automation", () => {
-    const release = RELEASES[1]
+    const release = RELEASES[2]
     expect(release).toMatchObject({
       version: "0.10.11",
       date: "2026-10-17",
@@ -32,7 +61,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.10 shell command queue, self-contained commits, and waiting for another database writer", () => {
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[3]).toEqual({
       version: "0.10.10",
       date: "2026-10-15",
       title: "Sleep mode, shell command queue, and faster web",
@@ -66,7 +95,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.9 Muse quota on the usage dashboard first", () => {
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[4]).toEqual({
       version: "0.10.9",
       date: "2026-10-14",
       title: "Muse quota on the usage dashboard",
@@ -78,7 +107,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.8 smaller database and eval run controls first", () => {
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[5]).toEqual({
       version: "0.10.8",
       date: "2026-10-14",
       title: "Smaller database and eval run controls",
@@ -96,7 +125,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.7 background Chrome and computer use first", () => {
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.10.7",
       date: "2026-10-13",
       title: "Background Chrome and computer use",
@@ -111,7 +140,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.6 Muse (Meta) subscriptions, quota, and built-in agent updates first", () => {
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.10.6",
       date: "2026-10-13",
       title: "Muse (Meta) subscriptions and quota",
@@ -127,7 +156,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.5 MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails first", () => {
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.10.5",
       date: "2026-10-13",
       title: "MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails",
@@ -144,7 +173,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.4 Session retention, directory-wide guardrail approvals, and bounded reads first", () => {
-    expect(RELEASES[8]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.10.4",
       date: "2026-10-12",
       title: "Automatic Session retention and directory-wide guardrail approvals",
@@ -160,7 +189,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.3 bounded derived reads, output delivery, and parent-session question answers first", () => {
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.10.3",
       date: "2026-10-12",
       title: "Bounded reads and parent-session subagent answers",
@@ -175,7 +204,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.2 prompt drafts, guardrail exemptions, and mobile fixes first", () => {
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.10.2",
       date: "2026-10-12",
       title: "Prompt drafts, quieter guardrails, and mobile fixes",
@@ -195,7 +224,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.1 on-demand suggestions and read receipts", () => {
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.10.1",
       date: "2026-10-11",
       title: "On-demand suggestions and read receipts",
@@ -209,26 +238,26 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.0 merged profiles, Meeting, prediction, and Focus workspace", () => {
-    expect(RELEASES[12]).toMatchObject({
+    expect(RELEASES[13]).toMatchObject({
       version: "0.10.0",
       date: "2026-10-11",
       title: "Concurrent profiles, Meeting, prediction, and a Focus workspace",
       tags: ["Added", "Changed", "Fixed"],
     })
-    expect(RELEASES[12]?.changes).toContainEqual({
+    expect(RELEASES[13]?.changes).toContainEqual({
       tag: "Fixed",
       text: "Remote web requests no longer wait on each other in the relay: independent requests are authorized without holding one another back. Reads, including several reads of one Session, proceed independently; mutations keep arrival order per Session; a cancel waits only for its own request; and agent responses are not held behind status or event processing. Every request is still authorized.",
     })
-    expect(RELEASES[12]?.changes).toContainEqual({
+    expect(RELEASES[13]?.changes).toContainEqual({
       tag: "Changed",
       text: "Prompts show a receipt beneath the bubble. The web shows a static receipt: Sending until the prompt is admitted, Processing while the Session is running, Queued for queued input, and Sent or Read when the Session is idle. The TUI animates a dot trail while sending, shows ✓ once the prompt is admitted (✓ Queued for queued input), and ✓✓ once the model has read it, both while running and after the Session settles.",
     })
-    expect(RELEASES[12]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
-    expect(RELEASES[12]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
+    expect(RELEASES[13]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
+    expect(RELEASES[13]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
   })
 
   test("retains v0.9.5 model decisions and remote recovery", () => {
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.9.5",
       date: "2026-10-08",
       title: "Model-powered decisions and resilient remote access",
@@ -244,7 +273,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.4 independent Claude profiles and native decisions", () => {
-    expect(RELEASES[14]).toEqual({
+    expect(RELEASES[15]).toEqual({
       version: "0.9.4",
       date: "2026-10-07",
       title: "Independent Claude accounts and native decisions",
@@ -260,7 +289,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.3 remote navigation, attention refresh, transcript recovery, and terminal OAuth layout", () => {
-    expect(RELEASES[15]).toEqual({
+    expect(RELEASES[16]).toEqual({
       version: "0.9.3",
       date: "2026-10-07",
       title: "Session navigation and attachment fixes",
@@ -278,7 +307,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.2 submitted prompt visibility", () => {
-    expect(RELEASES[16]).toEqual({
+    expect(RELEASES[17]).toEqual({
       version: "0.9.2",
       date: "2026-10-06",
       title: "Keep submitted prompts visible",
@@ -290,7 +319,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.1 Cursor models and machine-local Web diagnostics", () => {
-    expect(RELEASES[17]).toEqual({
+    expect(RELEASES[18]).toEqual({
       version: "0.9.1",
       date: "2026-10-05",
       title: "Cursor models and machine-local Web diagnostics",
@@ -306,7 +335,7 @@ describe("release entries", () => {
   })
 
   test("retains the v0.9.0 runtime and remote cutover", () => {
-    expect(RELEASES[18]).toEqual({
+    expect(RELEASES[19]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
@@ -327,7 +356,7 @@ describe("release entries", () => {
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[19]).toEqual({
+    expect(RELEASES[20]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
@@ -337,7 +366,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Improve agent guidance to request missing information, decisions, and required reviews through actionable questions, so pending requests use the existing attention alerts instead of ending with a text-only request. Permission and guardrail approvals keep their existing rules." },
       ],
     })
-    expect(RELEASES[20]).toEqual({
+    expect(RELEASES[21]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
@@ -357,7 +386,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show \"YCoding — alerts paused\" when the browser drops push alerts for this device and they cannot be renewed." },
       ],
     })
-    expect(RELEASES[21]).toEqual({
+    expect(RELEASES[22]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
@@ -367,7 +396,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Always choose a model variant when starting a subagent if that model offers variants. Match the variant to the task, and use a stronger variant only when the task needs it." },
       ],
     })
-    expect(RELEASES[22]).toEqual({
+    expect(RELEASES[23]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -378,7 +407,7 @@ describe("release entries", () => {
         { tag: "Fixed", text: "Show an invoked skill's Loaded row in the terminal transcript as soon as the skill activates." },
       ],
     })
-    expect(RELEASES[23]).toEqual({
+    expect(RELEASES[24]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -393,7 +422,7 @@ describe("release entries", () => {
         { tag: "Changed", text: "Allow explicit shell timeouts up to one hour. The default remains ten minutes, and foreground commands still move to the background after five minutes." },
       ],
     })
-    expect(RELEASES[24]).toEqual({
+    expect(RELEASES[25]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -405,7 +434,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[25]).toEqual({
+    expect(RELEASES[26]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -417,7 +446,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[26]).toEqual({
+    expect(RELEASES[27]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -433,7 +462,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[27]).toEqual({
+    expect(RELEASES[28]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -457,7 +486,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[28]).toEqual({
+    expect(RELEASES[29]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -481,7 +510,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[29]).toEqual({
+    expect(RELEASES[30]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -501,7 +530,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[30]).toEqual({
+    expect(RELEASES[31]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -529,7 +558,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[31]).toEqual({
+    expect(RELEASES[32]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1399,7 +1428,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 32)).toEqual([
+    expect(versions.slice(0, 33)).toEqual([
+      "0.10.13",
       "0.10.12",
       "0.10.11",
       "0.10.10",

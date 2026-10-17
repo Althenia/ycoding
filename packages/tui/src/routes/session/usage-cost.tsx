@@ -4,7 +4,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { Keymap } from "../../context/keymap"
 import { DialogHeader, DialogTitle, useDialog } from "../../ui/dialog"
 import { useTheme } from "../../context/theme"
-import { forecastLines, measuredSpeedLines, unitCostLines, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "../../util/usage-accounting"
+import { forecastLines, forecastSummary, measuredSpeedLines, unitCostLines, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "../../util/usage-accounting"
 
 export function UsageSpeedDetails(props: { speed?: SpeedPresentation }) {
   const { theme } = useTheme()
@@ -22,6 +22,12 @@ export function TaskCostDetails(props: { unit: Omit<UnitCostPresentation, "input
 export function QuotaForecastBlock(props: { forecast: ForecastPresentation; now: number; asOf?: number }) {
   const { theme } = useTheme()
   return <box flexDirection="column" flexShrink={0}><For each={forecastLines(props.forecast, props.now, props.asOf)}>{(line) => <text fg={theme.text.subdued} wrapMode="word">{line}</text>}</For></box>
+}
+
+export function QuotaForecastSummary(props: { forecast: ForecastPresentation; now: number; asOf?: number }) {
+  const { theme } = useTheme()
+  const summary = () => forecastSummary(props.forecast, props.now, props.asOf)
+  return <text fg={summary().tone === "error" ? theme.text.feedback.error.default : summary().tone === "warning" ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="word">{summary().text}</text>
 }
 
 export function TaskCostDialog(props: { unit?: Omit<UnitCostPresentation, "inputID">; loading: boolean; onRefresh: () => void }) {

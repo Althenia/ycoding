@@ -155,8 +155,8 @@ test("awake Ask-first rail names the human decider and the actual auto-answer st
   })
   try {
     await app.waitForFrame((frame) => frame.includes("Guardrails"))
-    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails ordinary · you")
-    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Auto-answer Off")
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails you")
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).not.toContain("Auto-answer")
     expect(app.captureCharFrame()).not.toContain("hard reviews")
   } finally {
     app.renderer.destroy()
@@ -171,7 +171,7 @@ test("an unloaded autonomy read renders unknown rows, never Ask first or Off", a
     const frame = app.captureCharFrame()
     expect(frame).toContain("unknown")
     expect(frame).not.toContain("Ask first")
-    expect(frame.replace(/\s+/g, " ")).toContain("Auto-answer unknown")
+    expect(frame).not.toContain("Auto-answer")
   } finally {
     app.renderer.destroy()
   }
@@ -187,7 +187,7 @@ test("effective level 2 without ordinary-review authority asks you for ordinary 
     await app.waitForFrame((frame) => frame.includes("Guardrails"))
     const frame = app.captureCharFrame().replace(/\s+/g, " ")
     expect(frame).toContain("Permissions auto")
-    expect(frame).toContain("Guardrails ordinary · you")
+    expect(frame).toContain("Guardrails you")
     expect(frame).toContain("Tools + reviews")
   } finally {
     app.renderer.destroy()
@@ -197,11 +197,12 @@ test("effective level 2 without ordinary-review authority asks you for ordinary 
 test("renders who decides each action at every approval level and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { level: 0, goal: false, autoAnswer: false, values: ["you", "ordinary · you", "you", "Off"] },
-    { level: 1, goal: false, autoAnswer: false, values: ["auto", "ordinary · you", "you", "Off"] },
-    { level: 2, goal: false, autoAnswer: false, values: ["auto", "ordinary · auto", "you", "Off"] },
-    { level: 0, goal: true, autoAnswer: false, values: ["you", "ordinary · you", "you", "Off"] },
-    { level: 0, goal: false, autoAnswer: true, values: ["you", "ordinary · you", "auto · this Session", "On"] },
+    { level: 0, goal: false, autoAnswer: false, values: ["you", "you", "you"] },
+    { level: 1, goal: false, autoAnswer: false, values: ["auto", "you", "you"] },
+    { level: 2, goal: false, autoAnswer: false, values: ["auto", "auto", "you"] },
+    { level: 0, goal: true, autoAnswer: false, values: ["you", "you", "you"] },
+    { level: 0, goal: false, autoAnswer: true, values: ["you", "you", "auto"] },
+    { level: 2, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"] },
   ] as const
 
   for (const item of cases) {
@@ -222,7 +223,7 @@ test("renders who decides each action at every approval level and with an active
       expect(frame).not.toContain("Hard reviews")
       expect(frame).not.toContain("always you")
       const rows = frame.split("\n")
-      const expected = ["Permissions", "Guardrails", "Questions", "Auto-answer"]
+      const expected = ["Permissions", "Guardrails", "Questions"]
       expect(frame).not.toContain("Scope dispatch")
       expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
       const labelRows = expected.map((label) => rows.findIndex((line) => line.includes(label)))
@@ -245,10 +246,12 @@ test("renders who decides each action at every approval level and with an active
       expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(
         `${["Ask first", "Allow tools", "Tools + reviews"][item.level]}${item.goal ? " · goal" : ""}`,
       )
+      for (const removed of ["Auto-answer", "ordinary", "this Session"]) expect(frame).not.toContain(removed)
+      expect(rows.find((line) => line.includes("AUTONOMY"))?.includes("answers auto")).toBe(item.autoAnswer)
       const spanLines = app.captureSpans().lines
       expected.forEach((label, index) => {
         const value = item.values[index]!
-        const human = value === "you" || value === "ordinary · you" || value === "Off"
+        const human = value === "you"
         const painted = block(index).flatMap((row) =>
           spanLines[row]!.spans.filter((span) => span.text.trim() !== "" && span.text.trim() !== label),
         )
@@ -291,18 +294,14 @@ for (const mode of ["dark", "light"] as const) {
           for (const line of lines) expect(line.slice(width).trim()).toBe("")
           const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
           const questionLine = lines.findIndex((line) => line.includes("Questions"))
-          const guardrailValue = asleep ? "ordinary · review box" : "ordinary · you"
+          const guardrailValue = asleep ? "review box" : "you"
           const questionValue = asleep ? "review box" : "you"
           expect(lines.slice(guardrailLine, questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
             `Guardrails ${guardrailValue}`,
           )
           expect(lines.slice(questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
-            `Questions ${questionValue} Auto-answer Off`,
+            `Questions ${questionValue}`,
           )
-          if (width === 32 && asleep) {
-            expect(lines[guardrailLine]?.trim()).toBe("Guardrails")
-            expect(lines[guardrailLine + 1]?.trim()).toContain("ordinary")
-          }
         } finally {
           app.renderer.destroy()
         }

@@ -160,7 +160,8 @@ export function quotaWindow(window: UsageWindow, now: number) {
     ? `Resets in ${Math.ceil(seconds / 86_400)} ${Math.ceil(seconds / 86_400) === 1 ? "day" : "days"}`
     : seconds >= 3600 ? `Resets in ${Math.ceil(seconds / 3600)} ${Math.ceil(seconds / 3600) === 1 ? "hour" : "hours"}`
     : `Resets in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}`
-  return { used, limit, remaining, fill, pace, reset }
+  const exhausted = window.unlimited !== true && ((fill !== undefined && fill >= 100) || window.remaining === 0)
+  return { used, limit, remaining, fill, pace, reset, exhausted }
 }
 
 export type Spend = { readonly cost: number; readonly tokens: number; readonly requests: number; readonly provenance?: "estimate"; readonly costReported?: boolean; readonly costCoverage?: { readonly pricedRequests: number; readonly unpricedRequests: number } }

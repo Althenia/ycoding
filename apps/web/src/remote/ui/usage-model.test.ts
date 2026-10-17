@@ -32,6 +32,20 @@ test("quota omits unknown values and calculates pace against the elapsed period"
   expect(quotaWindow({ id: "none", label: "Unknown", unit: "count" }, now).used).toBeUndefined()
 })
 
+test("a reported full or empty window is exhausted, while missing limits and partial use never are", () => {
+  const now = 1_000_000
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 100 }, now).exhausted).toBe(true)
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 120 }, now).exhausted).toBe(true)
+  expect(quotaWindow({ id: "credits", label: "Credits", unit: "count", used: 1000, limit: 1000, remaining: 0 }, now).exhausted).toBe(true)
+  expect(quotaWindow({ id: "balance", label: "Balance", unit: "usd", remaining: 0 }, now).exhausted).toBe(true)
+  expect(quotaWindow({ id: "credits", label: "Credits", unit: "usd", remaining: 0, unlimited: true }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 100, unlimited: true }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 99.9 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "spend", label: "Spend", unit: "usd", used: 40 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "daily", label: "Today", unit: "usd", used: 0 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "none", label: "Unknown", unit: "count" }, now).exhausted).toBe(false)
+})
+
 test("provider token distributions preserve free, unpriced, partial and unpaged price coverage", () => {
   const rows = [
     { ...row("free/model", 0, "recorded"), costCoverage: { pricedRequests: 2, unpricedRequests: 0 } },

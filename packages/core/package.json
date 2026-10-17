@@ -15,7 +15,7 @@
     "test:integration:clamshell": "bun test --timeout 30000 test-integration/clamshell-sleep.test.ts",
     "test:integration:browser": "bun test --timeout 120000 test-integration/browser/isolated-executor.test.ts test-integration/tool-browser-integration.test.ts",
     "smoke:cursor": "bun script/cursor-smoke.ts",
-    "typecheck": "bun check src test && bun check drizzle.config.ts script test-integration"
+    "typecheck": "bun check --threads=1 src test && bun check --threads=1 drizzle.config.ts script test-integration"
   },
   "exports": {
     "./effect/layer-node": "./src/effect/layer-node.ts",

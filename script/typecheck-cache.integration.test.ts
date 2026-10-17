@@ -9,6 +9,13 @@ const bun = process.execPath
 const cli = "@ycoding-ai/cli#typecheck"
 const web = "@ycoding-ai/web#typecheck"
 
+test("Core checks its source roots in two single-threaded invocations", async () => {
+  const config = await Bun.file(path.join(root, "packages/core/package.json")).json()
+  expect(config.scripts.typecheck).toBe(
+    "bun check --threads=1 src test && bun check --threads=1 drizzle.config.ts script test-integration",
+  )
+})
+
 function run(command: string[], cwd: string) {
   const result = Bun.spawnSync(command, {
     cwd,

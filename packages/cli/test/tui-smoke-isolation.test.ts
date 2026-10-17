@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-test.each(["ready", "invalid-readiness", "failed-exit"])(
+test.each(["ready", "invalid-readiness", "failed-exit", "version-mismatch", "version-failure"])(
   "artifact smoke isolates server state and cleans up after %s",
   async (mode) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-tui-smoke-test-"))
@@ -13,6 +13,7 @@ test.each(["ready", "invalid-readiness", "failed-exit"])(
       const stub = path.join(directory, "artifact.ts")
       const preload = path.join(directory, "preload.ts")
       const platform = process.platform === "win32" ? "windows" : process.platform
+      await Bun.write(path.join(directory, `tui-${platform}-${process.arch}`, "package.json"), JSON.stringify({ version: "0.10.13" }))
       await Bun.write(
         path.join(
           directory,
@@ -26,6 +27,10 @@ test.each(["ready", "invalid-readiness", "failed-exit"])(
         stub,
         `import { appendFileSync } from "node:fs"
 const args = process.argv.slice(2)
+if (args[0] === "--version") {
+  console.log(${JSON.stringify(mode === "version-mismatch" ? "ycoding v0.10.12" : "ycoding v0.10.13")})
+  process.exit(${mode === "version-failure" ? 7 : 0})
+}
 if (args.includes("--help")) {
   console.log("YCoding TUI\\n  run\\n  update\\n  remote\\n  service\\nRun YCoding with a message --model\\nUpdate ycoding to a release --version\\nControl this machine's YCoding agent enroll\\nManage the background server restart")
   process.exit(0)
@@ -80,6 +85,13 @@ Bun.spawnSync = (args, options) => spawnSync([process.execPath, ${JSON.stringify
         new Response(child.stderr).text(),
         child.exited,
       ])
+      if (mode === "version-mismatch" || mode === "version-failure") {
+        expect(exitCode).not.toBe(0)
+        expect(stderr).toContain("TUI artifact version")
+        expect(existsSync(capture)).toBe(false)
+        expect(stdout).not.toContain("TUI artifact smoke passed:")
+        return
+      }
       if (mode === "ready") {
         expect(exitCode, stderr).toBe(0)
         expect(stdout).toContain("TUI artifact smoke passed:")

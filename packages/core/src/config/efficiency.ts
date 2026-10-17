@@ -7,6 +7,7 @@ export class PromptCache extends Schema.Class<PromptCache>("ConfigEfficiency.Pro
   anthropic_ttl: Schema.Literals(["adaptive", "5m", "1h"]).pipe(Schema.optional),
   openai_mode: Schema.Literals(["auto", "implicit", "explicit"]).pipe(Schema.optional),
   openai_extended_retention: Schema.Boolean.pipe(Schema.optional),
+  family_scope: Schema.Literals(["session", "family-experiment"]).pipe(Schema.optional),
 }) {}
 
 export const HelperModel = Schema.Union([Schema.Literal("session"), ConfigModel.Selection])
@@ -36,3 +37,4 @@ export class Info extends Schema.Class<Info>("ConfigEfficiency.Info")({
 }) {}
 
 export const openAIResponsesState = (info?: Info) => info?.openai_responses_state ?? "stored"
+export const promptCacheFamilyScope = (info?: Info) => info?.prompt_cache?.family_scope ?? "session"

@@ -3,6 +3,7 @@ import {
   ToolCallPart,
   ToolOutput,
   ToolResultPart,
+  CacheHint,
   type ContentPart,
   type ProviderMetadata,
 } from "@ycoding-ai/ai"
@@ -13,6 +14,7 @@ import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
 import { SessionProviderState } from "../provider-state"
 import { Hash } from "../../util/hash"
+import { SessionSharedContext } from "../shared-context"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -352,6 +354,7 @@ function toLLMMessage(
   materialized: ReadonlyMap<string, Record<string, unknown>>,
   attachments?: AttachmentMaterialization,
   accountIdentityDigest?: string,
+  cacheSharedContext = false,
 ): Message[] {
   switch (message.type) {
     case "agent-switched":
@@ -363,8 +366,20 @@ function toLLMMessage(
     case "model-switched":
       return []
     case "user":
+      const split = SessionSharedContext.split(message.text, message.metadata)
       const content = [
-        ...(message.text === "" ? [] : [Message.text(message.text)]),
+        ...(split
+          ? [
+              {
+                type: "text" as const,
+                text: split.prefix,
+                cache: cacheSharedContext ? new CacheHint({ type: "ephemeral" }) : undefined,
+              },
+              Message.text(split.task),
+            ]
+          : message.text === ""
+            ? []
+            : [Message.text(message.text)]),
         ...(message.files ?? []).flatMap((file) => attachmentContent(file, attachments)),
       ]
       if (content.length === 0) return []
@@ -446,7 +461,8 @@ export const toLLMMessages = (
   materialized: ReadonlyMap<string, Record<string, unknown>> = new Map(),
   attachments?: AttachmentMaterialization,
   accountIdentityDigest?: string,
+  cacheSharedContext = false,
 ) =>
   messages.flatMap((message) =>
-    toLLMMessage(message, model, providerMetadataKey, materialized, attachments, accountIdentityDigest),
+    toLLMMessage(message, model, providerMetadataKey, materialized, attachments, accountIdentityDigest, cacheSharedContext),
   )

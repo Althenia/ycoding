@@ -44,3 +44,26 @@ test("quota refresh keeps a square target and a reduced-motion busy indicator", 
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] { border-color: var(--yc-green-strong); background: var(--yc-green-soft); }")
   expect(css).toContain(".usage-refresh[aria-busy=\"true\"] svg { animation: none; }")
 })
+
+const cost = await Bun.file(new URL("./usage-cost.css", import.meta.url)).text()
+
+test("an exhausted window takes the danger role on its meter, figures and pill without extra motion", () => {
+  expect(css).toContain(".usage-window--exhausted .usage-meter > span { background: var(--yc-danger); }")
+  expect(css).toContain(".usage-window--exhausted .usage-window__top b { color: var(--yc-danger); }")
+  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-danger)")
+  expect(rule(".usage-pace--exhausted")).toContain("var(--yc-danger-soft)")
+})
+
+test("recorded consumption rows share aligned tracks on wide layouts and stack on narrow ones without clipping", () => {
+  expect(rule(".usage-consumption__list")).toContain("grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)")
+  expect(rule(".usage-consumption__row")).toContain("grid-template-columns: subgrid")
+  expect(rule(".usage-consumption__row")).not.toContain("white-space: nowrap")
+  expect(css).toMatch(/@container \(max-width: 767px\) \{[^@]*\.usage-consumption__list \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/)
+  expect(css).toContain(".usage-consumption__identity { grid-column: 1 / -1; }")
+})
+
+test("disclosure details wrap long values and add no animation", () => {
+  expect(cost).toContain("overflow-wrap: anywhere")
+  expect(cost).not.toContain("animation")
+  expect(cost).not.toContain("transition")
+})

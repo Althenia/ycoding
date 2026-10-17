@@ -13,6 +13,12 @@ const executable = platformBinary(BUN_BINARY)
 const binary = path.join(outdir, `tui-${platform}-${process.arch}`, "bin", executable)
 
 if (!(await Bun.file(binary).exists())) throw new Error(`TUI artifact not found: ${binary}`)
+const metadata: unknown = await Bun.file(path.join(outdir, `tui-${platform}-${process.arch}`, "package.json")).json()
+if (typeof metadata !== "object" || metadata === null || !("version" in metadata) || typeof metadata.version !== "string" || !metadata.version)
+  throw new Error("TUI artifact version is missing from build metadata")
+const version = Bun.spawnSync([binary, "--version"], { stdout: "pipe", stderr: "pipe" })
+if (version.exitCode !== 0 || version.stdout.toString().trim() !== `${BUN_BINARY} v${metadata.version}`)
+  throw new Error(`TUI artifact version mismatch: expected ${metadata.version}, received ${version.stdout.toString().trim()} (exit ${version.exitCode})`)
 await verifyPackagedComputerHelper(path.dirname(binary))
 
 const help = Bun.spawnSync([binary, "--help"], { stdout: "pipe", stderr: "pipe" })

@@ -161,6 +161,20 @@ export const providerSessionNamespace = (input: ProviderSessionNamespaceInput): 
     }),
   )
 
+export const sharedContextMarkerSupport = (input: {
+  readonly providerID: string
+  readonly routeID: string
+  readonly apiModelID: string
+  readonly openaiMode: "auto" | "implicit" | "explicit"
+  readonly endpointBaseURL?: string
+}) =>
+  input.providerID === "openai" &&
+  input.routeID === "openai-responses" &&
+  input.openaiMode !== "implicit" &&
+  isPublicOpenAIResponsesEndpoint(input.endpointBaseURL) &&
+  OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID) === "gpt-5.6" &&
+  OpenAIOptions.supportsPromptCacheBreakpoints(input.routeID, input.apiModelID)
+
 export interface EfficiencySettings {
   readonly anthropicTtl: "adaptive" | "5m" | "1h"
   readonly openaiMode: "auto" | "implicit" | "explicit"
@@ -195,6 +209,13 @@ export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly anthropicTtlSeconds?: 300 | 3600
   readonly openaiMode?: "auto" | "implicit" | "explicit"
   readonly openaiExtendedRetention?: boolean
+  readonly familyExperiment?: {
+    readonly rootSessionID: string
+    readonly connectionIdentityDigest: string
+    readonly semanticOptionsDigest: string
+    readonly snapshotDigest: string
+    readonly endpointBaseURL: string | undefined
+  }
 }
 
 const ANTHROPIC_CACHE_ROUTES = new Set([
@@ -224,9 +245,10 @@ export const providerOptions = (
   },
 ) => {
   const baselineKey = prepared.promptCacheKey
-  const wirePromptCacheKey = supportsPromptCacheKey(input.routeID)
+  const experimentalKey = familyExperimentKey(input, baselineKey)
+  const wirePromptCacheKey = experimentalKey ?? (supportsPromptCacheKey(input.routeID)
     ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
-    : baselineKey
+    : baselineKey)
   const providerSessionID = providerSessionNamespace({
     projectID: input.projectID,
     sessionID: input.sessionID,
@@ -298,6 +320,67 @@ export const providerOptions = (
     providerOptions: { openai, openrouter },
     ...(cache === undefined ? {} : { cache }),
   }
+}
+
+function familyExperimentKey(input: ProviderOptionsInput, baselineKey: string): string | undefined {
+  const experiment = input.familyExperiment
+  if (
+    !experiment ||
+    input.openaiMode === undefined ||
+    !sharedContextMarkerSupport({
+      providerID: input.providerID,
+      routeID: input.routeID,
+      apiModelID: input.apiModelID,
+      openaiMode: input.openaiMode,
+      endpointBaseURL: experiment.endpointBaseURL,
+    }) ||
+    input.accountIdentityDigest === undefined ||
+    !isDigest(input.accountIdentityDigest) ||
+    !isDigest(experiment.connectionIdentityDigest) ||
+    !isDigest(experiment.semanticOptionsDigest) ||
+    !isDigest(experiment.snapshotDigest) ||
+    experiment.rootSessionID.length === 0 ||
+    OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID) !== "gpt-5.6" ||
+    !OpenAIOptions.supportsPromptCacheBreakpoints(input.routeID, input.apiModelID)
+  )
+    return undefined
+  return Hash.sha256(
+    canonicalJson({
+      namespace: "session-prompt-cache-family-experiment/v1",
+      rootSessionID: experiment.rootSessionID,
+      baselineKey,
+      accountIdentityDigest: input.accountIdentityDigest,
+      apiModelID: input.apiModelID,
+      variant: input.variant,
+      routeID: input.routeID,
+      connectionIdentityDigest: experiment.connectionIdentityDigest,
+      semanticOptionsDigest: experiment.semanticOptionsDigest,
+      snapshotDigest: experiment.snapshotDigest,
+    }),
+  )
+}
+
+export function isPublicOpenAIResponsesEndpoint(endpoint: string | undefined): boolean {
+  if (endpoint === undefined) return false
+  try {
+    const url = new URL(endpoint)
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "api.openai.com" &&
+      url.port === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.pathname.replace(/\/$/, "") === "/v1" &&
+      url.search === "" &&
+      url.hash === ""
+    )
+  } catch {
+    return false
+  }
+}
+
+function isDigest(value: string): boolean {
+  return /^[a-f0-9]{64}$/.test(value)
 }
 
 export function canonicalJson(value: unknown): string {

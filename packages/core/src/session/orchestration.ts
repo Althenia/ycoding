@@ -43,6 +43,7 @@ import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { isTerminal, readTeamView, renderTeamView, taskFromRow, withReviewState } from "./orchestration-view"
 import { SessionReviewFold } from "./review-fold"
 import { SessionPending } from "./pending"
+import { SessionSharedContext } from "./shared-context"
 
 export { isTerminal, readTeamView, renderTeamView }
 const PageSize = 10
@@ -258,6 +259,7 @@ export interface LaunchInput {
   readonly agent: Agent.ID
   readonly description: string
   readonly prompt: string
+  readonly sharedContext?: SessionSharedContext.Selection
   readonly background: boolean
   readonly model?: Model.Ref
   readonly prepared: Prepared
@@ -629,13 +631,47 @@ const layer = Layer.effect(
             const parent = yield* sessions.get(input.parentID)
             const usageAnchor = yield* SessionUsageAttribution.dispatch(db, input.parentID)
             const prepared = input.prepared
-            const promptDigest = Hash.sha256(input.prompt)
+            const promptDigest = input.sharedContext === undefined
+              ? Hash.sha256(input.prompt)
+              : Hash.json({ version: 1, prompt: input.prompt, messageIDs: input.sharedContext.messageIDs })
+            const existing = yield* task(ids.childID)
+            const admitted = yield* SessionPending.lookup(db, ids.childID, ids.inputID).pipe(
+              Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict
+                ? Effect.fail(new ConflictError({ message: `Conflicting initial input for ${ids.childID}` }))
+                : Effect.die(defect)),
+            )
+            if (existing && (
+              existing.parent_id !== input.parentID ||
+              existing.agent !== prepared.target.id ||
+              existing.model.providerID !== prepared.resolved.ref.providerID ||
+              existing.model.id !== prepared.resolved.ref.id ||
+              existing.model.variant !== prepared.resolved.ref.variant ||
+              existing.model.profile !== prepared.resolved.ref.profile ||
+              existing.prompt_digest !== promptDigest ||
+              existing.background !== input.background ||
+              existing.delivery !== "steer"
+            )) return yield* new ConflictError({ message: `Conflicting launch retry for ${ids.childID}` })
+            const sharedContext = admitted === undefined && input.sharedContext !== undefined
+              ? yield* SessionSharedContext.resolve(input.parentID, input.sharedContext, (sessionID, messageID) => sessions.message({ sessionID, messageID })).pipe(
+                  Effect.mapError((error) => new InvalidRequestError({ message: error instanceof SessionSharedContext.InvalidSelectionError ? error.message : "Selected shared context is unavailable" })),
+                )
+              : undefined
+            if (sharedContext !== undefined) {
+              try {
+                SessionSharedContext.compose(input.prompt, sharedContext)
+              } catch (error) {
+                if (error instanceof SessionSharedContext.InvalidSelectionError)
+                  return yield* new InvalidRequestError({ message: error.message })
+                throw error
+              }
+            }
             const start = Effect.gen(function* () {
               yield* sessions
                 .prompt({
                   id: ids.inputID,
                   sessionID: ids.childID,
                   text: input.prompt,
+                  sharedContext,
                   resume: false,
                   origin: "subagent",
                   causedBy: existing ? existing.usage_anchor ?? undefined : usageAnchor,
@@ -653,23 +689,9 @@ const layer = Layer.effect(
               yield* execution.wake(ids.childID)
               return yield* current(ids.childID)
             })
-            const existing = yield* task(ids.childID)
             if (existing) {
-              if (
-                existing.parent_id === input.parentID &&
-                existing.agent === prepared.target.id &&
-                existing.model.providerID === prepared.resolved.ref.providerID &&
-                existing.model.id === prepared.resolved.ref.id &&
-                existing.model.variant === prepared.resolved.ref.variant &&
-                existing.model.profile === prepared.resolved.ref.profile &&
-                existing.prompt_digest === promptDigest &&
-                existing.background === input.background &&
-                existing.delivery === "steer"
-              ) {
-                if (existing.state === "starting") return yield* start
-                return (yield* withReviewState(db, [taskFromRow(existing)]))[0]!
-              }
-              return yield* new ConflictError({ message: `Conflicting launch retry for ${ids.childID}` })
+              if (existing.state === "starting") return yield* start
+              return (yield* withReviewState(db, [taskFromRow(existing)]))[0]!
             }
             yield* sessions
               .create({

@@ -30,6 +30,7 @@ import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Global } from "@ycoding-ai/core/global"
+import { Hash } from "@ycoding-ai/core/util/hash"
 
 const attachmentRoot = await mkdtemp(path.join(tmpdir(), "ycoding-session-prompt-store-"))
 afterAll(() => rm(attachmentRoot, { recursive: true, force: true }))
@@ -147,6 +148,94 @@ const assistantRow = (id: SessionMessage.ID, seq: number) => {
 }
 
 describe("Session.prompt", () => {
+  it.effect("does not admit caller metadata as trusted shared-context provenance", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const prefix = "<shared-context>\nCaller-provided text.\n</shared-context>\n\n"
+      const result = yield* session.prompt({
+        sessionID,
+        text: prefix + "Task text",
+        resume: false,
+        metadata: {
+          requestTag: "ordinary-input",
+          sharedContext: {
+            version: 1,
+            messageIDs: [SessionMessage.ID.make("msg_unverified_source")],
+            digest: Hash.sha256(prefix),
+            prefixLength: prefix.length,
+          },
+        },
+      })
+      expect(result.data.text).toBe(prefix + "Task text")
+      expect(result.data.metadata).toEqual({ requestTag: "ordinary-input" })
+    }),
+  )
+
+  it.effect("admits shared historical text after scanning only the original task for skill mentions", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const prefix = "<shared-context>\nHistorical evidence: $audit was mentioned in the source.\n</shared-context>\n\n"
+      const input = {
+        id: SessionMessage.ID.create(),
+        sessionID,
+        text: "Review the selected evidence.",
+        origin: "subagent" as const,
+        resume: false,
+        metadata: { requestTag: "shared-context-fixture" },
+        sharedContext: {
+          parentID: Session.ID.make("ses_context_parent"),
+          messageIDs: [SessionMessage.ID.make("msg_context_source")],
+          text: prefix,
+          digest: Hash.sha256(prefix),
+        },
+      }
+      const result = yield* session.prompt(input)
+      expect(result.data.text).toBe(prefix + input.text)
+      expect(result.data.metadata).toMatchObject({
+        requestTag: "shared-context-fixture",
+        sharedContext: {
+          version: 1,
+          messageIDs: input.sharedContext.messageIDs,
+          digest: input.sharedContext.digest,
+          prefixLength: prefix.length,
+        },
+      })
+      expect(result.data.metadata?.skills).toBeUndefined()
+      const stored = yield* admitted(input.id)
+      expect(stored?.type === "user" ? stored.data.text : undefined).toBe(prefix + input.text)
+    }),
+  )
+
+  it.effect("reuses an admitted shared-context snapshot before considering replacement source text", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const prefix = "<shared-context>\nHistorical evidence: original text.\n</shared-context>\n\n"
+      const input = {
+        id: SessionMessage.ID.create(),
+        sessionID,
+        text: "Compare the evidence.",
+        origin: "subagent" as const,
+        resume: false,
+        sharedContext: {
+          parentID: Session.ID.make("ses_context_parent"),
+          messageIDs: [SessionMessage.ID.make("msg_context_source")],
+          text: prefix,
+          digest: Hash.sha256(prefix),
+        },
+      }
+      const first = yield* session.prompt(input)
+      const replay = yield* session.prompt({
+        ...input,
+        sharedContext: { ...input.sharedContext, text: "Changed source text", digest: "invalid" },
+      })
+      expect(first.data.text).toBe(prefix + input.text)
+      expect(replay).toEqual(first)
+    }),
+  )
+
   it.effect("durably admits one user message before transcript promotion", () =>
     Effect.gen(function* () {
       yield* setup

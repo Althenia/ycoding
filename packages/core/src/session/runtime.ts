@@ -72,6 +72,7 @@ import { KeepAwake } from "../keep-awake"
 import { LocationServiceMap } from "../location-service-map"
 import { SessionEvent } from "./event"
 import { SessionPending } from "./pending"
+import { SessionSharedContext } from "./shared-context"
 import { SessionGenerate } from "./generate"
 import { Snapshot } from "../snapshot"
 import { SessionRevert } from "./revert"
@@ -393,6 +394,7 @@ export interface Interface {
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     metadata?: Record<string, unknown>
+    sharedContext?: SessionSharedContext.Snapshot
     delivery?: SessionPending.Delivery
     resume?: boolean
     causedBy?: UsageAnchor.Ref
@@ -710,16 +712,6 @@ function dimensionLabel(dimensions: ProviderRequest.ReportDimensions) {
     return `${dimensions.providerID}/${dimensions.modelID} · ${dimensions.profile ?? "Provider default"}`
   if (dimensions.group === "prompt") return dimensions.anchor?.inputID ?? "Unattributed"
   return dimensions.sessionID ?? "Main Session / unattributed"
-}
-
-function usageWhere(input: Partial<ProviderRequest.ReportInput>, sessions?: ReadonlyArray<SessionSchema.ID>) {
-  return sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
-    ${input.from === undefined ? sql`` : sql`AND r.time_created >= ${input.from}`}
-    ${input.to === undefined ? sql`` : sql`AND r.time_created < ${input.to}`}
-    ${input.providerID === undefined ? sql`` : sql`AND json_extract(r.model, '$.providerID') = ${input.providerID}`}
-    ${input.profile === undefined ? sql`` : sql`AND json_extract(r.model, '$.profile') = ${input.profile}`}
-    ${input.modelID === undefined ? sql`` : sql`AND json_extract(r.model, '$.id') = ${input.modelID}`}
-    ${input.selectedEffort === undefined ? sql`` : sql`AND json_extract(r.model, '$.variant') = ${input.selectedEffort}`}`
 }
 
 function accountingBucket() {
@@ -1094,7 +1086,7 @@ const layer = Layer.effect(
       const sessions = session ? yield* usageFamily(session, recursive) : undefined
       return {
         sessions,
-        where: usageWhere(range, sessions),
+        where: SessionUsageRead.usageWhere(range, sessions),
       }
     })
     const pricingCache = SessionUsagePricing.make()
@@ -1188,7 +1180,7 @@ const layer = Layer.effect(
       pricing: UsagePricing,
       sessions?: ReadonlyArray<SessionSchema.ID>,
     ) => Effect.Effect<ProviderRequest.Report> = Effect.fnUntraced(function* (input, projectInfos, pricing, sessions) {
-      const where = usageWhere(input, sessions)
+      const where = SessionUsageRead.usageWhere(input, sessions)
       const formatter =
         input.timeZone && ["hour", "day", "month"].includes(input.group)
           ? new Intl.DateTimeFormat("en-US", {
@@ -2417,6 +2409,14 @@ const layer = Layer.effect(
                           return SessionSkill.mentions(input.text, yield* skills.list())
                         })
                       : []
+                    const shared = input.sharedContext
+                      ? SessionSharedContext.compose(prompt.text, input.sharedContext)
+                      : undefined
+                    const metadata = shared
+                      ? { ...input.metadata, sharedContext: shared.sharedContext }
+                      : input.metadata === undefined
+                        ? undefined
+                        : Object.fromEntries(Object.entries(input.metadata).filter(([key]) => key !== "sharedContext"))
                     const admitted = yield* SessionPending.admit(db, events, {
                       id: messageID,
                       sessionID: input.sessionID,
@@ -2425,9 +2425,10 @@ const layer = Layer.effect(
                         type: "user",
                         data: {
                           ...prompt,
+                          ...(shared ? { text: shared.text } : {}),
                           metadata: skillMentions.length
                             ? {
-                                ...input.metadata,
+                                ...metadata,
                                 skills: [
                                   ...(Array.isArray(input.metadata?.skills) ? input.metadata.skills : []),
                                   ...skillMentions.filter(
@@ -2435,7 +2436,7 @@ const layer = Layer.effect(
                                   ),
                                 ],
                               }
-                            : input.metadata,
+                            : metadata,
                         },
                         delivery: input.delivery ?? "steer",
                       }),

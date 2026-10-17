@@ -1044,4 +1044,24 @@ export const latest = Effect.fn("SessionUsageRead.latest")(function* (
   return { invalidation: latest.invalidation, namespace: latest.namespace, timing: latest.timing }
 })
 
-export const SessionUsageRead = { models, unpriced, latest, report, pricingRefs, localUsage, localSpend, each }
+export function usageWhere(input: Partial<ProviderRequest.ReportInput>, sessions?: ReadonlyArray<SessionSchema.ID>) {
+  return sql`${sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`}
+    ${input.from === undefined ? sql`` : sql`AND +r.time_created >= ${input.from}`}
+    ${input.to === undefined ? sql`` : sql`AND +r.time_created < ${input.to}`}
+    ${input.providerID === undefined ? sql`` : sql`AND json_extract(r.model, '$.providerID') = ${input.providerID}`}
+    ${input.profile === undefined ? sql`` : sql`AND json_extract(r.model, '$.profile') = ${input.profile}`}
+    ${input.modelID === undefined ? sql`` : sql`AND json_extract(r.model, '$.id') = ${input.modelID}`}
+    ${input.selectedEffort === undefined ? sql`` : sql`AND json_extract(r.model, '$.variant') = ${input.selectedEffort}`}`
+}
+
+export const SessionUsageRead = {
+  models,
+  unpriced,
+  latest,
+  report,
+  pricingRefs,
+  localUsage,
+  localSpend,
+  each,
+  usageWhere,
+}

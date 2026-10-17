@@ -162,7 +162,6 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
             ["Permissions", "permissions"],
             ["Guardrails", "guardrails"],
             ["Questions", "questions"],
-            ["Auto-answer", "auto-answer"],
           ] as const}>
             {([label, action]) => {
               const decision = () => autonomyDecisionKind(props.autonomy, action)

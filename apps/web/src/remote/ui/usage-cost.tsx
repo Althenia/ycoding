@@ -1,6 +1,8 @@
-import { For, Show } from "solid-js"
+import { createSignal, For, Show } from "solid-js"
+import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
-import { costCoverage, forecastLines, measuredSpeedLines, unitCostLines, type CostPresentation, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "./usage-accounting"
+import { Modal } from "../../ui/modal"
+import { costCoverage, forecastStatus, measuredSpeedLines, unitCostLines, type CostPresentation, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "./usage-accounting"
 import "./usage-cost.css"
 
 export function PromptCostBlock(props: { readonly unit: UnitCostPresentation }) {
@@ -36,6 +38,22 @@ export function TaskCostDetails(props: { readonly unit: Omit<UnitCostPresentatio
   </details>
 }
 
-export function QuotaForecastBlock(props: { readonly forecast: ForecastPresentation; readonly now: number; readonly asOf?: number }) {
-  return <div class="usage-quota-forecast" aria-label="Quota forecast"><For each={forecastLines(props.forecast, props.now, props.asOf)}>{(line) => <p>{line}</p>}</For></div>
+export function QuotaForecastStatus(props: { readonly forecast: ForecastPresentation; readonly asOf: number }) {
+  return <p class="usage-quota-forecast">{forecastStatus(props.forecast, props.asOf)}</p>
+}
+
+export function UsageDetails(props: { readonly label: string; readonly groups: readonly { readonly title?: string; readonly lines: readonly string[] }[] }) {
+  const [request, setRequest] = createSignal<{ readonly trigger: HTMLButtonElement; readonly pointerOpened: boolean }>()
+  const label = () => `${props.label} details`
+  return <>
+    <button type="button" class="button button--ghost usage-details-trigger" data-cursor="action" aria-label={label()} aria-haspopup="dialog" onClick={(event) => setRequest({ trigger: event.currentTarget, pointerOpened: event.detail > 0 })}><Icon name="chevron-right" size={12} /> Details</button>
+    <Show when={request()} keyed>{(selected) => <Portal><Modal class="overlay--usage-details" label={label()} returnFocus={selected.trigger} pointerOpened={selected.pointerOpened} onClose={() => setRequest(undefined)}>
+      <div class="usage-details-content">
+        <For each={props.groups}>{(group) => <section>
+          <Show when={group.title}><p class="usage-details__title">{group.title}</p></Show>
+          <For each={group.lines}>{(line) => <p>{line}</p>}</For>
+        </section>}</For>
+      </div>
+    </Modal></Portal>}</Show>
+  </>
 }

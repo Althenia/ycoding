@@ -48,7 +48,7 @@ export type WatchInput =
   | { readonly path: string; readonly type: "directory"; readonly ignore?: readonly string[] }
 
 export interface Interface {
-  readonly subscribe: (input: WatchInput) => Stream.Stream<Update>
+  readonly subscribe: (input: WatchInput, onReady?: Effect.Effect<void>) => Stream.Stream<Update>
 }
 
 export const Options = Schema.Struct({
@@ -140,8 +140,15 @@ export const layer = (options?: Options) => Layer.effect(
       return pubsub
     })
 
-    const subscribe = (input: WatchInput) =>
-      Stream.unwrap(acquire(input).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub))))
+    const subscribe = (input: WatchInput, onReady?: Effect.Effect<void>) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const pubsub = yield* acquire(input)
+          const subscription = yield* PubSub.subscribe(pubsub)
+          yield* onReady ?? Effect.void
+          return Stream.fromSubscription(subscription)
+        }),
+      )
 
     return Service.of({ subscribe })
   }),

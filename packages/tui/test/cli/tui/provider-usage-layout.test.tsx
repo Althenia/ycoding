@@ -127,7 +127,8 @@ test("renders each provider quota window with its own reset and derivable progre
     expect(rows.find((row) => row.includes("Extra usage") && !row.includes("cap"))).toContain("3 used")
     expect(rows.find((row) => row.includes("Web Searches"))).toContain("12 / 100 used")
     expect(rows.some((row) => /\d count\b/.test(row))).toBe(false)
-    expect(rows.find((row) => row.includes("Codex · YCoding local"))).toContain("local_session · stable")
+    expect(rows.find((row) => row.includes("Codex · YCoding local"))).not.toContain("local_session")
+    expect(frame).not.toContain("provider_api")
     expect(rows.find((row) => /^\s*Today\s/.test(row))).toContain("$0.00 used")
     expect(rows.find((row) => /^\s*Weekly\s/.test(row))).toContain("$11.22 used")
     expect(rows.find((row) => /^\s*Monthly\s/.test(row))).toContain("$18.45 used")
@@ -142,6 +143,8 @@ test("renders each provider quota window with its own reset and derivable progre
     expect(frame).not.toContain("Monupdated now")
     expect(frame).not.toContain("Weeklyupdated now")
     expect(frame).not.toMatch(/[#-]{3,}/)
+    app.mockInput.pressKey("d")
+    await app.waitForFrame((next) => next.includes("Source local session · Stability stable"))
   } finally {
     app.renderer.destroy()
   }

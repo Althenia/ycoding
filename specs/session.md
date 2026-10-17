@@ -379,6 +379,10 @@ The page read verifies the parent Session and calculates aggregates and rows in 
 
 The optional `subagent` tool timeout is a positive millisecond value no greater than 86,400,000 and defaults to 3,600,000 when omitted. On expiry, the runner interrupts the child, settles the durable task as failed, and delivers the parent failure notification.
 
+The Core `subagent` tool additionally accepts `shared_context: { message_ids }`, with one to eight unique IDs in supplied order. The owning parent is the sole source Session. Only nonempty plaintext user messages without files or agent mentions and completed successful text-only assistant messages qualify. The runtime rejects invalid sources and UTF-8 bounds above 32 KiB for the rendered prefix or 64 KiB for the composed prompt before creating a new child. The initial durable user input contains the selected text once, before the task, with source IDs, digest and split boundary in metadata. Its historical text grants no authority and does not invoke skills. Exact launch retries reuse the first admission after promotion or source pruning; an explicit retry before any admission may resolve its first snapshot. Automatic recovery never reconstructs or replays unadmitted context. The public HTTP launch and prompt payloads do not expose the internal snapshot object.
+
+`metadata.sharedContext` is reserved for the internally validated snapshot. New prompt admissions remove caller-supplied values and populate the key only from that snapshot. Existing-admission reconciliation preserves the original record. Other metadata and prompt text are unchanged.
+
 For each parent, the TUI retains only the current page's at-most-10 task metadata rows and replaces them on previous or next navigation. Exact summary totals remain independent from resident rows. Sibling navigation first locates an absent current child by loading pages lazily, then loads an adjacent page only when navigation crosses the current page boundary; this changes only volatile TUI residency and never durable child state.
 
 ## Recovery Boundaries Stay Explicit

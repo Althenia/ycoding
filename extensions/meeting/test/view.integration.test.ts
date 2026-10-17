@@ -11,7 +11,150 @@ import { meetingConfigSchema } from "../src/config"
 import { createMeetingQuestions } from "../src/plugin"
 import { MeetingRuntime } from "../src/runtime"
 import { MeetingStore } from "../src/store"
+import type { MeetingView } from "../src/types"
 import { viewAssets, viewPolicy } from "../view/assets"
+
+async function checkLifecycleLayout(cdp: Client, session: string, phase: string, snapshot = phase) {
+  for (const width of [320, 390, 768, 769, 1024, 1440])
+    for (const theme of ["light", "dark"]) {
+      await cdp.send(
+        "Emulation.setDeviceMetricsOverride",
+        { width, height: 900, deviceScaleFactor: 1, mobile: false },
+        session,
+      )
+      await cdp.send(
+        "Emulation.setEmulatedMedia",
+        {
+          features: [
+            { name: "prefers-color-scheme", value: theme },
+            { name: "prefers-reduced-motion", value: "reduce" },
+          ],
+        },
+        session,
+      )
+      expect(
+        await evaluate(
+          cdp,
+          session,
+          `(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(r));return {phase:document.querySelector('#passage').dataset.phase,overflow:document.documentElement.scrollWidth>innerWidth,controls:[...document.querySelectorAll('button,summary')].filter(n=>n.checkVisibility()).every(n=>n.getBoundingClientRect().height>=44)}})()`,
+        ),
+      ).toEqual({ phase, overflow: false, controls: true })
+      if (process.env.YCODING_MEETING_SCREENSHOTS && [390, 1440].includes(width)) {
+        await mkdir(process.env.YCODING_MEETING_SCREENSHOTS, { recursive: true })
+        const geometry = record(
+          await evaluate(
+            cdp,
+            session,
+            `(async()=>{window.scrollTo(0,0);await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};return {headers:document.querySelectorAll('.header').length,header:rect(document.querySelector('.header')),finalization:rect(document.querySelector('#finalization')),recovery:rect(document.querySelector('#recovery')),innerWidth,innerHeight,devicePixelRatio,visualViewport:{width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale,offsetLeft:visualViewport.offsetLeft,offsetTop:visualViewport.offsetTop},scrollX,scrollY}})()`,
+          ),
+        )
+        expect(geometry.headers).toBe(1)
+        expect(geometry.innerWidth).toBe(width)
+        expect(geometry.innerHeight).toBe(900)
+        expect(geometry.scrollX).toBe(0)
+        expect(geometry.scrollY).toBe(0)
+        const shot = record(
+          await cdp.send(
+            "Page.captureScreenshot",
+            {
+              format: "png",
+              fromSurface: true,
+              captureBeyondViewport: false,
+            },
+            session,
+          ),
+        )
+        const image = Buffer.from(string(shot.data), "base64")
+        expect(image.readUInt32BE(16)).toBe(width)
+        expect(image.readUInt32BE(20)).toBe(900)
+        await writeFile(
+          path.join(process.env.YCODING_MEETING_SCREENSHOTS, `passage-${snapshot}-${theme}-${width}-viewport.png`),
+          image,
+        )
+        await writeFile(
+          path.join(process.env.YCODING_MEETING_SCREENSHOTS, `passage-${snapshot}-${theme}-${width}-geometry.json`),
+          JSON.stringify({ geometry, layout: await cdp.send("Page.getLayoutMetrics", {}, session) }, null, 2),
+        )
+      }
+    }
+}
+
+test("Recovery and Finalizing capture geometry uses one header and the current viewport", async () => {
+  const view: MeetingView = {
+    meeting: {
+      id: "capture-fixture",
+      title: "Meeting capture verification",
+      sessionID: "capture-session",
+      status: "stopped",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    meetings: [],
+    findings: [],
+    proposals: [],
+    config: {},
+    segments: Array.from({ length: 8 }, (_, sequence) => ({
+      id: `capture-evidence-${sequence}`,
+      meetingID: "capture-fixture",
+      sequence: sequence + 1,
+      source: "remote",
+      speakerID: "remote-unknown",
+      state: "final",
+      startMs: sequence * 1000,
+      endMs: sequence * 1000 + 900,
+      text: `Retained transcript evidence ${sequence + 1}`,
+      rawText: `Retained transcript evidence ${sequence + 1}`,
+      model: "test",
+      createdAt: "2026-01-01T00:00:00Z",
+    })),
+    health: { status: "error", model: "Synthetic test model", provider: "test", device: "test" },
+    audio: {
+      bufferedSeconds: 3,
+      processedSeconds: 20,
+      backlog: 1,
+      error: "inference_failed",
+      sources: { remote: "inactive", microphone: "disabled" },
+    },
+    analysis: { status: "idle" },
+  }
+  const token = "g".repeat(64)
+  const bridge = await startBridge({
+    controlToken: token,
+    onView: () => ({ ...view, ask: { busy: false, history: [] } }),
+    onControl: async () => view,
+    onCapture: async () => ({ stop: true }),
+  })
+  let browser: Awaited<ReturnType<typeof launch>> | undefined
+  try {
+    browser = await launch()
+    const target = string(record(await browser.cdp.send("Target.createTarget", { url: "about:blank" })).targetId)
+    const session = string(
+      record(await browser.cdp.send("Target.attachToTarget", { targetId: target, flatten: true })).sessionId,
+    )
+    await browser.cdp.send("Runtime.enable", {}, session)
+    await browser.cdp.send("Page.enable", {}, session)
+    const reply = await fetch(`${bridge.url}/control`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "view" }),
+    })
+    await navigate(browser.cdp, session, string(record(await reply.json()).url))
+    await waitDOM(browser.cdp, session, "document.querySelector('#passage').dataset.phase==='recovery'")
+    await checkLifecycleLayout(browser.cdp, session, "recovery")
+    view.meeting!.status = "stopping"
+    view.audio.error = undefined
+    view.health.status = "ready"
+    await waitDOM(browser.cdp, session, "document.querySelector('#passage').dataset.phase==='finalizing'")
+    await checkLifecycleLayout(browser.cdp, session, "finalizing", "finalizing-audio")
+    view.meeting!.status = "stopped"
+    view.analysis.status = "analyzing"
+    await waitDOM(browser.cdp, session, "document.querySelector('#meeting-status').textContent==='Finalizing analysis'")
+    await checkLifecycleLayout(browser.cdp, session, "finalizing", "finalizing-analysis")
+  } finally {
+    await browser?.close()
+    await bridge.close()
+  }
+}, 60000)
 
 test("Passage captures real tab audio, preserves evidence, recovers failure and finalizes with advisory chat", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-view-"))
@@ -24,6 +167,12 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
   let audible = false
   let buffered = false
   const releaseAnswer = Promise.withResolvers<void>()
+  const releaseFinalAnalysis = Promise.withResolvers<void>()
+  const finalAudioStarted = Promise.withResolvers<void>()
+  const releaseFinalAudio = Promise.withResolvers<void>()
+  const sharingStopped = Promise.withResolvers<void>()
+  let holdFinalAnalysis = false
+  let holdFinalAudio = false
   const runtime = new MeetingRuntime({
     directory,
     store,
@@ -38,6 +187,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       if (prompt.includes('"question":"fail"') && answerFailing) throw new Error("Provider unavailable")
       if (prompt.includes('"question":"hold"')) await releaseAnswer.promise
       if (prompt.includes('"question":')) return "Advisory: rollout ยังเป็นข้อเสนอ · cite supplied transcript evidence."
+      if (holdFinalAnalysis) await releaseFinalAnalysis.promise
       return JSON.stringify({ summary: "สรุป rollout · unconfirmed", findings: [], proposals: [] })
     },
     mcp: {
@@ -53,6 +203,10 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       healthCheck: async () => ({ healthy: true, initialized: true, metrics: { device: "test-device" } }),
       transcribe: async (chunk) => {
         if (failing) throw new Error("inference_failed")
+        if (holdFinalAudio) {
+          finalAudioStarted.resolve()
+          await releaseFinalAudio.promise
+        }
         return [
           {
             startMs: chunk.startMs,
@@ -74,7 +228,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     }),
     onAsk: (question) => questions.ask(question),
     onControl: (value) => runtime.control(value),
-    onCapture: (input) => {
+    onCapture: async (input) => {
       captureMessages.push(input)
       if (input.type === "audio") {
         const pcm = Buffer.from(input.pcm, "base64")
@@ -83,7 +237,9 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         expect(pcm.length / 4).toBeLessThanOrEqual(input.sampleRate)
       }
       buffered ||= runtime.status().audio.bufferedSeconds > 0
-      return runtime.capture(input)
+      const reply = await runtime.capture(input)
+      if (input.type === "stop" && input.reason === "track_ended") sharingStopped.resolve()
+      return reply
     },
   })
   const fixture = mediaFixture()
@@ -152,6 +308,8 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     )
     reportFindings = true
     expect(await evaluate(browser.cdp, session, "document.querySelector('#start').disabled")).toBe(true)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#passage').dataset.phase")).toBe("setup")
+    await checkLifecycleLayout(browser.cdp, session, "setup")
     await click(browser.cdp, session, "#consent")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#start').disabled")).toBe(true)
     await click(browser.cdp, session, "#policy")
@@ -166,6 +324,10 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       await evaluate(browser.cdp, session, "document.querySelector('#segments').textContent.includes('Temporary')"),
     ).toBe(true)
     expect(runtime.status().audio.processedSeconds).toBeGreaterThan(0)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#passage').dataset.phase")).toBe("live")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#capture-form').checkVisibility()")).toBe(
+      false,
+    )
     expect(runtime.status().audio.sources?.microphone).toBe("capturing")
     expect(captureMessages.some((message) => message.type === "audio" && message.source === "microphone")).toBe(true)
     expect(audible).toBe(true)
@@ -196,6 +358,13 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     const stable = await evaluate(browser.cdp, session, "window.viewRow = document.querySelector('.segment'); true")
     expect(stable).toBe(true)
     await click(browser.cdp, session, "#follow")
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "document.querySelector('#ownership').contains(document.querySelector('#stop')) && getComputedStyle(document.querySelector('#ownership')).position==='sticky'",
+      ),
+    ).toBe(true)
     expect(await evaluate(browser.cdp, session, "document.querySelector('#follow').getAttribute('aria-pressed')")).toBe(
       "false",
     )
@@ -290,13 +459,15 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       { width: 390, height: 900, deviceScaleFactor: 1, mobile: false },
       session,
     )
-    expect(
+    const enlarged = record(
       await evaluate(
         browser.cdp,
         session,
-        `(async()=>{const sizes=[...document.querySelectorAll('body,body *')].map(node=>[node,node.style.fontSize,getComputedStyle(node).fontSize]);sizes.forEach(([node,original,size])=>{node.style.fontSize=parseFloat(size)*2+'px'});await new Promise(resolve=>requestAnimationFrame(resolve));const overflow=document.documentElement.scrollWidth>innerWidth;sizes.forEach(([node,original])=>{node.style.fontSize=original});return !overflow})()`,
+        `(async()=>{const sizes=[...document.querySelectorAll('body,body *')].map(node=>[node,node.style.fontSize,getComputedStyle(node).fontSize]);sizes.forEach(([node,original,size])=>{node.style.fontSize=parseFloat(size)*2+'px'});await new Promise(resolve=>requestAnimationFrame(resolve));const result={width:innerWidth,scrollWidth:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body,body *')].filter(node=>node.getBoundingClientRect().right+scrollX>innerWidth||node.scrollWidth>node.clientWidth+1).map(node=>({tag:node.tagName,id:node.id,width:node.getBoundingClientRect().width,right:node.getBoundingClientRect().right+scrollX,scroll:node.scrollWidth,client:node.clientWidth})).slice(0,12)};sizes.forEach(([node,original])=>{node.style.fontSize=original});return result})()`,
       ),
-    ).toBe(true)
+    )
+    expect(Number(enlarged.scrollWidth)).toBeLessThanOrEqual(Number(enlarged.width))
+    expect(enlarged.overflow).toEqual([])
     await click(browser.cdp, session, "#ask")
     expect(
       await evaluate(
@@ -356,6 +527,19 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     expect(await evaluate(browser.cdp, session, "document.querySelector('#question').value")).toBe("unsaved draft")
     failing = true
     await waitDOM(browser.cdp, session, "!document.querySelector('#retry-audio').hidden")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#passage').dataset.phase")).toBe("recovery")
+    await checkLifecycleLayout(browser.cdp, session, "recovery")
+    const startsBeforeRetry = captureMessages.filter((message) => message.type === "start").length
+    await click(browser.cdp, session, "#review-retained")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#passage').dataset.phase")).toBe("review")
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "document.querySelector('#recovery').checkVisibility() && document.querySelector('#retry-audio').checkVisibility()",
+      ),
+    ).toBe(true)
+    expect(runtime.status().audio.backlog).toBeGreaterThan(0)
     expect(
       await evaluate(browser.cdp, session, "document.querySelector('#retry-audio').getClientRects().length>0"),
     ).toBe(true)
@@ -375,6 +559,12 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     )
     expect(runtime.status().audio.backlog).toBe(0)
     expect(runtime.status().audio.sources?.remote).toBe("inactive")
+    expect(captureMessages.filter((message) => message.type === "start").length).toBe(startsBeforeRetry)
+    await waitDOM(
+      browser.cdp,
+      session,
+      "!document.querySelector('#capture-feedback').textContent.includes('Retry failed audio below')",
+    )
     expect(await evaluate(browser.cdp, session, "window.viewRow === document.querySelector('.segment')")).toBe(true)
     for (let index = 0; index < 51; index++) await questions.ask(`history-${index}`)
     await waitDOM(
@@ -424,8 +614,38 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     await waitDOM(browser.cdp, session, "!document.querySelector('#stop-dialog').open")
     expect(await evaluate(browser.cdp, session, "document.activeElement.id")).toBe("stop")
     expect(runtime.status().meeting?.status).toBe("recording")
+    await waitDOM(browser.cdp, session, "document.querySelector('.segment') !== null")
+    holdFinalAnalysis = true
+    holdFinalAudio = true
+    await finalAudioStarted.promise
     await click(browser.cdp, session, "#stop")
     await click(browser.cdp, session, "#confirm-stop")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#passage').dataset.phase==='finalizing' && document.querySelector('#finalization-title').textContent==='Finalizing audio'",
+    )
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#meeting-status').textContent")).toBe(
+      "Finalizing audio",
+    )
+    await checkLifecycleLayout(browser.cdp, session, "finalizing", "finalizing-audio")
+    releaseFinalAudio.resolve()
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#finalization-title').textContent==='Finalizing analysis'",
+    )
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#passage').dataset.phase")).toBe("finalizing")
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "document.querySelector('#transcript').checkVisibility() && !document.querySelector('#capture-form').checkVisibility()",
+      ),
+    ).toBe(true)
+    await checkLifecycleLayout(browser.cdp, session, "finalizing")
+    releaseFinalAnalysis.resolve()
+    await waitDOM(browser.cdp, session, "document.querySelector('#passage').dataset.phase==='review'")
     await waitDOM(
       browser.cdp,
       session,
@@ -464,6 +684,55 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         createdAt: new Date().toISOString(),
       })
     await waitDOM(browser.cdp, session, "document.querySelectorAll('.segment').length>=24")
+    for (const kind of ["action", "question"] as const)
+      store.putFinding({
+        id: `review-${kind}`,
+        meetingID: stoppedMeeting.id,
+        kind,
+        summary: kind === "action" ? "Verify rollout" : "Who owns rollout?",
+        sourceSegmentIds: ["reading-12"],
+        confidence: 0.8,
+        status: "unconfirmed",
+        createdAt: new Date().toISOString(),
+      })
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#actions-list').textContent.includes('Verify rollout') && document.querySelector('#questions-list').textContent.includes('Who owns rollout?')",
+    )
+    await checkLifecycleLayout(browser.cdp, session, "review")
+    store.putFinding({
+      id: "outside-window",
+      meetingID: stoppedMeeting.id,
+      kind: "action",
+      summary: "Earlier evidence",
+      sourceSegmentIds: ["outside-window-segment"],
+      confidence: 0.8,
+      status: "unconfirmed",
+      createdAt: new Date().toISOString(),
+    })
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#actions-list').textContent.includes('outside-window-segment')",
+    )
+    await click(browser.cdp, session, '#actions-list [data-evidence-id="outside-window-segment"]')
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#evidence-feedback').textContent")).toContain(
+      "outside the current transcript window",
+    )
+    expect(await evaluate(browser.cdp, session, "document.activeElement.id")).toBe("transcript")
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "document.querySelector('#actions-list').compareDocumentPosition(document.querySelector('#transcript')) & Node.DOCUMENT_POSITION_FOLLOWING",
+      ),
+    ).toBeTruthy()
+    await click(browser.cdp, session, "#actions-list .evidence-links button")
+    expect(await evaluate(browser.cdp, session, "document.activeElement.dataset.segmentId")).toBe("reading-12")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#follow').getAttribute('aria-pressed')")).toBe(
+      "false",
+    )
     await evaluate(
       browser.cdp,
       session,
@@ -493,6 +762,14 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
         ) - anchorTop,
       ),
     ).toBeLessThanOrEqual(1)
+    await click(browser.cdp, session, "#original")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#follow').getAttribute('aria-pressed')")).toBe(
+      "false",
+    )
+    expect(
+      await evaluate(browser.cdp, session, "document.querySelector('[data-segment-id=\"reading-0\"]').textContent"),
+    ).toContain("Evidence 0")
+    await click(browser.cdp, session, "#original")
     await runtime.control({ action: "start", title: "Chrome sharing ended" })
     await waitDOM(browser.cdp, session, "document.querySelector('#meeting-title').textContent==='Chrome sharing ended'")
     await click(browser.cdp, session, "#consent")
@@ -509,6 +786,7 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
       session,
       "document.querySelector('#capture-feedback').textContent.includes('Stop sharing ended capture')",
     )
+    await sharingStopped.promise
     expect(
       captureMessages.some(
         (message) => message.type === "stop" && "reason" in message && message.reason === "track_ended",
@@ -530,6 +808,8 @@ test("Passage captures real tab audio, preserves evidence, recovers failure and 
     unsubscribe()
   } finally {
     releaseAnswer.resolve()
+    releaseFinalAnalysis.resolve()
+    releaseFinalAudio.resolve()
     await browser?.close()
     fixture.stop(true)
     await bridge.close()
@@ -703,7 +983,7 @@ async function launch(surface: "tab" | "silent" = "tab") {
     cdp,
     async close() {
       cdp.close()
-      if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(-child.pid, "SIGTERM")
+      if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(-child.pid, "SIGKILL")
       await exited
       await rm(directory, { recursive: true, force: true })
     },
@@ -802,7 +1082,7 @@ async function click(cdp: Client, session: string, selector: string) {
     await evaluate(
       cdp,
       session,
-      `(async()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node||node.disabled)throw new Error('Control unavailable');node.scrollIntoView({block:'center'});await new Promise(r=>requestAnimationFrame(r));const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}})()`,
+      `(async()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node||node.disabled)throw new Error('Control unavailable');node.scrollIntoView({block:'center'});await new Promise(r=>{requestAnimationFrame(r);setTimeout(r,100)});const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}})()`,
     ),
   )
   for (const type of ["mousePressed", "mouseReleased"])

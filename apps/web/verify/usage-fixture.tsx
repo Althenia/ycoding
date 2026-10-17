@@ -23,10 +23,12 @@ const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const oldGroups = new URLSearchParams(location.search).has("old-groups")
 const forecastMode = new URLSearchParams(location.search).get("forecast")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
+const museMode = new URLSearchParams(location.search).get("provider") === "muse"
+const states = forecastMode === "states"
 const providers: UsageProvider[] = [
   { providerID: "openai", label: longDistribution ? "Provider with a long descriptive name and a shared workspace plan" : "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
     { id: "session", label: "Session allowance", unit: "percent", used: 38, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 5 * 3600 },
-    { id: "week", label: "Weekly allowance", unit: "percent", used: 72, resetAt: Date.now() + 3 * 86_400_000, periodSeconds: 7 * 86_400 },
+    { id: "week", label: "Weekly allowance", unit: "percent", used: states ? 100 : 72, resetAt: Date.now() + 3 * 86_400_000, periodSeconds: 7 * 86_400 },
   ] },
   { providerID: "anthropic", label: "Claude", profile: "Max · Personal", status: "available", source: "provider_api", stability: "best_effort", updatedAt: Date.now(), windows: [
     { id: "session", label: "Current session", unit: "percent", used: 23, resetAt: Date.now() + 3 * 3600_000, periodSeconds: 5 * 3600 },
@@ -54,6 +56,10 @@ const providers: UsageProvider[] = [
   { providerID: "empty", label: "Empty provider", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [] },
   { providerID: "failed", label: "Provider with an error", status: "error", source: "provider_api", stability: "best_effort", updatedAt: Date.now(), windows: [], message: "Quota refresh failed." },
 ]
+const museProvider: UsageProvider = { providerID: "muse", label: "Muse (Meta)", profile: "Muse", status: "available", source: "response_stream", stability: "observed", updatedAt: Date.now(), windows: [
+  { id: "window", label: "5-hour window", unit: "percent", used: 35, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 18_000 },
+  { id: "weekly", label: "Weekly", unit: "percent", used: 64, resetAt: Date.now() + 4 * 86_400_000, periodSeconds: 604_800 },
+] }
 const tokens = longDistribution
   ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
@@ -82,6 +88,21 @@ const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "
   label: input.group === "model" ? `${sample[index % sample.length]} ${index + 1}` : `${input.group === "session" ? "Session" : input.group === "project" ? "Project" : "Agent"} ${index + 1}`,
   logical: 41 - index, physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded", costCoverage: { pricedRequests: 41 - index, unpricedRequests: 0 },
 }))
+const insufficient = (reason: string) => ({ state: "insufficient" as const, evidence: "insufficient" as const, reason })
+const stateFor = (providerID: string, windowID: string, asOf: number) => {
+  if (providerID === "openai" && windowID === "session") return { state: "estimated" as const, evidence: "low" as const, method: "quota-delta-ema" as const, ratePerHour: 10.25, exhaustionAt: asOf + 7_200_000, projectedUsedAtReset: 83.5, observedFrom: asOf - 3_600_000, observedTo: asOf }
+  if (providerID === "openai" && windowID === "week") return { state: "exhausted" as const, evidence: "medium" as const }
+  if (providerID === "anthropic" && windowID === "session") return insufficient("Quota observations are stale")
+  if (providerID === "anthropic" && windowID === "weekly") return insufficient("Quota window has expired")
+  if (providerID === "anthropic") return insufficient("No increase observed")
+  return insufficient("Warming up after restart")
+}
+const localRates = [
+  { providerID: "openai", profile: "Personal", modelID: "gpt-6-sol", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 12_345.678, tokensPerMinute5: 15_000.25, tokensPerMinute60: 9_876.5, estimatedUSDPerHour: 1.23456, coverage: { pricedRequests: 40, unpricedRequests: 0 } },
+  { providerID: "provider-with-an-extremely-long-identifier-that-must-wrap-inside-its-row", modelID: "model-with-an-extremely-long-identifier-v2-20260101-preview-extra-long-suffix", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 0.4, coverage: { pricedRequests: 0, unpricedRequests: 7 } },
+  { providerID: "anthropic", profile: "Max · Personal", modelID: "claude-opus", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 0, tokensPerMinute5: 0, estimatedUSDPerHour: 0.0042, coverage: { pricedRequests: 3, unpricedRequests: 2 } },
+]
+const museRate = [{ providerID: "muse", profile: "Muse", modelID: "muse-model", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 120, tokensPerMinute5: 180, tokensPerMinute60: 120, coverage: { pricedRequests: 0, unpricedRequests: 3 } }]
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
 let releasePage: (() => void) | undefined
 let releaseReload: (() => void) | undefined
@@ -138,17 +159,19 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
   if (operation === "usage.report" && oldZone && input?.timeZone !== undefined) return failure("invalid_message", "Unknown usage report field")
   if (operation === "usage.report" && oldGroups && input && !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group)) return failure("invalid_message", "Unknown usage report group")
   if (refreshCycle && pendingReload) await pendingReload
-  if (operation === "usage.providers") { quotaSnapshots = none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
+  if (operation === "usage.providers") { quotaSnapshots = museMode ? [museProvider, ...providers] : none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
   if (operation === "usage.summary") return ok({ logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 })
   if (operation === "usage.forecast") {
     const asOf = Date.now()
     const quotas = quotaSnapshots.flatMap((provider) => provider.windows.map((window) => ({
       providerID: provider.providerID, ...(provider.profile === undefined ? {} : { profile: provider.profile }), windowID: window.id, unit: window.unit,
       source: provider.source, stability: provider.stability, updatedAt: provider.updatedAt,
-      ...(forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
+      ...(museMode && provider.providerID === "muse" ? { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Muse quota observations are warming up" }
+        : forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
+        : states ? stateFor(provider.providerID, window.id, asOf)
         : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
     })))
-    return ok({ asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) })
+    return ok({ asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: museMode ? [...museRate, ...localRates] : states ? localRates : [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) })
   }
   if (input === undefined) return failure("internal_error", "Missing report input")
   if (paged && input.group !== "day" && input.limit !== 200 && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {

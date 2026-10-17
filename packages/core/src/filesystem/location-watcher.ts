@@ -1,7 +1,7 @@
 export * as LocationWatcher from "./location-watcher"
 
 import { makeLocationNode } from "../effect/app-node"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import os from "os"
 import path from "path"
@@ -39,6 +39,14 @@ const layer = Layer.effect(
         file: update.path,
         event: update.type === "create" ? "add" : update.type === "update" ? "change" : "unlink",
       })
+    const start = (input: Watcher.WatchInput) =>
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>()
+        const fiber = yield* watcher
+          .subscribe(input, Deferred.succeed(ready, undefined).pipe(Effect.asVoid))
+          .pipe(Stream.runForEach(publish), Effect.forkScoped)
+        yield* Effect.raceFirst(Deferred.await(ready), Fiber.join(fiber))
+      })
 
     yield* Effect.gen(function* () {
       const config = (yield* configService.entries())
@@ -47,13 +55,11 @@ const layer = Layer.effect(
       const home = path.resolve(location.directory) === path.resolve(os.homedir())
 
       if (!home && location.vcs) {
-        yield* watcher
-          .subscribe({
-            path: location.directory,
-            type: "directory",
-            ignore: [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)],
-          })
-          .pipe(Stream.runForEach(publish), Effect.forkScoped)
+        yield* start({
+          path: location.directory,
+          type: "directory",
+          ignore: [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)],
+        })
       }
       if (home) {
         yield* Effect.logInfo("location watcher skipped home directory", { directory: location.directory })
@@ -68,15 +74,12 @@ const layer = Layer.effect(
           const ignore = (yield* fs.readDirectoryEntries(vcs).pipe(Effect.catch(() => Effect.succeed([])))).flatMap(
             (entry) => (entry.name === "HEAD" ? [] : [entry.name]),
           )
-          yield* watcher
-            .subscribe({ path: vcs, type: "directory", ignore })
-            .pipe(Stream.runForEach(publish), Effect.forkScoped)
+          yield* start({ path: vcs, type: "directory", ignore })
         }
       }
     }).pipe(
       Effect.withSpan("LocationWatcher.start", { attributes: { directory: location.directory } }),
       Effect.catchCause((cause) => Effect.logError("failed to init location watcher service", { cause })),
-      Effect.forkScoped,
     )
 
     return Service.of({})

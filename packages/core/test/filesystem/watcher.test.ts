@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Deferred, Duration, Effect, Fiber, Layer, Option, Queue, Schedule, Stream } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, Option, PubSub, Queue, Schedule, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -31,7 +31,7 @@ const configLayer = Layer.succeed(
   }),
 )
 
-function provide(directory: string, vcs?: Location.Interface["vcs"]) {
+function provide(directory: string, vcs?: Location.Interface["vcs"], watcher?: Layer.Layer<Watcher.Service>) {
   const locationLayer = Layer.succeed(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) }, { vcs })),
@@ -40,6 +40,7 @@ function provide(directory: string, vcs?: Location.Interface["vcs"]) {
     AppNodeBuilder.build(LocationWatcher.node, [
       [Config.node, configLayer],
       [Location.node, locationLayer],
+      ...(watcher ? [[Watcher.node, watcher] as const] : []),
     ]),
   )
 }
@@ -187,6 +188,116 @@ function ready(directory: string) {
       () => fs.writeFileString(file, `ready-${Math.random()}`),
     ).pipe(Effect.ensuring(fs.remove(file, { force: true }).pipe(Effect.ignore)), Effect.asVoid)
   })
+}
+
+for (const interrupted of [false, true]) {
+  it.live(
+    interrupted
+      ? "releases location subscriptions when initialization is interrupted"
+      : "waits for root and Git subscriptions before exposing the location watcher",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
+        )
+        yield* Effect.promise(() => $`git init`.cwd(tmp.path).quiet())
+        const root = {
+          started: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+          stopped: yield* Deferred.make<void>(),
+          updates: yield* PubSub.unbounded<Watcher.Update>(),
+        }
+        const git = {
+          started: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+          stopped: yield* Deferred.make<void>(),
+          updates: yield* PubSub.unbounded<Watcher.Update>(),
+        }
+        const available = yield* Deferred.make<void>()
+        const close = yield* Deferred.make<void>()
+        const watcher = Layer.succeed(
+          Watcher.Service,
+          Watcher.Service.of({
+            subscribe: (input: Watcher.WatchInput, onReady?: Effect.Effect<void>) => {
+              const state = input.path === tmp.path ? root : git
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(state.started, undefined)
+                  yield* Deferred.await(state.release)
+                  const subscription = yield* PubSub.subscribe(state.updates)
+                  yield* onReady ?? Effect.void
+                  return Stream.fromSubscription(subscription)
+                }),
+              ).pipe(Stream.ensuring(Deferred.succeed(state.stopped, undefined)))
+            },
+          }),
+        )
+        const fiber = yield* Effect.gen(function* () {
+          yield* LocationWatcher.Service
+          yield* Deferred.succeed(available, undefined)
+          yield* Deferred.await(close)
+        }).pipe(
+          provide(tmp.path, { type: "git", store: AbsolutePath.make(path.join(tmp.path, ".git")) }, watcher),
+          Effect.forkScoped({ startImmediately: true }),
+        )
+        yield* Deferred.await(root.started)
+        expect(yield* Deferred.isDone(available)).toBe(false)
+        yield* Deferred.succeed(root.release, undefined)
+        yield* Deferred.await(git.started)
+        expect(yield* Deferred.isDone(available)).toBe(false)
+
+        if (interrupted) {
+          yield* Fiber.interrupt(fiber)
+          expect(yield* Deferred.isDone(available)).toBe(false)
+          expect(yield* Deferred.isDone(root.stopped)).toBe(true)
+          expect(yield* Deferred.isDone(git.stopped)).toBe(true)
+          return
+        }
+
+        yield* Deferred.succeed(git.release, undefined)
+        yield* Deferred.await(available)
+        for (const [state, file] of [
+          [root, path.join(tmp.path, "file.txt")],
+          [git, path.join(tmp.path, ".git", "HEAD")],
+        ] as const) {
+          expect(
+            yield* nextUpdate(
+              (event) => event.file === file,
+              PubSub.publish<Watcher.Update>(state.updates, { path: file, type: "update" }).pipe(Effect.asVoid),
+            ),
+          ).toEqual({ file, event: "change" })
+        }
+        yield* Deferred.succeed(close, undefined)
+        yield* Fiber.join(fiber)
+        expect(yield* Deferred.isDone(root.stopped)).toBe(true)
+        expect(yield* Deferred.isDone(git.stopped)).toBe(true)
+      }),
+  )
+}
+
+for (const failed of [false, true]) {
+  it.live(
+    failed
+      ? "settles location initialization when a subscription fails before readiness"
+      : "settles location initialization when watching is disabled",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (value) => Effect.promise(() => value[Symbol.asyncDispose]()),
+        )
+        yield* LocationWatcher.Service.pipe(
+          provide(
+            tmp.path,
+            { type: "git", store: AbsolutePath.make(path.join(tmp.path, ".git")) },
+            failed
+              ? Layer.succeed(Watcher.Service, Watcher.Service.of({ subscribe: () => Stream.die("unavailable") }))
+              : Watcher.layer({ enabled: false }),
+          ),
+        )
+      }),
+  )
 }
 
 describeWatcher("LocationWatcher", () => {

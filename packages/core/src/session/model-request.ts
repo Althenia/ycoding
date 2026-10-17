@@ -9,6 +9,7 @@ import {
   mergeHttpOptions,
   mergeProviderOptions,
 } from "@ycoding-ai/ai"
+import { sql } from "drizzle-orm"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
@@ -36,6 +37,7 @@ import { SessionMessage } from "./message"
 import { SessionProviderState } from "./provider-state"
 import { AttachmentStore } from "../attachment-store"
 import { SessionEffort } from "./effort"
+import { SessionSharedContext } from "./shared-context"
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -130,6 +132,18 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const configEntries = yield* config.entries()
         const efficiencyInfo = Config.latest(configEntries, "efficiency")
         const responsesState = ConfigEfficiency.openAIResponsesState(efficiencyInfo)
+        const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
+        const sharedContextUser = input.context.messages.find((message) => message.type === "user")
+        const sharedContextSnapshot = sharedContextUser
+          ? SessionSharedContext.split(sharedContextUser.text, sharedContextUser.metadata)
+          : undefined
+        const cacheSharedContext = SessionRunnerCache.sharedContextMarkerSupport({
+          providerID: model.provider,
+          routeID: model.route.id,
+          apiModelID: model.id,
+          openaiMode: efficiency.openaiMode,
+          endpointBaseURL: model.route.endpoint.baseURL,
+        })
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
@@ -222,6 +236,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             materialized,
             attachmentMaterialization,
             resolved.accountIdentityDigest,
+            cacheSharedContext,
           ),
         )
         const history = loweredHistory.flat()
@@ -271,7 +286,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         )
         const systemDigest = SessionRunnerCache.systemDigest(contextEvent.system)
         const toolDigest = SessionRunnerCache.toolDigest(hookedTools)
-        const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
         const generation = yield* cacheRuntime.generation({
           sessionID: session.id,
           model: resolved.ref,
@@ -282,24 +296,22 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           baselineKey,
           now,
         })
-        const cache = SessionRunnerCache.providerOptions(
-          {
-            ...namespaceInput,
-            apiModelID: model.id,
-            sessionID: session.id,
-            routeID: resolved.model.route.id,
-            anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
-              modelID: model.id,
-              configured: efficiency.anthropicTtl,
-              interactive: session.parentID === undefined,
-            }),
-            openaiMode: efficiency.openaiMode,
-            openaiExtendedRetention: efficiency.openaiExtendedRetention,
-            generation,
-          },
-          now,
-          { promptCacheKey: baselineKey, systemDigest, toolDigest },
-        )
+        const providerCacheInput = {
+          ...namespaceInput,
+          apiModelID: model.id,
+          sessionID: session.id,
+          routeID: resolved.model.route.id,
+          anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+            modelID: model.id,
+            configured: efficiency.anthropicTtl,
+            interactive: session.parentID === undefined,
+          }),
+          openaiMode: efficiency.openaiMode,
+          openaiExtendedRetention: efficiency.openaiExtendedRetention,
+          generation,
+        }
+        const preparedCache = { promptCacheKey: baselineKey, systemDigest, toolDigest }
+        const cache = SessionRunnerCache.providerOptions(providerCacheInput, now, preparedCache)
         const effortRequest = yield* SessionEffort.prepare({
           db,
           catalog,
@@ -346,6 +358,62 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           promptCacheKey: _promptCacheKey,
           ...semanticOpenAI
         } = effectiveOpenAI
+        const semanticOptionsDigest = Hash.sha256(
+          SessionRunnerCache.canonicalJson(
+            fingerprintValue({
+              generation: effectiveRequest.generation,
+              openai: semanticOpenAI,
+              toolChoice: effectiveRequest.toolChoice,
+              responseFormat: effectiveRequest.responseFormat,
+              cache: effectiveRequest.cache,
+              http: { body: effectiveRequest.http?.body, query: effectiveRequest.http?.query },
+            }),
+          ),
+        )
+        const familyScope = ConfigEfficiency.promptCacheFamilyScope(efficiencyInfo)
+        const familyRoot =
+          familyScope === "family-experiment" &&
+          cacheSharedContext &&
+          sharedContextSnapshot !== undefined &&
+          resolved.accountIdentityDigest !== undefined &&
+          /^[a-f0-9]{64}$/.test(resolved.accountIdentityDigest) &&
+          /^[a-f0-9]{64}$/.test(resolved.connectionIdentityDigest)
+            ? yield* db.get<{ readonly id: string }>(sql`
+                WITH RECURSIVE ancestry(id, parent_id) AS (
+                  SELECT id, parent_id FROM session WHERE id = ${session.id}
+                  UNION
+                  SELECT parent.id, parent.parent_id FROM session AS parent
+                  JOIN ancestry AS child ON parent.id = child.parent_id
+                )
+                SELECT id FROM ancestry WHERE parent_id IS NULL LIMIT 1
+              `).pipe(Effect.orDie)
+            : undefined
+        const experimentalCache =
+          familyRoot === undefined || sharedContextSnapshot === undefined
+            ? undefined
+            : SessionRunnerCache.providerOptions(
+                {
+                  ...providerCacheInput,
+                  familyExperiment: {
+                    rootSessionID: familyRoot.id,
+                    connectionIdentityDigest: resolved.connectionIdentityDigest,
+                    semanticOptionsDigest,
+                    snapshotDigest: sharedContextSnapshot.digest,
+                    endpointBaseURL: model.route.endpoint.baseURL,
+                  },
+                },
+                now,
+                preparedCache,
+              )
+        const requestBase =
+          experimentalCache === undefined ||
+          experimentalCache.wirePromptCacheKey === cache.wirePromptCacheKey
+            ? baseRequest
+            : LLMRequest.update(baseRequest, {
+                providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
+                  openai: { promptCacheKey: experimentalCache.wirePromptCacheKey },
+                }),
+              })
         const continuationMode = efficiencyInfo?.openai_responses_continuation ?? "auto"
         const authority = directOpenAIResponses
           ? yield* SessionContinuation.captureAuthority(db, session.id).pipe(Effect.orDie)
@@ -376,18 +444,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             ),
           ),
           toolsDigest: cache.toolDigest,
-          optionsDigest: Hash.sha256(
-            SessionRunnerCache.canonicalJson(
-              fingerprintValue({
-                generation: effectiveRequest.generation,
-                openai: semanticOpenAI,
-                toolChoice: effectiveRequest.toolChoice,
-                responseFormat: effectiveRequest.responseFormat,
-                cache: effectiveRequest.cache,
-                http: { body: effectiveRequest.http?.body, query: effectiveRequest.http?.query },
-              }),
-            ),
-          ),
+          optionsDigest: semanticOptionsDigest,
           volatileContextDigest: Hash.sha256(SessionRunnerCache.canonicalJson(fingerprintValue(volatileMessages))),
         }
         const eligible =
@@ -415,9 +472,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           : 0
         const continuedMessages = state ? stableMessages : baseRequest.messages
         const transportRequest = !OpenAICodex.isWebSocketRoute(model.route.id)
-          ? baseRequest
-          : LLMRequest.update(baseRequest, {
-              providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
+          ? requestBase
+          : LLMRequest.update(requestBase, {
+              providerOptions: mergeProviderOptions(requestBase.providerOptions, {
                 openai: {
                   responsesWebSocket: {
                     sessionKey: cache.wirePromptCacheKey,
@@ -433,7 +490,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             ? transportRequest
             : LLMRequest.update(transportRequest, {
                 messages: continuedMessages,
-                providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
+                providerOptions: mergeProviderOptions(transportRequest.providerOptions, {
                   openai: {
                     previousResponseId: state.responseID,
                     continuationInputStart,

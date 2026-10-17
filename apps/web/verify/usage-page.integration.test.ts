@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { launchBrowser } from "./cdp"
 
 const port = 4593
@@ -7,13 +9,14 @@ const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
+let captures = ""
 
 beforeAll(async () => {
   server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", `${port}`, "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
   for (let index = 0; index < 60 && !(await ready()); index++) await Bun.sleep(100)
   if (!(await ready())) throw new Error("Vite did not start")
   browser = await launchBrowser(browserPath, 1440, 900)
-  await mkdir(new URL("../../../.cache/tmp/", import.meta.url), { recursive: true })
+  captures = await mkdtemp(join(tmpdir(), "usage-page-"))
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
@@ -87,7 +90,7 @@ test("provider distribution keeps exact large values readable in one accessible 
           expect(await page.evaluate<number>(`document.querySelectorAll('.usage-distribution table, .usage-distribution__table-toggle').length`)).toBe(0)
         }
         await page.evaluate(`document.querySelector('.usage-distribution').scrollIntoView()`)
-        await Bun.write(new URL(`../../../.cache/tmp/usage-distribution-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, `usage-distribution-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
       } finally { await page.close() }
     }
   }
@@ -109,7 +112,13 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(await page.evaluate<string>(`document.querySelector('.usage-cost-note')?.textContent ?? ''`)).toContain("not provider bills")
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-provider h3')].map(item => item.textContent.trim())`)).toEqual(["Codex", "Claude", "Copilot", "OpenRouter", "Provider with an error"])
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider')?.innerText ?? ''`)).not.toContain("provider api")
-        expect(await page.evaluate<string>(`document.querySelector('.usage-provider time')?.getAttribute('aria-label') ?? ''`)).toContain("source: provider API, stability: stable")
+        expect(await page.evaluate<string>(`document.querySelector('.usage-provider time')?.getAttribute('aria-label') ?? ''`)).toBe("")
+        await page.evaluate(`document.querySelector('.usage-provider button[aria-label="Codex details"]').focus()`)
+        await page.pressKey("Enter", "Enter", 13, "\r")
+        await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
+        expect(await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details')?.innerText ?? ''`)).toContain("Source provider API · stability stable")
+        await page.pressEscape()
+        expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Codex details'`)).toBe(true)
         expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.textContent ?? ''`)).toBe("$15.00")
          expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('aria-label') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
          expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total')?.getAttribute('title') ?? ''`)).toBe("Exact known USD subtotal: $15.00")
@@ -138,20 +147,20 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         if (width! < 768) expect(await page.evaluate<number>(`document.querySelectorAll('.usage-mobile-row .usage-provider-chip').length`)).toBe(25)
         expect(result.requests).toBe(6)
         expect(result.controls).toBe(true)
-        await Bun.write(new URL(`../../../.cache/tmp/usage-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, `usage-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
         if (width === 390 && theme === "dark" || width === 1440 && theme === "light") {
           await page.evaluate(`document.querySelector('.usage-tiles')?.scrollIntoView()`)
           await Bun.sleep(120)
-          await Bun.write(new URL(`../../../.cache/tmp/usage-tiles-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+          await Bun.write(join(captures, `usage-tiles-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
           await page.evaluate(`document.querySelector('.usage-distribution')?.scrollIntoView()`)
           await Bun.sleep(400)
-          await Bun.write(new URL(`../../../.cache/tmp/usage-donut-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+          await Bun.write(join(captures, `usage-donut-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
           await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView()`)
           await Bun.sleep(120)
-          await Bun.write(new URL(`../../../.cache/tmp/usage-chart-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+          await Bun.write(join(captures, `usage-chart-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
           await page.evaluate(`document.querySelector('.usage-breakdown')?.scrollIntoView()`)
           await Bun.sleep(120)
-          await Bun.write(new URL(`../../../.cache/tmp/usage-breakdown-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+          await Bun.write(join(captures, `usage-breakdown-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
         }
         if (width === 390 && theme === "light") {
           expect(await page.evaluate<unknown>(`window.usageRequests().find(item => item.operation === 'usage.report' && item.input?.limit === 200)?.input`)).toMatchObject({ group: "model", limit: 200, sort: "cost", order: "desc" })
@@ -205,7 +214,7 @@ test("a run-out time already past reads as now, and an unavailable forecast read
   try {
     await page.setViewport(1024, 768)
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=past`)
-    await wait(page, `document.querySelector('.usage-quota-forecast')?.textContent?.includes('Estimated exhaustion now') === true`)
+    await wait(page, `document.querySelector('.usage-quota-forecast')?.textContent?.includes('Estimated · run-out now · medium evidence') === true`)
     expect(await page.evaluate<boolean>(`!document.querySelector('.usage-page').textContent.includes('1970') && document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.')`)).toBe(true)
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=quotas-absent`)
     await wait(page, `[...document.querySelectorAll('.usage-window__details')].some((item) => item.textContent.includes('Forecast unavailable · lookup failed; refresh quotas to retry'))`)
@@ -215,6 +224,134 @@ test("a run-out time already past reads as now, and an unavailable forecast read
     expect(await page.evaluate<boolean>(`!document.querySelector('.usage-page').textContent.includes('No recorded consumption in the observation window.') && document.querySelector('.usage-quota-forecast') !== null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
+
+test("quota status stays concise, diagnostics open by keyboard, and exhausted, stale and unreported states stay distinct at every width and theme", async () => {
+  for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=states`)
+      await wait(page, `document.querySelectorAll('.usage-consumption__row').length === 3 && document.querySelectorAll('.usage-quota-forecast').length > 3`)
+      await page.evaluate(`document.fonts.ready`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      const closed = await page.evaluate<string>(`document.querySelector('.usage-page').innerText`)
+      for (const hidden of ["half-life", "Warming up after restart", "Source provider API", "5m 15,000.25", "Recorded requests on this backend", "Reason:"]) expect(closed).not.toContain(hidden)
+      for (const shown of ["Exhausted", "Forecast stale", "Forecast expired", "No increase observed", "Forecast unavailable", "low evidence", "12.3k tokens/min", "<1 tokens/min", "0 tokens/min", "$1.23/hour est.", "cost rate unreported", "Known $0.0042/hour est. + unreported"]) expect(closed).toContain(shown)
+      expect(closed).not.toContain("12,345.678")
+      expect(await page.evaluate<boolean>(`!!document.querySelector('.usage-consumption__row button[aria-label*=" details"]') && !!document.querySelector('.usage-window--exhausted .usage-pace--exhausted')?.textContent.includes('exhausted') && !document.querySelector('dialog[open]')`)).toBe(true)
+      const colors = await page.evaluate<{ exhausted: string; normal: string; danger: string }>(`(() => {
+        const probe = document.createElement('i'); probe.style.color = 'var(--yc-danger)'; document.body.append(probe)
+        const danger = getComputedStyle(probe).color; probe.remove()
+        const fill = (window) => getComputedStyle(window.querySelector('.usage-meter > span')).backgroundColor
+        return { exhausted: fill(document.querySelector('.usage-window--exhausted')), normal: fill(document.querySelector('.usage-window:not(.usage-window--exhausted):has(.usage-meter)')), danger }
+      })()`)
+      expect(colors.exhausted).toBe(colors.danger)
+      expect(colors.normal).not.toBe(colors.danger)
+      await page.evaluate(`document.querySelector('.usage-consumption__row button').focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
+      const rateDetails = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details .overlay__body')?.innerText ?? ''`)
+      for (const exact of ["Rate 12,345.678 tokens/min", "5m 15,000.25 tokens/min · 60m 9,876.5 tokens/min", "Estimated cost rate $1.23456/hour", "40 priced · 0 unpriced", "Observed 2023-11-14T22:13:20.000Z – 2023-11-14T23:13:20.000Z"]) expect(rateDetails).toContain(exact)
+      await page.pressEscape()
+      await wait(page, `document.querySelector('dialog.overlay--usage-details') === null`)
+      await page.evaluate(`document.querySelectorAll('.usage-consumption__row button')[1].focus()`)
+      await page.pressKey("Enter", "Enter", 13, "\r")
+      await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
+      const unreportedRateDetails = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details[open] .overlay__body')?.innerText ?? ''`)
+      for (const exact of ["5m unreported · 60m unreported", "Estimated cost rate unreported", "Profile provider default at request time", "0 priced · 7 unpriced"]) expect(unreportedRateDetails).toContain(exact)
+      await page.pressEscape()
+      await wait(page, `document.querySelector('dialog.overlay--usage-details') === null`)
+      for (const index of [0, 1, 2]) {
+        await page.evaluate(`document.querySelectorAll('.usage-provider > button[aria-label$=" details"]')[${index}].focus()`)
+        await page.pressKey("Enter", "Enter", 13, "\r")
+        await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
+        const dialog = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details[open]')?.innerText ?? ''`)
+        expect(dialog).toContain(index === 0 ? "Source provider API · stability stable" : index === 1 ? "Source provider API · stability best effort" : "Source local client rpc · stability client contract")
+        if (index === 0) for (const exact of ["Quota burn 10.25 percentage points/hour", "Projected at reset 83.5 percentage points", "Recent quota deltas · 15m half-life · 1h horizon · low evidence", "Observed ", "Updated "]) expect(dialog).toContain(exact)
+        if (index === 1) for (const exact of ["Reason: Quota observations are stale", "Reason: Quota window has expired", "Reason: No increase observed"]) expect(dialog).toContain(exact)
+        if (index === 2) expect(dialog).toContain("Reason: Warming up after restart")
+        await page.pressEscape()
+        await wait(page, `document.querySelector('dialog.overlay--usage-details') === null`)
+      }
+      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelectorAll('.usage-provider > button[aria-label$=" details"]')[2]`)).toBe(true)
+      const layout = await page.evaluate<{ overflow: boolean; clipped: boolean }>(`(() => ({
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        clipped: [...document.querySelectorAll('.usage-consumption__row, .usage-consumption__row > *')].some((item) => item.scrollWidth > item.clientWidth + 1 || item.getBoundingClientRect().right > document.querySelector('.usage-page').getBoundingClientRect().right + 1),
+      }))()`)
+      expect(layout).toEqual({ overflow: false, clipped: false })
+      await page.evaluate(`document.querySelector('.usage-consumption__list').scrollIntoView()`)
+      await Bun.write(join(captures, `usage-consumption-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+      await page.evaluate(`document.querySelector('.usage-window--exhausted').scrollIntoView()`)
+      await Bun.write(join(captures, `usage-exhausted-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
+    } finally { await page.close() }
+  }
+}, 60_000)
+
+test("quota and recorded-consumption Details open bounded dialogs without moving the Usage page", async () => {
+  for (const width of [390, 1440]) for (const theme of ["light", "dark"]) for (const reduced of [false, true]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, width === 390 ? 844 : 900)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse`)
+      await wait(page, `document.querySelector('.usage-provider h3')?.textContent === 'Muse (Meta)' && document.querySelector('.usage-consumption__row') !== null`)
+      await page.evaluate(`document.fonts.ready`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      for (const selector of ['.usage-provider button[aria-label="Muse (Meta) details"]', '.usage-consumption__row button']) {
+        await page.evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: 'center' })`)
+        const baseline = await page.evaluate<{ cards: readonly { label: string; x: number; y: number; width: number; height: number }[]; scrollHeight: number; scrollTop: number }>(`(() => ({
+          cards: [...document.querySelectorAll('.usage-provider')].map(card => { const rect=card.getBoundingClientRect(); return { label:card.querySelector('h3')?.textContent ?? '', x:rect.x, y:rect.y, width:rect.width, height:rect.height } }),
+          scrollHeight: document.scrollingElement.scrollHeight, scrollTop: document.scrollingElement.scrollTop,
+        }))()`)
+        expect(baseline.cards.length).toBeGreaterThanOrEqual(4)
+        expect(baseline.cards[0]?.label).toBe("Muse (Meta)")
+        if (width === 1440) expect(new Set(baseline.cards.map((card) => Math.round(card.y))).size).toBeGreaterThanOrEqual(2)
+        if (width === 390) expect(baseline.cards.slice(1).filter((card) => card.y > baseline.cards[0]!.y).length).toBeGreaterThanOrEqual(2)
+        await page.evaluate(`(() => { const button=document.querySelector(${JSON.stringify(selector)}); button.focus(); button.dispatchEvent(new MouseEvent('click', { bubbles:true, detail:${selector.includes("usage-consumption") ? 1 : 0} })); })()`)
+        await wait(page, `document.querySelector('dialog.overlay--usage-details[open]') !== null`)
+        await page.evaluate(`Promise.all(document.querySelector('dialog.overlay--usage-details').getAnimations({subtree:true}).map(animation => animation.finished.catch(() => undefined)))`)
+        const dialog = await page.evaluate<{ label: string; title: string; closeCount: number; closeName: string; closeInHeader: boolean; focused: boolean; modal: boolean; visible: boolean; contained: boolean; pointerFocus: boolean; triggerHasPopup: string | null; surface: { left: number; top: number; right: number; bottom: number }; cards: readonly { label: string; x: number; y: number; width: number; height: number }[]; scrollHeight: number; scrollTop: number }>(`(() => {
+          const node=document.querySelector('dialog.overlay--usage-details'), rect=node.getBoundingClientRect(), surface=node.querySelector('.overlay__surface'), bounds=surface.getBoundingClientRect(), buttons=[...node.querySelectorAll('button[aria-label^="Close "]')];
+          return { label:node.getAttribute('aria-label'), title:node.querySelector('.overlay__title')?.textContent, closeCount:buttons.length, closeName:buttons[0]?.getAttribute('aria-label'), closeInHeader:buttons[0]?.parentElement?.classList.contains('overlay__head') === true,
+            focused:node.contains(document.activeElement), modal:node.matches(':modal'), visible:bounds.width>0&&bounds.height>0,
+            pointerFocus:buttons[0]?.hasAttribute('data-pointer-focus') === true, triggerHasPopup:document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-haspopup') ?? null,
+            contained:bounds.left>=-1&&bounds.right<=innerWidth+1&&bounds.top>=-1&&bounds.bottom<=innerHeight+1, surface:{left:bounds.left,top:bounds.top,right:bounds.right,bottom:bounds.bottom},
+            cards:[...document.querySelectorAll('.usage-provider')].map(card=>{const cardRect=card.getBoundingClientRect();return{label:card.querySelector('h3')?.textContent??'',x:cardRect.x,y:cardRect.y,width:cardRect.width,height:cardRect.height}}),
+            scrollHeight:document.scrollingElement.scrollHeight,scrollTop:document.scrollingElement.scrollTop };
+        })()`)
+        expect(dialog.label).toBe(selector.includes("usage-provider") ? "Muse (Meta) details" : "muse · muse-model · profile Muse details")
+        expect(dialog.title).toBe(dialog.label)
+        expect(dialog.closeCount).toBe(1)
+        expect(dialog.closeName).toBe(`Close ${dialog.label}`)
+        expect(dialog.closeInHeader).toBe(true)
+        expect(dialog.focused).toBe(true)
+        expect(dialog.modal).toBe(true)
+        expect(dialog.visible).toBe(true)
+        expect(dialog.contained, JSON.stringify(dialog)).toBe(true)
+        expect(dialog.pointerFocus).toBe(selector.includes("usage-consumption"))
+        expect(dialog.triggerHasPopup).toBe("dialog")
+        expect(dialog.cards).toEqual(baseline.cards)
+        expect(dialog.scrollHeight).toBe(baseline.scrollHeight)
+        expect(dialog.scrollTop).toBe(baseline.scrollTop)
+        const body = await page.evaluate<string>(`document.querySelector('dialog.overlay--usage-details .overlay__body')?.innerText ?? ''`)
+        if (selector.includes("usage-provider")) {
+          for (const line of ["Source response stream · stability observed", "Updated ", "5-hour window", "Weekly", "No supported method · insufficient evidence", "Muse quota observations are warming up"]) expect(body).toContain(line)
+        } else {
+          for (const line of ["Rate 120 tokens/min", "5m 180 tokens/min · 60m 120 tokens/min", "Estimated cost rate unreported", "0 priced · 3 unpriced", "Observed ", "not account quota or generation speed"]) expect(body).toContain(line)
+        }
+        if (width === 390 || width === 1440) {
+          await Bun.write(join(captures, `usage-details-${width}-${theme}-${reduced ? "reduced" : "normal"}-${selector.includes("usage-provider") ? "quota" : "recorded"}.png`), Buffer.from(await page.screenshot(), "base64"))
+        }
+        await page.pressKey("Tab", "Tab", 9)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--usage-details')?.contains(document.activeElement) === true`)).toBe(true)
+        await page.pressEscape()
+        await wait(page, `document.querySelector('dialog.overlay--usage-details') === null`)
+        expect(await page.evaluate<boolean>(`document.querySelector('dialog.overlay--usage-details[open]') === null && document.activeElement === document.querySelector(${JSON.stringify(selector)})`)).toBe(true)
+        expect(await page.evaluate<{ scrollHeight: number; scrollTop: number }>(`({ scrollHeight:document.scrollingElement.scrollHeight, scrollTop:document.scrollingElement.scrollTop })`)).toEqual({ scrollHeight: baseline.scrollHeight, scrollTop: baseline.scrollTop })
+      }
+    } finally { await page.close() }
+  }
+}, 90_000)
 
 test("usage waits for a connected machine and loads after connection opens", async () => {
   const page = await browser!.openPage()
@@ -273,7 +410,7 @@ test("paging keeps the table and page geometry mounted while the next report is 
         rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
         busy: document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') ?? null
       })`)
-      if (width === 390 && theme === "light") await Bun.write(new URL("../../../.cache/tmp/usage-paging-pending.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390 && theme === "light") await Bun.write(join(captures, "usage-paging-pending.png"), Buffer.from(await page.screenshot(), "base64"))
       expect(during.nodes).toBe(true)
       expect(during.rows).toBe(25)
       expect(during.busy).toBe("true")
@@ -346,7 +483,7 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       if (width === 390 && theme === "light") {
         await page.evaluate(`document.querySelector('.usage-chart')?.scrollIntoView({ block: 'center' })`)
         await Bun.sleep(200)
-        await Bun.write(new URL("../../../.cache/tmp/usage-day-tooltip.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, "usage-day-tooltip.png"), Buffer.from(await page.screenshot(), "base64"))
       }
       await page.evaluate(`document.querySelector('.usage-chart__bar:first-of-type')?.focus()`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-chart__tooltip')?.textContent ?? ''`)).toMatch(/\d{4}-\d{2}-\d{2}/)
@@ -364,7 +501,7 @@ test("chart details respond to hover, keyboard focus, and tap inside each card",
       if (width === 1440 && theme === "dark") {
         await page.evaluate(`document.querySelector('.usage-distribution')?.scrollIntoView({ block: 'center' })`)
         await Bun.sleep(200)
-        await Bun.write(new URL("../../../.cache/tmp/usage-provider-tooltip.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        await Bun.write(join(captures, "usage-provider-tooltip.png"), Buffer.from(await page.screenshot(), "base64"))
       }
       await page.evaluate(`document.querySelectorAll('.usage-donut__arc')[1]?.focus()`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-distribution__tooltip')?.textContent ?? ''`)).toContain("OpenRouter")
@@ -426,7 +563,7 @@ test("three same-device reloads and Refresh update values without removing cards
         await page.evaluate(`window.usageReconnect()`)
         await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === ${cycle + 1}`)
         const pending = await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean; providers: number; tiles: number; session: string; today: string; donut: string; height: number }>(`window.usageProbeSnapshot()`)
-        if (cycle === 1 && width === 390 && theme === "light") await Bun.write(new URL("../../../.cache/tmp/usage-reconnect-pending.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+        if (cycle === 1 && width === 390 && theme === "light") await Bun.write(join(captures, "usage-reconnect-pending.png"), Buffer.from(await page.screenshot(), "base64"))
         expect(pending).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 5, tiles: 3, today: cycle === 1 ? "$5.40" : `$${(5.4 + cycle - 1).toFixed(2)}`, donut: cycle === 1 ? "$15.00" : `$${(15 + 3 * (cycle - 1)).toFixed(2)}`, height: baseline.height })
         await page.evaluate(`window.usageReleaseReload()`)
         await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('${38 + cycle}%') === true`)
@@ -444,7 +581,7 @@ test("three same-device reloads and Refresh update values without removing cards
       await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('42%') === true`)
       expect(await page.evaluate<string | null>(`document.querySelector('.usage-refresh')?.getAttribute('aria-busy') ?? null`)).toBe("false")
       expect(await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean }>(`window.usageProbeSnapshot()`)).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true })
-      if (width === 390 && theme === "dark") await Bun.write(new URL("../../../.cache/tmp/usage-refresh-settled.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390 && theme === "dark") await Bun.write(join(captures, "usage-refresh-settled.png"), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
 }, 180_000)
@@ -470,7 +607,7 @@ test("large spend values keep each metric intact in usable tiles at 320, 390, an
       expect(geometry.overflow).toBe(false)
       await page.evaluate(`document.querySelector('.usage-tiles')?.scrollIntoView({ block: 'start' })`)
       await Bun.sleep(400)
-      await Bun.write(new URL(`../../../.cache/tmp/usage-large-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await Bun.write(join(captures, `usage-large-${width}-${theme}.png`), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
 }, 180_000)
@@ -512,7 +649,7 @@ test("UTC and Local report choices persist and never label UTC data as local", a
       expect(bounds.breakdown).toEqual(bounds.day)
       expect(bounds.month.from).toBeLessThan(bounds.day.to)
       expect(bounds.overflow).toBe(false)
-      if (width === 390) await Bun.write(new URL("../../../.cache/tmp/usage-local-390.png", import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      if (width === 390) await Bun.write(join(captures, "usage-local-390.png"), Buffer.from(await page.screenshot(), "base64"))
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
       await wait(page, `document.querySelectorAll('.usage-donut__arc').length === 2`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-head [aria-label="Usage time zone"] button:last-child')?.getAttribute('aria-pressed') ?? ''`)).toBe("true")

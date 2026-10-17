@@ -18,6 +18,7 @@ import { SessionRunnerModel } from "../session/runner/model"
 import { ProjectArtifactSource } from "../project-artifact/source"
 import { Tool } from "./tool"
 import { Hash } from "../util/hash"
+import { SessionSharedContext } from "../session/shared-context"
 
 export const name = "subagent"
 
@@ -46,6 +47,9 @@ export const Input = Schema.Struct({
   timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS)).pipe(Schema.optional).annotate({
     description: `Optional child runtime timeout in milliseconds (maximum: ${MAX_TIMEOUT_MS}); omission uses ${DEFAULT_TIMEOUT_MS}`,
   }),
+  shared_context: Schema.Struct({ message_ids: SessionSharedContext.Selection.fields.messageIDs }).annotate({
+    description: "Select 1–8 distinct historical message IDs from the parent Session. Their text is supplied as ordinary user evidence, not as instructions or approvals.",
+  }).pipe(Schema.optional),
 })
 
 export const Output = Schema.Struct({
@@ -134,8 +138,11 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
         Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
       )
       const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+      const sharedContext = input.shared_context === undefined
+        ? undefined
+        : { messageIDs: input.shared_context.message_ids }
       const operationDigest = Hash.json({ action: "launch", agent: prepared.target.id, description: input.description,
-        prompt: input.prompt, model: prepared.resolved.ref, connectionIdentityDigest: prepared.resolved.connectionIdentityDigest, background: true, timeout })
+        prompt: input.prompt, sharedContext: sharedContext?.messageIDs, model: prepared.resolved.ref, connectionIdentityDigest: prepared.resolved.connectionIdentityDigest, background: true, timeout })
       yield* SessionOrchestration.authorize(context.sessionID, prepared.target.id, {
         agent: context.agent, messageID: context.messageID, callID: context.callID,
       }, operationDigest).pipe(
@@ -151,7 +158,7 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
       const child = yield* orchestration.launch({
         parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.callID,
         agent: Agent.ID.make(input.agent), description: input.description, prompt: input.prompt,
-        background: true, model: input.model, prepared,
+        background: true, model: input.model, prepared, sharedContext,
       }).pipe(
         Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
         Effect.onError(() => reservation.release),

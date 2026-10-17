@@ -11,6 +11,7 @@ import { Tool } from "@ycoding-ai/core/tool/tool"
 import { Effect, Schema } from "effect"
 import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { Session } from "@ycoding-ai/core/session"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 
 const base = {
   projectID: "project",
@@ -51,6 +52,20 @@ test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
     "87f7196969720e74e3d2ad02a0926e06bff1037aeb1d47dc516638a7fed3a6e0",
   )
+})
+
+test("defaults prompt-cache family scope to Session and validates the experiment opt-in", () => {
+  expect(ConfigEfficiency.promptCacheFamilyScope()).toBe("session")
+  expect(
+    Schema.decodeUnknownSync(ConfigEfficiency.Info)({
+      prompt_cache: { family_scope: "family-experiment" },
+    }).prompt_cache?.family_scope,
+  ).toBe("family-experiment")
+  expect(() =>
+    Schema.decodeUnknownSync(ConfigEfficiency.Info)({
+      prompt_cache: { family_scope: "family" },
+    }),
+  ).toThrow()
 })
 
 test("reuses prepared cache digests without reading unchanged system and tool inputs again", () => {
@@ -457,6 +472,144 @@ test("isolates key-carrying sibling Sessions while retaining the shared non-key 
   )
   expect(anthropic.providerOptions.openai.promptCacheKey).toBe(anthropic.promptCacheKey)
   expect(anthropic.providerOptions.openrouter.promptCacheKey).toBe(anthropic.promptCacheKey)
+})
+
+test("shares only opted-in experimental OpenAI Responses cache keys across verified sibling identity", () => {
+  const familyExperiment = {
+    rootSessionID: "ses_root",
+    connectionIdentityDigest: "1".repeat(64),
+    semanticOptionsDigest: "2".repeat(64),
+    snapshotDigest: "3".repeat(64),
+    endpointBaseURL: "https://api.openai.com/v1",
+  }
+  const options = (sessionID: string, additions: Record<string, unknown> = {}) =>
+    SessionRunnerCache.providerOptions({
+      ...base,
+      accountIdentityDigest: "4".repeat(64),
+      sessionID,
+      routeID: "openai-responses",
+      openaiMode: "explicit",
+      familyExperiment,
+      ...additions,
+    })
+
+  const first = options("ses_child_a")
+  const sibling = options("ses_child_b")
+  expect(first.promptCacheKey).toBe(sibling.promptCacheKey)
+  expect(first.providerOptions.openai.promptCacheKey).toBe(sibling.providerOptions.openai.promptCacheKey)
+  expect(first.providerOptions.openai.promptCacheKey).not.toBe(first.promptCacheKey)
+  expect(options("ses_child_a", { familyExperiment: undefined }).providerOptions.openai.promptCacheKey).not.toBe(
+    first.providerOptions.openai.promptCacheKey,
+  )
+
+  for (const mismatch of [
+    { rootSessionID: "ses_other_root" },
+    { connectionIdentityDigest: "5".repeat(64) },
+    { semanticOptionsDigest: "6".repeat(64) },
+    { snapshotDigest: "7".repeat(64) },
+  ]) {
+    expect(options("ses_child_a", { familyExperiment: { ...familyExperiment, ...mismatch } }).providerOptions.openai.promptCacheKey)
+      .not.toBe(first.providerOptions.openai.promptCacheKey)
+  }
+  for (const mismatch of [
+    { apiModelID: "gpt-5.7" },
+    { variant: "high" },
+    { routeID: "openai-responses-websocket" },
+    { accountIdentityDigest: "8".repeat(64) },
+  ]) {
+    expect(options("ses_child_a", mismatch).providerOptions.openai.promptCacheKey)
+      .not.toBe(first.providerOptions.openai.promptCacheKey)
+  }
+})
+
+test("keeps experimental family sharing disabled for implicit, unsupported, and unverified routes", () => {
+  const familyExperiment = {
+    rootSessionID: "ses_root",
+    connectionIdentityDigest: "1".repeat(64),
+    semanticOptionsDigest: "2".repeat(64),
+    snapshotDigest: "3".repeat(64),
+    endpointBaseURL: "https://api.openai.com/v1",
+  }
+  const options = (routeID: string, openaiMode: "implicit" | "explicit", apiModelID = "gpt-5.6", accountIdentityDigest?: string) =>
+    SessionRunnerCache.providerOptions({
+      ...base,
+      apiModelID,
+      accountIdentityDigest,
+      sessionID: "ses_child",
+      routeID,
+      openaiMode,
+      familyExperiment,
+    })
+  for (const candidate of [
+    options("openai-responses", "implicit", "gpt-5.6", "4".repeat(64)),
+    options("openai-responses-websocket", "explicit", "gpt-5.6", "4".repeat(64)),
+    options("openai-codex-responses", "explicit", "gpt-5.6", "4".repeat(64)),
+    options("openai-responses", "explicit", "gpt-5.5", "4".repeat(64)),
+    options("openai-responses", "explicit", "gpt-5.6"),
+  ]) {
+    expect(
+      SessionRunnerCache.providerOptions({
+        ...base,
+        sessionID: "ses_child_b",
+        accountIdentityDigest: "4".repeat(64),
+        routeID: "openai-responses",
+        openaiMode: "explicit",
+        familyExperiment,
+      }).providerOptions.openai.promptCacheKey,
+    ).not.toBe(candidate.providerOptions.openai.promptCacheKey)
+  }
+})
+
+test("keeps gateway and non-HTTPS OpenAI endpoints Session-scoped", () => {
+  const familyExperiment = {
+    rootSessionID: "ses_root",
+    connectionIdentityDigest: "1".repeat(64),
+    semanticOptionsDigest: "2".repeat(64),
+    snapshotDigest: "3".repeat(64),
+    endpointBaseURL: "https://api.openai.com/v1",
+  }
+  const key = (sessionID: string, endpointBaseURL: string) =>
+    SessionRunnerCache.providerOptions({
+      ...base,
+      accountIdentityDigest: "4".repeat(64),
+      sessionID,
+      routeID: "openai-responses",
+      openaiMode: "explicit",
+      familyExperiment: { ...familyExperiment, endpointBaseURL },
+    }).providerOptions.openai.promptCacheKey
+  const publicEndpoint = key("ses_public", "https://api.openai.com/v1")
+  for (const endpoint of [
+    "https://gateway.example/v1",
+    "http://api.openai.com/v1",
+    "https://api.openai.com/other",
+    "https://api.openai.com/v1?proxy=1",
+  ]) {
+    expect(key("ses_gateway", endpoint)).not.toBe(publicEndpoint)
+  }
+})
+
+test("marks shared context only for direct public GPT-5.6+ Responses requests with generated markers", () => {
+  const base = {
+    providerID: "openai",
+    routeID: "openai-responses",
+    apiModelID: "gpt-5.6",
+    openaiMode: "explicit" as const,
+    endpointBaseURL: "https://api.openai.com/v1",
+  }
+  expect(SessionRunnerCache.sharedContextMarkerSupport(base)).toBe(true)
+  for (const change of [
+    { providerID: "openai-codex" },
+    { routeID: "openai-codex-responses" },
+    { routeID: "openai-responses-websocket" },
+    { routeID: "openai-responses", apiModelID: "gpt-5.5" },
+    { providerID: "anthropic", routeID: "anthropic-messages" },
+    { providerID: "openrouter", routeID: "openrouter-responses" },
+    { providerID: "google", routeID: "gemini" },
+    { openaiMode: "implicit" },
+    { endpointBaseURL: "https://gateway.example/v1" },
+  ] as const) {
+    expect(SessionRunnerCache.sharedContextMarkerSupport({ ...base, ...change })).toBe(false)
+  }
 })
 
 test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () => {

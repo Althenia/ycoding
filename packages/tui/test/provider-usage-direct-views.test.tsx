@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
+import { ScrollBoxRenderable } from "@opentui/core"
 import type { UsageReportOutput, ProviderRequestSummary, ProviderUsageListOutput, ProviderUsageForecastOutput } from "@ycoding-ai/client"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
@@ -11,6 +12,7 @@ import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { stringWidth } from "../src/util/string-width"
 
 type ReportInput = {
   group: UsageReportOutput["group"]
@@ -105,6 +107,9 @@ async function renderUsage(input: {
   onBack?: () => void
   initialTab?: ProviderUsageView
   forecast?: ProviderUsageForecastOutput["data"]
+  snapshots?: ProviderUsageListOutput["data"]
+  mode?: "dark" | "light"
+  refreshing?: boolean
 }) {
   const config = createTuiResolvedConfig()
   const app = await testRender(
@@ -112,17 +117,18 @@ async function renderUsage(input: {
       <TestTuiContexts>
         <ConfigProvider config={config}>
           <Keymap.Provider config={config}>
-            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <ThemeProvider mode={input.mode ?? "dark"} source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
                   <ProviderUsageScreenContent
-                    snapshots={() => snapshots}
+                    snapshots={() => input.snapshots ?? snapshots}
                     backendUsage={() => input.summary ?? usage}
                     now={() => Date.UTC(2026, 8, 22, 12)}
                     loadReport={input.load}
                     onBack={input.onBack}
                     initialTab={input.initialTab}
                     forecast={() => input.forecast}
+                    refreshing={() => input.refreshing ?? false}
                   />
                 </DialogProvider>
               </ToastProvider>
@@ -440,3 +446,149 @@ test("derives a full-width colored Stats graph and summary from daily, model, an
     app.renderer.destroy()
   }
 }, 30_000)
+
+const quotaUpdatedAt = Date.UTC(2026, 8, 22, 11, 30)
+const quotaSnapshots: ProviderUsageListOutput["data"] = [{
+  providerID: "openai", label: "OpenAI plan", profile: "Work", status: "available", source: "provider_api", stability: "stable", updatedAt: quotaUpdatedAt,
+  windows: ["five", "weekly", "monthly", "flat", "stale", "bare"].map((id) => ({ id, label: `Window ${id}`, unit: "percent" as const, used: id === "monthly" ? 100 : id === "five" ? 80 : 40 })),
+}]
+const quotaForecast = (windowID: string, extra: Partial<NonNullable<ProviderUsageForecastOutput["data"]["quotas"]>[number]>) => ({
+  providerID: "openai", profile: "Work", windowID, unit: "percent" as const, source: "provider_api" as const, stability: "stable" as const, updatedAt: quotaUpdatedAt,
+  state: "insufficient" as const, evidence: "insufficient" as const, ...extra,
+})
+const detailForecast: ProviderUsageForecastOutput["data"] = {
+  asOf: Date.UTC(2026, 8, 22, 12), localScope: "backend",
+  quotas: [
+    quotaForecast("five", { state: "estimated", method: "quota-delta-ema", evidence: "medium", ratePerHour: 20, exhaustionAt: Date.UTC(2026, 8, 22, 15), observedFrom: quotaUpdatedAt - 3_600_000, observedTo: quotaUpdatedAt }),
+    quotaForecast("weekly", { reason: "Warming up after restart, 3 samples" }),
+    quotaForecast("monthly", { state: "exhausted", evidence: "low" }),
+    quotaForecast("flat", { reason: "No increase observed" }),
+    quotaForecast("stale", { reason: "Observation stale: 2h old" }),
+  ],
+  localRates: [
+    { providerID: "openai", profile: "Work", modelID: "gpt-5", observedFrom: Date.UTC(2026, 8, 22, 11), observedTo: Date.UTC(2026, 8, 22, 12), tokensPerMinute: 1234.567, tokensPerMinute5: 1500, tokensPerMinute60: 1100, estimatedUSDPerHour: 0.42, coverage: { pricedRequests: 3, unpricedRequests: 1 } },
+    { providerID: "openai", modelID: "mini", observedFrom: Date.UTC(2026, 8, 22, 11), observedTo: Date.UTC(2026, 8, 22, 12), tokensPerMinute: 0.04, coverage: { pricedRequests: 0, unpricedRequests: 2 } },
+  ],
+}
+
+const longModel = "claudesonnet45extendedthinkingpreview20250929xyz"
+const boundaryForecast: ProviderUsageForecastOutput["data"] = {
+  ...detailForecast,
+  localRates: [
+    ...detailForecast.localRates!,
+    { providerID: "anthropic", profile: "研究チーム", modelID: longModel, observedFrom: Date.UTC(2026, 8, 22, 11), observedTo: Date.UTC(2026, 8, 22, 12), tokensPerMinute: 2_500_000.5, tokensPerMinute5: 2_600_000, tokensPerMinute60: 2_400_000, estimatedUSDPerHour: 1234.5, coverage: { pricedRequests: 9, unpricedRequests: 2 } },
+    { providerID: "xai", modelID: "grok-mini", observedFrom: Date.UTC(2026, 8, 22, 11), observedTo: Date.UTC(2026, 8, 22, 12), tokensPerMinute: 3, estimatedUSDPerHour: 0.004, coverage: { pricedRequests: 2, unpricedRequests: 0 } },
+  ],
+}
+const compactText = [
+  "OpenAI plan · Work · updated 30m", "Window five ████████░░ 80% used", "Estimated exhaustion 2026-09-22T15:00:00.000Z · medium evidence",
+  "Window weekly ████░░░░░░ 40% used", "Forecast unavailable", "Window monthly ██████████ 100% used", "Exhausted", "No increase observed", "Forecast stale",
+  "Forecast unavailable · No matching quota observation", "Recorded consumption · Backend",
+  "openai · Work · gpt-5", "1,235 tok/min", "~$0.42/hour partial", "openai · provider default · mini", "<0.1 tok/min", "$/hour unreported",
+  `anthropic · 研究チーム · ${longModel}`, "2,500,001 tok/min", "~$1234.50/hour partial", "xai · provider default · grok-mini", "3 tok/min", "<$0.01/hour",
+]
+const detailText = [
+  "Source provider API · Stability stable", "Recent quota deltas · 15m half-life · 1h horizon · medium evidence", "Quota burn 20 percentage points/hour",
+  "Observed 2026-09-22T10:30:00.000Z – 2026-09-22T11:30:00.000Z", "Updated 30m ago", "Warming up after restart, 3 samples", "Observation stale: 2h old",
+  "Recorded consumption 1234.567 tokens/min · 5m 1500 · 60m 1100", "Estimated cost $0.42/hour · 3 priced / 1 unpriced", "60m unreported", "provider default at request time",
+  `anthropic · profile 研究チーム · ${longModel}`, "Recorded consumption 2500000.5 tokens/min · 5m 2600000 · 60m 2400000", "Estimated cost $1234.5/hour · 9 priced / 2 unpriced",
+  "Estimated cost $0.004/hour · 2 priced / 0 unpriced", "Observed 2026-09-22T11:00:00.000Z – 2026-09-22T12:00:00.000Z", "Local recorded consumption · not provider quota",
+]
+const strip = (value: string) => value.replace(/\s/g, "")
+
+async function scrolledUsage(app: Awaited<ReturnType<typeof renderUsage>>) {
+  const walk = (node: { getChildren?: () => unknown[] }): unknown[] => [node, ...(node.getChildren?.() ?? []).flatMap((child) => walk(child as { getChildren?: () => unknown[] }))]
+  const scroll = walk(app.renderer.root).find((node): node is ScrollBoxRenderable => node instanceof ScrollBoxRenderable)!
+  expect(scroll.verticalScrollBar.visible).toBe(true)
+  const cells = (row: string, from: number, to: number) => {
+    let column = 0
+    return [...row].filter((character) => {
+      const start = column
+      column += Math.max(1, stringWidth(character))
+      return start >= from && column <= to
+    }).join("")
+  }
+  const viewport = () => app.captureCharFrame().split("\n").slice(scroll.viewport.screenY, scroll.viewport.screenY + scroll.viewport.height).map((row) => cells(row, scroll.viewport.screenX, scroll.viewport.screenX + scroll.viewport.width))
+  scroll.scrollTo(0)
+  await app.renderOnce()
+  const rows = viewport()
+  for (let step = 0; step < 400; step++) {
+    const top = scroll.scrollTop
+    scroll.scrollBy(1)
+    await app.renderOnce()
+    if (scroll.scrollTop === top) break
+    rows.push(viewport().at(-1)!)
+  }
+  scroll.scrollTo(0)
+  await app.renderOnce()
+  return strip(rows.join(""))
+}
+
+test.each([{ width: 60, mode: "dark" as const }, { width: 40, mode: "dark" as const }, { width: 189, mode: "light" as const }])("usage view keeps every character within the scrolling column, compact by default and one Details toggle away at $width $mode", async ({ width, mode }) => {
+  const app = await renderUsage({ width, height: 24, mode, initialTab: "usage", snapshots: quotaSnapshots, forecast: boundaryForecast, load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(app, (frame) => frame.includes("Details"), "compact usage")
+    await app.renderOnce()
+    const compact = await scrolledUsage(app)
+    for (const text of compactText) expect(compact).toContain(strip(text))
+    for (const text of ["provider_api", "providerAPI", "Recentquotadeltas", "Warmingupafterrestart", "Observationstale", "Updated", "5m", "60m", "unpriced", "Observed", "generationspeed"])
+      expect(compact).not.toContain(text)
+    app.mockInput.pressKey("d")
+    await waitFor(app, (frame) => frame.includes("Hide details"), "details")
+    await app.renderOnce()
+    const expanded = await scrolledUsage(app)
+    for (const text of [...compactText.filter((text) => !/^Estimated exhaustion|^Forecast (unavailable|stale)$|^No increase observed$/.test(text)), ...detailText]) expect(expanded).toContain(strip(text))
+    app.mockInput.pressKey("d")
+    await waitFor(app, (frame) => frame.includes("Details · d") && !frame.includes("Hide details"), "details collapsed")
+    const frame = app.captureCharFrame()
+    const detailsRow = frame.split("\n").findIndex((row) => row.includes("Details · d"))
+    await app.mockMouse.click(frame.split("\n")[detailsRow]!.indexOf("Details") + 1, detailsRow)
+    await waitFor(app, (next) => next.includes("Hide details"), "details by mouse")
+  } finally { app.renderer.destroy() }
+})
+
+test("recorded consumption rows align token and cost columns and keep the unavailable and empty states", async () => {
+  const app = await renderUsage({ width: 120, height: 90, initialTab: "usage", snapshots: quotaSnapshots, forecast: detailForecast, load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(app, (frame) => frame.includes("tok/min"), "rate rows")
+    const rows = app.captureCharFrame().split("\n").filter((row) => row.includes("tok/min"))
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows.map((row) => row.indexOf("tok/min"))).size).toBe(1)
+    expect(new Set(rows.map((row) => row.search(/~\$|\$\/hour/))).size).toBe(1)
+  } finally { app.renderer.destroy() }
+})
+
+test.each(["dark", "light"] as const)("exhausted and warning forecasts use the severity ink of their quota bars in %s", async (mode) => {
+  const app = await renderUsage({ width: 100, height: 60, mode, initialTab: "usage", snapshots: quotaSnapshots, forecast: detailForecast, load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(app, (frame) => frame.includes("Exhausted"), "forecast states")
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+    const ink = (text: string) => spans.find((span) => span.text.includes(text))!.fg.toInts()
+    const rows = app.captureCharFrame().split("\n")
+    const barInk = (label: string) => app.captureSpans().lines[rows.findIndex((row) => row.includes(label))]!.spans.find((span) => span.text.includes("█"))!.fg.toInts()
+    expect(ink("Exhausted")).toEqual(barInk("Window monthly"))
+    expect(ink("Estimated exhaustion")).toEqual(barInk("Window five"))
+    expect(ink("Exhausted")).not.toEqual(ink("Estimated exhaustion"))
+    expect(ink("No increase observed")).not.toEqual(ink("Exhausted"))
+    expect(ink("No increase observed")).not.toEqual(ink("Estimated exhaustion"))
+    expect(ink("partial")).toEqual(ink("Estimated exhaustion"))
+    expect(ink("partial")).not.toEqual(ink("~$0.42/hour"))
+  } finally { app.renderer.destroy() }
+})
+
+test("loading, failed and unreported usage states stay explicit without forecasts", async () => {
+  const loading = await renderUsage({ width: 80, height: 30, initialTab: "usage", snapshots: [], refreshing: true, load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(loading, (frame) => frame.includes("Loading provider quotas..."), "loading")
+    expect(loading.captureCharFrame()).toContain("Quota forecasts unavailable")
+    expect(loading.captureCharFrame()).toContain("Recorded consumption unavailable")
+  } finally { loading.renderer.destroy() }
+  const unreported = await renderUsage({ width: 80, height: 40, initialTab: "usage", snapshots: [{ ...quotaSnapshots[0]!, windows: [{ id: "bare", label: "Window bare", unit: "percent" }] }, { ...quotaSnapshots[0]!, providerID: "empty", label: "Empty plan", profile: undefined, windows: [] }], load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(unreported, (frame) => frame.includes("Quota information is not reported."), "unreported")
+    const frame = unreported.captureCharFrame()
+    expect(frame).toContain("Not reported")
+    expect(frame).toContain("Forecast unavailable · Not loaded")
+    expect(frame).not.toContain("Exhausted")
+  } finally { unreported.renderer.destroy() }
+})
