@@ -24,7 +24,7 @@ ycoding mcp serve \
   --subject YOUR_IMMUTABLE_ACCOUNT_SUBJECT
 ```
 
-The listener binds only `127.0.0.1`, on port 4097 by default. Optional `--port`, `--max-concurrent` (1–16, default 4), `--agent`, and `--model` select local policy; remote tool arguments cannot choose an arbitrary path, agent, model, shell command, or permission mode. `--model` uses the normal `[profile#]provider/model[#variant]` format.
+The listener uses Node-compatible HTTP APIs in both Bun and the Node executable and binds only `127.0.0.1`, on port 4097 by default. SSE responses stream without buffering; disconnecting a client aborts its pending HTTP request, and shutdown closes open streams. MCP request bodies are limited to 128 KiB by the protocol transport. Optional `--port`, `--max-concurrent` (1–16, default 4), `--agent`, and `--model` select local policy; remote tool arguments cannot choose an arbitrary path, agent, model, shell command, or permission mode. `--model` uses the normal `[profile#]provider/model[#variant]` format.
 
 The owner/repository/resource/model configuration selects a private durable admission index under YCoding's state directory. It is bound to the worktree root and protected by a process lock. Do not move or delete that index while its gateway is running. Do not move gateway Sessions or their worktrees while they are in use: placement is checked before each operation, but the existing runtime API does not atomically fence a concurrent local move. Changing the issuer, subject, resource URL, agent, model, or repository selects a separate task namespace. One gateway accepts one subject. Run separate gateway configurations and ports for different owners; this is not a shared multi-user execution sandbox.
 

@@ -12,6 +12,7 @@ import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServiceConfig } from "../../../services/service-config"
+import { serveTaskMcp } from "../../../task-mcp-http"
 import { makeTaskMcpBackend } from "../../../task-mcp-backend"
 import { parseSessionTargetModel } from "../../../session-target"
 
@@ -75,19 +76,7 @@ export default Runtime.handler(
         await transport.close()
       }),
     )
-    yield* Effect.acquireRelease(
-      Effect.try(() =>
-        Bun.serve({
-          hostname: "127.0.0.1",
-          port: input.port,
-          maxRequestBodySize: 128 * 1024,
-          idleTimeout: 30,
-          fetch: (request) => transport.fetch(request),
-          error: () => new Response("MCP request failed", { status: 500 }),
-        }),
-      ),
-      (server) => Effect.promise(() => server.stop(true)),
-    )
+    yield* serveTaskMcp(input.port, (request) => transport.fetch(request))
     process.stdout.write(`YCoding task MCP listening on 127.0.0.1:${input.port}/mcp\n`)
     yield* Effect.never
   }),
