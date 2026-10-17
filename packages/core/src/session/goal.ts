@@ -50,6 +50,7 @@ type Dependencies = {
   readonly config: Config.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
+  readonly autonomy: SessionAutonomy.Interface
 }
 
 export interface Interface {
@@ -94,11 +95,16 @@ const make = (dependencies: Dependencies) => {
           if (message.type === "assistant")
             return [
               `Assistant: ${message.content
-                .filter((part) => part.type === "text" || part.type === "reasoning")
-                .map((part) => part.text)
+                .flatMap((part) => {
+                  if (part.type === "text" || part.type === "reasoning") return [part.text]
+                  if (part.name !== "question" || part.state.status !== "completed") return []
+                  const origin = part.state.structured.automatic === true ? "automatic" : "source unreported"
+                  return [`Question details (bounded): ${JSON.stringify({ questions: part.state.input.questions }).slice(0, 1_000)}\nQuestion tool result (${origin}): ${JSON.stringify({ answers: part.state.structured.answers }).slice(0, 1_000)}`]
+                })
                 .join("\n")}`,
             ]
-          if (message.type === "system" || message.type === "synthetic" || message.type === "skill")
+          if (message.type === "synthetic") return [`Synthetic observation (not a human reply): ${message.text}`]
+          if (message.type === "system" || message.type === "skill")
             return [`Context: ${message.text}`]
           return []
         })
@@ -224,8 +230,11 @@ const make = (dependencies: Dependencies) => {
       generate(db, { session: input.session, request: `Goal synthesis request:\n${input.text}` }),
   )
   const steer = Effect.fn("SessionGoal.steer")(
-    (db: Database.Interface["db"], input: Parameters<Interface["steer"]>[0]) =>
-      generate(db, {
+    function* (db: Database.Interface["db"], input: Parameters<Interface["steer"]>[0]) {
+      const autoAnswer = yield* dependencies.autonomy.canAutoAnswer(input.session.id).pipe(
+        Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)),
+      )
+      return yield* generate(db, {
         session: input.session,
         request: (assistant) => {
           const latestAssistantText =
@@ -241,11 +250,13 @@ const make = (dependencies: Dependencies) => {
             `Active goal: ${input.goal.text}`,
             `Phase: ${input.phase}`,
             `Current iteration: ${input.goal.iteration}`,
+            `Automatic answering: ${autoAnswer ? "enabled" : "disabled"}`,
             `Latest assistant response: ${latestAssistantText?.trim().slice(-2_000) || "(none)"}`,
             "Preserve the active goal and produce only the next concise user-proxy steer.",
           ].join("\n")
         },
-      }),
+      })
+    },
   )
   const continuation = Effect.fn("SessionGoal.continuation")(function* (
     db: Database.Interface["db"],
@@ -270,7 +281,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
       const database = yield* Database.Service
-      const goal = make({ events, llm, agents, config, helpers, requests, headers: options })
+      const autonomy = yield* SessionAutonomy.Service
+      const goal = make({ events, llm, agents, config, helpers, requests, autonomy, headers: options })
       return Service.of({
         synthesize: (input) =>
           goal
@@ -312,6 +324,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       SessionHelperPolicy.node,
       SessionProviderRequest.node,
       Database.node,
+      SessionAutonomy.node,
     ],
   })
 }

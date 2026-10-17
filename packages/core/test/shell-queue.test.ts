@@ -126,6 +126,120 @@ const evaluations = Effect.gen(function* () {
 })
 
 describe("ShellQueue", () => {
+  it.live("backfills another Session once behind a memory-blocked head without bypassing its lane", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const sample = { availableMb: 8_192, load: 0 }
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const holder = yield* enqueue(queue, "sh_backfill_0_holder", "ses_holder", {
+              memoryLimitMb: 6_144,
+              residentMb: () => 4_096,
+            })
+            yield* Deferred.await(holder.admitted).pipe(Effect.timeout(2_000))
+            const head = yield* enqueue(queue, "sh_backfill_1_head", "ses_head", { memoryLimitMb: 8_192 })
+            const sameLane = yield* enqueue(queue, "sh_backfill_2_same", "ses_head", { memoryLimitMb: 512 })
+            const follower = yield* enqueue(queue, "sh_backfill_3_follower", "ses_follower", { memoryLimitMb: 1_024 })
+            yield* evaluation.flush
+            expect(yield* head.isAdmitted).toBe(false)
+            expect(yield* sameLane.isAdmitted).toBe(false)
+            expect(yield* follower.isAdmitted).toBe(true)
+            yield* follower.release
+            const later = yield* enqueue(queue, "sh_backfill_4_later", "ses_later", { memoryLimitMb: 1_024 })
+            yield* evaluation.flush
+            yield* evaluation.flush
+            expect(yield* later.isAdmitted).toBe(false)
+            expect(yield* head.isAdmitted).toBe(false)
+            sample.availableMb = 16_384
+            yield* evaluation.flush
+            expect(yield* head.isAdmitted).toBe(true)
+            expect(yield* sameLane.isAdmitted).toBe(false)
+            yield* head.release
+            yield* evaluation.flush
+            expect(yield* sameLane.isAdmitted).toBe(true)
+          }),
+        { ...evaluation.options, sample: Effect.sync(() => sample), parallelism: 64, now: () => 0 },
+      )
+    }),
+  )
+
+  it.live("does not spend a memory-blocked head's backfill on a full family", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const holder = yield* enqueue(queue, "sh_family_backfill_0_holder", "ses_holder", {
+              memoryLimitMb: 6_144,
+              residentMb: () => 4_096,
+            })
+            yield* Deferred.await(holder.admitted).pipe(Effect.timeout(2_000))
+            const head = yield* enqueue(queue, "sh_family_backfill_1_head", "ses_head", { memoryLimitMb: 8_192 })
+            const full = yield* enqueue(queue, "sh_family_backfill_2_full", "ses_full", {
+              memoryLimitMb: 1_024,
+              admission: { family: "ses_full", acquire: Effect.succeed(undefined), subscribe: () => () => {} },
+            })
+            const fitting = yield* enqueue(queue, "sh_family_backfill_3_fit", "ses_fit", { memoryLimitMb: 1_024 })
+            yield* evaluation.flush
+            expect(yield* full.isAdmitted).toBe(false)
+            expect(yield* head.isAdmitted).toBe(false)
+            expect(yield* fitting.isAdmitted).toBe(true)
+          }),
+        { ...evaluation.options, sample: Effect.succeed({ availableMb: 8_192, load: 0 }), parallelism: 64, now: () => 0 },
+      )
+    }),
+  )
+
+  posixIt("keeps an unhinted foreign memory-blocked head as an ordering barrier", () =>
+    Effect.gen(function* () {
+      const state = yield* temp
+      const evaluation = yield* evaluations
+      const log = path.join(state, "log")
+      yield* withQueue(
+        state,
+        (queue) =>
+          Effect.gen(function* () {
+            const holder = yield* enqueue(queue, "sh_foreign_memory_holder", "ses_holder", {
+              memoryLimitMb: 6_144,
+              residentMb: () => 4_096,
+            })
+            yield* Deferred.await(holder.admitted).pipe(Effect.timeout(2_000))
+            const foreign = spawn({
+              state,
+              log,
+              id: "sh_foreign_memory_head",
+              sessionID: "ses_foreign",
+              holdMs: -1,
+              maxRunning: 4,
+              availableMb: 8_192,
+              memoryReserveMb: 8_192,
+              parallelism: 64,
+              evaluated: `${log}.evaluated`,
+            })
+            yield* Effect.addFinalizer(() =>
+              Effect.promise(async () => {
+                foreign.kill("SIGKILL")
+                await foreign.exited
+              }),
+            )
+            yield* waitFor(() => Bun.file(`${log}.sh_foreign_memory_head.queued`).exists())
+            yield* waitFor(() => Bun.file(`${log}.evaluated`).exists())
+            const follower = yield* enqueue(queue, "sh_foreign_memory_follower", "ses_follower", {
+              memoryLimitMb: 1_024,
+            })
+            yield* evaluation.flush
+            expect(yield* follower.isAdmitted).toBe(false)
+          }),
+        { ...evaluation.options, sample: Effect.succeed({ availableMb: 8_192, load: 0 }), parallelism: 64 },
+      )
+    }),
+  )
+
   it.live("makes no running claims while the head's family is full", () =>
     Effect.gen(function* () {
       const state = yield* temp

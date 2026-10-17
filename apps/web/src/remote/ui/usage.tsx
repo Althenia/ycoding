@@ -8,6 +8,7 @@ import type { RemoteUsageForecast } from "@ycoding-ai/remote"
 import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
 import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
 import { ModelIncidents } from "./model-incidents"
+import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
 import { consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
@@ -194,7 +195,7 @@ export function UsagePage() {
   })
 
   return <div class="usage-page">
-    <header class="usage-head"><div class="usage-head__title"><h1>Usage</h1><p>Quotas and spend from {machine() ?? "your machine"}</p></div>
+    <header class="usage-head"><div class="usage-head__title"><h1><Icon name="usage" />Usage</h1><p>Quotas and spend from {machine() ?? "your machine"}</p></div>
       <div class="usage-head__actions"><Show when={latest() !== undefined}><span class="usage-head__freshness">Updated {relativeFreshness(latest()!, now())}</span></Show>
         <div class={`usage-zone usage-toggle${zoneMode() === "local" ? " usage-zone--local" : ""}`} role="group" aria-label="Usage time zone">
           <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
@@ -204,8 +205,19 @@ export function UsagePage() {
       </div>
     </header>
 
+    <section class="usage-spend" aria-labelledby="usage-spend-title">
+      <h2 class="visually-hidden" id="usage-spend-title">Estimated spend overview</h2>
+      <Show when={dailyData()}>
+        <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
+          <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id))}</strong>
+          <p class="usage-tile__meta"><span>{count(tileValue(id).requests)} requests</span><span>{count(tileValue(id).tokens)} tokens</span></p>
+          <Show when={id === "last30"}><svg viewBox="0 0 100 32" aria-label="Spend trend over the last 30 days" role="img" preserveAspectRatio="none"><polyline points={sparkline()} /></svg></Show>
+        </article>}</For></div>
+      </Show>
+    </section>
+
     <section class="usage-quotas" aria-labelledby="usage-allowances">
-      <h2 class="visually-hidden" id="usage-allowances">Provider quotas</h2>
+      <div class="usage-section-head"><h2 id="usage-allowances"><Icon name="usage" />Provider quotas</h2><p>Account-reported limits · separate from this backend's consumption</p></div>
       <Show when={!providerData() && providerRead().status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
       <Show when={!providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
       <Show when={providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
@@ -218,28 +230,9 @@ export function UsagePage() {
       }}</For></div>
     </section>
 
-    <Show when={forecastData()}><section class="usage-breakdown-section" aria-label="Recorded token consumption"><h2>Recorded consumption · Backend</h2>
-      <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
-        const row = consumptionRow(rate)
-        return <li class="usage-consumption__row"><span class="usage-consumption__identity">{row.identity}</span><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span>
-          <UsageDetails label={row.identity} groups={[{ lines: row.details }]} /></li>
-      }}</For></ul></Show>
-      <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
-      <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
-    </section></Show>
-
-    <section class="usage-spend" aria-labelledby="usage-spend-title">
-      <h2 class="visually-hidden" id="usage-spend-title">Spend overview</h2>
-      <Show when={dailyData()}>
-        <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
-          <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id))}</strong>
-          <p class="usage-tile__meta"><span>{count(tileValue(id).requests)} requests</span><span>{count(tileValue(id).tokens)} tokens</span></p>
-          <Show when={id === "last30"}><svg viewBox="0 0 100 32" aria-label="Spend trend over the last 30 days" role="img" preserveAspectRatio="none"><polyline points={sparkline()} /></svg></Show>
-        </article>}</For></div>
-      </Show>
-      <div class="usage-visuals">
+    <section class="usage-visuals" aria-label="Usage charts">
         <div class="usage-chart" ref={dayCard}>
-          <div class="usage-chart__head"><div><h3>Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}>{tableOpen() ? "Hide table" : "View table"}</button></div>
+          <div class="usage-chart__head"><div><h3><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
           <Show when={dailyData() && daily()?.status === "error"}><p class="usage-message" role="alert">{daily()?.message ?? "Daily usage could not be loaded."} <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></p></Show>
           <Show when={dailyData()} fallback={<Show when={daily()?.status === "unsupported" || daily()?.status === "error"} fallback={<Show when={connected()}><LoadingPlaceholder kind="chart" label="Loading daily spend…" /></Show>}>
             <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></Show></p>
@@ -264,13 +257,13 @@ export function UsagePage() {
           </Show>
         </div>
         <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
-          <Show when={monthlyData()}>{(value) => <p class="usage-message">Pricing: {reportCostText(value().total)}</p>}</Show>
-          <div class="usage-distribution__head"><div><h3 id="usage-distribution-title">Provider distribution (current {zoneLabel()} month)</h3><p>Current {zoneLabel()} month</p></div>
+          <div class="usage-distribution__head"><div><h3 id="usage-distribution-title"><Icon name="package" />Provider distribution (current {zoneLabel()} month)</h3><p>Current {zoneLabel()} month</p></div>
             <div class="usage-distribution__controls"><div class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Distribution metric">
-              <button type="button" aria-pressed={distributionMetric() === "spend"} onClick={() => setDistributionMetric("spend")}>Spend</button>
-              <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}>Tokens</button>
+              <button type="button" aria-pressed={distributionMetric() === "spend"} onClick={() => setDistributionMetric("spend")}><Icon name="usage" />Spend</button>
+              <button type="button" aria-pressed={distributionMetric() === "tokens"} onClick={() => setDistributionMetric("tokens")}><Icon name="hash" />Tokens</button>
             </div></div>
           </div>
+          <Show when={monthlyData()}>{(value) => <p class="usage-distribution__pricing">Pricing: {reportCostText(value().total)}</p>}</Show>
           <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
           <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
           <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see monthly usage."}</p></Show>
@@ -304,17 +297,26 @@ export function UsagePage() {
                 const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
                 return <li>
                 <span class="usage-distribution__swatch" style={{ background: distributionColors[index() % distributionColors.length] }} aria-hidden="true" />
-                <span class="usage-distribution__name">{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? segment().costLabel ?? "unreported" : count(segment().value)}</strong>
+                <span class="usage-distribution__name"><ProviderLogo providerID={segment().providerID} />{segment().label}</span><span>{Math.round(segment().share * 100)}%</span><strong>{distributionMetric() === "spend" ? segment().costLabel ?? "unreported" : count(segment().value)}</strong>
               </li>
               }}</For></ul>
             </div>
           </Show></Show>
         </div>
-      </div>
     </section>
 
+    <Show when={forecastData()}><section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
+      <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
+        const row = consumptionRow(rate)
+        return <li class="usage-consumption__row"><span class="usage-consumption__identity"><ProviderLogo providerID={rate.providerID} /><span>{row.identity}</span></span><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span>
+          <UsageDetails label={row.identity} groups={[{ lines: row.details }]} /></li>
+      }}</For></ul></Show>
+      <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
+      <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
+    </section></Show>
+
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
-      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title">Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
+      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
       <UsageGroupControl value={group()} onChange={selectGroup} /></div>
       <UsageFilterControls value={filters()} providers={[...new Map((providerRead().data ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()]} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />
       <Show when={group() === "task"}><p class="usage-message">Inclusive task rows overlap; do not add them for a family total.</p></Show>
@@ -330,14 +332,14 @@ export function UsagePage() {
               <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
             </article>
           }}</For></div>
-          <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}>{breakdownTableOpen() ? "Hide table" : "View table"}</button>
+          <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}><Icon name="sessions" />{breakdownTableOpen() ? "Hide table" : "View table"}</button>
           <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownBreakdown()?.input.group ?? group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
             const identity = () => shownBreakdown()?.input.group === "model" || row.dimensions ? reportIdentity(row, providerRead().data ?? []) : undefined
             return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
           <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => retryReport(breakdownInput())}>Retry</button></span></Show></div>
-          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}>Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next</button></div></div>
-          <p class="usage-message">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
+          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" />Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next<Icon name="arrow-right" /></button></div></div>
+          <p class="usage-scope-total">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
         </Show></Show>
       </div>
     </section>
@@ -357,8 +359,8 @@ function ProviderCard(props: { readonly provider: () => UsageProvider; readonly 
       return forecast === undefined ? [] : [{ title: window.label, lines: forecastDetails(forecast, props.now, props.forecastAsOf) }]
     }),
   ]
-  return <article class="usage-provider">
-    <header class="usage-provider__head"><div class="usage-provider__identity"><span class={`usage-status usage-status--${props.provider().status}`} title={label(props.provider().status)} aria-label={`${label(props.provider().status)} quota status`} /><h3>{heading().name}</h3><Show when={heading().plan}><span class="usage-provider__plan">{heading().plan}</span></Show><Show when={props.provider().status !== "available"}><span class="usage-provider__state">{label(props.provider().status)}</span></Show></div>
+  return <article class="usage-provider" data-provider-id={props.provider().providerID}>
+    <header class="usage-provider__head"><div class="usage-provider__identity"><h3><ProviderLogo providerID={props.provider().providerID} />{heading().name}</h3><span class={`usage-status usage-status--${props.provider().status}`} title={label(props.provider().status)} aria-label={`${label(props.provider().status)} quota status`} /><Show when={heading().plan}><span class="usage-provider__plan">{heading().plan}</span></Show><Show when={props.provider().status !== "available"}><span class="usage-provider__state">{label(props.provider().status)}</span></Show></div>
       <span class="usage-provider__freshness">{props.provider().status === "error" ? "Checked" : "Synced"} <time datetime={new Date(props.provider().updatedAt).toISOString()}>{relativeFreshness(props.provider().updatedAt, props.now)}</time></span></header>
     <Show when={props.provider().windows.length > 0} fallback={<p class="usage-provider__empty">{props.provider().message ?? "This provider has not reported any quota metrics."}</p>}>
       <div class="usage-provider__windows"><For each={props.provider().windows.map((window) => window.id)}>{(id) => {

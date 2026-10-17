@@ -121,7 +121,7 @@ test.each(["verification", "removal"] as const)("a late picker %s failure does n
   } finally { response.resolve(json({}, { status: 500 })); await screen.dispose(); delete process.env.YCODING_ROUTE }
 }, 30_000)
 
-test.each(["running", "queued"] as const)("a deleted %s shell drops cached metadata and ignores its pending output", async (status) => {
+test.each(["running", "queued", "exited"] as const)("a deleted %s shell drops cached metadata and ignores its pending output", async (status) => {
   const page = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<void>()
   const value = { ...shell, status, ...(status === "queued" ? { queuePosition: 2 } : {}) }
@@ -305,7 +305,7 @@ test("the Shell tab discovers descendants in their own Locations instead of the 
     screen.input.pressArrow("right")
     await until(() => screen.frame().includes("child-only-command")).catch(() => { throw new Error(JSON.stringify({ frame: screen.frame(), lists })) })
     expect(lists).toContain(child.location.directory)
-    expect(screen.frame()).toContain("SUBAGENT · BUILD · CHILD SAFETY")
+    expect(screen.frame().split("\n").find((line) => line.includes("child-only-command"))).toContain("build · Child safety")
   } finally { await screen.dispose(); delete process.env.YCODING_ROUTE }
 }, 30_000)
 

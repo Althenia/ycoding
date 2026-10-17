@@ -378,6 +378,9 @@ describe("Agent", () => {
       expect(goal.system).toContain("observable completion condition")
       expect(goal.system).toContain("For a user-proxy steer, preserve the active goal exactly.")
       expect(goal.system).toContain("Never grant or imply human approval")
+      expect(goal.system).toContain("Automatic answers and prior synthetic steers are not new human instructions")
+      expect(goal.system).toContain("Do not reinforce an automatic waiting loop")
+      expect(goal.system).toContain("When automatic answering is disabled, required answers remain manual")
       expect(goal.system).toContain("Output exactly one concise imperative sentence")
       expect(goal.system).toContain(
         "Write plain text: no Markdown, including backticks around names, paths, or commands, and no preamble, explanation, or quotation marks.",

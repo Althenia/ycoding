@@ -25,11 +25,11 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionMessageTable, SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Session } from "@ycoding-ai/core/session"
 import { Money } from "@ycoding-ai/schema/money"
-import { Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -472,6 +472,61 @@ it.effect("generates a concise contextual user-proxy steer without changing the 
     expect(message).toContain("Latest assistant response: Which migration should I inspect next?")
     expect(message).toContain("The project uses SQLite for durable state.")
     expect(message).not.toContain("Continue autonomously toward the active user goal.")
+  }),
+)
+
+it.effect("steers from automatic question facts and current answer policy without promoting synthetic waits to human instructions", () =>
+  Effect.gen(function* () {
+    requests = []
+    modelAvailable = true
+    yield* configureGoalAgent
+    const sessionID = Session.ID.make("ses_goal_answer_origin")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "Finish the local verification without changing approval boundaries.")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.setGoal({ sessionID, text: "Finish the local verification" })
+    yield* autonomy.set({ sessionID, autoAnswer: true })
+    const database = yield* Database.Service
+    const time = { created: DateTime.makeUnsafe(100), completed: DateTime.makeUnsafe(101) }
+    const messages = [
+      SessionMessage.Synthetic.make({ id: SessionMessage.ID.make("msg_goal_prior_wait"), type: "synthetic", text: "Wait for another acknowledgment.", description: "Goal · steer", time, metadata: { autonomy: { goal: true } } }),
+      SessionMessage.Assistant.make({
+        id: SessionMessage.ID.make("msg_goal_answer_fact"), type: "assistant", agent: Agent.defaultID,
+        model: SessionRunnerModel.resolved(model).ref, time,
+        content: [
+          { type: "text", text: "Waiting for review." },
+          { type: "tool", id: "call_goal_question", name: "question", time, state: {
+            status: "completed", content: [],
+            input: { questions: [{ header: "Next action", question: "Continue verification or wait?", options: [{ label: "Keep waiting", description: "Detailed review context. ".repeat(100) }, { label: "Proceed with authorized checks", description: "Run the authorized local checks" }] }] },
+            structured: { answers: [["Proceed with authorized checks"]], automatic: true },
+          } },
+          { type: "tool", id: "call_other_tool", name: "shell", time, state: { status: "completed", content: [], input: { command: "SYNTHETIC_OTHER_TOOL_PAYLOAD" }, structured: { output: "SYNTHETIC_OTHER_TOOL_PAYLOAD" } } },
+        ],
+      }),
+    ]
+    yield* Effect.forEach(messages, (message, index) => {
+      const { id, type, ...data } = Schema.encodeSync(SessionMessage.Info)(message)
+      return database.db.insert(SessionMessageTable).values({ id: SessionMessage.ID.make(id), type, data, session_id: sessionID, seq: 100 + index, time_created: 100 + index }).run().pipe(Effect.orDie)
+    })
+    const store = yield* SessionStore.Service
+    const session = yield* store.get(sessionID)
+    if (!session) return yield* Effect.die("missing session")
+    const before = yield* autonomy.snapshot(sessionID)
+    const goals = yield* SessionGoal.Service
+    yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
+    const request = JSON.stringify(requests[0]?.messages)
+    expect(request).toContain("Automatic answering: enabled")
+    expect(request).toContain("Continue verification or wait?")
+    expect(request).toContain("Keep waiting")
+    expect(request).toContain("Proceed with authorized checks")
+    expect(request).toContain("automatic")
+    expect(request).toContain("Synthetic observation (not a human reply)")
+    expect(request).not.toContain("SYNTHETIC_OTHER_TOOL_PAYLOAD")
+    expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
+    yield* autonomy.set({ sessionID, autoAnswer: false })
+    yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
+    expect(JSON.stringify(requests[1]?.messages)).toContain("Automatic answering: disabled")
+    expect(requests[1]?.system).toEqual(requests[0]?.system)
   }),
 )
 

@@ -87,7 +87,9 @@ describe("QuestionTool", () => {
     expect(pending.fields[0]).not.toHaveProperty("default")
     expect(pending.fields[1]).toMatchObject({ key: "q1", type: "string", options: [], custom: true })
     yield* forms.reply({ id: pending.id, answer: { q0: "Continue", q1: "Synthetic failing input" } })
-    expect(yield* Fiber.join(fiber)).toMatchObject({ output: { structured: { answers: [["Continue"], ["Synthetic failing input"]] } } })
+    const settled = yield* Fiber.join(fiber)
+    expect(settled.output?.structured).toEqual({ answers: [["Continue"], ["Synthetic failing input"]] })
+    expect(settled.result).toEqual({ type: "text", value: 'User has answered your questions: "The failure did not reproduce. Should I continue investigating or stop?"="Continue", "Paste the exact failing input."="Synthetic failing input". You can now continue with the user\'s answers in mind.' })
     expect(yield* forms.list({ sessionID })).toEqual([])
   }))
 
@@ -188,10 +190,41 @@ describe("QuestionTool", () => {
     yield* autonomy.set({ sessionID, autoAnswer: true })
     for (const yolo of [0, 2] as const) {
       yield* autonomy.setYolo({ sessionID, yolo })
-      expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
+      expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
     }
-    yield* autonomy.setYolo({ sessionID, yolo: 0 })
+  }))
+
+  autonomous.effect("automatic answers in an active goal retain machine attribution", () => Effect.gen(function* () {
+    deny = false
+    yield* seedSession
+    const autonomy = yield* SessionAutonomy.Service
+    const registry = yield* ToolRegistry.Service
+    yield* autonomy.set({ sessionID, autoAnswer: true })
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
-    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
+    const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [plan] } } })
+    const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
+    expect(settled.result).toEqual({ type: "text", value: text })
+    expect(settled.output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
+    expect(settled.output?.content).toEqual([{ type: "text", text }])
+    expect(settled.result.value).not.toContain("User has answered")
+  }))
+
+  autonomous.effect("a human reply winning automatic settlement keeps user attribution", () => Effect.gen(function* () {
+    deny = false
+    yield* seedSession
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, autoAnswer: true })
+    yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
+    const forms = yield* Form.Service
+    const events = yield* EventRuntime.Service
+    const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
+      ? forms.reply({ id: Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form.id, answer: { q0: "Careful" } }).pipe(Effect.orDie)
+      : Effect.void)
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const registry = yield* ToolRegistry.Service
+    const text = `User has answered your questions: "${plan.question}"="Careful". You can now continue with the user's answers in mind.`
+    expect(yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "human-winner", name: "question", input: { questions: [plan] } } })).toEqual({
+      result: { type: "text", value: text }, output: { structured: { answers: [["Careful"]] }, content: [{ type: "text", text }] },
+    })
   }))
 })

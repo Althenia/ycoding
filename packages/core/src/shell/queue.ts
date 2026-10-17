@@ -118,11 +118,17 @@ type Waiter = {
   readonly admission: Scope.Scope
   readonly waiting: Scope.Closeable
   position: number
+  backfilled: boolean
   onPosition: (position: number) => Effect.Effect<void>
 }
 
 type Claim = { readonly id: string; readonly parent: Scope.Scope; readonly scope: Scope.Closeable }
-type Exhausted = { run: number; readonly sessions: Map<string, number>; readonly families: Set<string> }
+type Exhausted = {
+  run: number
+  readonly sessions: Map<string, number>
+  readonly families: Set<string>
+  readonly memory: Map<string, Waiter>
+}
 
 type Snapshot = {
   readonly started: number
@@ -597,10 +603,10 @@ export const layer = (options?: Options) =>
         )
       })
 
-      const resourcesMet = (entry: Entry, current: Snapshot) =>
+      const resourceStatus = (entry: Entry, current: Snapshot) =>
         sampler.pipe(
           Effect.map((value) => {
-            if (value === undefined) return false
+            if (value === undefined) return "unavailable" as const
             const unmaterializedMb = current.running.reduce(
               (total, running) =>
                 total +
@@ -619,15 +625,14 @@ export const layer = (options?: Options) =>
                 total + (running.admitted === undefined ? 0 : Math.exp(-Math.max(0, time - running.admitted) / 60_000)),
               0,
             )
-            return (
-              value.availableMb - unmaterializedMb >= entry.reserveMb &&
-              value.load + recentLoad / parallelism < entry.maxLoad
-            )
+            if (!(value.load + recentLoad / parallelism < entry.maxLoad)) return "cpu" as const
+            return value.availableMb - unmaterializedMb >= entry.reserveMb ? ("met" as const) : ("memory" as const)
           }),
         )
 
       const candidate = (current: Snapshot, exhausted: Exhausted) =>
         current.waiting.find((entry) => {
+          if (exhausted.memory.has(entry.sessionID)) return false
           const family = waiters.get(entry.id)?.request.admission?.family
           if (family !== undefined && exhausted.families.has(family)) return false
           if (current.stalled.has(entry.owner)) return false
@@ -680,7 +685,10 @@ export const layer = (options?: Options) =>
         const idle = current.running.length === 0
         const family: { current?: FamilyReservation } = {}
         const claimed = yield* Effect.gen(function* () {
-          if (!idle && !(yield* resourcesMet(entry, current))) return "resources" as const
+          if (!idle) {
+            const resources = yield* resourceStatus(entry, current)
+            if (resources !== "met") return resources
+          }
           if (changes.revision !== current.revision || candidate(current, exhausted)?.id !== entry.id)
             return "changed" as const
           if (waiter.request.admission) {
@@ -696,7 +704,10 @@ export const layer = (options?: Options) =>
             const session = yield* slot(`session-${lane}`, entry.maxRunningPerSession)
             return session === undefined ? ("session" as const) : { run: exempt, session }
           }
-          if (idle && !(yield* resourcesMet(entry, current))) return "resources" as const
+          if (idle) {
+            const resources = yield* resourceStatus(entry, current)
+            if (resources !== "met") return resources
+          }
           const session = yield* slot(`session-${lane}`, entry.maxRunningPerSession)
           if (session === undefined) return "session" as const
           const run = yield* slot("run", entry.maxRunning)
@@ -705,7 +716,13 @@ export const layer = (options?: Options) =>
         if (typeof claimed === "string") {
           yield* Scope.close(admission, Exit.void)
           if (claimed !== "changed")
-            yield* capacityBlocked(waiter, claimed === "resources" ? undefined : yield* admissionEpoch)
+            yield* capacityBlocked(
+              waiter,
+              claimed === "memory" || claimed === "cpu" || claimed === "unavailable"
+                ? undefined
+                : yield* admissionEpoch,
+            )
+          if (claimed === "memory" && !idle) return "memory" as const
           return claimed === "run" || claimed === "session" || claimed === "family" ? claimed : ("stop" as const)
         }
         trace("claimed")
@@ -847,7 +864,12 @@ export const layer = (options?: Options) =>
         yield* register
         const state = {
           current: yield* snapshot,
-          exhausted: { run: 0, sessions: new Map<string, number>(), families: new Set<string>() },
+          exhausted: {
+            run: 0,
+            sessions: new Map<string, number>(),
+            families: new Set<string>(),
+            memory: new Map<string, Waiter>(),
+          },
         }
         yield* settle(state.current)
         while (true) {
@@ -857,6 +879,10 @@ export const layer = (options?: Options) =>
           if (!waiter) return
           const result = yield* admit(waiter, state.current, state.exhausted)
           if (result === "stop") return
+          if (result === "memory") {
+            if (waiter.backfilled) return
+            state.exhausted.memory.set(waiter.entry.sessionID, waiter)
+          }
           if (result === "family" && waiter.request.admission)
             state.exhausted.families.add(waiter.request.admission.family)
           if (result === "run") state.exhausted.run = Math.max(state.exhausted.run, waiter.entry.maxRunning)
@@ -866,8 +892,16 @@ export const layer = (options?: Options) =>
               Math.max(state.exhausted.sessions.get(waiter.entry.sessionID) ?? 0, waiter.entry.maxRunningPerSession),
             )
           if (result === "admitted") {
+            state.exhausted.memory.forEach((blocked) => {
+              blocked.backfilled = true
+            })
             state.current = yield* snapshot
-            state.exhausted = { run: 0, sessions: new Map<string, number>(), families: new Set<string>() }
+            state.exhausted = {
+              run: 0,
+              sessions: new Map<string, number>(),
+              families: new Set<string>(),
+              memory: new Map<string, Waiter>(),
+            }
             yield* settle(state.current)
           }
         }
@@ -968,6 +1002,7 @@ export const layer = (options?: Options) =>
           admitted: yield* Deferred.make<void, EntryLostError>(),
           admission,
           waiting,
+          backfilled: false,
           position,
           onPosition: () => Effect.void,
         }

@@ -9,6 +9,7 @@ export async function captureRoute(input: {
   args?: { sessionID?: string }
   pluginStatus?: ReadonlyArray<TuiPluginStatus>
   settle: string
+  sessionReady?: boolean
   stable?: string[]
 }) {
   const screen = await renderScreen(input)

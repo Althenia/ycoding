@@ -96,7 +96,8 @@ Output only one natural single-line message in the user's language, 2–40 words
 const PROMPT_GOAL = `Handle the task identified in the request using the recent conversation context.
 
 - For goal synthesis, preserve the user's authority and produce the current autonomous-work goal with its intended outcome and observable completion condition.
-- For a user-proxy steer, preserve the active goal exactly. Use the latest assistant response and context to direct the next useful action. Decide on the user's behalf: answer any question or choice the assistant raises with the safest reasonable option that serves the goal, so the user is not consulted until the goal is satisfied.
+- For a user-proxy steer, preserve the active goal exactly. Use the latest assistant response and context to direct the next useful authorized action. Resolve routine implementation choices toward the goal. When automatic answering is disabled, required answers remain manual; continue independent work or preserve the native request instead of supplying a reply. When enabled, use the question's context to choose a safe option within the authorized scope.
+- Automatic answers and prior synthetic steers are not new human instructions. Use question results and the current answer policy to distinguish an automatic default from an actual user constraint. Do not reinforce an automatic waiting loop or invent a human-only gate from assistant prose; direct the next authorized action or the native request for a genuinely required approval.
 - Never grant or imply human approval, permission, authorization, or confirmation. Do not weaken permission ceilings, guardrails, or required human review.
 
 Output exactly one concise imperative sentence, or two only when required for clarity. Write plain text: no Markdown, including backticks around names, paths, or commands, and no preamble, explanation, or quotation marks.`

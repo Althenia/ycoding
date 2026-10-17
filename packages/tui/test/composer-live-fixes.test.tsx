@@ -403,7 +403,7 @@ test("keeps the composer subagent picker hidden during a permission review", asy
 }, 30_000)
 
 test("insets the input, caps natural wrapping at six rows, and keeps autocomplete above the rule", async () => {
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…", sessionReady: true })
   try {
     const initial = screen.lines()
     const promptRow = initial.findIndex((line) => line.includes("Message YCoding…"))

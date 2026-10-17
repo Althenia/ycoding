@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
+import type { useData } from "../../src/context/data"
 
 const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const chrome = [15, 17, 21, 255] satisfies [number, number, number, number]
@@ -139,6 +140,7 @@ describe("screen chrome colour probes", () => {
 
   test("landing Chrome pairing reuses a Session in the current Location", async () => {
     const requests: string[] = []
+    let data: ReturnType<typeof useData> | undefined
     const route: FetchHandler = (url, request) => {
       if (url.pathname === "/api/session" && request.method === "GET") return json({ data: [session], cursor: {} })
       if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
@@ -148,8 +150,12 @@ describe("screen chrome colour probes", () => {
       }
       return landingRoute(url)
     }
-    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
+    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…", data: (value) => { data = value } })
     try {
+      await waitFor(screen, "Message YCoding…", () => {
+        const current = data
+        return current?.location.info()?.directory === directory && current.session.list().some((item) => item.id === sessionID && item.location.directory === current.location.default().directory)
+      })
       screen.input.pressKey("p", { ctrl: true })
       await waitFor(screen, "Commands")
       await screen.input.typeText("Connect Chrome")
@@ -247,9 +253,9 @@ describe("screen chrome colour probes", () => {
   }, 60_000)
 })
 
-async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, text: string) {
+async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, text: string, ready: () => boolean = () => true) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (screen.frame().includes(text)) return
+    if (screen.frame().includes(text) && ready()) return
     await Bun.sleep(20)
   }
   throw new Error(`Screen did not render ${text}`)

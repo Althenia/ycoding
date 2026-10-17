@@ -34,6 +34,7 @@ export type When = Form.When
 export const State = Form.State
 export type State = typeof State.Type
 export type TerminalState = Exclude<State, { readonly status: "pending" }>
+export type AskResult = TerminalState & { readonly automatic?: true }
 
 export const Answer = Form.Answer
 export type Answer = typeof Answer.Type
@@ -91,7 +92,7 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
   readonly ask: (
     input: CreateInput,
-  ) => Effect.Effect<TerminalState, AlreadyExistsError | InvalidFormError | SessionReviewFold.FullError>
+  ) => Effect.Effect<AskResult, AlreadyExistsError | InvalidFormError | SessionReviewFold.FullError>
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
@@ -295,21 +296,29 @@ export const layer = Layer.effect(
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
             const created = yield* createPending({ ...input, id: form.id }, true)
-            yield* reply({ id: created.id, answer: outcome.answer }).pipe(Effect.orDie)
-            return { status: "answered", answer: outcome.answer } as TerminalState
+            const entry = yield* find(created.id).pipe(Effect.orDie)
+            const automatic = yield* reply({ id: created.id, answer: outcome.answer }).pipe(
+              Effect.as(true),
+              Effect.catchTag("Form.AlreadySettledError", () => Effect.succeed(false)),
+              Effect.orDie,
+            )
+            const result = yield* Deferred.await(entry.deferred)
+            return automatic ? { ...result, automatic: true as const } : result
           }
           const form = yield* createPending(input, true)
           const entry = yield* find(form.id).pipe(Effect.orDie)
           return yield* restore(Effect.gen(function* () {
             const answer = autoAnswer ? automaticAnswer(form) : undefined
-            if (answer) {
-              yield* reply({ id: form.id, answer }).pipe(
-                Effect.catchTag("Form.AlreadySettledError", () => Effect.void),
-                Effect.orDie,
-              )
-            }
+            const automatic = answer
+              ? yield* reply({ id: form.id, answer }).pipe(
+                  Effect.as(true),
+                  Effect.catchTag("Form.AlreadySettledError", () => Effect.succeed(false)),
+                  Effect.orDie,
+                )
+              : false
             if (!answer) yield* armTimeout(form.id)
-            return yield* Deferred.await(entry.deferred)
+            const result = yield* Deferred.await(entry.deferred)
+            return automatic ? { ...result, automatic: true as const } : result
           })).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
           )
