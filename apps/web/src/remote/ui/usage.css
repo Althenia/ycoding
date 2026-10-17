@@ -508,7 +508,8 @@
   height: 10px;
   border-radius: var(--yc-radius-pill);
 }
-.usage-distribution__empty {
+.usage-distribution__empty,
+.usage-distribution__unavailable {
   padding: var(--yc-space-8) 0;
   color: var(--yc-text-muted);
   font-size: var(--yc-size-sm);
@@ -561,31 +562,20 @@
 .usage-breakdown__head h2 {
   font-size: var(--yc-size-sm);
 }
+.usage-breakdown__head .custom-select {
+  min-width: 0;
+  max-width: 100%;
+  inline-size: calc(var(--yc-device-max) * 2);
+}
 .usage-breakdown__summary {
   display: none;
   color: var(--yc-text-muted);
   font: var(--yc-size-2xs) / var(--yc-leading-2xs) var(--yc-font-mono);
 }
-.usage-tabs {
-  display: flex;
-  gap: var(--yc-space-1);
-  overflow-x: auto;
-}
-.usage-tabs button {
-  min-height: var(--yc-hit-min);
-  border: 1px solid transparent;
-  border-radius: var(--yc-radius-pill);
-  background: none;
-  padding: 0 var(--yc-space-3);
-  color: var(--yc-text-muted);
-  font-size: var(--yc-size-xs);
-  white-space: nowrap;
-  transition: background var(--yc-dur-base) var(--yc-ease-standard);
-}
-.usage-tabs button[aria-selected="true"] {
-  border-color: var(--yc-green-strong);
-  background: var(--yc-green-soft);
-  color: var(--yc-green-strong);
+.usage-breakdown__head .custom-select {
+  min-width: 0;
+  max-width: 100%;
+  inline-size: calc(var(--yc-device-max) * 2);
 }
 .usage-breakdown {
   min-width: 0;
@@ -821,10 +811,6 @@
     display: inline;
     margin-left: auto;
   }
-  .usage-tabs {
-    order: 3;
-    width: 100%;
-  }
   .usage-breakdown {
     border: none;
     background: transparent;
@@ -855,7 +841,9 @@
   .usage-mobile-row__top b {
     color: var(--yc-green-strong);
     font: var(--yc-weight-semibold) var(--yc-size-xs) / var(--yc-leading-xs) var(--yc-font-mono);
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-inline-size: 50%;
   }
   .usage-mobile-row p {
     margin-top: var(--yc-space-2);
@@ -930,7 +918,6 @@
   .usage-refresh[aria-busy="true"] svg {
     animation: none;
   }
-  .usage-tabs button,
   .usage-toggle::before {
     transition: none;
   }

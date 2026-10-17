@@ -33,6 +33,10 @@ import type {
   GuardrailRequestReplyInput,
   GuardrailStatusInput,
   HealthStopInput,
+  IncidentGuidanceClearInput,
+  IncidentGuidanceGetInput,
+  IncidentRecentInput,
+  IncidentReportInput,
   IntegrationCommandCancelInput,
   IntegrationCommandConnectInput,
   IntegrationCommandStatusInput,
@@ -100,6 +104,7 @@ import type {
   ProviderIntegrationsInput,
   ProviderListInput,
   ProviderRefreshInput,
+  ProviderUsageForecastInput,
   ProviderUsageGetInput,
   ProviderUsageListInput,
   PtyConnectTokenInput,
@@ -115,6 +120,8 @@ import type {
   QuestionRequestListInput,
   ReferenceListInput,
   RemoteSetInput,
+  ReviewDecideInput,
+  ReviewListInput,
   ServerTelemetryAppendInput,
   ServerTelemetryConsentSetInput,
   ServerTelemetryListInput,
@@ -147,6 +154,7 @@ import type {
   SessionPendingListInput,
   SessionPinInput,
   SessionPredictionInput,
+  SessionPromptCostsInput,
   SessionPromptGenerateInput,
   SessionPromptInput,
   SessionRemoveInput,
@@ -168,6 +176,7 @@ import type {
   SessionSwitchAgentInput,
   SessionSwitchModelInput,
   SessionSyntheticInput,
+  SessionTaskCostsInput,
   SessionTodoListInput,
   SessionTodoUpdateInput,
   SessionUnarchiveInput,
@@ -418,6 +427,16 @@ export const methodCoverage = [
     operationID: 4078,
   },
   {
+    method: "session.promptCosts",
+    operation: "session.promptCosts",
+    operationID: 4084,
+  },
+  {
+    method: "session.taskCosts",
+    operation: "session.taskCosts",
+    operationID: 4085,
+  },
+  {
     method: "session.skills",
     operation: "session.skills",
     operationID: 4062,
@@ -591,6 +610,11 @@ export const methodCoverage = [
     method: "provider.get",
     operation: "provider.get",
     operationID: 2050,
+  },
+  {
+    method: "providerUsage.forecast",
+    operation: "providerUsage.forecast",
+    operationID: 2063,
   },
   {
     method: "providerUsage.list",
@@ -1148,6 +1172,26 @@ export const methodCoverage = [
     operationID: 2059,
   },
   {
+    method: "incident.report",
+    operation: "incident.report",
+    operationID: 2064,
+  },
+  {
+    method: "incident.recent",
+    operation: "incident.recent",
+    operationID: 2065,
+  },
+  {
+    method: "incident.guidance.get",
+    operation: "incident.guidance.get",
+    operationID: 2066,
+  },
+  {
+    method: "incident.guidance.clear",
+    operation: "incident.guidance.clear",
+    operationID: 2067,
+  },
+  {
     method: "remote.get",
     operation: "remote.get",
     operationID: 3037,
@@ -1171,6 +1215,16 @@ export const methodCoverage = [
     method: "config.diagnostics",
     operation: "config.diagnostics",
     operationID: 2020,
+  },
+  {
+    method: "review.list",
+    operation: "session.review.list",
+    operationID: 4086,
+  },
+  {
+    method: "review.decide",
+    operation: "session.review.decide",
+    operationID: 4087,
   },
 ] as const
 export function bind(transport: LocalTransport): Client {
@@ -1582,6 +1636,10 @@ export function bind(transport: LocalTransport): Client {
             params: { sessionID: input["sessionID"] },
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
@@ -1591,6 +1649,20 @@ export function bind(transport: LocalTransport): Client {
               order: input["order"],
             },
           },
+          input,
+          requestOptions,
+        ),
+      promptCosts: (input: SessionPromptCostsInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["session"]["promptCosts"]>>>(
+          { method: "session.promptCosts", operationID: 4084, resultPath: ["data"], empty: false },
+          { params: { sessionID: input["sessionID"] }, query: { inputIDs: input["inputIDs"] } },
+          input,
+          requestOptions,
+        ),
+      taskCosts: (input: SessionTaskCostsInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["session"]["taskCosts"]>>>(
+          { method: "session.taskCosts", operationID: 4085, resultPath: ["data"], empty: false },
+          { params: { sessionID: input["sessionID"] }, query: { sessionIDs: input["sessionIDs"] } },
           input,
           requestOptions,
         ),
@@ -1884,6 +1956,13 @@ export function bind(transport: LocalTransport): Client {
         ),
     },
     providerUsage: {
+      forecast: (input: ProviderUsageForecastInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["providerUsage"]["forecast"]>>>(
+          { method: "providerUsage.forecast", operationID: 2063, resultPath: [], empty: false },
+          { query: { location: input["location"], localScope: input["localScope"] } },
+          input,
+          requestOptions,
+        ),
       list: (input?: ProviderUsageListInput, requestOptions?: RequestOptions) =>
         transport.call<Awaited<ReturnType<Client["providerUsage"]["list"]>>>(
           { method: "providerUsage.list", operationID: 2055, resultPath: [], empty: false },
@@ -3017,6 +3096,10 @@ export function bind(transport: LocalTransport): Client {
           {
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
@@ -3029,6 +3112,48 @@ export function bind(transport: LocalTransport): Client {
           input,
           requestOptions,
         ),
+    },
+    incident: {
+      report: (input: IncidentReportInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["incident"]["report"]>>>(
+          { method: "incident.report", operationID: 2064, resultPath: ["data"], empty: false },
+          {
+            query: {
+              group: input["group"],
+              from: input["from"],
+              to: input["to"],
+              offset: input["offset"],
+              limit: input["limit"],
+            },
+          },
+          input,
+          requestOptions,
+        ),
+      recent: (input: IncidentRecentInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["incident"]["recent"]>>>(
+          { method: "incident.recent", operationID: 2065, resultPath: ["data"], empty: false },
+          {
+            query: { provider: input["provider"], model: input["model"], agent: input["agent"], limit: input["limit"] },
+          },
+          input,
+          requestOptions,
+        ),
+      guidance: {
+        get: (input: IncidentGuidanceGetInput, requestOptions?: RequestOptions) =>
+          transport.call<Awaited<ReturnType<Client["incident"]["guidance"]["get"]>>>(
+            { method: "incident.guidance.get", operationID: 2066, resultPath: ["data"], empty: false },
+            { query: { provider: input["provider"], model: input["model"], location: input["location"] } },
+            input,
+            requestOptions,
+          ),
+        clear: (input: IncidentGuidanceClearInput, requestOptions?: RequestOptions) =>
+          transport.call<Awaited<ReturnType<Client["incident"]["guidance"]["clear"]>>>(
+            { method: "incident.guidance.clear", operationID: 2067, resultPath: ["data"], empty: false },
+            { query: { provider: input["provider"], model: input["model"], location: input["location"] } },
+            input,
+            requestOptions,
+          ),
+      },
     },
     remote: {
       get: (requestOptions?: RequestOptions) =>
@@ -3067,6 +3192,25 @@ export function bind(transport: LocalTransport): Client {
         transport.call<Awaited<ReturnType<Client["config"]["diagnostics"]>>>(
           { method: "config.diagnostics", operationID: 2020, resultPath: [], empty: false },
           { query: { location: input?.["location"] } },
+          input,
+          requestOptions,
+        ),
+    },
+    review: {
+      list: (input: ReviewListInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["review"]["list"]>>>(
+          { method: "review.list", operationID: 4086, resultPath: ["data"], empty: false },
+          { params: { sessionID: input["sessionID"] } },
+          input,
+          requestOptions,
+        ),
+      decide: (input: ReviewDecideInput, requestOptions?: RequestOptions) =>
+        transport.call<Awaited<ReturnType<Client["review"]["decide"]>>>(
+          { method: "review.decide", operationID: 4087, resultPath: [], empty: true },
+          {
+            params: { sessionID: input["sessionID"], itemID: input["itemID"] },
+            payload: { decision: input["decision"] },
+          },
           input,
           requestOptions,
         ),

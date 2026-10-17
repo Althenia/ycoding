@@ -10,6 +10,8 @@ import { useTheme } from "../../context/theme"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
+import { stringWidth } from "../../util/string-width"
+import { approvalLevelLabel } from "../../util/session-autonomy"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -30,7 +32,16 @@ export type SessionHeaderOperationalState =
 
 export type SessionHeaderState =
   | SessionHeaderOperationalState
-  | { type: "autonomy"; yolo: number; goalActive: boolean; state: SessionHeaderOperationalState }
+  | {
+      type: "autonomy"
+      yolo?: 0 | 1 | 2
+      goalActive: boolean
+      answersAuto?: boolean
+      asleep?: boolean
+      machineAwake?: boolean
+      review?: number
+      state: SessionHeaderOperationalState
+    }
 
 type SessionHeaderTimedState = Extract<
   SessionHeaderOperationalState,
@@ -85,7 +96,7 @@ export function headerModelRef<T extends { providerID: string; id: string; varia
  * Truncation ladder from the design contract: ellipsize identifiers and drop them whole rather than
  * shorten status labels; below 120 columns, only working drops its state word.
  */
-export function headerSegments(input: SessionHeaderIdentity & { width: number }) {
+export function headerSegments(input: SessionHeaderIdentity & { width: number; availableWidth?: number }) {
   const path = input.width >= 120 ? truncatePath(input.path, input.width) : undefined
   const branch = input.width >= 100 ? input.branch : undefined
   // A profile names the credential the provider resolves the request through, so it rides with the
@@ -106,7 +117,14 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
     ],
     ["variant", input.variant],
   ]
-  return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
+  return (["path", "branch", "agent", "variant"] as const).reduce(
+    (segments, key) =>
+      input.availableWidth !== undefined &&
+      stringWidth(segments.map((segment) => segment.label).join(" · ")) > input.availableWidth
+        ? segments.filter((segment) => segment.key !== key)
+        : segments,
+    ordered.flatMap(([key, label]) => (label ? [{ key, label }] : [])),
+  )
 }
 
 export function pendingModelVariant(
@@ -126,12 +144,6 @@ function pendingAgent(current: string | undefined, pending: string | undefined) 
   return pending && current?.toLocaleLowerCase() !== pending.toLocaleLowerCase() ? `→ ${pending}` : undefined
 }
 
-function headerYoloLevel(yolo: unknown): number {
-  if (typeof yolo === "number") return yolo
-  if (yolo === true) return 2
-  return 0
-}
-
 export function headerStatusLabel(
   state: SessionHeaderState,
   width: number,
@@ -139,13 +151,22 @@ export function headerStatusLabel(
   now = Date.now(),
 ): string {
   if (state.type === "autonomy") {
-    const level = headerYoloLevel(state.yolo)
-    let autonomy: string
-    if (level > 0 && state.goalActive) autonomy = `YOLO ${level} + Goal · autonomous`
-    else if (level > 0) autonomy = `YOLO ${level} · auto-approve`
-    else if (state.goalActive) autonomy = "Goal · autonomous"
-    else autonomy = "autonomous"
-    return `${autonomy} · ${headerStatusLabel(state.state, width, runningShells, now)}`
+    const parts =
+      state.yolo === undefined
+        ? ["unknown"]
+        : [
+            approvalLevelLabel(state.yolo),
+            ...(state.goalActive ? ["goal"] : []),
+            ...(state.asleep ? ["asleep"] : []),
+            ...(state.answersAuto ? ["answers auto"] : []),
+          ]
+    const inner = headerStatusLabel(state.state, width, runningShells, now)
+    return [
+      ...parts,
+      ...(state.asleep && state.machineAwake === false ? ["machine may sleep"] : []),
+      ...(state.review ? [`review ${state.review}`] : []),
+      state.review && inner === "ready" ? "waiting for your review" : inner,
+    ].join(" · ")
   }
   if (state.type === "retry-scheduled")
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
@@ -222,10 +243,9 @@ export function Header(
       current.type === "awaiting-input"
     )
       return current
-    return undefined
   })
   createEffect(() => {
-    // The shared `now` tick drives the retry countdown and active elapsed states;
+    // The shared `now` tick drives the retry countdown and the active elapsed statuses;
     // terminal states (ready/waiting/provider-error/cancelled/completed/failed/lost) freeze elapsed and stop the tick.
     const active = timed()
     const op = operational()
@@ -261,9 +281,30 @@ export function Header(
       ),
     ].filter((value): value is string => !!value)
   })
+  const inset = () => (props.subagent ? 3 : 1)
+  const gap = () => (props.subagent ? 6 : 2)
+  const label = () =>
+    props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())
+  const spinning = () =>
+    !props.connection &&
+    ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")
+  const brandWidth = () =>
+    stringWidth(
+      props.sideChat ? "BTW" : props.subagent ? `${getGlyph("subagent").glyph} subagent` : `v${InstallationVersion}`,
+    ) + (!props.sideChat && !props.subagent ? 3 : 0)
   const segments = createMemo(() =>
     headerSegments({
       width: dimensions().width,
+      availableWidth: Math.max(
+        0,
+        dimensions().width -
+          inset() -
+          3 -
+          gap() * 2 -
+          brandWidth() -
+          stringWidth(label()) -
+          (spinning() ? stringWidth(DOT_TRAIL_FRAMES[0]) + 1 : 0),
+      ),
       path: identity().path,
       branch: identity().branch,
       agent: identity().agent,
@@ -277,7 +318,11 @@ export function Header(
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
     if (current.type === "autonomy")
-      return headerYoloLevel(current.yolo) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
+      return current.yolo === undefined
+        ? theme.text.subdued
+        : current.yolo > 0
+          ? theme.text.feedback.error.default
+          : theme.text.feedback.success.default
     if (active.type === "provider-error") return theme.text.feedback.error.default
     if (active.type === "retrying" || active.type === "retry-scheduled") return theme.text.feedback.warning.default
     if (active.type === "awaiting-input") return theme.text.feedback.warning.default
@@ -324,8 +369,8 @@ export function Header(
     <>
       <box
         flexDirection="row"
-        gap={props.subagent ? 6 : 2}
-        paddingLeft={props.subagent ? 3 : 1}
+        gap={gap()}
+        paddingLeft={inset()}
         paddingRight={3}
         height={3}
         flexShrink={0}
@@ -347,7 +392,7 @@ export function Header(
             {props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
           </text>
         </Show>
-        <text flexGrow={1} wrapMode="none">
+        <text flexGrow={1} minWidth={0} wrapMode="none">
           <For each={segments()}>
             {(segment, index) => (
               <>
@@ -378,17 +423,11 @@ export function Header(
           </For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-          <Show
-            when={
-              !props.connection &&
-              ((effectiveOperational().type === "working" && !props.subagent) ||
-                effectiveOperational().type === "retrying")
-            }
-          >
+          <Show when={spinning()}>
             <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
           </Show>
           <text fg={props.connection ? theme.text.subdued : statusColor()} wrapMode="none">
-            {props.connection ?? headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}
+            {label()}
           </text>
         </box>
       </box>

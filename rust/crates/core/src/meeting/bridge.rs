@@ -1,4 +1,5 @@
 use super::BoxFuture;
+use super::owner::{Outcome, Update, parse_update};
 use super::pcm::{AudioSource, decode_base64, encode_base64};
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -20,6 +21,7 @@ const MAX_DRAIN: usize = 8 * MAX_BODY;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOSE_GRACE: Duration = Duration::from_secs(3);
 const VIEW_ROUTES: [&str; 4] = ["/view/state", "/view/control", "/view/ask", "/view/capture"];
+const OWNER_ROUTE: &str = "/view/owner/settings";
 const VIEW_FIELDS: [&str; 12] = [
     "meeting",
     "meetings",
@@ -82,6 +84,15 @@ pub trait Handlers: Send + Sync + 'static {
     fn ask(&self, _question: String) -> Option<BoxFuture<'_, Result<Value, CallbackFailed>>> {
         None
     }
+    fn owner_read(&self) -> Option<BoxFuture<'_, Result<Value, CallbackFailed>>> {
+        None
+    }
+    fn owner_update(
+        &self,
+        _update: Update,
+    ) -> Option<BoxFuture<'_, Result<Outcome, CallbackFailed>>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +150,8 @@ struct Shared {
     control_digest: [u8; 32],
     view_digest: [u8; 32],
     view_key: String,
+    owner_digest: [u8; 32],
+    owner_key: String,
     assets: ViewAssets,
     handlers: Arc<dyn Handlers>,
     state: Mutex<Activity>,
@@ -166,11 +179,15 @@ impl Bridge {
             .port();
         let view_key =
             hex(&crate::platform::random::<32>().map_err(|error| BridgeError(error.to_string()))?);
+        let owner_key =
+            hex(&crate::platform::random::<32>().map_err(|error| BridgeError(error.to_string()))?);
         let shared = Arc::new(Shared {
             port,
             control_digest: digest(&options.control_token),
             view_digest: digest(&view_key),
             view_key,
+            owner_digest: digest(&owner_key),
+            owner_key,
             assets: options.assets,
             handlers,
             state: Mutex::new(Activity {
@@ -293,28 +310,35 @@ async fn route(shared: &Arc<Shared>, request: Request) -> Reply {
         return Reply::asset(asset, &shared.assets.policy);
     }
     let view = VIEW_ROUTES.contains(&path);
-    if path != "/control" && !view {
+    let owner = path == OWNER_ROUTE;
+    if path != "/control" && !view && !owner {
         return reply(404, json!({ "error": "not_found" }));
     }
-    if view && foreign {
+    if (view || owner) && foreign {
         return reply(403, json!({ "error": "invalid_origin" }));
     }
     if path == "/control" && origin.is_some() {
         return reply(403, json!({ "error": "origin_forbidden" }));
     }
-    if request.method()
-        != if path == "/view/state" {
-            Method::GET
-        } else {
-            Method::POST
-        }
-    {
+    let allowed = if owner {
+        [Method::GET, Method::POST].contains(request.method())
+    } else {
+        request.method()
+            == if path == "/view/state" {
+                Method::GET
+            } else {
+                Method::POST
+            }
+    };
+    if !allowed {
         return reply(405, json!({ "error": "method_not_allowed" }));
     }
     let token = joined(headers, &header::AUTHORIZATION)
         .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned))
         .unwrap_or_default();
-    let expected = if view {
+    let expected = if owner {
+        &shared.owner_digest
+    } else if view {
         &shared.view_digest
     } else {
         &shared.control_digest
@@ -331,10 +355,13 @@ async fn route(shared: &Arc<Shared>, request: Request) -> Reply {
     if path == "/view/state" {
         return view_state(shared).await;
     }
+    if owner && request.method() == Method::GET {
+        return owner_read(shared).await;
+    }
     if !joined(headers, &header::CONTENT_TYPE).is_some_and(|value| json_content_type(&value)) {
         return reply(415, json!({ "error": "invalid_content_type" }));
     }
-    let limit = if view && path != "/view/capture" {
+    let limit = if (view || owner) && path != "/view/capture" {
         MAX_VIEW_BODY
     } else {
         MAX_BODY
@@ -362,6 +389,7 @@ async fn route(shared: &Arc<Shared>, request: Request) -> Reply {
     match path.as_str() {
         "/view/control" => view_control(shared, body).await,
         "/view/ask" => view_ask(shared, body).await,
+        OWNER_ROUTE => owner_update(shared, body).await,
         "/control" => control(shared, body).await,
         _ => {
             let shared = shared.clone();
@@ -443,14 +471,48 @@ async fn view_ask(shared: &Arc<Shared>, body: Value) -> Reply {
     reply(200, answer)
 }
 
+async fn owner_read(shared: &Arc<Shared>) -> Reply {
+    match run_optional(shared.handlers.clone(), |handlers| handlers.owner_read()).await {
+        Some(None) => reply(503, json!({ "error": "owner_unavailable" })),
+        Some(Some(Ok(settings))) => reply(200, settings),
+        _ => reply(500, json!({ "error": "owner_failed" })),
+    }
+}
+
+async fn owner_update(shared: &Arc<Shared>, body: Value) -> Reply {
+    let Some(update) = parse_update(&body) else {
+        return reply(400, json!({ "error": "invalid_settings" }));
+    };
+    match run_optional(shared.handlers.clone(), move |handlers| {
+        handlers.owner_update(update)
+    })
+    .await
+    {
+        Some(None) => reply(503, json!({ "error": "owner_unavailable" })),
+        Some(Some(Ok(Outcome::Saved(settings)))) => reply(200, settings),
+        Some(Some(Ok(Outcome::SelectionUnavailable))) => {
+            reply(422, json!({ "error": "selection_unavailable" }))
+        }
+        _ => reply(500, json!({ "error": "owner_failed" })),
+    }
+}
+
 async fn control(shared: &Arc<Shared>, body: Value) -> Reply {
-    if body.get("action").and_then(Value::as_str) == Some("view") {
+    let page = match body.get("action").and_then(Value::as_str) {
+        Some("view") => Some(format!("#key={}", shared.view_key)),
+        Some("owner-view") => Some(format!(
+            "#key={}&owner={}",
+            shared.view_key, shared.owner_key
+        )),
+        _ => None,
+    };
+    if let Some(fragment) = page {
         if !exact_keys(&body, &["action"]) {
             return reply(400, json!({ "error": "invalid_action" }));
         }
         return reply(
             200,
-            json!({ "url": format!("http://127.0.0.1:{}/view#key={}", shared.port, shared.view_key) }),
+            json!({ "url": format!("http://127.0.0.1:{}/view{fragment}", shared.port) }),
         );
     }
     match run(shared.handlers.clone(), move |handlers| {

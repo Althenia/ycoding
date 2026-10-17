@@ -585,6 +585,7 @@ fn blocker_task(store: &Client, parent: &str, task: &str, state: &str, notice: b
                     revision: 0,
                     time_created: 1,
                     time_updated: 1,
+                    usage_anchor: None,
                 },
             )?;
             if notice {
@@ -674,6 +675,52 @@ async fn unfinished_family_work_refuses_completion() {
         complete(&store, &job::Jobs::new(), "ses_one", &running).await;
         assert_eq!(receipts(&store, "ses_one"), [], "{blocker}");
     }
+}
+
+fn review_event(store: &Client, session: &str, type_: &str, data: serde_json::Value) {
+    let event = NewEvent {
+        id: format!("evt_review_{}", EVENTS.fetch_add(1, Ordering::Relaxed)).into(),
+        aggregate_id: session.into(),
+        created: 40,
+        type_: type_.into(),
+        data: value(data),
+    };
+    store
+        .submit(move |tx| append(tx, &event, None).map(|_| ()))
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_open_review_item_anywhere_in_the_family_refuses_completion_until_it_settles() {
+    let store = support::store();
+    child(&store, "ses_child", "ses_one");
+    child(&store, "ses_grand", "ses_child");
+    settled(&store, "ses_one", &Exchange::default());
+    review_event(
+        &store,
+        "ses_grand",
+        "session.review.deferred.1",
+        json!({
+            "sessionID": "ses_grand",
+            "itemID": "rvw_completion_gate",
+            "kind": "question",
+            "reason": "free_text",
+            "origin": {"requestID": "frm_completion_gate"},
+            "payload": {"type": "form", "title": "Plan", "fields": [{"key": "plan", "type": "string", "required": true}]},
+        }),
+    );
+    complete(&store, &job::Jobs::new(), "ses_one", &["ses_one"]).await;
+    assert_eq!(receipts(&store, "ses_one"), []);
+    review_event(
+        &store,
+        "ses_grand",
+        "session.review.withdrawn.1",
+        json!({"sessionID": "ses_grand", "itemID": "rvw_completion_gate", "reason": "task_closed"}),
+    );
+    complete(&store, &job::Jobs::new(), "ses_one", &["ses_one"]).await;
+    assert_eq!(receipts(&store, "ses_one").len(), 1);
 }
 
 async fn started_job(jobs: &job::Jobs, kind: &str, session: &str) -> oneshot::Sender<()> {

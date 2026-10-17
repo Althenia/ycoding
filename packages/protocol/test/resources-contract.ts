@@ -1,4 +1,5 @@
 import { wireContract } from "./wire-contract.js"
+import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { Schema, SchemaAST } from "effect"
 import { resourceEndpoints, middlewareErrors, allEndpoints } from "./resources-source.js"
 import type { Constraints } from "../src/v5/constraints.js"
@@ -64,6 +65,11 @@ export const resourceIDs = {
   "skill.list": 2057,
   "usage.get": 2058,
   "usage.report": 2059,
+  "providerUsage.forecast": 2063,
+  "incident.report": 2064,
+  "incident.recent": 2065,
+  "incident.guidance.get": 2066,
+  "incident.guidance.clear": 2067,
 } as const
 
 export type ResourceField = {
@@ -73,6 +79,7 @@ export type ResourceField = {
   constraints: readonly Schema.Annotations.Filter[]
   ast?: SchemaAST.AST
   source?: string
+  itemChecks?: readonly Schema.Annotations.Filter[]
 }
 export type ResourceMessage = { fields: ResourceField[]; oneof: boolean }
 const identifier = (value: string) => value.replace(/[^a-zA-Z0-9]/g, "_")
@@ -109,6 +116,9 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
     return `packages/protocol/src/groups/project-artifact.ts#${parts[0]}`
   if (parts[0].endsWith("Error")) return `packages/protocol/src/errors.ts#${parts[0]}`
   if (parts[0] === "LocationQuery") return "packages/protocol/src/groups/location.ts#LocationQuery"
+  if (parts[0] === "ModelIncidentReportQuery") return "packages/protocol/src/groups/incident.ts#IncidentReportQuery"
+  if (parts[0] === "ModelIncidentRecentQuery") return "packages/protocol/src/groups/incident.ts#IncidentRecentQuery"
+  if (parts[0] === "ModelIncidentGuidanceQuery") return "packages/protocol/src/groups/incident.ts#IncidentGuidanceQuery"
   if (parts[0] === "ProjectInventoryQuery") return "packages/protocol/src/groups/project.ts#ProjectInventoryQuery"
   if (parts[0] === "ProjectInventoryResponse") return "packages/protocol/src/groups/project.ts#ProjectGroup"
   const modules: Record<string, string> = {
@@ -120,6 +130,7 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
     Location: "location",
     Mcp: "mcp",
     Model: "model",
+    ModelIncident: "model-incident",
     Money: "money",
     Permission: "permission",
     Plugin: "plugin",
@@ -128,11 +139,18 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
     Provider: "provider",
     ProviderRequest: "provider-request",
     ProviderUsage: "provider-usage",
+    UsageAnchor: "usage-anchor",
+    UsageAccounting: "usage-accounting",
+    UsageForecast: "usage-forecast",
     Reference: "reference",
     Skill: "skill",
     TokenUsage: "token-usage",
   }
-  if (modules[parts[0]]) return `packages/schema/src/${modules[parts[0]]}.ts#${parts[0]}.${parts[1] ?? "Info"}`
+  const owner = hint.split(/[._]/)
+  if (parts[0].startsWith("Session") && modules[owner[0]])
+    return `packages/schema/src/${modules[owner[0]]}.ts#${owner[0]}.${owner[1] ?? "Info"}`
+  if (modules[parts[0]])
+    return `packages/schema/src/${modules[parts[0]]}.ts#${parts[0]}.${parts[1]?.replace(/Value\d+$/, "") ?? "Info"}`
   const group = resourceEndpoints()
     .find(
       ({ endpoint }) =>
@@ -144,8 +162,16 @@ export function resourceSourceIdentity(ast: SchemaAST.AST, hint: string) {
   return `packages/protocol/src/groups/${group.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}.ts#${group[0].toUpperCase() + group.slice(1)}Group`
 }
 
-export function resourceContract() {
-  const contract = wireContract(resourceEndpoints(), resourceIDs, resourceSourceIdentity, middlewareErrors)
+export function resourceContract(allocation: WireAllocation = wireAllocation) {
+  const contract = wireContract(
+    resourceEndpoints(),
+    resourceIDs,
+    resourceSourceIdentity,
+    middlewareErrors,
+    {},
+    [],
+    allocation,
+  )
   const sources = contract.enums.get("ProviderUsage_Source")
   if (sources)
     contract.enums.set("ProviderUsage_Source", [
@@ -225,14 +251,13 @@ export function resourceFieldConstraints(field: ResourceField): Constraints {
     if (typeof meta !== "object" || meta === null) continue
     const min = "minLength" in meta && typeof meta.minLength === "number" ? meta.minLength : undefined
     const max = "maxLength" in meta && typeof meta.maxLength === "number" ? meta.maxLength : undefined
-    if (field.type === "LosslessString") {
-      bounds.utf16Min = min ?? bounds.utf16Min
-      bounds.utf16Max = max ?? bounds.utf16Max
-    }
-    if (field.presence === "repeated" || field.type === "bytes") {
-      bounds.countMin = min ?? bounds.countMin
-      bounds.countMax = max ?? bounds.countMax
-    }
+    const item = field.itemChecks?.includes(constraint)
+    const text = field.type === "LosslessString" && item !== false
+    const count = (field.presence === "repeated" || field.type === "bytes") && item !== true
+    bounds.utf16Min = text ? (min ?? bounds.utf16Min) : bounds.utf16Min
+    bounds.utf16Max = text ? (max ?? bounds.utf16Max) : bounds.utf16Max
+    bounds.countMin = count ? (min ?? bounds.countMin) : bounds.countMin
+    bounds.countMax = count ? (max ?? bounds.countMax) : bounds.countMax
   }
   return bounds
 }
@@ -251,19 +276,19 @@ function fieldOption(field: ResourceField) {
   return entries.length ? ` [(ycoding.v5.constraints) = { ${entries.join(" ")} }]` : ""
 }
 
-export function resourceProto(sharedFile = false) {
-  const contract = resourceContract()
+export function resourceProto(sharedFile = false, allocation: WireAllocation = wireAllocation) {
+  const contract = resourceContract(allocation)
   const shared = resourceSharedSet()
   return (
     (
       'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\n' +
       (sharedFile ? "" : 'import "ycoding/v5/shared.proto";\n') +
-      (sharedFile ? "\n" : "\noption (ycoding.v5.operation_range) = { first: 2000 last: 2059 };\n\n") +
+      (sharedFile ? "\n" : "\noption (ycoding.v5.operation_range) = { first: 2000 last: 2067 };\n\n") +
       Array.from(contract.enums)
         .filter(([name]) => shared.has(name) === sharedFile)
         .map(
           ([name, values]) =>
-            `enum ${name} {\n${values.map((value, index) => `  ${name.toUpperCase()}_${typeof value === "string" ? identifier(value).toUpperCase() : String(value).replace("-", "MINUS_")} = ${index + 1};`).join("\n")}\n}`,
+            `enum ${name} {\n${values.map((value, index) => `  ${name.toUpperCase()}_${typeof value === "string" ? identifier(value).toUpperCase() : String(value).replace("-", "MINUS_")} = ${enumNumbers(name, values, allocation)[index]};`).join("\n")}\n${reservedLine("enum", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +
@@ -271,7 +296,7 @@ export function resourceProto(sharedFile = false) {
         .filter(([name]) => shared.has(name) === sharedFile)
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +
@@ -284,7 +309,7 @@ export function resourceProto(sharedFile = false) {
                 .filter((operation) => operation.group === group)
                 .map(
                   (operation) =>
-                    `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((error) => `      error_types: "ycoding.v5.${error}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${connectorRoles(operation.name)}      scope: ${["usage.get", "usage.report", "project.list", "project.inventory", "project.forget"].includes(operation.name) ? "MACHINE" : "LOCATION"}\n      mutation: ${operation.method === "GET" ? "READ" : "MUTATION"}\n      settlement: COMPLETED\n      paging: ${operation.name === "usage.report" ? "OFFSET" : operation.name === "project.inventory" ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${["agent.list", "model.list", "model.default", "provider.list", "provider.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.complete"].includes(operation.name) ? "SECRET" : "PRIVATE"}\n    };\n  }`,
+                    `  rpc ${operation.rpc}(${operation.request}) returns (${operation.result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${operation.id}\n      diagnostic_name: ${JSON.stringify(operation.name)}\n${operation.errors.map((error) => `      error_types: "ycoding.v5.${error}"`).join("\n")}\n      roles: LOCAL_CLIENT\n${connectorRoles(operation.name)}      scope: ${["usage.get", "usage.report", "incident.report", "incident.recent", "project.list", "project.inventory", "project.forget"].includes(operation.name) ? "MACHINE" : "LOCATION"}\n      mutation: ${operation.method === "GET" ? "READ" : "MUTATION"}\n      settlement: COMPLETED\n      paging: ${operation.name === "usage.report" || operation.name === "incident.report" ? "OFFSET" : operation.name === "project.inventory" ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${["agent.list", "model.list", "model.default", "provider.list", "provider.get", "integration.connect.key", "integration.oauth.connect", "integration.oauth.complete"].includes(operation.name) ? "SECRET" : "PRIVATE"}\n    };\n  }`,
                 )
                 .join("\n")}\n}`,
           ).join("\n\n")) +

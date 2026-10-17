@@ -2678,6 +2678,7 @@ fn ac_wire_008_all_non_tiny_controls_are_normal_and_require_consumption() {
             outstanding: None,
             failed: None,
             details: None,
+            lost: None,
         }),
         v5::control::Kind::ResyncRequired(v5::ResyncRequired {
             scope: batch("a").scope,

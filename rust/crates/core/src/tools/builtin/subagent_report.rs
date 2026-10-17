@@ -49,10 +49,11 @@ impl Tool for SubagentReport {
                 Report::Question { text, data } => {
                     let asked = self
                         .orchestration
-                        .question(
+                        .question_attributed(
                             &context.session_id,
                             &text.to_utf8().unwrap_or_default(),
                             data,
+                            &context.attribution,
                         )
                         .await
                         .map_err(failure)?;

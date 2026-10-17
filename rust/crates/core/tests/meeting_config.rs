@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use ycoding_core::meeting::config::{AnalysisModel, MeetingConfig, TranscriptionConfig};
+use ycoding_schema::DomainDecode;
 
 fn parse(value: Value) -> Result<MeetingConfig, String> {
     MeetingConfig::parse(&value).map_err(|error| error.to_string())
@@ -151,7 +152,7 @@ fn knowledge_bindings_are_bounded_and_strict() {
     let configured = parse(json!({ "knowledge": { "bindings": [binding.clone()] } })).unwrap();
     assert_eq!(
         configured.to_value()["knowledge"]["bindings"],
-        json!([binding.clone()])
+        json!([{ "server": "wiki", "search": "search", "read": "read", "write": "write", "enabled": true }])
     );
     assert!(parse(json!({ "knowledge": { "bindings": vec![binding.clone(); 4] } })).is_ok());
     assert!(parse(json!({ "knowledge": { "bindings": vec![binding; 5] } })).is_err());
@@ -203,6 +204,147 @@ fn explicit_analysis_model_and_fallback_round_trip() {
     assert_eq!(config.transcription.cache_dir, "/models");
     assert_eq!(MeetingConfig::parse(&config.to_value()).unwrap(), config);
     assert!(parse(json!({ "transcription": { "device": "tpu" } })).is_err());
+}
+
+#[test]
+fn ask_model_defaults_to_inherit_and_accepts_only_inherit_or_a_bounded_reference() {
+    let config = parse(json!({})).unwrap();
+    assert_eq!(config.analysis.ask_model, AnalysisModel::Inherit);
+    assert_eq!(config.to_value()["analysis"]["askModel"], "inherit");
+    let explicit = parse(json!({ "analysis": {
+        "model": { "providerID": "p", "id": "analysis" },
+        "askModel": { "providerID": "p", "id": "m", "variant": "high", "profile": "acct" },
+    } }))
+    .unwrap();
+    assert_eq!(
+        explicit.analysis.ask_model,
+        AnalysisModel::Explicit {
+            id: "m".into(),
+            provider_id: "p".into(),
+            variant: Some("high".into()),
+            profile: Some("acct".into()),
+        }
+    );
+    assert_eq!(
+        explicit.analysis.model,
+        AnalysisModel::Explicit {
+            id: "analysis".into(),
+            provider_id: "p".into(),
+            variant: None,
+            profile: None,
+        }
+    );
+    assert_eq!(
+        explicit.to_value()["analysis"]["askModel"],
+        json!({ "providerID": "p", "id": "m", "variant": "high", "profile": "acct" })
+    );
+    assert_eq!(
+        MeetingConfig::parse(&explicit.to_value()).unwrap(),
+        explicit
+    );
+    for rejected in [
+        json!({ "analysis": { "askModel": { "providerID": "p" } } }),
+        json!({ "analysis": { "askModel": { "id": "m" } } }),
+        json!({ "analysis": { "askModel": "p/m" } }),
+        json!({ "analysis": { "askModel": null } }),
+        json!({ "analysis": { "askModel": { "providerID": "p", "id": "m", "account": "x" } } }),
+        json!({ "analysis": { "askModel": { "providerID": "p", "id": "m", "variant": 1 } } }),
+    ] {
+        assert!(parse(rejected.clone()).is_err(), "accepted {rejected}");
+    }
+}
+
+#[test]
+fn knowledge_bindings_default_enabled_and_preserve_a_disabled_binding() {
+    let bound = parse(json!({ "knowledge": { "bindings": [
+        { "server": "docs", "search": "search", "read": "read" },
+        { "server": "wiki", "search": "find", "read": "get", "write": "put", "enabled": false },
+    ] } }))
+    .unwrap();
+    assert!(bound.knowledge.bindings[0].enabled);
+    assert!(!bound.knowledge.bindings[1].enabled);
+    assert_eq!(bound.knowledge.bindings[1].write.as_deref(), Some("put"));
+    assert_eq!(
+        bound.to_value()["knowledge"]["bindings"],
+        json!([
+            { "server": "docs", "search": "search", "read": "read", "enabled": true },
+            { "server": "wiki", "search": "find", "read": "get", "write": "put", "enabled": false },
+        ])
+    );
+    assert_eq!(MeetingConfig::parse(&bound.to_value()).unwrap(), bound);
+    for enabled in [json!("false"), json!(0), json!(null)] {
+        assert!(
+            parse(json!({ "knowledge": { "bindings": [
+                { "server": "docs", "search": "search", "read": "read", "enabled": enabled.clone() },
+            ] } }))
+            .is_err(),
+            "accepted enabled {enabled}"
+        );
+    }
+}
+
+#[test]
+fn released_owner_settings_file_decodes_without_relaxing_other_fields() {
+    let released = json!({
+        "analysis": {
+            "model": "inherit",
+            "askModel": { "providerID": "p", "id": "m1", "variant": "deep" },
+            "incremental": false,
+            "maxCharacters": 32000,
+        },
+        "knowledge": {
+            "mcpEnabled": false,
+            "autoApply": false,
+            "requireApproval": true,
+            "retrievalTTL": 300000,
+            "bindings": [{ "server": "docs", "search": "search", "read": "read", "write": "replace", "enabled": true }],
+        },
+    });
+    let config = parse(released.clone()).unwrap();
+    assert!(!config.knowledge.mcp_enabled);
+    let mut auto = released.clone();
+    auto["knowledge"]["autoApply"] = json!(true);
+    let mut approval = released.clone();
+    approval["knowledge"]["requireApproval"] = json!(false);
+    let mut unknown = released;
+    unknown["analysis"]["askModels"] = json!("inherit");
+    for rejected in [auto, approval, unknown] {
+        assert!(parse(rejected.clone()).is_err(), "accepted {rejected}");
+    }
+}
+
+#[test]
+fn explicit_selections_become_model_references_with_variant_and_profile() {
+    assert_eq!(AnalysisModel::Inherit.reference().unwrap(), None);
+    let reference = AnalysisModel::Explicit {
+        id: "vendor/model-x".into(),
+        provider_id: "openrouter".into(),
+        variant: Some("deep".into()),
+        profile: Some("acct".into()),
+    }
+    .reference()
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        reference,
+        ycoding_schema::model::Ref::decode(
+            &ycoding_schema::parse_json(
+                r#"{"id":"vendor/model-x","providerID":"openrouter","variant":"deep","profile":"acct"}"#
+            )
+            .unwrap()
+        )
+        .unwrap()
+    );
+    let bare = AnalysisModel::Explicit {
+        id: "m".into(),
+        provider_id: "p".into(),
+        variant: None,
+        profile: None,
+    }
+    .reference()
+    .unwrap()
+    .unwrap();
+    assert_eq!((bare.variant, bare.profile), (None, None));
 }
 
 #[test]

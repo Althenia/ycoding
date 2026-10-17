@@ -20,6 +20,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -200,6 +201,9 @@ const locations = Layer.effect(
             forConnection: (model) => Effect.succeed(model),
             small: () => Effect.succeed(undefined),
           },
+        }),
+        Layer.mock(SessionGuardrail.Service, {
+          reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
         }),
         Layer.succeed(
           SessionGoal.Service,
@@ -719,5 +723,67 @@ setIt.effect("R7 stopping during calculation prevents late reactivation and cont
       goal: { rawText: "Initial objective", status: "stopped" },
     })
     expect(yield* session.pending(created.id)).toEqual(before)
+  }),
+)
+
+setIt.effect("effective autonomy resolves inherited YOLO, root-only ordinary review approval, and review policy", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const root = yield* session.create({ location })
+    yield* session.autonomy.set({ sessionID: root.id, yolo: 1 })
+    expect(yield* session.autonomy.effective(root.id)).toEqual({
+      yolo: 1,
+      asleep: false,
+      ordinaryReviewsAuto: false,
+      guardrailsEnabled: true,
+      modelReviews: false,
+      hardModelReviews: false,
+    })
+    const child = yield* session.create({ parentID: root.id })
+    yield* events.publish(
+      SessionEvent.Task.Updated,
+      Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
+        sessionID: child.id,
+        change: {
+          type: "launched",
+          parentID: root.id,
+          parentAssistantMessageID: "msg_effective_parent",
+          toolCallID: "call_effective",
+          inputID: "msg_effective_child",
+          description: "Effective child",
+          agent: "build",
+          model: { providerID: "test", id: "model" },
+          promptDigest: "digest",
+          background: true,
+          delivery: "steer",
+        },
+      }),
+    )
+    expect((yield* session.autonomy.effective(child.id)).yolo).toBe(1)
+    yield* session.autonomy.set({ sessionID: child.id, yolo: 2 })
+    expect(yield* session.autonomy.effective(child.id)).toMatchObject({ yolo: 2, ordinaryReviewsAuto: false })
+    yield* session.autonomy.set({ sessionID: root.id, yolo: 2 })
+    expect(yield* session.autonomy.effective(child.id)).toMatchObject({ yolo: 2, ordinaryReviewsAuto: true })
+    yield* session.autonomy.set({ sessionID: root.id, goal: "Explicit objective", yolo: 0 })
+    expect(yield* session.autonomy.effective(root.id)).toMatchObject({ yolo: 0, ordinaryReviewsAuto: false })
+  }),
+)
+
+setIt.effect("Session autonomy owns a durable per-Session autoAnswer toggle and rejects YOLO 3", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const root = yield* session.create({ location })
+    const child = yield* session.create({ parentID: root.id })
+    expect((yield* session.autonomy.get(root.id)).autoAnswer).toBeUndefined()
+    expect(yield* session.autonomy.set({ sessionID: root.id, autoAnswer: true })).toMatchObject({ autoAnswer: true })
+    expect((yield* session.autonomy.get(root.id)).autoAnswer).toBe(true)
+    expect((yield* session.autonomy.get(child.id)).autoAnswer).toBeUndefined()
+    yield* session.autonomy.set({ sessionID: root.id, yolo: 1 })
+    expect(yield* session.autonomy.get(root.id)).toMatchObject({ yolo: 1, autoAnswer: true })
+    const rejected = yield* session.autonomy.set({ sessionID: root.id, yolo: 3 }).pipe(Effect.exit)
+    expect(rejected._tag).toBe("Failure")
+    expect(yield* session.autonomy.get(root.id)).toMatchObject({ yolo: 1, autoAnswer: true })
+    expect(yield* session.autonomy.set({ sessionID: root.id, autoAnswer: false })).toMatchObject({ autoAnswer: false })
   }),
 )

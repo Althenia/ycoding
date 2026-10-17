@@ -37,6 +37,7 @@ export const resourceGroups = [
   ReferenceGroup,
   SkillGroup,
   UsageGroup,
+  ClientApi.groups["server.incident"],
 ]
 type Endpoint = Pick<
   HttpApiEndpoint.Top,

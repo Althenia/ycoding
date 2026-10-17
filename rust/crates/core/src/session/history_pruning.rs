@@ -278,7 +278,7 @@ const ERROR_EVENT_TYPES: [&str; 4] = [
 ];
 
 #[cfg(unix)]
-fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
+pub fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
     use std::os::unix::ffi::OsStrExt;
     let directory = std::ffi::CString::new(directory.as_os_str().as_bytes())
         .map_err(|_| Error::Rejected("invalid backup directory"))?;
@@ -291,7 +291,7 @@ fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
 }
 
 #[cfg(windows)]
-fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
+pub fn free_bytes(directory: &std::path::Path) -> Result<u64, Error> {
     use std::os::windows::ffi::OsStrExt;
     let directory = directory
         .as_os_str()

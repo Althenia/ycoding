@@ -1663,7 +1663,7 @@ async fn session_operations_are_fenced_on_location_generation_denied_and_cancell
     let other_directory = support::world::directory("fence-other");
     let session = world.seed("ses_fence", &directory);
     let fixture = ToolFixture::new();
-    fixture.authority.session("ses_fence", None, 1, false, None);
+    fixture.authority.session("ses_fence", None, 2, false, None);
     let (release, held) = tokio::sync::oneshot::channel();
     let (endpoint, mut received, server) =
         flow::server_replies(vec![flow::Reply::Held(held, flow::TEXT)]).await;

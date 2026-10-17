@@ -31,6 +31,48 @@
   },
   {
     "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "negativeZeros": []
@@ -211,6 +253,12 @@
   },
   {
     "name": "SessionEvent.All",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.All",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "negativeZeros": []
@@ -271,8 +319,8 @@
   },
   {
     "name": "SessionEvent.All",
-    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
-    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
     "negativeZeros": []
   },
   {
@@ -433,6 +481,48 @@
   },
   {
     "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "negativeZeros": []
@@ -595,6 +685,12 @@
   },
   {
     "name": "SessionEvent.Durable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.Durable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "negativeZeros": []
@@ -633,12 +729,6 @@
     "name": "SessionEvent.Durable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.called\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"input\":{},\"executed\":false}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.called\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"input\":{},\"executed\":false}}",
-    "negativeZeros": []
-  },
-  {
-    "name": "SessionEvent.Durable",
-    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
-    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
     "negativeZeros": []
   },
   {
@@ -799,6 +889,48 @@
   },
   {
     "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.dismissed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.escalated\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"requestID\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.guardrail.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.deferred\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.decided\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.withdrawn\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.review.consumed\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.moved\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}}",
     "negativeZeros": []
@@ -961,6 +1093,12 @@
   },
   {
     "name": "SessionEvent.PublicDurable",
+    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.step.rerouted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.PublicDurable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.text.started\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"ordinal\":0}}",
     "negativeZeros": []
@@ -999,12 +1137,6 @@
     "name": "SessionEvent.PublicDurable",
     "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.called\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"input\":{},\"executed\":false}}",
     "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.called\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"input\":{},\"executed\":false}}",
-    "negativeZeros": []
-  },
-  {
-    "name": "SessionEvent.PublicDurable",
-    "input": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
-    "output": "{\"id\":\"evt_1\",\"created\":0,\"type\":\"session.tool.progress\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"callID\":\"a\",\"structured\":{},\"content\":[]}}",
     "negativeZeros": []
   },
   {
@@ -2684,6 +2816,510 @@
     "negativeZeros": []
   },
   {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":-2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":9007199254740991}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":9007199254740992}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1,\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"ruleID\":\"standard.review.x\",\"confidence\":1}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.dismissed",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\"}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"approve_all\"}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"approve_all\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"approve\"}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"approve\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"reject\"}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"reject\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"escalate\"}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"escalate\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"choice\":\"__invalid__\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":-2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":1}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":1}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":9007199254740991}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"confidence\":9007199254740992}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"requestID\":\"a\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{\"sessionID\":\"sesx\",\"requestID\":\"a\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"requestID\":\"a\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.escalated",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"always\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"always\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"reject\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"reject\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"approve_all\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"approve_all\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"approve\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"approve\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"reject\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"reject\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"escalate\"}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"escalate\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"__invalid__\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"choice\":\"__invalid__\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":-2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":1}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":1}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":9007199254740991}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"confidence\":9007199254740992}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"reviewSessionID\":\"sesx\",\"requestID\":\"a\",\"reply\":\"once\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.guardrail.decided",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"subagent_question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"subagent_question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"guardrail\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"guardrail\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"permission\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"permission\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"free_text\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"free_text\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"refused\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"refused\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"low_confidence\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"low_confidence\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"escalated\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"escalated\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"error\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"error\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"timeout\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"timeout\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"sleep_entry\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"sleep_entry\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"restart\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"restart\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"__invalid__\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"__invalid__\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":-2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":0}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"confidence\":0,\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":1}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"confidence\":1,\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":2}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":9007199254740991}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"confidence\":9007199254740992}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]},\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"kind\":\"question\",\"reason\":\"disabled\",\"origin\":{\"messageID\":\"msg_x\",\"callID\":\"a\"},\"payload\":{\"type\":\"form\",\"title\":\"a\",\"fields\":[{\"key\":\"a\",\"type\":\"string\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.deferred",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.decided",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.decided",
+    "input": "{\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.decided",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}},\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"decision\":{\"kind\":\"question\",\"answers\":{}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.decided",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"task_closed\"}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"task_closed\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"__invalid__\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"reason\":\"reverted\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.withdrawn",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.consumed",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.consumed",
+    "input": "{\"itemID\":\"rvw_x\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.consumed",
+    "input": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\",\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"itemID\":\"rvw_x\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.review.consumed",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "SessionEvent.session.moved",
     "input": "{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}",
     "output": "{\"sessionID\":\"sesx\",\"location\":{\"directory\":\"a\"}}",
@@ -3681,6 +4317,30 @@
   },
   {
     "name": "SessionEvent.session.step.failed",
+    "input": "{}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.step.rerouted",
+    "input": "{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}",
+    "output": "{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.step.rerouted",
+    "input": "{\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.step.rerouted",
+    "input": "{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"},\"unknownField\":true}",
+    "output": "{\"sessionID\":\"sesx\",\"assistantMessageID\":\"msg_x\",\"model\":{\"id\":\"a\",\"providerID\":\"a\"},\"error\":{\"type\":\"a\",\"message\":\"a\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionEvent.session.step.rerouted",
     "input": "{}",
     "output": null,
     "negativeZeros": []
@@ -6040,7 +6700,7 @@
   {
     "name": "ProviderRequest.Speed",
     "input": "{\"samples\":0,\"outputTokensPerSecond\":0}",
-    "output": "{\"outputTokensPerSecond\":0,\"samples\":0}",
+    "output": null,
     "negativeZeros": []
   },
   {
@@ -6082,7 +6742,7 @@
   {
     "name": "ProviderRequest.ReportRow",
     "input": "{\"key\":\"model\",\"label\":\"Model\",\"logical\":0,\"physical\":0,\"helpers\":0,\"continued\":0,\"fallback\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"speed\":{\"samples\":0}}",
-    "output": "{\"key\":\"model\",\"label\":\"Model\",\"logical\":0,\"physical\":0,\"helpers\":0,\"continued\":0,\"fallback\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"speed\":{\"samples\":0}}",
+    "output": null,
     "negativeZeros": []
   },
   {
@@ -9906,6 +10566,18 @@
     "negativeZeros": []
   },
   {
+    "name": "SessionMessage.Assistant",
+    "input": "{\"id\":\"msg_x\",\"type\":\"assistant\",\"agent\":\"a\",\"model\":{\"providerID\":\"p\",\"id\":\"m\"},\"content\":[],\"reroutes\":[{\"from\":{\"providerID\":\"p\",\"id\":\"m\"},\"model\":{\"providerID\":\"q\",\"id\":\"n\"},\"error\":{\"type\":\"provider\",\"message\":\"quota\"}}],\"time\":{\"created\":0}}",
+    "output": "{\"id\":\"msg_x\",\"time\":{\"created\":0},\"type\":\"assistant\",\"agent\":\"a\",\"model\":{\"id\":\"m\",\"providerID\":\"p\"},\"content\":[],\"reroutes\":[{\"from\":{\"id\":\"m\",\"providerID\":\"p\"},\"model\":{\"id\":\"n\",\"providerID\":\"q\"},\"error\":{\"type\":\"provider\",\"message\":\"quota\"}}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionMessage.Assistant",
+    "input": "{\"id\":\"msg_x\",\"type\":\"assistant\",\"agent\":\"a\",\"model\":{\"providerID\":\"p\",\"id\":\"m\"},\"content\":[],\"reroutes\":[{\"model\":{\"providerID\":\"q\",\"id\":\"n\"},\"error\":{\"type\":\"provider\",\"message\":\"quota\"}}],\"time\":{\"created\":0}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "SessionMessage.AssistantContent",
     "input": "{\"type\":\"text\",\"text\":\"x\"}",
     "output": "{\"type\":\"text\",\"text\":\"x\"}",
@@ -10380,6 +11052,18 @@
     "negativeZeros": []
   },
   {
+    "name": "SessionOrchestration.Question",
+    "input": "{\"id\":\"qst_x\",\"text\":\"x\",\"time\":0,\"deferred\":true}",
+    "output": "{\"id\":\"qst_x\",\"text\":\"x\",\"time\":0,\"deferred\":true}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Question",
+    "input": "{\"id\":\"qst_x\",\"text\":\"x\",\"time\":0,\"deferred\":\"yes\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "SessionOrchestration.Answer",
     "input": "{\"questionID\":\"qst_x\"}",
     "output": "{\"questionID\":\"qst_x\"}",
@@ -10497,6 +11181,12 @@
     "name": "SessionOrchestration.Notification",
     "input": "{\"id\":\"n\",\"parentID\":\"ses\",\"childID\":\"ses\",\"type\":\"unknown\",\"revision\":0}",
     "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Notification",
+    "input": "{\"id\":\"n\",\"parentID\":\"ses\",\"childID\":\"ses\",\"type\":\"resumed\",\"revision\":0}",
+    "output": "{\"id\":\"n\",\"parentID\":\"ses\",\"childID\":\"ses\",\"type\":\"resumed\",\"revision\":0}",
     "negativeZeros": []
   },
   {
@@ -10752,6 +11442,18 @@
     "negativeZeros": []
   },
   {
+    "name": "SessionOrchestration.Task",
+    "input": "{\"sessionID\":\"ses\",\"parentID\":\"ses\",\"description\":\"x\",\"agent\":\"a\",\"model\":{\"providerID\":\"p\",\"id\":\"m\"},\"background\":true,\"state\":\"waiting\",\"revision\":0,\"time\":{\"created\":0,\"updated\":0},\"stoppedRecovery\":{\"itemID\":\"rvw_x\"}}",
+    "output": "{\"sessionID\":\"ses\",\"parentID\":\"ses\",\"description\":\"x\",\"agent\":\"a\",\"model\":{\"id\":\"m\",\"providerID\":\"p\"},\"background\":true,\"state\":\"waiting\",\"revision\":0,\"time\":{\"created\":0,\"updated\":0},\"stoppedRecovery\":{\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Task",
+    "input": "{\"sessionID\":\"ses\",\"parentID\":\"ses\",\"description\":\"x\",\"agent\":\"a\",\"model\":{\"providerID\":\"p\",\"id\":\"m\"},\"background\":true,\"state\":\"waiting\",\"revision\":0,\"time\":{\"created\":0,\"updated\":0},\"stoppedRecovery\":{\"itemID\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "SessionOrchestration.Control",
     "input": "{\"action\":\"list\"}",
     "output": "{\"action\":\"list\"}",
@@ -10917,6 +11619,24 @@
     "name": "SessionOrchestration.Change",
     "input": "{\"type\":\"lost\"}",
     "output": "{\"type\":\"lost\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Change",
+    "input": "{\"type\":\"resumed\"}",
+    "output": "{\"type\":\"resumed\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Change",
+    "input": "{\"type\":\"question_timed_out\",\"questionID\":\"qst_x\"}",
+    "output": "{\"type\":\"question_timed_out\",\"questionID\":\"qst_x\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionOrchestration.Change",
+    "input": "{\"type\":\"question_timed_out\",\"questionID\":\"bad\"}",
+    "output": null,
     "negativeZeros": []
   },
   {
@@ -13038,6 +13758,72 @@
     "negativeZeros": []
   },
   {
+    "name": "Telemetry.Operation",
+    "input": "\"session.usageReport\"",
+    "output": "\"session.usageReport\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"session.promptCosts\"",
+    "output": "\"session.promptCosts\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"session.taskCosts\"",
+    "output": "\"session.taskCosts\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"usage.forecast\"",
+    "output": "\"usage.forecast\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"session.review.list\"",
+    "output": "\"session.review.list\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"session.review.decide\"",
+    "output": "\"session.review.decide\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"incident.report\"",
+    "output": "\"incident.report\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"incident.recent\"",
+    "output": "\"incident.recent\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"incident.guidance\"",
+    "output": "\"incident.guidance\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"incident.guidance.get\"",
+    "output": "\"incident.guidance.get\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Telemetry.Operation",
+    "input": "\"incident.guidance.clear\"",
+    "output": "\"incident.guidance.clear\"",
+    "negativeZeros": []
+  },
+  {
     "name": "Telemetry.RequestSample",
     "input": "{\"kind\":\"request\",\"at\":\"2024-03-01T12:34:56.789Z\",\"operation\":\"session.list\",\"outcome\":\"ok\",\"queueMs\":0,\"totalMs\":600000}",
     "output": "{\"kind\":\"request\",\"at\":\"2024-03-01T12:34:56.789Z\",\"operation\":\"session.list\",\"outcome\":\"ok\",\"queueMs\":0,\"totalMs\":600000}",
@@ -13394,7 +14180,7 @@
   {
     "name": "Form.NumberField",
     "input": "{\"key\":\"k\",\"type\":\"number\",\"minimum\":-1.5,\"default\":1e400}",
-    "output": "{\"key\":\"k\",\"type\":\"number\",\"minimum\":-1.5,\"default\":null}",
+    "output": null,
     "negativeZeros": []
   },
   {
@@ -13479,6 +14265,18 @@
     "name": "Form.Field",
     "input": "{\"key\":\"x\",\"type\":\"external\",\"url\":\"\"}",
     "output": "{\"key\":\"x\",\"type\":\"external\",\"url\":\"\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Field",
+    "input": "{\"key\":\"x\",\"type\":\"number\",\"minimum\":1e400}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Field",
+    "input": "{\"key\":\"x\",\"type\":\"integer\",\"default\":1}",
+    "output": "{\"key\":\"x\",\"type\":\"integer\",\"default\":1}",
     "negativeZeros": []
   },
   {
@@ -13574,6 +14372,30 @@
   {
     "name": "Form.State",
     "input": "{\"status\":\"answered\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.State",
+    "input": "{\"status\":\"timed_out\",\"seconds\":5}",
+    "output": "{\"status\":\"timed_out\",\"seconds\":5}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.State",
+    "input": "{\"status\":\"deferred\",\"itemID\":\"rvw_x\"}",
+    "output": "{\"status\":\"deferred\",\"itemID\":\"rvw_x\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.State",
+    "input": "{\"status\":\"timed_out\",\"seconds\":0}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.State",
+    "input": "{\"status\":\"deferred\",\"itemID\":\"bad\"}",
     "output": null,
     "negativeZeros": []
   },
@@ -13938,6 +14760,18 @@
     "negativeZeros": []
   },
   {
+    "name": "Guardrail.Request",
+    "input": "{\"id\":\"grq_x\",\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"action\":\"\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"\",\"standard\":false,\"escalation\":{\"choice\":\"escalate\",\"confidence\":0.2,\"grades\":[]}}",
+    "output": "{\"id\":\"grq_x\",\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"action\":\"\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"\",\"standard\":false,\"escalation\":{\"choice\":\"escalate\",\"confidence\":0.2,\"grades\":[]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Request",
+    "input": "{\"id\":\"grq_x\",\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"action\":\"\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"\",\"standard\":false,\"escalation\":{\"choice\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "Guardrail.Reply",
     "input": "\"once\"",
     "output": "\"once\"",
@@ -13974,6 +14808,18 @@
     "negativeZeros": []
   },
   {
+    "name": "Guardrail.Status",
+    "input": "{\"rootSessionID\":\"ses\",\"profile\":\"p\",\"customRules\":0,\"approvals\":0,\"blocked\":0,\"counters\":[],\"invalidFiles\":[],\"dismissals\":[{\"sessionID\":\"ses\",\"created\":0,\"eventID\":\"e\",\"ruleID\":\"standard.review.x\",\"confidence\":0.9,\"source\":{\"messageID\":\"msg_x\",\"callID\":\"c\"}}],\"decisions\":[{\"sessionID\":\"ses\",\"created\":0,\"requestID\":\"grq_x\",\"reply\":\"once\",\"choice\":\"approve\",\"confidence\":0.9,\"grades\":[],\"ruleIDs\":[\"r\"]}]}",
+    "output": "{\"rootSessionID\":\"ses\",\"profile\":\"p\",\"customRules\":0,\"approvals\":0,\"blocked\":0,\"counters\":[],\"invalidFiles\":[],\"dismissals\":[{\"sessionID\":\"ses\",\"created\":0,\"eventID\":\"e\",\"ruleID\":\"standard.review.x\",\"confidence\":0.9,\"source\":{\"messageID\":\"msg_x\",\"callID\":\"c\"}}],\"decisions\":[{\"sessionID\":\"ses\",\"created\":0,\"requestID\":\"grq_x\",\"reply\":\"once\",\"choice\":\"approve\",\"confidence\":0.9,\"grades\":[],\"ruleIDs\":[\"r\"]}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Status",
+    "input": "{\"rootSessionID\":\"ses\",\"profile\":\"p\",\"customRules\":0,\"approvals\":0,\"blocked\":0,\"counters\":[],\"invalidFiles\":[],\"dismissals\":[{\"sessionID\":\"ses\",\"created\":0,\"eventID\":\"e\",\"ruleID\":\"r\",\"confidence\":0.8}]}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "Guardrail.Event.Asked",
     "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.asked\",\"data\":{\"id\":\"grq_x\",\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"action\":\"a\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"r\",\"standard\":false}}",
     "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.asked\",\"data\":{\"id\":\"grq_x\",\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"action\":\"a\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"r\",\"standard\":false}}",
@@ -13994,6 +14840,18 @@
   {
     "name": "Guardrail.Event.Replied",
     "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.replied\",\"data\":{\"rootSessionID\":\"bad\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"reply\":\"always\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Event.Replied",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.replied\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"reply\":\"once\",\"decidedBy\":\"decision-model\",\"choice\":\"approve\",\"confidence\":0.9,\"grades\":[{\"choice\":\"approve\",\"confidence\":0.9,\"evidence\":\"x\"}]}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.replied\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"reply\":\"once\",\"decidedBy\":\"decision-model\",\"choice\":\"approve\",\"confidence\":0.9,\"grades\":[{\"choice\":\"approve\",\"confidence\":0.9,\"evidence\":\"x\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Event.Replied",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.replied\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"reply\":\"once\",\"decidedBy\":\"human\"}}",
     "output": null,
     "negativeZeros": []
   },
@@ -14156,6 +15014,18 @@
   {
     "name": "Shell.Event.Created",
     "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.created\",\"data\":{}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Shell.Event.Updated",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{\"info\":{\"id\":\"sh_x\",\"status\":\"queued\",\"command\":\"c\",\"cwd\":\"\",\"shell\":\"sh\",\"file\":\"f\",\"metadata\":{},\"queuePosition\":1,\"time\":{\"started\":0,\"queued\":1}}}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{\"info\":{\"id\":\"sh_x\",\"status\":\"queued\",\"command\":\"c\",\"cwd\":\"\",\"shell\":\"sh\",\"file\":\"f\",\"metadata\":{},\"time\":{\"started\":0,\"queued\":1},\"queuePosition\":1}}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Shell.Event.Updated",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{}}",
     "output": null,
     "negativeZeros": []
   },
@@ -16112,6 +16982,330 @@
   {
     "name": "IsolatedBrowser.ControlInput",
     "input": "{\"action\":\"stop\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Event.TimedOut",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.timed_out\",\"data\":{\"id\":\"frm_x\",\"sessionID\":\"global\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.timed_out\",\"data\":{\"id\":\"frm_x\",\"sessionID\":\"global\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Event.TimedOut",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.timed_out\",\"data\":{\"id\":\"bad\",\"sessionID\":\"global\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.deferred\",\"data\":{\"id\":\"frm_x\",\"sessionID\":\"global\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.deferred\",\"data\":{\"id\":\"frm_x\",\"sessionID\":\"global\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Form.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"form.deferred\",\"data\":{\"id\":\"frm_x\",\"sessionID\":\"global\",\"itemID\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Question.Event.TimedOut",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.timed_out\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"que\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.timed_out\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"que\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Question.Event.TimedOut",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.timed_out\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Question.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"que\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"que\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Question.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"question.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"que\",\"itemID\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Permission.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"permission.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"per_1\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"permission.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"per_1\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Permission.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"permission.deferred\",\"data\":{\"sessionID\":\"ses\",\"requestID\":\"bad\",\"itemID\":\"rvw_x\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.deferred\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"itemID\":\"rvw_x\"}}",
+    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.deferred\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"itemID\":\"rvw_x\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Event.Deferred",
+    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"guardrail.deferred\",\"data\":{\"rootSessionID\":\"ses\",\"sessionID\":\"ses\",\"requestID\":\"grq_x\",\"itemID\":\"bad\"}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Source",
+    "input": "{\"messageID\":\"msg_x\",\"callID\":\"c\"}",
+    "output": "{\"messageID\":\"msg_x\",\"callID\":\"c\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Source",
+    "input": "{\"messageID\":\"bad\",\"callID\":\"c\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.DecisionChoice",
+    "input": "\"approve_all\"",
+    "output": "\"approve_all\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.DecisionChoice",
+    "input": "\"approve-all\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Confidence",
+    "input": "0.9",
+    "output": "0.9",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Confidence",
+    "input": "1.1",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Grade",
+    "input": "{\"choice\":\"reject\",\"confidence\":0.5,\"evidence\":\"Scoped\"}",
+    "output": "{\"choice\":\"reject\",\"confidence\":0.5,\"evidence\":\"Scoped\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Grade",
+    "input": "{\"choice\":\"reject\",\"confidence\":0.5,\"evidence\":\"  \"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Escalation",
+    "input": "{\"choice\":\"escalate\",\"confidence\":0.4,\"grades\":[{\"choice\":\"reject\",\"confidence\":0.5,\"evidence\":\"x\"}]}",
+    "output": "{\"choice\":\"escalate\",\"confidence\":0.4,\"grades\":[{\"choice\":\"reject\",\"confidence\":0.5,\"evidence\":\"x\"}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "Guardrail.Escalation",
+    "input": "{\"choice\":\"maybe\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.ID",
+    "input": "\"rvw_x\"",
+    "output": "\"rvw_x\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.ID",
+    "input": "\"review_x\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Kind",
+    "input": "\"subagent_question\"",
+    "output": "\"subagent_question\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Kind",
+    "input": "\"form\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Reason",
+    "input": "\"sleep_entry\"",
+    "output": "\"sleep_entry\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Reason",
+    "input": "\"asleep\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Origin",
+    "input": "{\"messageID\":\"msg_x\",\"callID\":\"c\"}",
+    "output": "{\"messageID\":\"msg_x\",\"callID\":\"c\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Origin",
+    "input": "{\"requestID\":\"\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Fingerprint",
+    "input": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+    "output": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Fingerprint",
+    "input": "\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.FormPayload",
+    "input": "{\"type\":\"form\",\"title\":\"t\",\"fields\":[{\"key\":\"k\",\"type\":\"string\"}],\"questionTool\":true}",
+    "output": "{\"type\":\"form\",\"title\":\"t\",\"fields\":[{\"key\":\"k\",\"type\":\"string\"}],\"questionTool\":true}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.FormPayload",
+    "input": "{\"type\":\"form\",\"title\":\"t\",\"fields\":[]}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.QuestionPayload",
+    "input": "{\"type\":\"question\",\"questions\":[{\"question\":\"q\",\"header\":\"h\",\"options\":[]}]}",
+    "output": "{\"type\":\"question\",\"questions\":[{\"question\":\"q\",\"header\":\"h\",\"options\":[]}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.QuestionPayload",
+    "input": "{\"type\":\"question\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.SubagentQuestionPayload",
+    "input": "{\"type\":\"subagent_question\",\"text\":\"q\",\"data\":{\"a\":1}}",
+    "output": "{\"type\":\"subagent_question\",\"text\":\"q\",\"data\":{\"a\":1}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.SubagentQuestionPayload",
+    "input": "{\"type\":\"subagent_question\",\"text\":1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.GuardrailPayload",
+    "input": "{\"type\":\"guardrail\",\"action\":\"a\",\"resources\":[\"r\"],\"ruleIDs\":[\"x\"],\"reason\":\"r\",\"hardReview\":false,\"directories\":[\"/d\"],\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requestID\":\"grq_x\"}",
+    "output": "{\"type\":\"guardrail\",\"action\":\"a\",\"resources\":[\"r\"],\"ruleIDs\":[\"x\"],\"reason\":\"r\",\"hardReview\":false,\"directories\":[\"/d\"],\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requestID\":\"grq_x\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.GuardrailPayload",
+    "input": "{\"type\":\"guardrail\",\"action\":\"a\",\"resources\":[],\"ruleIDs\":[],\"reason\":\"r\",\"hardReview\":false,\"directories\":[],\"fingerprint\":\"bad\",\"requestID\":\"grq_x\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.PermissionPayload",
+    "input": "{\"type\":\"permission\",\"action\":\"a\",\"resources\":[\"r\"],\"save\":[\"s\"],\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requestID\":\"per_1\"}",
+    "output": "{\"type\":\"permission\",\"action\":\"a\",\"resources\":[\"r\"],\"save\":[\"s\"],\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requestID\":\"per_1\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.PermissionPayload",
+    "input": "{\"type\":\"permission\",\"action\":\"a\",\"resources\":[],\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"requestID\":\"bad\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.RecoveryTool",
+    "input": "{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}",
+    "output": "{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.RecoveryTool",
+    "input": "{\"messageID\":\"bad\",\"callID\":\"c\",\"name\":\"read\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.RecoveryPayload",
+    "input": "{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}",
+    "output": "{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.RecoveryPayload",
+    "input": "{\"type\":\"recovery\",\"tools\":[]}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Payload",
+    "input": "{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}",
+    "output": "{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Payload",
+    "input": "{\"type\":\"unknown\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Deferral",
+    "input": "{\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"restart\",\"origin\":{\"requestID\":\"r\"},\"payload\":{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}}",
+    "output": "{\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"restart\",\"origin\":{\"requestID\":\"r\"},\"payload\":{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Deferral",
+    "input": "{\"itemID\":\"bad\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Item",
+    "input": "{\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"restart\",\"origin\":{\"requestID\":\"r\"},\"payload\":{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]},\"sessionID\":\"ses\",\"rootSessionID\":\"ses\",\"sessionTitle\":\"t\",\"created\":0,\"child\":{\"agent\":\"a\",\"description\":\"d\"}}",
+    "output": "{\"itemID\":\"rvw_x\",\"kind\":\"recovery\",\"reason\":\"restart\",\"origin\":{\"requestID\":\"r\"},\"payload\":{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]},\"sessionID\":\"ses\",\"rootSessionID\":\"ses\",\"sessionTitle\":\"t\",\"created\":0,\"child\":{\"agent\":\"a\",\"description\":\"d\"}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Item",
+    "input": "{\"itemID\":\"rvw_x\",\"reason\":\"restart\",\"origin\":{\"requestID\":\"r\"},\"payload\":{\"type\":\"recovery\",\"tools\":[{\"messageID\":\"msg_x\",\"callID\":\"c\",\"name\":\"read\"}]},\"sessionID\":\"ses\",\"rootSessionID\":\"ses\",\"sessionTitle\":\"t\",\"created\":0,\"kind\":\"question\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Decision",
+    "input": "{\"kind\":\"question\",\"dismissed\":true}",
+    "output": "{\"kind\":\"question\",\"dismissed\":true}",
+    "negativeZeros": []
+  },
+  {
+    "name": "SessionReview.Decision",
+    "input": "{\"kind\":\"recovery\",\"choice\":\"retry\"}",
     "output": null,
     "negativeZeros": []
   }

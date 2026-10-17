@@ -80,6 +80,58 @@ test("presentation decoding preserves empty cursor pages, absent quota values an
   )
 })
 
+test("a Waiting list query and a page status envelope with lost identifiers cross the wire by label", () => {
+  const request = prepareRemoteRequest("session.list", {
+    input: { limit: 25, order: "active", status: "waiting", parentID: null },
+  })
+  expect(
+    readWireMessage(session_list_RequestSchema, decodeStrict(session_list_RequestSchema, request.payload)),
+  ).toMatchObject({
+    query: { order: "active", status: "waiting" },
+  })
+  const status = { running: ["ses_running"], attention: ["ses_waiting", "ses_lost"], lost: ["ses_lost"] }
+  const result = writeWireMessage(session_list_ResultSchema, { data: { data: [], cursor: {}, status } })
+  expect(readWireMessage(session_list_ResultSchema, result)).toEqual({ data: { data: [], cursor: {}, status } })
+  const noLoss = { running: [], attention: ["ses_waiting"] }
+  expect(
+    readWireMessage(
+      session_list_ResultSchema,
+      writeWireMessage(session_list_ResultSchema, { data: { data: [], cursor: {}, status: noLoss } }),
+    ),
+  ).toEqual({
+    data: { data: [], cursor: {}, status: noLoss },
+  })
+})
+
+test("autonomy state crosses the wire flattened with its effective values, and auto-answer is its own exclusive set", () => {
+  const codec = remotePayloadCodecs.get("session.autonomy.get")!.result.schema
+  const effective = {
+    yolo: 1,
+    asleep: true,
+    guardrailsEnabled: true,
+    ordinaryReviewsAuto: false,
+    modelReviews: true,
+    hardModelReviews: false,
+  }
+  const state = { mode: "normal", yolo: 1, autoAnswer: true, sleep: {}, effective }
+  expect(readWireMessage(codec, writeWireMessage(codec, { data: state }))).toEqual({ data: state })
+  const request = prepareRemoteRequest("session.autonomy.set", {
+    sessionID: "ses_browser",
+    input: { autoAnswer: false },
+  })
+  const setCodec = remotePayloadCodecs.get("session.autonomy.set")!
+  expect(
+    readWireMessage(setCodec.request.schema, decodeStrict(setCodec.request.schema, request.payload)),
+  ).toMatchObject({
+    params: { sessionID: "ses_browser" },
+    payload: { autoAnswer: false },
+  })
+  expect(() => writeWireMessage(codec, { data: { ...state, yolo: 3 } })).toThrow()
+  expect(() =>
+    prepareRemoteRequest("session.autonomy.set", { sessionID: "ses_browser", input: { autoAnswer: true, yolo: 1 } }),
+  ).toThrow()
+})
+
 test("the canonical snapshot wrapper and lossless strings reach the presentation unchanged", () => {
   const schema = remotePayloadCodecs.get("session.snapshot")!.result.schema
   const snapshot = {
@@ -117,4 +169,159 @@ test("public event decoding selects the typed branch rather than parsing a JSON 
     data: { sessionID: "ses_browser", assistantMessageID: "msg_browser", ordinal: 0, delta: "answer" },
   }
   expect(readWireMessage(PublicEventSchema, writeWireMessage(PublicEventSchema, event))).toEqual(event)
+})
+
+const breakdown = {
+  requests: 2,
+  tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 3 } },
+  cost: { known: 0.5, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" },
+}
+
+test("usage accounting requests carry their ID arrays in the declared query and keep the Session in the params", () => {
+  const ids = Array.from({ length: 100 }, (_, index) => `msg_${index}`)
+  for (const [operation, field] of [
+    ["session.promptCosts", "inputIDs"],
+    ["session.taskCosts", "sessionIDs"],
+  ] as const) {
+    const request = prepareRemoteRequest(operation, { sessionID: "ses_root", input: { [field]: ids } })
+    const codec = remotePayloadCodecs.get(operation)!
+    const decoded = readWireMessage(codec.request.schema, decodeStrict(codec.request.schema, request.payload)) as {
+      params: { sessionID: string }
+      query: Record<string, string[]>
+    }
+    expect(decoded.params.sessionID).toBe("ses_root")
+    expect(decoded.query[field]).toEqual(ids)
+    expect(request.scope.target).toEqual({ case: "session", value: "ses_root" })
+  }
+})
+
+test("the native forecast and report requests encode their scope, groups and filters by label", () => {
+  const forecast = prepareRemoteRequest("providerUsage.forecast", { input: { localScope: "backend" } })
+  const forecastCodec = remotePayloadCodecs.get("providerUsage.forecast")!
+  expect(
+    readWireMessage(forecastCodec.request.schema, decodeStrict(forecastCodec.request.schema, forecast.payload)),
+  ).toEqual({ query: { localScope: "backend" } })
+  expect(forecast.scope.target).toEqual({ case: "machine", value: { $typeName: "ycoding.v5.Empty" } })
+  const reportCodec = remotePayloadCodecs.get("usage.report")!
+  for (const group of [
+    "provider",
+    "provider-profile-model",
+    "provider-model",
+    "model-id",
+    "profile",
+    "prompt",
+    "task",
+  ]) {
+    const input = { group, providerID: "openai", profile: "Work", modelID: "gpt", selectedEffort: "high", limit: 25 }
+    const report = prepareRemoteRequest("usage.report", { input })
+    expect(
+      readWireMessage(reportCodec.request.schema, decodeStrict(reportCodec.request.schema, report.payload)),
+    ).toEqual({
+      query: input,
+    })
+  }
+})
+
+test("accounting, forecast and report results decode their breakdowns, dimensions and optional sections", () => {
+  const unit = {
+    anchor: { sessionID: "ses_root", inputID: "msg_first" },
+    status: "so-far",
+    attribution: "partial",
+    history: "partial",
+    total: breakdown,
+    main: breakdown,
+    children: breakdown,
+    helpers: [{ ...breakdown, source: "decision" }],
+  }
+  const prompt = remotePayloadCodecs.get("session.promptCosts")!.result.schema
+  const prompts = { data: { units: [unit], unattributed: breakdown, history: "partial" } }
+  expect(readWireMessage(prompt, writeWireMessage(prompt, prompts))).toEqual(prompts)
+  const task = remotePayloadCodecs.get("session.taskCosts")!.result.schema
+  const { anchor: _anchor, ...taskUnit } = unit
+  const tasks = { data: { tasks: [{ sessionID: "ses_child", ...taskUnit }], total: breakdown, history: "retained" } }
+  expect(readWireMessage(task, writeWireMessage(task, tasks))).toEqual(tasks)
+  const forecast = remotePayloadCodecs.get("providerUsage.forecast")!.result.schema
+  const location = { directory: "/work", project: { id: "prj_browser", directory: "/work" } }
+  const quota = {
+    providerID: "openai",
+    windowID: "week",
+    unit: "percent",
+    source: "provider_api",
+    stability: "stable",
+    updatedAt: 1,
+    state: "insufficient",
+    evidence: "insufficient",
+    reason: "Warming up",
+  }
+  for (const data of [
+    { asOf: 2, localScope: "backend", localRates: [], quotas: [quota] },
+    { asOf: 2, localScope: "backend", quotas: [quota] },
+    { asOf: 2, localScope: "backend", localRates: [] },
+  ])
+    expect(readWireMessage(forecast, writeWireMessage(forecast, { location, data }))).toEqual({ location, data })
+  const report = remotePayloadCodecs.get("usage.report")!.result.schema
+  const metrics = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    costCoverage: { pricedRequests: 1, unpricedRequests: 0 },
+    tokens: breakdown.tokens,
+    cost: 0,
+    costProvenance: "recorded",
+  }
+  const row = (key: string, dimensions: unknown) => ({
+    key,
+    label: key,
+    dimensions,
+    ...metrics,
+    speed: { generationSamples: 2, providerTimedSamples: 1, observedSamples: 1, samples: 2 },
+  })
+  const rows = [
+    row("a", { group: "provider", providerID: "openai" }),
+    row("b", {
+      group: "provider-profile-model",
+      providerID: "openai",
+      profileState: "provider-default",
+      modelID: "gpt",
+    }),
+    row("c", { group: "profile", providerID: "openai", profile: "Work", profileState: "recorded" }),
+    row("d", { group: "prompt", anchor: { sessionID: "ses_a", inputID: "msg_a" }, attribution: "complete" }),
+    row("e", { group: "task", attribution: "unattributed" }),
+  ]
+  const { speed: _speed, dimensions: _dimensions, key: _key, label: _label, ...total } = rows[0]!
+  const value = { data: { group: "provider", rows, total, rowCount: 5 } }
+  expect(readWireMessage(report, writeWireMessage(report, value))).toEqual(value)
+})
+
+test("snapshot generation-speed history carries the estimated flag, its model and an unreported reason through the wire", () => {
+  const model = { providerID: "openai", id: "speed-model", variant: "high", profile: "work" }
+  const measured = { model, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
+  const histories = [
+    { model, latest: { ...measured, estimated: true }, recent: [measured] },
+    { model, latest: measured, recent: [measured, { ...measured, tokens: 40, tokensPerSecond: 40 }] },
+    { model, recent: [], unreportedReason: "No usable provider measurement" },
+  ]
+  const schema = remotePayloadCodecs.get("session.snapshot")!.result.schema
+  for (const generationSpeed of histories) {
+    const snapshot = {
+      data: {
+        sourceEpoch: "source",
+        session: {
+          id: "ses_browser",
+          projectID: "prj_browser",
+          title: "Speed",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1, updated: 1 },
+          location: { directory: "/work" },
+        },
+        messages: [],
+        watermark: { type: "log.synced", aggregateID: "ses_browser", seq: 0 },
+        generationSpeed,
+      },
+    }
+    expect(readWireMessage(schema, writeWireMessage(schema, snapshot))).toEqual(snapshot)
+  }
 })

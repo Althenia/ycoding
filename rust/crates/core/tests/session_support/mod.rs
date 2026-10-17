@@ -25,6 +25,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<ycoding_store::resources::CredentialTable>(),
         TableDeclaration::of::<ycoding_store::resources::ConsentTable>(),
         TableDeclaration::of::<ycoding_store::resources::RequestTable>(),
+        TableDeclaration::of::<ycoding_store::resources::UsageAnalyticsRequestTable>(),
         TableDeclaration::of::<ycoding_store::resources::SequenceTable>(),
         TableDeclaration::of::<session::FileChangeTable>(),
         TableDeclaration::of::<ycoding_store::resources::UsageTable>(),
@@ -37,6 +38,8 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<session::ExclusionTable>(),
         TableDeclaration::of::<analytics::DeliveryTable>(),
         TableDeclaration::of::<analytics::IntentTable>(),
+        TableDeclaration::of::<ycoding_store::model_incident::IncidentTable>(),
+        TableDeclaration::of::<ycoding_store::model_incident::GuidanceClearTable>(),
     ],
 );
 

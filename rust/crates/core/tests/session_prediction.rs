@@ -506,6 +506,16 @@ fn helper_output_filter_accepts_only_single_line_suggestions_in_bounds() {
         ("Run \u{61c}the tests", false),
         ("Run the\u{2028}tests", false),
         ("Run the\u{2029}tests", false),
+        (
+            "計算した平均を棒グラフで可視化する方法を教えてください。",
+            true,
+        ),
+        ("如何用柱状图可视化每列的平均值？", true),
+        ("ありがとう", false),
+        ("Run 🦀", false),
+        ("Run...tests", true),
+        ("-- ...", false),
+        ("Run 🦀 tests", true),
     ] {
         assert_eq!(
             prediction::accept(value, previous).is_some(),

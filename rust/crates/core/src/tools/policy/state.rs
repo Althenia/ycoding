@@ -1,5 +1,5 @@
 use super::ceiling;
-use crate::session::autonomy::{Effective, State};
+use crate::session::autonomy::{self, Effective, State};
 use std::{
     collections::BTreeSet,
     future::Future,
@@ -89,7 +89,10 @@ impl Authority {
             root_session_id: SessionId::new(root.id).map_err(|_| Error::InvalidSession)?,
             agent,
             configured,
-            autonomy: State::read(session.autonomy.as_ref()).effective(),
+            autonomy: autonomy::effective_in(&snapshot, id).map_err(|error| match error {
+                autonomy::Error::NotFound(id) => Error::NotFound(id),
+                autonomy::Error::Store(error) => Error::Store(error),
+            })?,
             root_autonomy: State::read(root.autonomy.as_ref()).effective(),
         })
     }
@@ -98,6 +101,30 @@ impl Authority {
 pub struct Wait<T> {
     receiver: oneshot::Receiver<T>,
     cancel: Option<Box<dyn FnOnce() + Send>>,
+}
+
+pub(crate) struct Task {
+    handle: tokio::task::JoinHandle<()>,
+    cancel: Box<dyn Fn() + Send>,
+}
+
+impl Task {
+    pub(crate) fn new(
+        handle: tokio::task::JoinHandle<()>,
+        cancel: impl Fn() + Send + 'static,
+    ) -> Self {
+        Self {
+            handle,
+            cancel: Box::new(cancel),
+        }
+    }
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        (self.cancel)();
+        self.handle.abort();
+    }
 }
 
 impl<T> Wait<T> {

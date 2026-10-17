@@ -1,16 +1,22 @@
-use std::cell::Cell;
-use ycoding_core::session::{
-    store::Service,
-    usage_read::{Pricing, PricingRef},
+use std::{cell::Cell, sync::Arc};
+use ycoding_core::{
+    resources::{config::Roots, tool_output_store},
+    session::{
+        cleanups::Cleanups,
+        retention::Settings,
+        runner::Clock,
+        store::Service,
+        usage_read::{Pricing, PricingRef},
+    },
 };
 use ycoding_schema::{
-    DecodeError, DomainDecode, DomainEncode, JsonValue, model, money::UsdPerMillionTokens,
-    parse_json, provider, provider_request, session,
+    DecodeError, DomainDecode, DomainEncode, JsonValue, LosslessString, model,
+    money::UsdPerMillionTokens, parse_json, provider, provider_request, session,
 };
 use ycoding_store::{
     Error, Store,
     project::{Project, ProjectTable},
-    resources::{Request, RequestTable},
+    resources::{Request, RequestTable, UsageAnalyticsRequest, UsageAnalyticsRequestTable},
     session::{Document, SessionTable},
 };
 
@@ -160,20 +166,61 @@ impl<'a> Spec<'a> {
             )))
             .unwrap(),
             time_created: self.time,
+            usage_anchor: None,
         }
     }
 }
 
 fn insert(store: &Store, specs: Vec<Spec<'static>>) {
-    let rows = specs.iter().map(Spec::row).collect::<Vec<_>>();
-    store
-        .submit(move |tx| {
-            rows.iter()
-                .try_for_each(|row| RequestTable::insert(tx, row))
-        })
-        .unwrap()
-        .wait()
-        .unwrap();
+    insert_rows(store, specs.iter().map(Spec::row).collect());
+}
+
+fn insert_rows(store: &Store, rows: Vec<Request>) {
+    for rows in rows.chunks(1_000) {
+        let rows = rows.to_vec();
+        store
+            .submit(move |tx| {
+                rows.iter().try_for_each(|row| {
+                    RequestTable::insert(tx, row)?;
+                    let session = tx
+                        .get::<SessionTable>(&ycoding_store::tuple_key(&[
+                            ycoding_store::KeyPart::String(&row.session_id),
+                        ]))?
+                        .unwrap();
+                    UsageAnalyticsRequestTable::insert(
+                        tx,
+                        &UsageAnalyticsRequest {
+                            id: row.id.clone(),
+                            session_id: row.session_id.clone(),
+                            project_id: session.project_id,
+                            directory: session.directory,
+                            workspace_id: session.workspace_id,
+                            session_updated: session.time_updated,
+                            agent: row.agent.clone(),
+                            source: row.source.clone(),
+                            model: row.model.clone(),
+                            usage_anchor: None,
+                            task_path: Document::new(parse_json("[]").unwrap())?,
+                            request: row.request,
+                            attempts: row.attempts,
+                            continuation: row.continuation.clone(),
+                            invalidation: row.invalidation.clone(),
+                            prompt_cache_key: LosslessString::from_utf16(
+                                row.prompt_cache_key.code_units().take(8).collect(),
+                            ),
+                            cache_read_reported: row.cache_read_reported,
+                            tokens: row.tokens.clone(),
+                            cost: row.cost,
+                            timing: row.timing.clone(),
+                            time_created: row.time_created,
+                        },
+                    )
+                })
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+    }
 }
 
 fn sessions(store: &Store, rows: Vec<(&'static str, Option<&'static str>, i64)>) {
@@ -303,7 +350,7 @@ fn a_root_family_pages_high_cardinality_session_groups_with_exact_totals() {
     assert_eq!(
         at(&scoped, "rows.0.speed"),
         &json(
-            r#"{"firstOutputP50Ms":300,"firstOutputP95Ms":300,"totalP50Ms":600,"totalP95Ms":600,"outputTokensPerSecond":1,"samples":1}"#
+            r#"{"generationSamples":1,"providerTimedSamples":1,"observedSamples":0,"generationP50TokensPerSecond":1,"generationP90TokensPerSecond":1,"firstOutputP50Ms":300,"firstOutputP95Ms":300,"totalP50Ms":600,"totalP95Ms":600,"outputTokensPerSecond":1,"samples":1}"#
         )
     );
     let past = report(
@@ -868,7 +915,7 @@ fn speed_uses_ranked_percentiles_and_observed_generation_windows() {
     assert_eq!(
         at(&report, "rows.0.speed"),
         &json(
-            r#"{"firstOutputP50Ms":20,"firstOutputP95Ms":40,"totalP50Ms":200,"totalP95Ms":400,"outputTokensPerSecond":5,"samples":4}"#
+            r#"{"generationSamples":1,"providerTimedSamples":0,"observedSamples":1,"generationP50TokensPerSecond":5,"generationP90TokensPerSecond":5,"firstOutputP50Ms":20,"firstOutputP95Ms":40,"totalP50Ms":200,"totalP95Ms":400,"outputTokensPerSecond":5,"samples":4}"#
         )
     );
 }
@@ -1171,11 +1218,7 @@ fn known_prices_follow_the_native_text_projection_for_lossless_profiles() {
         r#"{"providerID":"openai","id":"gpt","profile":"Work\ud800"}"#,
     ))
     .unwrap();
-    store
-        .submit(move |tx| RequestTable::insert(tx, &row))
-        .unwrap()
-        .wait()
-        .unwrap();
+    insert_rows(&store, vec![row]);
     let pricer = |_: &PricingRef| Some(catalog(2.0));
     let summary = service.usage_all(Some(&pricer)).unwrap();
     let result = service
@@ -1274,4 +1317,178 @@ fn a_missing_session_is_not_found_and_invalid_inputs_do_not_decode() {
     let rejected: Result<provider_request::ReportInput, DecodeError> =
         provider_request::ReportInput::decode(&json(r#"{"group":"day","from":5,"to":5}"#));
     assert!(rejected.is_err());
+}
+
+fn recorded(
+    session: &str,
+    event: &str,
+    request_id: &str,
+    number: i64,
+    cost: f64,
+    time: i64,
+) -> ycoding_store::session::NewEvent {
+    ycoding_store::session::NewEvent {
+        id: event.into(),
+        aggregate_id: session.into(),
+        type_: "session.provider.request.recorded.1".into(),
+        created: time,
+        data: json(&format!(
+            r#"{{"sessionID":"{session}","id":"{request_id}","source":"step","agent":"build","model":{{"providerID":"openai","id":"gpt"}},"routeID":"test","promptCacheKey":"{}","systemDigest":"{}","toolDigest":"{}","request":{number},"attempts":1,"invalidation":"first-request","continuation":"full","cacheReadReported":true,"cost":{cost},"tokens":{{"input":10,"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}},"time":{time}}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+            "c".repeat(64)
+        )),
+    }
+}
+
+fn delete_ledger_row(store: &Store, request_id: &'static str) {
+    store
+        .submit(move |tx| {
+            RequestTable::delete(
+                tx,
+                &ycoding_store::tuple_key(&[ycoding_store::KeyPart::String(&request_id.into())]),
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    store.analytics().unwrap().purge().unwrap();
+}
+
+struct Epoch;
+impl Clock for Epoch {
+    fn now(&self) -> i64 {
+        0
+    }
+    fn sleep(&self, _: u64) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+async fn settle_purge(store: &Store) {
+    let roots = Roots::development(
+        &std::env::temp_dir().join(format!("ycoding-usage-read-settle-{}", std::process::id())),
+    )
+    .unwrap();
+    Cleanups::new(
+        store.client(),
+        Arc::new(tool_output_store::Store::new(&roots)),
+        Arc::new(Epoch),
+        Arc::new(Vec::new),
+        Arc::new(Settings::default),
+    )
+    .usage()
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn backend_reads_keep_recorded_requests_after_session_removal_while_session_reads_use_the_ledger()
+ {
+    let (store, service) = setup();
+    service
+        .publish(recorded(
+            "ses_one",
+            "evt_fact_one",
+            "prq_fact_one",
+            1,
+            1.0,
+            100,
+        ))
+        .await
+        .unwrap();
+    service
+        .publish(recorded(
+            "ses_two",
+            "evt_fact_two",
+            "prq_fact_two",
+            1,
+            2.0,
+            200,
+        ))
+        .await
+        .unwrap();
+    let all = service.usage_all(None).unwrap();
+    assert_eq!(all.logical.get(), 2);
+    assert_eq!(all.cost.unwrap().get(), 3.0);
+
+    service.remove(&id("ses_one")).await.unwrap();
+    let pending = service
+        .usage_report_all(&report_input(r#"{"group":"model"}"#), None)
+        .err()
+        .unwrap();
+    assert!(format!("{pending:?}").contains("Privacy"), "{pending:?}");
+    settle_purge(&store).await;
+
+    let all = service.usage_all(None).unwrap();
+    assert_eq!(all.logical.get(), 2);
+    assert_eq!(all.cost.unwrap().get(), 3.0);
+    let by_session = service
+        .usage_report_all(
+            &report_input(r#"{"group":"session","sort":"cost","order":"desc"}"#),
+            None,
+        )
+        .unwrap()
+        .encode();
+    assert_eq!(number(&by_session, "total.logical"), 2.0);
+    assert_eq!(number(&by_session, "rowCount"), 2.0);
+    assert_eq!(keys(&by_session), ["ses_two", "ses_one"]);
+    assert_eq!(string(&by_session, "rows.0.label"), "Test");
+    assert_eq!(string(&by_session, "rows.1.label"), "ses_one");
+
+    let two = service.usage(&id("ses_two"), None).unwrap();
+    assert_eq!(two.logical.get(), 1);
+    assert_eq!(two.cost.unwrap().get(), 2.0);
+    delete_ledger_row(&store, "prq_fact_two");
+    assert_eq!(
+        service.usage(&id("ses_two"), None).unwrap().logical.get(),
+        0
+    );
+    let session_report = report(&service, "ses_two", r#"{"group":"model"}"#);
+    assert_eq!(number(&session_report, "total.logical"), 0.0);
+    let all = service.usage_all(None).unwrap();
+    assert_eq!(all.logical.get(), 2);
+    assert_eq!(all.cost.unwrap().get(), 3.0);
+    let by_model = service
+        .usage_report_all(&report_input(r#"{"group":"model"}"#), None)
+        .unwrap()
+        .encode();
+    assert_eq!(number(&by_model, "total.logical"), 2.0);
+}
+
+#[tokio::test]
+async fn a_repeated_request_id_never_rewrites_the_retained_request() {
+    let (store, service) = setup();
+    let first = service
+        .publish(recorded("ses_one", "evt_dup_one", "prq_dup", 1, 1.0, 100))
+        .await
+        .unwrap();
+    service
+        .publish(recorded("ses_one", "evt_dup_new", "prq_dup", 1, 9.0, 300))
+        .await
+        .unwrap();
+    let all = service.usage_all(None).unwrap();
+    assert_eq!((all.logical.get(), all.cost.unwrap().get()), (1, 1.0));
+    let one = service.usage(&id("ses_one"), None).unwrap();
+    assert_eq!((one.logical.get(), one.cost.unwrap().get()), (1, 1.0));
+    store
+        .submit(move |tx| ycoding_core::session::projector::fold(tx, &first))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let all = service.usage_all(None).unwrap();
+    assert_eq!((all.logical.get(), all.cost.unwrap().get()), (1, 1.0));
+    let one = service.usage(&id("ses_one"), None).unwrap();
+    assert_eq!((one.logical.get(), one.cost.unwrap().get()), (1, 1.0));
+
+    delete_ledger_row(&store, "prq_dup");
+    service
+        .publish(recorded("ses_one", "evt_dup_two", "prq_dup", 1, 9.0, 300))
+        .await
+        .unwrap();
+
+    let all = service.usage_all(None).unwrap();
+    assert_eq!((all.logical.get(), all.cost.unwrap().get()), (1, 1.0));
+    let one = service.usage(&id("ses_one"), None).unwrap();
+    assert_eq!((one.logical.get(), one.cost.unwrap().get()), (1, 9.0));
 }

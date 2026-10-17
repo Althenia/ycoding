@@ -450,6 +450,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     XDG_CACHE_HOME: cache,
     XDG_STATE_HOME: state,
     YCODING_PASSWORD: PASSWORD,
+    YCODING_DB: undefined,
+    YCODING_SQLITE_IMPORT_SOURCE: undefined,
     YCODING_CONFIG_DIR: path.join(config, "ycoding"),
     YCODING_CONFIG: undefined,
     YCODING_CONFIG_CONTENT: undefined,

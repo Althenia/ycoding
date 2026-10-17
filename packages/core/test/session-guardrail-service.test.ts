@@ -283,6 +283,27 @@ exact.it.effect("admits YCoding-managed tool operations without a review request
   expect(yield* service.forSession(parentID)).toEqual([])
 }))
 
+const disabledPolicy = harness({
+  entries: [
+    new Config.Document({
+      type: "document",
+      info: new Config.Info({ guardrails: new ConfigGuardrail.Info({ enabled: false }) }),
+    }),
+  ],
+})
+exact.it.effect("captures the default review policy for effective autonomy", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    expect(service.reviewPolicy).toEqual({ enabled: true, decideReviews: false, decideHardReviews: true })
+  }),
+)
+disabledPolicy.it.effect("captures disabled ordinary guardrails in the review policy", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    expect(service.reviewPolicy).toEqual({ enabled: false, decideReviews: false, decideHardReviews: true })
+  }),
+)
+
 const oneShell = harness({
   entries: [new Config.Document({
     type: "document",
@@ -533,7 +554,7 @@ describe("SessionGuardrail ordinary review", () => {
   )
 
   const yolo3 = harness({ autoGuardrail: true })
-  yolo3.it.effect("allows YOLO 3 admission of ordinary review without changing hard review", () =>
+  yolo3.it.effect("allows YOLO 2 admission of ordinary review without changing hard review", () =>
     Effect.gen(function* () {
       const service = yield* SessionGuardrail.Service
       yield* (yield* service.assert(semanticInput)).release
@@ -649,7 +670,7 @@ exact.it.effect("serializes root-family mutations without holding the fence acro
 )
 
 autonomousRuntime.effect(
-  "auto-approves ordinary reviews at YOLO 1-3 but retains goal-only human review",
+  "auto-approves ordinary reviews only at YOLO 2 and retains human review at YOLO 1 and for goals",
   () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -682,53 +703,57 @@ autonomousRuntime.effect(
       const permission = yield* Permission.Service
       const guardrail = yield* SessionGuardrail.Service
 
-      for (const yolo of [1, 2, 3]) {
-        yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo })
-        expect(
-          yield* permission.ask({
-            sessionID: autonomousSessionID,
-            action: "read",
-            resources: ["src/index.ts"],
-          }),
-        ).toMatchObject({ effect: "allow" })
-        expect(yield* permission.forSession(autonomousSessionID)).toEqual([])
+      yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 2 })
+      expect(
+        yield* permission.ask({
+          sessionID: autonomousSessionID,
+          action: "read",
+          resources: ["src/index.ts"],
+        }),
+      ).toMatchObject({ effect: "allow" })
+      expect(yield* permission.forSession(autonomousSessionID)).toEqual([])
+      const autoReservation = yield* guardrail.assert({ ...destructive, sessionID: autonomousSessionID })
+      yield* autoReservation.release
+      expect(yield* guardrail.forSession(autonomousSessionID)).toEqual([])
 
-        const reservation = yield* guardrail.assert({ ...destructive, sessionID: autonomousSessionID })
-        yield* reservation.release
-        expect(yield* guardrail.forSession(autonomousSessionID)).toEqual([])
-      }
+      const expectHumanReview = Effect.gen(function* () {
+        const asked = yield* Deferred.make<void>()
+        const unsubscribe = yield* events.listen((event) =>
+          event.type === Guardrail.Event.Asked.type
+            ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        )
+        const fiber = yield* guardrail
+          .assert({ ...destructive, sessionID: autonomousSessionID })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(asked).pipe(Effect.timeout("1 second"), Effect.ensuring(unsubscribe))
+        const request = (yield* guardrail.forSession(autonomousSessionID))[0]
+        if (!request) yield* Effect.die("guardrail request was not retained")
+        expect(yield* guardrail.forSession(autonomousSessionID)).toContainEqual(request)
+        yield* guardrail.reply({ sessionID: autonomousSessionID, requestID: request!.id, reply: "once" })
+        yield* (yield* Fiber.join(fiber)).release
+      })
+
+      yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 1 })
+      expect(
+        yield* permission.ask({
+          sessionID: autonomousSessionID,
+          action: "read",
+          resources: ["src/index.ts"],
+        }),
+      ).toMatchObject({ effect: "allow" })
+      yield* expectHumanReview
+
       yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 0 })
       yield* autonomy.setGoal({ sessionID: autonomousSessionID, text: "Finish safely" })
-      expect(yield* permission.ask({ sessionID: autonomousSessionID, action: "read", resources: ["src/index.ts"] })).toMatchObject({ effect: "allow" })
-
-      const asked = yield* Deferred.make<void>()
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === Guardrail.Event.Asked.type
-          ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
-          : Effect.void,
-      )
-      yield* Effect.addFinalizer(() => unsubscribe)
-      const fiber = yield* guardrail
-        .assert({
-          ...destructive,
-          sessionID: autonomousSessionID,
-        })
-        .pipe(Effect.forkScoped)
-      yield* Deferred.await(asked).pipe(Effect.timeout("1 second"))
-      const request = (yield* guardrail.forSession(autonomousSessionID))[0]
-      if (!request) yield* Effect.die("guardrail request was not retained")
-      expect(yield* guardrail.forSession(autonomousSessionID)).toContainEqual(request)
-      yield* guardrail.reply({
-        sessionID: autonomousSessionID,
-        requestID: request.id,
-        reply: "once",
-      })
-      const reservation = yield* Fiber.join(fiber)
-      yield* reservation.release
+      const goalPermission = yield* permission.ask({ sessionID: autonomousSessionID, action: "read", resources: ["src/index.ts"] })
+      expect(goalPermission).toMatchObject({ effect: "ask" })
+      yield* permission.reply({ requestID: goalPermission.id, reply: "once" })
+      yield* expectHumanReview
     }),
 )
 
-autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-3 and in goal mode", () =>
+autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-2 and in goal mode", () =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -776,7 +801,7 @@ autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-3 a
       yield* reservation.release
     })
 
-    for (const yolo of [0, 1, 2, 3]) {
+    for (const yolo of [0, 1, 2]) {
       yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo })
       expect(
         yield* guardrail.evaluate({
@@ -793,7 +818,7 @@ autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-3 a
     yield* review()
 
     yield* autonomy.clearGoal(autonomousSessionID)
-    yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 3 })
+    yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 2 })
     const ordinary = yield* guardrail.assert({
       ...destructive,
       sessionID: autonomousSessionID,
@@ -1074,7 +1099,7 @@ const hardReviewInput = {
 
 const autoHardReview = harness({ autoGuardrail: true })
 
-autoHardReview.it.effect("does not let YOLO 3 auto-approve a hard review", () =>
+autoHardReview.it.effect("does not let YOLO 2 auto-approve a hard review", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const pending = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })

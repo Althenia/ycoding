@@ -14,7 +14,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
 use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle, ThreadId};
 
@@ -65,6 +65,19 @@ pub struct Store {
 
 #[derive(Clone)]
 pub struct Client(Arc<Shared>);
+
+#[derive(Clone)]
+pub struct WeakClient(Weak<Shared>);
+
+impl WeakClient {
+    pub fn upgrade(&self) -> Option<Client> {
+        self.0.upgrade().map(Client)
+    }
+
+    pub fn refers_to(&self, client: &Client) -> bool {
+        std::ptr::eq(Weak::as_ptr(&self.0), Arc::as_ptr(&client.0))
+    }
+}
 
 type EventObserver = Box<dyn Fn(&[Event]) -> bool + Send + Sync>;
 
@@ -308,6 +321,10 @@ impl Deref for Store {
 }
 
 impl Client {
+    pub fn downgrade(&self) -> WeakClient {
+        WeakClient(Arc::downgrade(&self.0))
+    }
+
     pub fn prepare_pruning(
         &self,
         now: i64,
@@ -366,18 +383,22 @@ impl Client {
             .ok_or(Error::Closed)?;
         let catalog = self.0.catalog;
         let observers = Arc::clone(&self.0.observers);
-        self.submit_operation(move |db, fenced, metadata| {
-            let value = transact(db, catalog, fenced, metadata, &observers, operation)?;
-            Ok((
-                value,
-                Snapshot {
-                    read: db.begin_read()?,
-                    _permit: permit,
-                    _database: database,
-                    catalog,
-                },
-            ))
-        })
+        self.submit_operation(
+            move |db, fenced, metadata| {
+                let value = transact(db, catalog, fenced, metadata, &observers, operation)?;
+                Ok((
+                    value,
+                    Snapshot {
+                        read: db.begin_read()?,
+                        _permit: permit,
+                        _database: database,
+                        catalog,
+                    },
+                ))
+            },
+            true,
+            |_| {},
+        )
     }
     pub fn metadata(&self) -> &Metadata {
         &self.0.metadata
@@ -396,9 +417,30 @@ impl Client {
     {
         let catalog = self.0.catalog;
         let observers = Arc::clone(&self.0.observers);
-        self.submit_operation(move |database, fenced, metadata| {
-            transact(database, catalog, fenced, metadata, &observers, operation)
-        })
+        self.submit_operation(
+            move |database, fenced, metadata| {
+                transact(database, catalog, fenced, metadata, &observers, operation)
+            },
+            true,
+            |_| {},
+        )
+    }
+
+    pub fn submit_owned<R, F, O>(&self, operation: F, observe: O) -> Result<Receipt<R>, Error>
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut Write<'_>) -> Result<R, Error> + Send + 'static,
+        O: FnOnce(&Result<R, Error>) + Send + 'static,
+    {
+        let catalog = self.0.catalog;
+        let observers = Arc::clone(&self.0.observers);
+        self.submit_operation(
+            move |database, fenced, metadata| {
+                transact(database, catalog, fenced, metadata, &observers, operation)
+            },
+            false,
+            observe,
+        )
     }
 
     pub fn observe_events(&self, observer: impl Fn(&[Event]) -> bool + Send + Sync + 'static) {
@@ -413,6 +455,8 @@ impl Client {
     fn submit_operation<R: Send + 'static>(
         &self,
         operation: impl FnOnce(&Database, &AtomicBool, &Metadata) -> Result<R, Error> + Send + 'static,
+        cancel_on_drop: bool,
+        observe: impl FnOnce(&Result<R, Error>) + Send + 'static,
     ) -> Result<Receipt<R>, Error> {
         if self.0.closed.load(Ordering::Acquire) {
             return Err(Error::Closed);
@@ -456,6 +500,9 @@ impl Client {
                     fenced.store(true, Ordering::Release);
                     Err(Error::WriterPanicked)
                 });
+                if catch_unwind(AssertUnwindSafe(|| observe(&result))).is_err() {
+                    fenced.store(true, Ordering::Release);
+                }
                 owned_completion.complete(result);
             },
         );
@@ -470,7 +517,11 @@ impl Client {
                 mpsc::TrySendError::Full(_) => Error::QueueFull,
                 mpsc::TrySendError::Disconnected(_) => Error::Closed,
             })?;
-        Ok(Receipt { completion, writer })
+        Ok(Receipt {
+            completion,
+            writer,
+            cancel_on_drop,
+        })
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -535,6 +586,7 @@ impl<R> Completion<R> {
 pub struct Receipt<R> {
     completion: Arc<Completion<R>>,
     writer: ThreadId,
+    cancel_on_drop: bool,
 }
 impl<R> Receipt<R> {
     pub fn wait(self) -> Result<R, Error> {
@@ -580,7 +632,7 @@ impl<R> Drop for Receipt<R> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !state.started {
+        if self.cancel_on_drop && !state.started {
             state.cancelled = true;
         }
         state.waker = None;
@@ -891,7 +943,7 @@ impl Write<'_> {
     }
 }
 
-fn index_storage_key(index: &IndexDefinition, key: &[u8], primary: &[u8]) -> Vec<u8> {
+pub(crate) fn index_storage_key(index: &IndexDefinition, key: &[u8], primary: &[u8]) -> Vec<u8> {
     if index.unique {
         return key.to_vec();
     }

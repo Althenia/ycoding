@@ -130,7 +130,9 @@ fn failure(error: Error) -> Failure {
         Error::InvalidConsent => Failure::Invalid("Invalid telemetry consent".into()),
         Error::InvalidCursor => Failure::InvalidCursor("Invalid telemetry cursor".into()),
         Error::InvalidLimit => Failure::Invalid("Invalid telemetry limit".into()),
-        Error::Storage => Failure::Unavailable("Telemetry store unavailable".into()),
+        Error::Storage | Error::Derived => {
+            Failure::Unavailable("Telemetry store unavailable".into())
+        }
     }
 }
 fn invalid_sample() -> Failure {
@@ -142,7 +144,7 @@ fn invalid_sample() -> Failure {
 fn integer(value: u64) -> Result<Int, Failure> {
     Int::new(i64::try_from(value).map_err(|_| invalid_sample())?).map_err(|_| invalid_sample())
 }
-const OPERATIONS: [telemetry::Operation; 66] = [
+const OPERATIONS: [telemetry::Operation; 77] = [
     telemetry::Operation::V0,
     telemetry::Operation::V1,
     telemetry::Operation::V2,
@@ -209,6 +211,17 @@ const OPERATIONS: [telemetry::Operation; 66] = [
     telemetry::Operation::V63,
     telemetry::Operation::V64,
     telemetry::Operation::V65,
+    telemetry::Operation::V66,
+    telemetry::Operation::V67,
+    telemetry::Operation::V68,
+    telemetry::Operation::V69,
+    telemetry::Operation::V70,
+    telemetry::Operation::V71,
+    telemetry::Operation::V72,
+    telemetry::Operation::V73,
+    telemetry::Operation::V74,
+    telemetry::Operation::V75,
+    telemetry::Operation::V76,
 ];
 fn sample_domain(sample: &v5::TelemetrySample) -> Result<telemetry::Sample, Failure> {
     use v5::telemetry_sample::Kind;

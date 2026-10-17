@@ -1,10 +1,11 @@
 import { SchemaAST } from "effect"
 import { wireContract, isUtcDeclaration } from "./wire-contract.js"
+import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { middlewareErrors } from "./resources-source.js"
 import { resourceContract, resourceFieldConstraints, resourceSourceIdentity } from "./resources-contract.js"
 import { platformContract, sharedSet } from "./platform-contract.js"
 import { sessionRpcEndpoints } from "./session-source.js"
-import { SessionLogItem } from "../src/groups/session.js"
+import { SessionAutonomyState, SessionListBefore, SessionLogItem } from "../src/groups/session.js"
 import type { WireField } from "./wire-contract.js"
 import { connectorRoles } from "./connector-source.js"
 
@@ -93,6 +94,10 @@ export const sessionIDs = {
   "session.compaction.list": 4081,
   "session.prediction": 4082,
   "session.promptGenerate": 4083,
+  "session.promptCosts": 4084,
+  "session.taskCosts": 4085,
+  "session.review.list": 4086,
+  "session.review.decide": 4087,
 } as const
 
 export const sessionResultNames = {} as const
@@ -122,6 +127,10 @@ export function sessionSourceIdentity(ast: SchemaAST.AST, hint: string): string 
     return "packages/schema/src/session-revert.ts#Revert"
   if (name.startsWith("Form.CreatePayload") || name.startsWith("Form_CreatePayload"))
     return "packages/protocol/src/groups/form.ts#CreatePayload"
+  if (name.startsWith("SessionReview.Decide") && !name.startsWith("SessionReview.Decision"))
+    return "packages/protocol/src/groups/review.ts#ReviewDecide"
+  if (name.startsWith("SessionReview_Decide") && !name.startsWith("SessionReview_Decision"))
+    return "packages/protocol/src/groups/review.ts#ReviewDecide"
   if (name.startsWith("Prompt.Mention") || name.startsWith("Prompt_Mention"))
     return "packages/schema/src/prompt.ts#PromptMention"
   if (module.endsWith("Error")) return `packages/protocol/src/errors.ts#${module}`
@@ -165,8 +174,13 @@ export function sessionSourceIdentity(ast: SchemaAST.AST, hint: string): string 
     Integration: "integration",
     Provider: "provider",
     Snapshot: "snapshot",
+    UsageAnchor: "usage-anchor",
+    UsageAccounting: "usage-accounting",
+    UsageForecast: "usage-forecast",
+    SessionReview: "session-review",
   }
-  if (modules[module]) return `packages/schema/src/${modules[module]}.ts#${module}.${name.split(/[._]/)[1] ?? "Info"}`
+  if (modules[module])
+    return `packages/schema/src/${modules[module]}.ts#${module}.${name.split(/[._]/)[1]?.replace(/Value\d+$/, "") ?? "Info"}`
   if (module === "SourceEpoch") return "packages/schema/src/source-epoch.ts#SourceEpoch"
   if (module === "AttachmentDigest" || module === "Base64") return `packages/schema/src/prompt.ts#${module}`
   if (module.startsWith("Session") || module === "SessionsQuery")
@@ -179,14 +193,15 @@ export function sessionSourceIdentity(ast: SchemaAST.AST, hint: string): string 
   return `packages/protocol/src/groups/${group}.ts#${group === "generate" ? "GenerateGroup" : group === "message" ? "MessageGroup" : `make${group[0].toUpperCase() + group.slice(1)}Group`}`
 }
 
-export function sessionContract(endpoints = sessionRpcEndpoints()) {
+export function sessionContract(endpoints = sessionRpcEndpoints(), allocation: WireAllocation = wireAllocation) {
   const contract = wireContract(
     [...endpoints].sort((a, b) => a.endpoint.identifier.localeCompare(b.endpoint.identifier)),
     sessionIDs,
     sessionSourceIdentity,
     middlewareErrors,
     sessionResultNames,
-    [SessionLogItem],
+    [SessionLogItem, SessionAutonomyState],
+    allocation,
   )
   contract.messages.get("event_subscribe_Request")!.fields.push({
     name: "scope",
@@ -214,14 +229,31 @@ export function sessionContract(endpoints = sessionRpcEndpoints()) {
   })
   contract.operations.sort((a, b) => a.id - b.id)
   contract.enums.set("SessionsQuery_order", ["asc", "desc", "pinned", "active"])
-  contract.enums.set("SessionsQuery_status", ["running", "idle"])
+  contract.enums.set("SessionsQuery_status", ["running", "idle", "waiting"])
   contract.enums.set("SessionsQuery_searchFields", ["summary"])
   contract.messages
     .get("SessionsQuery")!
     .fields.push(
       { name: "status", type: "SessionsQuery_status", presence: "optional", constraints: [] },
       { name: "searchFields", type: "SessionsQuery_searchFields", presence: "optional", constraints: [] },
+      { name: "around", type: "LosslessString", presence: "optional", constraints: [] },
+      {
+        name: "before",
+        type: "uint64",
+        presence: "optional",
+        constraints: [],
+        ast: SessionListBefore.ast,
+        source: "packages/protocol/src/groups/session.ts#SessionListBefore",
+      },
     )
+  contract.messages
+    .get("SessionsResponse")!
+    .fields.push(
+      { name: "status", type: "Status", presence: "optional", constraints: [] },
+      { name: "stale", type: "bool", presence: "optional", constraints: [] },
+    )
+  contract.messages.get("SessionAutonomyEffective")!.fields[0].type = "SessionAutonomyYolo"
+  contract.messages.delete("SessionAutonomyYoloLevel")
   return contract
 }
 
@@ -269,8 +301,8 @@ export function sessionPolicy(name: string, method: string) {
   } as const
 }
 
-export function sessionProto(endpoints = sessionRpcEndpoints()) {
-  const contract = sessionContract(endpoints)
+export function sessionProto(endpoints = sessionRpcEndpoints(), allocation: WireAllocation = wireAllocation) {
+  const contract = sessionContract(endpoints, allocation)
   const shared = sharedSet()
   const resources = resourceContract()
   const platform = platformContract()
@@ -292,7 +324,7 @@ export function sessionProto(endpoints = sessionRpcEndpoints()) {
   }
   return (
     (
-      'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\nimport "ycoding/v5/shared.proto";\n\noption (ycoding.v5.operation_range) = { first: 4000 last: 4083 };\n\n' +
+      'syntax = "proto2";\npackage ycoding.v5;\nimport "ycoding/v5/foundation.proto";\nimport "ycoding/v5/operations.proto";\nimport "ycoding/v5/shared.proto";\n\noption (ycoding.v5.operation_range) = { first: 4000 last: 4087 };\n\n' +
       [...contract.enums]
         .filter(([name]) => !shared.has(name))
         .map(
@@ -302,9 +334,9 @@ export function sessionProto(endpoints = sessionRpcEndpoints()) {
                 (value, index) =>
                   `  ${name.toUpperCase()}_${String(value)
                     .replace(/[^a-zA-Z0-9]/g, "_")
-                    .toUpperCase()} = ${index + 1};`,
+                    .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
               )
-              .join("\n")}\n}`,
+              .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +
@@ -312,7 +344,7 @@ export function sessionProto(endpoints = sessionRpcEndpoints()) {
         .filter(([name]) => !shared.has(name))
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +

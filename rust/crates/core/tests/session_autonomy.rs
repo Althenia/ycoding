@@ -32,13 +32,13 @@ fn stored(store: &ycoding_store::Store) -> Option<JsonValue> {
 }
 
 #[tokio::test]
-async fn yolo_ladder_grants_approvals_at_one_and_answers_at_two_with_stored_numeric_levels() {
-    for level in 0..=3u8 {
+async fn yolo_ladder_grants_permissions_at_one_and_reviews_at_two_but_never_answers() {
+    for level in 0..=2u8 {
         let store = support::store();
         let service = Service::new(store.client());
         let state = service.set_yolo(&id("ses_one"), yolo(level)).await.unwrap();
         let effective = state.effective();
-        assert_eq!(effective.can_auto_answer(), level >= 2, "answer at {level}");
+        assert!(!effective.can_auto_answer(), "answer at {level}");
         assert_eq!(
             effective.can_auto_permission(),
             level >= 1,
@@ -46,7 +46,7 @@ async fn yolo_ladder_grants_approvals_at_one_and_answers_at_two_with_stored_nume
         );
         assert_eq!(
             effective.can_auto_guardrail(),
-            level >= 1,
+            level >= 2,
             "guardrail at {level}"
         );
         let expected = parse_json(&format!(r#"{{"mode":"normal","yolo":{level}}}"#)).unwrap();
@@ -60,7 +60,7 @@ async fn yolo_ladder_grants_approvals_at_one_and_answers_at_two_with_stored_nume
 }
 
 #[tokio::test]
-async fn active_goal_grants_answers_and_permissions_but_never_ordinary_guardrail_approval() {
+async fn an_active_goal_grants_no_permission_answer_or_review_authority() {
     let store = support::store();
     let service = Service::new(store.client());
     service
@@ -68,18 +68,21 @@ async fn active_goal_grants_answers_and_permissions_but_never_ordinary_guardrail
         .await
         .unwrap();
     let effective = service.effective(&id("ses_one")).unwrap();
-    assert!(effective.can_auto_answer());
-    assert!(effective.can_auto_permission());
+    assert!(effective.goal_active);
+    assert!(!effective.can_auto_answer());
+    assert!(!effective.can_auto_permission());
     assert!(!effective.can_auto_guardrail());
     assert!(!effective.can_auto_review(ReviewKind::Ordinary));
 }
 
 #[tokio::test]
 async fn hard_reviews_stay_human_only_at_every_level_with_or_without_a_goal() {
-    for level in 0..=3u8 {
+    for level in 0..=2u8 {
         let state = State {
             yolo: yolo(level),
             goal: Some(goal("Ship")),
+            sleep: false,
+            auto_answer: Some(true),
         };
         assert!(
             !state.effective().can_auto_review(ReviewKind::Hard),
@@ -87,7 +90,7 @@ async fn hard_reviews_stay_human_only_at_every_level_with_or_without_a_goal() {
         );
         assert_eq!(
             state.effective().can_auto_review(ReviewKind::Ordinary),
-            level >= 1,
+            level >= 2,
             "ordinary at {level}"
         );
     }
@@ -275,7 +278,7 @@ async fn guarded_calculations_apply_only_at_the_expected_revision_and_stop_fence
         .set_goal_if_current(
             &id("ses_one"),
             current.sequence,
-            Some(yolo(3)),
+            Some(yolo(2)),
             goal("Late"),
         )
         .await
@@ -378,6 +381,8 @@ fn terminal_and_active_goals_render_visible_reminders() {
             no_progress: 1,
             ..goal("Finish the bounded task")
         }),
+        sleep: false,
+        auto_answer: None,
     };
     assert_eq!(
         [
@@ -504,6 +509,49 @@ mod continuation {
             *steer.requests.lock().unwrap(),
             [(0, Some("Done so far".to_owned())), (1, None)]
         );
+    }
+
+    #[tokio::test]
+    async fn an_open_review_item_pauses_goal_continuation_without_spending_the_budget() {
+        let store = support::store();
+        let autonomy = Service::new(store.client());
+        let sessions = store::Service::new(store.client());
+        autonomy
+            .set_goal(&id("ses_one"), goal("Ship it"))
+            .await
+            .unwrap();
+        let before = autonomy.get(&id("ses_one")).unwrap();
+        store
+            .submit(|tx| {
+                ycoding_store::session::append(
+                    tx,
+                    &ycoding_store::session::NewEvent {
+                        id: "evt_goal_review_gate".into(),
+                        aggregate_id: "ses_one".into(),
+                        created: 40,
+                        type_: "session.review.deferred.1".into(),
+                        data: ycoding_schema::parse_json(
+                            r#"{"sessionID":"ses_one","itemID":"rvw_goal_gate","kind":"question","reason":"free_text","origin":{"requestID":"frm_goal_gate"},"payload":{"type":"form","title":"Plan","fields":[{"key":"plan","type":"string","required":true}]}}"#,
+                        )
+                        .unwrap(),
+                    },
+                    None,
+                )
+                .map(|_| ())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        let steer = fixed(Some("Run the tests next."));
+
+        let held = continue_goal(&autonomy, &sessions, &steer, &id("ses_one"), None, false)
+            .await
+            .unwrap();
+
+        assert!(held.is_none());
+        assert!(steer.requests.lock().unwrap().is_empty());
+        assert!(sessions.pending_list(&id("ses_one")).unwrap().is_empty());
+        assert_eq!(autonomy.get(&id("ses_one")).unwrap(), before);
     }
 
     #[tokio::test]

@@ -168,6 +168,7 @@ async fn flow() {
     let core = Core::production(
         store.client(),
         Production {
+            analytics: roots.data.join("analytics"),
             configuration: config::LoadOptions {
                 directory,
                 roots: roots.clone(),
@@ -228,7 +229,7 @@ async fn flow() {
     };
     assert_eq!(
         field(&messages[0], "content"),
-        &JsonValue::String(ycoding_core::session::goal::SYSTEM.into())
+        &JsonValue::String(ycoding_core::resources::agent::prompts::GOAL.into())
     );
     assert_eq!(
         field(&messages[1], "content"),

@@ -17,34 +17,81 @@ pub async fn status(
         .guardrails
         .status(&session)
         .map_err(|error| failure(error, None))?;
-    let count = |value: NonNegativeInt| value.get() as u64;
     Ok(v5::SessionGuardrailStatusResult {
-        data: v5::GuardrailStatus {
-            root_session_id: convert::wire(status.root_session_id.as_lossless()),
-            profile: convert::wire(&status.profile),
-            custom_rules: count(status.custom_rules),
-            approvals: count(status.approvals),
-            blocked: count(status.blocked),
-            counters: v5::GuardrailStatusCounters {
-                items: status
-                    .counters
+        data: status_wire(&status),
+    })
+}
+
+fn status_wire(status: &guardrail::Status) -> v5::GuardrailStatus {
+    let count = |value: NonNegativeInt| value.get() as u64;
+    v5::GuardrailStatus {
+        root_session_id: convert::wire(status.root_session_id.as_lossless()),
+        profile: convert::wire(&status.profile),
+        custom_rules: count(status.custom_rules),
+        approvals: count(status.approvals),
+        blocked: count(status.blocked),
+        counters: v5::GuardrailStatusCounters {
+            items: status
+                .counters
+                .iter()
+                .map(|counter| v5::GuardrailCounter {
+                    id: convert::wire(&counter.id),
+                    current: count(counter.current),
+                    limit: count(counter.limit),
+                    scope: match counter.scope {
+                        guardrail::CounterScope::Session => v5::GuardrailCounterScope::Session,
+                        guardrail::CounterScope::Family => v5::GuardrailCounterScope::Family,
+                    } as i32,
+                })
+                .collect(),
+        },
+        invalid_files: v5::GuardrailStatusInvalidFiles {
+            items: status.invalid_files.iter().map(convert::wire).collect(),
+        },
+        dismissals: status
+            .dismissals
+            .as_ref()
+            .map(|items| v5::GuardrailStatusDismissals {
+                items: items
                     .iter()
-                    .map(|counter| v5::GuardrailCounter {
-                        id: convert::wire(&counter.id),
-                        current: count(counter.current),
-                        limit: count(counter.limit),
-                        scope: match counter.scope {
-                            guardrail::CounterScope::Session => v5::GuardrailCounterScope::Session,
-                            guardrail::CounterScope::Family => v5::GuardrailCounterScope::Family,
-                        } as i32,
+                    .map(|dismissal| v5::GuardrailStatusDismissalsItem {
+                        session_id: convert::wire(dismissal.session_id.as_lossless()),
+                        created: count(dismissal.created),
+                        event_id: convert::wire(&dismissal.event_id),
+                        rule_id: convert::wire(&dismissal.rule_id),
+                        confidence: dismissal.confidence,
+                        source: dismissal.source.as_ref().map(convert::guardrail_source),
                     })
                     .collect(),
-            },
-            invalid_files: v5::GuardrailStatusInvalidFiles {
-                items: status.invalid_files.iter().map(convert::wire).collect(),
-            },
-        },
-    })
+            }),
+        decisions: status
+            .decisions
+            .as_ref()
+            .map(|items| v5::GuardrailStatusDecisions {
+                items: items
+                    .iter()
+                    .map(|decision| v5::GuardrailStatusDecisionsItem {
+                        session_id: convert::wire(decision.session_id.as_lossless()),
+                        created: count(decision.created),
+                        request_id: convert::wire(&decision.request_id),
+                        reply: convert::guardrail_reply(decision.reply),
+                        choice: decision.choice.map(convert::decision_choice),
+                        confidence: decision.confidence.map(guardrail::Confidence::get),
+                        grades: decision.grades.as_ref().map(|grades| {
+                            v5::GuardrailStatusDecisionsItemGrades {
+                                items: convert::grades(grades),
+                            }
+                        }),
+                        rule_i_ds: decision.rule_ids.as_ref().map(|rules| {
+                            v5::GuardrailStatusDecisionsItemRuleIDs {
+                                items: rules.iter().map(convert::wire).collect(),
+                            }
+                        }),
+                        source: decision.source.as_ref().map(convert::guardrail_source),
+                    })
+                    .collect(),
+            }),
+    }
 }
 
 pub async fn request_list(
@@ -145,6 +192,7 @@ pub(crate) fn wire(request: &guardrail::Request) -> Result<v5::GuardrailRequest,
                     })
                     .collect(),
             }),
+        escalation: request.escalation.as_ref().map(convert::escalation),
     })
 }
 
@@ -160,5 +208,43 @@ fn failure(error: Error, request: Option<&v5::LosslessString>) -> Failure {
                 .unwrap_or_default(),
         ),
         _ => Failure::Unavailable("Guardrail service unavailable".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ycoding_core::ycoding_schema::{DomainDecode, parse_json};
+
+    #[test]
+    fn request_and_status_wire_carry_escalation_dismissals_and_decision_provenance() {
+        let request = guardrail::Request::decode(&parse_json(r#"{"id":"grq_fixture","rootSessionID":"ses_root","sessionID":"ses_child","action":"shell","resources":[],"ruleIDs":["standard.review.fixture"],"reason":"outside","standard":true,"escalation":{"choice":"escalate","confidence":0.5,"grades":[{"choice":"approve","confidence":0.5,"evidence":"close"}]}}"#).unwrap()).unwrap();
+        let escalation = wire(&request).unwrap().escalation.unwrap();
+        assert_eq!(
+            (escalation.choice, escalation.confidence),
+            (Some(4), Some(0.5))
+        );
+        assert_eq!(escalation.grades.unwrap().items[0].choice, 2);
+        let status = guardrail::Status::decode(&parse_json(r#"{"rootSessionID":"ses_root","profile":"standard","customRules":0,"approvals":0,"blocked":0,"counters":[],"invalidFiles":[],"dismissals":[{"sessionID":"ses_child","created":5,"eventID":"evt_dismissed","ruleID":"standard.review.fixture","confidence":0.95,"source":{"messageID":"msg_tool","callID":"call_one"}}],"decisions":[{"sessionID":"ses_child","created":6,"requestID":"grq_fixture","reply":"always","choice":"approve_all","confidence":0.9,"grades":[{"choice":"approve_all","confidence":0.9,"evidence":"broad"}],"ruleIDs":["standard.review.fixture"]}]}"#).unwrap()).unwrap();
+        let status = status_wire(&status);
+        let dismissal = &status.dismissals.unwrap().items[0];
+        assert_eq!((dismissal.created, dismissal.confidence), (5, 0.95));
+        assert_eq!(
+            dismissal.source.as_ref().unwrap().call_id,
+            convert::text("call_one")
+        );
+        let decision = &status.decisions.unwrap().items[0];
+        assert_eq!(
+            (decision.reply, decision.choice, decision.confidence),
+            (2, Some(1), Some(0.9))
+        );
+        assert_eq!(decision.grades.as_ref().unwrap().items.len(), 1);
+        assert_eq!(decision.rule_i_ds.as_ref().unwrap().items.len(), 1);
+        assert!(decision.source.is_none());
+        assert!(
+            status_wire(&guardrail::Status::decode(&parse_json(r#"{"rootSessionID":"ses_root","profile":"standard","customRules":0,"approvals":0,"blocked":0,"counters":[],"invalidFiles":[]}"#).unwrap()).unwrap())
+                .dismissals
+                .is_none()
+        );
     }
 }

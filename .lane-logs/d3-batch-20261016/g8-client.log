@@ -1,0 +1,88 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/contract-identity.test.ts:
+(pass) effect entrypoint exposes canonical Schema contracts [0.02ms]
+(pass) shared DTO schemas construct and decode plain objects [0.43ms]
+
+test/v5-local-family.test.ts:
+(pass) M7 generated session.capturedChanges.list binds Session scope and lossless domain results [5.39ms]
+(pass) M7 generated session.team.economics binds Session scope and lossless domain results [0.85ms]
+(pass) M7 generated session.family.activity binds Session scope and lossless domain results [0.97ms]
+(pass) M7 generated session.capturedChanges.list preserves Connector_Error without replay [0.72ms]
+(pass) M7 generated session.team.economics preserves Connector_Error without replay [0.59ms]
+(pass) M7 generated session.family.activity preserves Connector_Error without replay [0.38ms]
+
+test/v5-codec.test.ts:
+(pass) REQ-WIRE-004 preserves lone UTF-16 units, empty strings and explicit profile values [0.14ms]
+(pass) REQ-WIRE-004 distinguishes absent, empty, false, zero and explicit clearing [0.44ms]
+(pass) REQ-WIRE-004 converts typed public events into the existing domain shape [1.24ms]
+(pass) REQ-WIRE-004 rejects unsafe integer conversion rather than rounding [0.05ms]
+(pass) REQ-WIRE-004/007 string admission uses canonical UTF-16 bytes, not replacement-character UTF-8 [1.73ms]
+(pass) REQ-WIRE-004 duplicate dynamic keys are rejected rather than collapsed [0.21ms]
+
+test/v5-frontend-boundary.test.ts:
+(pass) M3/M4/M5/M10 provider.configure dispatches a typed request and decodes its redacted settlement [1.25ms]
+(pass) M3/M4/M5/M10 mcp.configure dispatches a typed request and decodes its redacted settlement [0.68ms]
+(pass) M3/M4/M5/M10 frontendPackage.resolve dispatches a typed request and decodes its redacted settlement [0.80ms]
+(pass) M3/M4/M5/M10 remote.enroll dispatches a typed request and decodes its redacted settlement [0.61ms]
+(pass) M3/M4/M5/M10 %s ConfigurationWriteError errors settle once without replay [0.47ms]
+(pass) M3/M4/M5/M10 %s ConfigurationPartialFailure errors settle once without replay [0.37ms]
+(pass) M3/M4/M5/M10 %s ConfigurationPartialFailure errors settle once without replay [0.35ms]
+(pass) M3/M4/M5/M10 %s FrontendPackageError errors settle once without replay [0.28ms]
+(pass) M3/M4/M5/M10 %s RemoteEnrollmentError errors settle once without replay [0.29ms]
+(pass) M3/M4/M5/M10 %s RemoteEnrollmentPartialFailure errors settle once without replay [0.30ms]
+(pass) M3/M4 alternate provider and remote MCP shapes keep global scope and optional lists [0.23ms]
+(pass) S2/M8/M10 existing reads expose optional backend-owned metadata through typed bindings [0.88ms]
+
+test/v5-absence.test.ts:
+(pass) absent model.default matches UndefinedOr HTTP JSON instead of returning an empty object [1.67ms]
+(pass) integration.get preserves the none branch and Location envelope [0.65ms]
+(pass) integration.get preserves the value branch and Location envelope [0.49ms]
+(pass) an omitted optional result-path field remains undefined like promise session.diagnostics [0.34ms]
+(pass) UndefinedOr none, NullOr clear and an ordinary empty message stay distinct [0.13ms]
+(pass) optional result fields omit absence but preserve present empty, false, zero, enum and null values [0.46ms]
+
+test/v5-surface.test.ts:
+(pass) REQ-WIRE-001 health group dispatches its canonical health.get operation [0.52ms]
+(pass) REQ-WIRE-001 server group dispatches its canonical server.get operation [0.28ms]
+(pass) REQ-WIRE-001 telemetry group dispatches its canonical telemetry.consent.set operation [0.28ms]
+(pass) REQ-WIRE-001 location group dispatches its canonical location.get operation [0.27ms]
+(pass) REQ-WIRE-001 agent group dispatches its canonical agent.list operation [0.25ms]
+(pass) REQ-WIRE-001 plugin group dispatches its canonical plugin.list operation [0.24ms]
+(pass) REQ-WIRE-001 session group dispatches its canonical session.list operation [0.44ms]
+(pass) REQ-WIRE-001 guardrail group dispatches its canonical session.guardrail.request.reply operation [0.32ms]
+(pass) REQ-WIRE-001 review group dispatches its canonical session.review.list operation [0.25ms]
+(pass) REQ-WIRE-001 message group dispatches its canonical session.messages operation [0.22ms]
+(pass) REQ-WIRE-001 model group dispatches its canonical model.list operation [0.27ms]
+(pass) REQ-WIRE-001 generate group dispatches its canonical generate.text operation [0.26ms]
+(pass) REQ-WIRE-001 provider group dispatches its canonical provider.refresh operation [0.31ms]
+(pass) REQ-WIRE-001 providerUsage group dispatches its canonical providerUsage.list operation [0.28ms]
+(pass) REQ-WIRE-001 integration group dispatches its canonical integration.oauth.status operation [0.34ms]
+(pass) REQ-WIRE-001 mcp group dispatches its canonical mcp.connect operation [0.42ms]
+(pass) REQ-WIRE-001 credential group dispatches its canonical credential.activate operation [0.25ms]
+(pass) REQ-WIRE-001 project group dispatches its canonical project.forget operation [0.22ms]
+(pass) REQ-WIRE-001 form group dispatches its canonical session.form.reply operation [0.33ms]
+(pass) REQ-WIRE-001 permission group dispatches its canonical session.permission.reply operation [0.21ms]
+(pass) REQ-WIRE-001 file group dispatches its canonical fs.find operation [0.21ms]
+(pass) REQ-WIRE-001 command group dispatches its canonical command.list operation [0.20ms]
+(pass) REQ-WIRE-001 skill group dispatches its canonical skill.list operation [0.18ms]
+(pass) REQ-WIRE-001 pty group dispatches its canonical pty.connectToken operation [0.24ms]
+(pass) REQ-WIRE-001 shell group dispatches its canonical shell.output operation [0.24ms]
+(pass) REQ-WIRE-001 question group dispatches its canonical session.question.reject operation [0.19ms]
+(pass) REQ-WIRE-001 reference group dispatches its canonical reference.list operation [0.20ms]
+(pass) REQ-WIRE-001 projectCopy group dispatches its canonical projectCopy.refresh operation [0.19ms]
+(pass) REQ-WIRE-001 vcs group dispatches its canonical vcs.diff operation [0.19ms]
+(pass) REQ-WIRE-001 projectArtifact group dispatches its canonical artifact.list operation [0.23ms]
+(pass) REQ-WIRE-001 debug group dispatches its canonical debug.location operation [0.26ms]
+(pass) REQ-WIRE-001 browser group dispatches its canonical browser.status operation [0.22ms]
+(pass) REQ-WIRE-001 isolatedBrowser group dispatches its canonical isolatedBrowser.status operation [0.18ms]
+(pass) REQ-WIRE-001 usage group dispatches its canonical usage.get operation [0.17ms]
+(pass) REQ-WIRE-001 remote group dispatches its canonical remote.set operation [0.17ms]
+(pass) REQ-WIRE-001 keepAwake group dispatches its canonical keepAwake.set operation [0.17ms]
+(pass) REQ-WIRE-001 config group dispatches its canonical config.diagnostics operation [0.16ms]
+(pass) REQ-WIRE-001 the complete 201-method surface has one canonical LocalClient descriptor [0.27ms]
+
+ 70 pass
+ 0 fail
+ 658 expect() calls
+Ran 70 tests across 6 files. [200.00ms]

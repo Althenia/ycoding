@@ -15,7 +15,7 @@ use ycoding_schema::{JsonValue, parse_json, permission};
 #[tokio::test]
 async fn creates_overwrites_preserves_bom_and_permission_denial_has_no_effect() {
     let fixture = Fixture::default();
-    fixture.session("ses_write", None, 1, false, None);
+    fixture.session("ses_write", None, 2, false, None);
     fixture.rules.lock().unwrap().push(permission::Rule {
         action: "*".into(),
         resource: "*".into(),
@@ -47,6 +47,8 @@ async fn creates_overwrites_preserves_bom_and_permission_denial_has_no_effect() 
                 custom: Arc::new(Vec::new),
                 enabled: true,
                 limits: Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             fixture.publisher(),
         ),

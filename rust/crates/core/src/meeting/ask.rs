@@ -1,3 +1,4 @@
+use super::config::AnalysisModel;
 use super::intelligence::{Generate, from_generator, units};
 use super::runtime::MeetingRuntime;
 use super::store::{now, uuid};
@@ -58,6 +59,11 @@ impl Questions {
         if !lock(&self.running).insert(meeting.clone()) {
             return json!({ "busy": true });
         }
+        let analysis = self.runtime.config().analysis;
+        let model = match analysis.ask_model {
+            AnalysisModel::Inherit => analysis.model,
+            selected => selected,
+        };
         self.idle.send_modify(|running| *running += 1);
         let id = match uuid() {
             Ok(id) => id,
@@ -66,7 +72,7 @@ impl Questions {
         let mut entry =
             json!({ "id": id, "question": question, "createdAt": now(), "status": "pending" });
         self.record(&meeting, &entry);
-        match self.answer(&meeting, &question).await {
+        match self.answer(&meeting, &question, model).await {
             Ok(Some(answer)) => {
                 entry["answer"] = json!(answer);
                 entry["status"] = json!("answered");
@@ -103,7 +109,12 @@ impl Questions {
         }
     }
 
-    async fn answer(&self, meeting: &str, question: &str) -> Result<Option<String>, String> {
+    async fn answer(
+        &self,
+        meeting: &str,
+        question: &str,
+        model: AnalysisModel,
+    ) -> Result<Option<String>, String> {
         if question.trim().is_empty() || units(question) > MAX_QUESTION {
             return Err("invalid_question".into());
         }
@@ -149,7 +160,11 @@ impl Questions {
         if transcript.is_empty() || units(&render(&transcript, omitted)) > budget {
             return Err("transcript_exceeds_budget".into());
         }
-        let session = self.runtime.create_session(None).await.map_err(|e| e.0)?;
+        let session = self
+            .runtime
+            .create_session(None, model)
+            .await
+            .map_err(|e| e.0)?;
         let answer = (self.generate)(session, render(&transcript, omitted)).await?;
         if answer.trim().is_empty() || units(&answer) > MAX_ANSWER {
             return Err("invalid_answer".into());

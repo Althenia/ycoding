@@ -4,7 +4,7 @@ use crate::services::{Identity, Services};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,7 +18,8 @@ use ycoding_core::ycoding_store::{Metadata, Options, Store, import};
 use ycoding_protocol::connection::Budgets;
 
 mod activation;
-pub use activation::ImportError;
+use activation::Paths;
+pub use activation::{ImportError, ImportSource};
 
 include!(concat!(env!("OUT_DIR"), "/bundled_models.rs"));
 
@@ -74,9 +75,35 @@ pub struct LaunchConfig {
     pub config_dir: PathBuf,
     pub state_dir: PathBuf,
     pub roots: config::Roots,
-    pub stable_data: PathBuf,
+    pub storage: Storage,
     pub environment: BTreeMap<String, String>,
     pub startup_error_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Storage {
+    Memory { analytics: PathBuf },
+    File(FileStorage),
+}
+
+#[derive(Clone, Debug)]
+pub struct FileStorage {
+    pub file: PathBuf,
+    pub lease: PathBuf,
+    pub analytics: PathBuf,
+    pub marker: PathBuf,
+    pub import: ImportSource,
+    pub source_resources: PathBuf,
+    pub slot: bool,
+}
+
+impl Storage {
+    pub fn analytics(&self) -> &Path {
+        match self {
+            Self::Memory { analytics } => analytics,
+            Self::File(storage) => &storage.analytics,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -205,6 +232,8 @@ pub fn parse_launch(
     let channel = env("YCODING_CHANNEL")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "local".to_string());
+    let database = env("YCODING_DB").filter(|value| !value.is_empty());
+    let import_source = env("YCODING_SQLITE_IMPORT_SOURCE").filter(|value| !value.is_empty());
     let home = env("HOME")
         .or_else(|| env("USERPROFILE"))
         .map(PathBuf::from)
@@ -309,6 +338,7 @@ pub fn parse_launch(
         Some(password) if !password.is_empty() => password,
         _ => random_password()?,
     };
+    check_import_source(database.as_deref(), import_source.as_deref())?;
     Ok(Parsed::Run(Box::new(LaunchConfig {
         mode,
         hostname: hostname.unwrap_or_else(|| "127.0.0.1".to_string()),
@@ -318,11 +348,18 @@ pub fn parse_launch(
         password,
         password_generated,
         version,
+        storage: select_storage(
+            &channel,
+            &roots,
+            &stable_data,
+            database.as_deref(),
+            env("YCODING_DISABLE_CHANNEL_DB").is_some_and(|value| value == "1" || value == "true"),
+            import_source,
+        )?,
         channel,
         config_dir,
         state_dir,
         roots,
-        stable_data,
         environment,
         startup_error_file: env("YCODING_SERVICE_STARTUP_ERROR_FILE")
             .filter(|value| !value.is_empty())
@@ -334,7 +371,7 @@ pub async fn build_production_services(
     config: &LaunchConfig,
     store: &Store,
 ) -> Result<Services, LaunchError> {
-    let core = crate::Core::production(
+    let core = crate::Core::production_with_recovery(
         store.client(),
         crate::Production {
             configuration: config::LoadOptions {
@@ -387,7 +424,9 @@ pub async fn build_production_services(
             steer: None,
             ripgrep: "rg".into(),
             meeting: config.meeting,
+            analytics: config.storage.analytics().to_path_buf(),
         },
+        config.mode == Mode::Service,
     )
     .await
     .map_err(|failure| {
@@ -458,16 +497,30 @@ pub fn record_startup_error(config: &LaunchConfig, error: &LaunchError) {
 }
 
 pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
+    validate_storage(&config)?;
+    let _analytics = MemoryAnalytics(match &config.storage {
+        Storage::Memory { analytics } => Some(analytics.clone()),
+        Storage::File(_) => None,
+    });
     config.roots.initialize().map_err(message)?;
-    let lease = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(config.roots.data.join("runtime.lock"))?;
-    match lease.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) if config.mode == Mode::Service => return Ok(()),
-        Err(error) => return Err(message(error)),
+    let lease = match &config.storage {
+        Storage::File(storage) => Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&storage.lease)?,
+        ),
+        Storage::Memory { .. } => None,
+    };
+    if let Some(lease) = &lease {
+        match lease.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) if config.mode == Mode::Service => {
+                return Ok(());
+            }
+            Err(error) => return Err(message(error)),
+        }
     }
     let mut diagnostics =
         ycoding_core::observability::install(ycoding_core::observability::Options::new(
@@ -477,6 +530,10 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
             config.channel == "local",
         ))
         .map_err(message)?;
+    let store_config = config.clone();
+    tokio::task::spawn_blocking(move || prepare_store(&store_config))
+        .await
+        .map_err(|_| LaunchError::Message("Store startup worker failed".into()))??;
     let store = open_store(&config)?;
     let services = match diagnostics
         .attach_events(ycoding_core::event_feed::Feed::attach(&store.client()))
@@ -497,8 +554,6 @@ pub async fn run(config: LaunchConfig) -> Result<(), LaunchError> {
     };
     let core = services.core.clone();
     let (result, registration) = serve_until_stopped(&config, services).await;
-    // The managed service marks Sessions still running at a graceful stop as suspended before
-    // their drains are interrupted; startup never resumes them.
     let suspended = match (&core, config.mode) {
         (Some(core), Mode::Service) => core
             .execution
@@ -982,35 +1037,56 @@ fn metadata() -> Result<Metadata, LaunchError> {
     Ok(Metadata::new(bytes, 1))
 }
 
+fn prepare_store(config: &LaunchConfig) -> Result<(), LaunchError> {
+    let Storage::File(storage) = &config.storage else {
+        return Ok(());
+    };
+    activation::activate(
+        &storage.import,
+        Paths {
+            file: &storage.file,
+            marker: &storage.marker,
+            scratch_root: &config.roots.tmp,
+            source_resources: &storage.source_resources,
+            target_resources: &config.roots.data,
+            create_parents: storage.slot,
+        },
+        import::DatabaseKind::Core,
+        |_| Ok(()),
+    )?;
+    if storage.file.try_exists()? {
+        ycoding_core::ycoding_store::upgrade::core(
+            &storage.file,
+            Options::core(),
+            ycoding_core::session::history_pruning::free_bytes,
+        )
+        .map_err(|_| unsupported_store())?;
+    }
+    Ok(())
+}
+
 fn open_store(config: &LaunchConfig) -> Result<Store, LaunchError> {
     let catalog = import::catalog(import::DatabaseKind::Core);
-    let file = config.roots.data.join("ycoding.redb");
-    if config.channel == "beta" {
-        import_stable(
-            &config.stable_data.join("ycoding.db"),
-            &file,
-            &config.roots.state.join("stable-import-v1.json"),
-            &config.roots.tmp,
-            import::DatabaseKind::Core,
-        )?;
+    let Storage::File(storage) = &config.storage else {
+        return Store::disposable(Options::core(), catalog, metadata()?).map_err(message);
+    };
+    if storage.file.try_exists()? {
+        return Store::open(&storage.file, Options::core(), catalog)
+            .map_err(|_| unsupported_store());
     }
-    if file.try_exists()? {
-        return Store::open(file, Options::core(), catalog).map_err(|_| unsupported_store());
-    }
-    let store = Store::initialize(&file, Options::core(), catalog, metadata()?).map_err(message)?;
+    let store =
+        Store::initialize(&storage.file, Options::core(), catalog, metadata()?).map_err(message)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&storage.file, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(store)
 }
 
-// Store errors can carry internal detail, so startup reports a fixed diagnostic and never
-// replaces or migrates the existing file.
 fn unsupported_store() -> LaunchError {
     LaunchError::Message(
-        "The YCoding data store is unreadable or uses an unsupported format. It was left unchanged; restore a supported store or move it aside before starting.".into(),
+        "The YCoding data store is unreadable or uses an unsupported format, or its upgrade could not be completed. Existing store files and backups were retained; inspect them before starting again.".into(),
     )
 }
 
@@ -1021,7 +1097,328 @@ pub(crate) fn import_stable(
     scratch_root: &Path,
     kind: import::DatabaseKind,
 ) -> Result<(), LaunchError> {
-    activation::activate(source, file, marker, scratch_root, kind, |_| Ok(()))
+    activation::activate(
+        &ImportSource::Default(source.to_path_buf()),
+        Paths {
+            file,
+            marker,
+            scratch_root,
+            source_resources: source
+                .parent()
+                .ok_or_else(|| message("the import source has no parent directory"))?,
+            target_resources: file
+                .parent()
+                .ok_or_else(|| message("the import target has no parent directory"))?,
+            create_parents: true,
+        },
+        kind,
+        |_| Ok(()),
+    )
+}
+
+struct MemoryAnalytics(Option<PathBuf>);
+
+impl Drop for MemoryAnalytics {
+    fn drop(&mut self) {
+        let Some(directory) = self.0.take() else {
+            return;
+        };
+        if let Err(error) = std::fs::remove_dir_all(&directory)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            tracing::error!(%error, "Disposable analytics cleanup failed");
+        }
+    }
+}
+
+fn check_import_source(database: Option<&str>, source: Option<&str>) -> Result<(), LaunchError> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    if !Path::new(source).is_absolute() {
+        return Err(LaunchError::Usage(
+            "YCODING_SQLITE_IMPORT_SOURCE must be an absolute path".into(),
+        ));
+    }
+    if database.is_none_or(|database| database == ":memory:") {
+        return Err(LaunchError::Usage(
+            "YCODING_SQLITE_IMPORT_SOURCE requires YCODING_DB to name a file store".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn select_storage(
+    channel: &str,
+    roots: &config::Roots,
+    stable_data: &Path,
+    database: Option<&str>,
+    selector: bool,
+    source: Option<String>,
+) -> Result<Storage, LaunchError> {
+    let mut slot = slot_storage(channel, roots, stable_data, selector);
+    let Some(database) = database else {
+        return Ok(Storage::File(with_source(slot, source)));
+    };
+    if database == ":memory:" {
+        return Ok(Storage::Memory {
+            analytics: roots.tmp.join(format!("analytics-{}", source_epoch()?)),
+        });
+    }
+    let requested = roots.data.join(database);
+    if resolve(&requested) == resolve(&slot.file) {
+        return Ok(Storage::File(with_source(slot, source)));
+    }
+    slot.lease = companion(&requested, ".runtime.lock");
+    slot.analytics = companion(&requested, ".analytics");
+    slot.marker = companion(&requested, ".stable-import-v1.json");
+    slot.file = requested;
+    slot.slot = false;
+    slot.import = ImportSource::None;
+    Ok(Storage::File(with_source(slot, source)))
+}
+
+fn with_source(mut storage: FileStorage, source: Option<String>) -> FileStorage {
+    if let Some(source) = source {
+        storage.import = ImportSource::Explicit(PathBuf::from(source));
+    }
+    storage
+}
+
+fn slot_storage(
+    channel: &str,
+    roots: &config::Roots,
+    stable_data: &Path,
+    selector: bool,
+) -> FileStorage {
+    let named = |name: &str| {
+        (
+            roots.data.join(format!("ycoding{name}.redb")),
+            roots.data.join(format!("runtime{name}.lock")),
+            roots.data.join(format!("analytics{name}")),
+        )
+    };
+    let (file, lease, analytics, marker, import) = if channel == "beta" {
+        let (file, lease, analytics) = named("");
+        (
+            file,
+            lease,
+            analytics,
+            roots.state.join("stable-import-v1.json"),
+            ImportSource::Default(stable_data.join("ycoding.db")),
+        )
+    } else if matches!(channel, "latest" | "prod") || selector {
+        let (file, lease, analytics) = named("");
+        (
+            file,
+            lease,
+            analytics,
+            roots.state.join("stable-import-v1.json"),
+            ImportSource::None,
+        )
+    } else {
+        let name = sanitize(channel);
+        let (file, lease, analytics) = named(&format!("-{name}"));
+        (
+            file,
+            lease,
+            analytics,
+            roots.state.join(format!("stable-import-{name}-v1.json")),
+            ImportSource::Default(stable_data.join(format!("ycoding-{name}.db"))),
+        )
+    };
+    FileStorage {
+        file,
+        lease,
+        analytics,
+        marker,
+        import,
+        source_resources: stable_data.to_path_buf(),
+        slot: true,
+    }
+}
+
+fn sanitize(channel: &str) -> String {
+    channel
+        .chars()
+        .flat_map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                vec![character]
+            } else {
+                vec!['-'; character.len_utf16()]
+            }
+        })
+        .collect()
+}
+
+fn companion(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    name.into()
+}
+
+fn resolve(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved = existing_prefix(&resolved);
+                resolved.pop();
+            }
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    existing_prefix(&resolved)
+}
+
+fn existing_prefix(path: &Path) -> PathBuf {
+    let mut head = path.to_path_buf();
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(mut real) = std::fs::canonicalize(&head) {
+            real.extend(tail.iter().rev());
+            return real;
+        }
+        let Some(name) = head.file_name().map(ToOwned::to_owned) else {
+            return path.to_path_buf();
+        };
+        tail.push(name);
+        head.pop();
+    }
+}
+
+fn validate_storage(config: &LaunchConfig) -> Result<(), LaunchError> {
+    let Storage::File(storage) = &config.storage else {
+        return Ok(());
+    };
+    if !storage.slot {
+        validate_target(storage, &config.roots.data)?;
+    }
+    if matches!(storage.import, ImportSource::None)
+        || !activation::import_would_run(
+            &storage.file,
+            &storage.marker,
+            import::DatabaseKind::Core,
+        )?
+    {
+        return Ok(());
+    }
+    if storage.file.try_exists()? && !storage.marker.with_extension("stage-v2").try_exists()? {
+        return Err(refusal(
+            "the target already holds a store that was never imported; it was left unchanged",
+        ));
+    }
+    if let ImportSource::Explicit(source) = &storage.import {
+        validate_source(source, storage)?;
+    }
+    Ok(())
+}
+
+fn validate_target(storage: &FileStorage, data: &Path) -> Result<(), LaunchError> {
+    let parent = storage
+        .file
+        .parent()
+        .ok_or_else(|| refusal("the target has no parent directory"))?;
+    if parent
+        .components()
+        .any(|component| component == Component::ParentDir)
+        || resolve(parent) != resolve(data)
+    {
+        match std::fs::symlink_metadata(parent) {
+            Ok(info) if info.is_dir() => {}
+            _ => {
+                return Err(refusal(
+                    "the target parent is missing, is not a directory, or is a symbolic link; nothing was changed",
+                ));
+            }
+        }
+    }
+    match std::fs::symlink_metadata(&storage.file) {
+        Ok(info) if info.is_file() => {
+            let mut header = [0; 16];
+            let sqlite = std::fs::File::open(&storage.file)
+                .and_then(|mut file| io::Read::read_exact(&mut file, &mut header))
+                .is_ok()
+                && &header == b"SQLite format 3\0";
+            if sqlite {
+                return Err(refusal(
+                    "the target is a SQLite database and was left unchanged; use YCODING_SQLITE_IMPORT_SOURCE to import it into a new native store file",
+                ));
+            }
+            Ok(())
+        }
+        Ok(_) => Err(refusal(
+            "the target is not a regular file; nothing was changed",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(refusal(
+            "the target cannot be inspected; nothing was changed",
+        )),
+    }
+}
+
+fn validate_source(source: &Path, storage: &FileStorage) -> Result<(), LaunchError> {
+    match std::fs::symlink_metadata(source) {
+        Ok(info) if info.is_file() => {}
+        Ok(_) => {
+            return Err(LaunchError::Message(
+                "YCODING_SQLITE_IMPORT_SOURCE must name a regular file, not a directory or symbolic link; nothing was changed".into(),
+            ));
+        }
+        Err(_) => {
+            return Err(LaunchError::Message(
+                "YCODING_SQLITE_IMPORT_SOURCE does not name an existing file; nothing was changed"
+                    .into(),
+            ));
+        }
+    }
+    let sources = ["", "-wal", "-journal", "-shm"]
+        .into_iter()
+        .map(|suffix| resolve(&companion(source, suffix)))
+        .collect::<Vec<_>>();
+    let mut owned = vec![
+        storage.file.clone(),
+        storage.lease.clone(),
+        storage.analytics.clone(),
+        companion(&storage.file, ".pre-prune-backup"),
+        companion(&storage.file, ".pre-prune-backup.complete"),
+        storage.marker.clone(),
+        storage.marker.with_extension("stage-v2"),
+        storage.marker.with_extension("import-lock"),
+    ];
+    if let Some(directory) = storage.file.parent()
+        && let Ok(entries) = std::fs::read_dir(directory)
+    {
+        owned.extend(entries.flatten().filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            (name.starts_with(".stable-import-") && name.ends_with(".redb")).then(|| entry.path())
+        }));
+    }
+    let mut aliased = false;
+    for path in owned {
+        aliased |= sources.contains(&resolve(&path));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(target), Ok(origin)) =
+            (std::fs::metadata(&storage.file), std::fs::metadata(source))
+        {
+            aliased |= target.dev() == origin.dev() && target.ino() == origin.ino();
+        }
+    }
+    if aliased {
+        return Err(LaunchError::Message(
+            "YCODING_SQLITE_IMPORT_SOURCE overlaps a file owned by the target store; nothing was changed".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn refusal(reason: &str) -> LaunchError {
+    LaunchError::Message(format!("YCODING_DB: {reason}"))
 }
 
 fn source_epoch() -> Result<String, LaunchError> {

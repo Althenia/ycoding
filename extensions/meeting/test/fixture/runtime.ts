@@ -9,12 +9,13 @@ import { validateDescriptor } from "../../src/discovery"
 import { sendControl } from "../../src/bridge-client"
 import { isMeetingView } from "../../src/view"
 
-export async function startBackend(channel = "beta", knowledge = false) {
+export async function startBackend(channel = "beta", knowledge = false, analysis: Record<string, unknown> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-rust-"))
   const project = path.join(root, "project")
   const data = path.join(root, "data")
   await Promise.all([mkdir(project), mkdir(path.join(root, "home"))])
   const flags = { answerFailing: true }
+  const requests: Record<string, unknown>[] = []
   const releaseAnswer = Promise.withResolvers<void>()
   const provider = Bun.serve({
     hostname: "127.0.0.1",
@@ -23,6 +24,7 @@ export async function startBackend(channel = "beta", knowledge = false) {
       const body: unknown = await request.json()
       if (!body || typeof body !== "object" || !("messages" in body) || !Array.isArray(body.messages))
         throw new Error("Expected model messages")
+      requests.push({ ...body })
       const messages: unknown[] = body.messages
       const prompt = messages
         .flatMap((message) =>
@@ -36,25 +38,29 @@ export async function startBackend(channel = "beta", knowledge = false) {
       if (prompt.includes('"question":"hold"')) await releaseAnswer.promise
       const evidence =
         knowledge && !prompt.includes('"question":')
-          ? (JSON.parse(prompt.slice(prompt.indexOf("\n") + 1)) as { transcript: { id: string }[] })
+          ? (JSON.parse(prompt.slice(prompt.indexOf("\n") + 1)) as {
+              transcript: { id: string }[]
+              knowledge: { server: string; target: string }[]
+            })
           : undefined
       const text = prompt.includes('"question":')
         ? "Advisory: rollout ยังเป็นข้อเสนอ · cite supplied transcript evidence."
         : JSON.stringify({
             summary: "สรุป rollout · unconfirmed",
             findings: [],
-            proposals: evidence?.transcript.length
-              ? [
-                  {
-                    server: "knowledge",
-                    target: "doc-1",
-                    suggestedContent: "Reviewed canonical replacement",
-                    explanation: "Meeting evidence",
-                    sourceSegmentIds: [evidence.transcript[0].id],
-                    confidence: 0.8,
-                  },
-                ]
-              : [],
+            proposals:
+              evidence?.transcript.length && evidence.knowledge.length
+                ? [
+                    {
+                      server: evidence.knowledge[0].server,
+                      target: evidence.knowledge[0].target,
+                      suggestedContent: "Reviewed canonical replacement",
+                      explanation: "Meeting evidence",
+                      sourceSegmentIds: [evidence.transcript[0].id],
+                      confidence: 0.8,
+                    },
+                  ]
+                : [],
           })
       return new Response(
         `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
@@ -152,7 +158,7 @@ require("node:readline").createInterface({input:process.stdin}).on("line",line=>
     JSON.stringify({
       transcription: { pythonExecutable: worker, chunkSeconds: 1, overlapSeconds: 0 },
       streaming: { vad: false },
-      analysis: { incremental: false },
+      analysis: { incremental: false, ...analysis },
       knowledge: {
         mcpEnabled: knowledge,
         bindings: knowledge ? [{ server: "knowledge", search: "search", read: "read", write: "replace" }] : [],
@@ -237,6 +243,8 @@ require("node:readline").createInterface({input:process.stdin}).on("line",line=>
     url: address.url,
     origin: new URL(address.url).origin,
     knowledgeState,
+    requests,
+    meetingDirectory: selected,
     control,
     status,
     async settled() {

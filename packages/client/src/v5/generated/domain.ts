@@ -69,6 +69,17 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "64": "usage.report",
     "65": "machine.keepAwake.get",
     "66": "machine.keepAwake.set",
+    "67": "session.usageReport",
+    "68": "session.promptCosts",
+    "69": "session.taskCosts",
+    "70": "usage.forecast",
+    "71": "session.review.list",
+    "72": "session.review.decide",
+    "73": "incident.report",
+    "74": "incident.recent",
+    "75": "incident.guidance",
+    "76": "incident.guidance.get",
+    "77": "incident.guidance.clear",
   },
   "ycoding.v5.Telemetry_RequestSample_outcome": {
     "1": "ok",
@@ -110,6 +121,7 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionsQuery_order": {
     "1": "asc",
     "2": "desc",
+    "3": "pinned",
     "4": "active",
   },
   "ycoding.v5.Model_Daybreak": {
@@ -156,6 +168,7 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
+    "6": "queued",
   },
   "ycoding.v5.Session_Message_Assistant_type": {
     "1": "assistant",
@@ -369,6 +382,13 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "5": "session",
     "6": "project",
     "7": "agent",
+    "8": "provider",
+    "9": "provider-profile-model",
+    "10": "provider-model",
+    "11": "model-id",
+    "12": "profile",
+    "13": "prompt",
+    "14": "task",
   },
   "ycoding.v5.session_usageReport_Request_query_sort": {
     "1": "key",
@@ -393,6 +413,52 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "5": "session",
     "6": "project",
     "7": "agent",
+    "8": "provider",
+    "9": "provider-profile-model",
+    "10": "provider-model",
+    "11": "model-id",
+    "12": "profile",
+    "13": "prompt",
+    "14": "task",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue1_group": {
+    "1": "provider",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue2_group": {
+    "1": "provider-profile-model",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue2_profileState": {
+    "1": "recorded",
+    "2": "provider-default",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue3_group": {
+    "1": "provider-model",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue4_group": {
+    "1": "model-id",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue5_group": {
+    "1": "profile",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue5_profileState": {
+    "1": "recorded",
+    "2": "provider-default",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue6_group": {
+    "1": "prompt",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue6_attribution": {
+    "1": "complete",
+    "2": "partial",
+    "3": "unattributed",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue7_group": {
+    "1": "task",
+  },
+  "ycoding.v5.ProviderRequest_ReportDimensionsValue7_attribution": {
+    "1": "complete",
+    "2": "partial",
+    "3": "unattributed",
   },
   "ycoding.v5.ProviderRequest_Report_rowsItem_costProvenance": {
     "1": "recorded",
@@ -401,6 +467,57 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.ProviderRequest_Report_total_costProvenance": {
     "1": "recorded",
     "2": "current_catalog",
+  },
+  "ycoding.v5.UsageAccounting_PromptCost_status": {
+    "1": "settled",
+    "2": "so-far",
+  },
+  "ycoding.v5.UsageAccounting_PromptCost_attribution": {
+    "1": "complete",
+    "2": "partial",
+    "3": "unattributed",
+  },
+  "ycoding.v5.UsageAccounting_PromptCost_history": {
+    "1": "retained",
+    "2": "partial",
+  },
+  "ycoding.v5.UsageAccounting_Breakdown_cost_provenance": {
+    "1": "recorded",
+    "2": "current_catalog",
+  },
+  "ycoding.v5.UsageAccounting_Helper_source": {
+    "1": "step",
+    "2": "title",
+    "3": "goal",
+    "4": "compaction",
+    "5": "decision",
+    "6": "prediction",
+    "7": "prompt",
+  },
+  "ycoding.v5.UsageAccounting_Helper_cost_provenance": {
+    "1": "recorded",
+    "2": "current_catalog",
+  },
+  "ycoding.v5.UsageAccounting_PromptCosts_history": {
+    "1": "retained",
+    "2": "partial",
+  },
+  "ycoding.v5.UsageAccounting_TaskCost_status": {
+    "1": "settled",
+    "2": "so-far",
+  },
+  "ycoding.v5.UsageAccounting_TaskCost_attribution": {
+    "1": "complete",
+    "2": "partial",
+    "3": "unattributed",
+  },
+  "ycoding.v5.UsageAccounting_TaskCost_history": {
+    "1": "retained",
+    "2": "partial",
+  },
+  "ycoding.v5.UsageAccounting_TaskCosts_history": {
+    "1": "retained",
+    "2": "partial",
   },
   "ycoding.v5.session_skills_Result_dataItemValue1_activatedBy": {
     "1": "reference",
@@ -514,6 +631,12 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "1": "confidence",
     "2": "probability",
   },
+  "ycoding.v5.Guardrail_DecisionChoice": {
+    "1": "approve_all",
+    "2": "approve",
+    "3": "reject",
+    "4": "escalate",
+  },
   "ycoding.v5.Guardrail_Reply": {
     "1": "once",
     "2": "always",
@@ -542,6 +665,14 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "2": "beta",
     "3": "deprecated",
     "4": "active",
+  },
+  "ycoding.v5.providerUsage_forecast_Request_query_localScope": {
+    "1": "backend",
+    "2": "location",
+  },
+  "ycoding.v5.UsageForecast_Info_localScope": {
+    "1": "backend",
+    "2": "location",
   },
   "ycoding.v5.ProviderUsage_Status": {
     "1": "available",
@@ -678,6 +809,12 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.Form_StateValue3_status": {
     "1": "cancelled",
   },
+  "ycoding.v5.Form_StateValue4_status": {
+    "1": "timed_out",
+  },
+  "ycoding.v5.Form_StateValue5_status": {
+    "1": "deferred",
+  },
   "ycoding.v5.Permission_Source_type": {
     "1": "tool",
   },
@@ -731,6 +868,7 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
+    "6": "queued",
   },
   "ycoding.v5.Reference_LocalSource_type": {
     "1": "local",
@@ -940,6 +1078,13 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "5": "session",
     "6": "project",
     "7": "agent",
+    "8": "provider",
+    "9": "provider-profile-model",
+    "10": "provider-model",
+    "11": "model-id",
+    "12": "profile",
+    "13": "prompt",
+    "14": "task",
   },
   "ycoding.v5.usage_report_Request_query_sort": {
     "1": "key",
@@ -955,6 +1100,19 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.usage_report_Request_query_order": {
     "1": "asc",
     "2": "desc",
+  },
+  "ycoding.v5.ModelIncident_Group": {
+    "1": "model",
+    "2": "agent",
+  },
+  "ycoding.v5.ModelIncident_Kind": {
+    "1": "fallback",
+    "2": "guardrail-escalated",
+    "3": "guardrail-rejected",
+  },
+  "ycoding.v5.ModelIncident_DecidedBy": {
+    "1": "decision-model",
+    "2": "human",
   },
   "ycoding.v5.remote_get_Result_data_state": {
     "1": "off",
@@ -985,6 +1143,73 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "1": "invalid-json",
     "2": "invalid-values",
     "3": "removed-keys",
+  },
+  "ycoding.v5.SessionReview_ItemValue1_kind": {
+    "1": "question",
+  },
+  "ycoding.v5.SessionReview_Reason": {
+    "1": "disabled",
+    "2": "free_text",
+    "3": "refused",
+    "4": "low_confidence",
+    "5": "escalated",
+    "6": "error",
+    "7": "timeout",
+    "8": "sleep_entry",
+    "9": "restart",
+  },
+  "ycoding.v5.SessionReview_FormPayload_type": {
+    "1": "form",
+  },
+  "ycoding.v5.SessionReview_QuestionPayload_type": {
+    "1": "question",
+  },
+  "ycoding.v5.SessionReview_ItemValue2_kind": {
+    "1": "subagent_question",
+  },
+  "ycoding.v5.SessionReview_SubagentQuestionPayload_type": {
+    "1": "subagent_question",
+  },
+  "ycoding.v5.SessionReview_ItemValue3_kind": {
+    "1": "guardrail",
+  },
+  "ycoding.v5.SessionReview_GuardrailPayload_type": {
+    "1": "guardrail",
+  },
+  "ycoding.v5.SessionReview_ItemValue4_kind": {
+    "1": "permission",
+  },
+  "ycoding.v5.SessionReview_PermissionPayload_type": {
+    "1": "permission",
+  },
+  "ycoding.v5.SessionReview_ItemValue5_kind": {
+    "1": "recovery",
+  },
+  "ycoding.v5.SessionReview_RecoveryPayload_type": {
+    "1": "recovery",
+  },
+  "ycoding.v5.SessionReview_DecisionValue1_kind": {
+    "1": "question",
+  },
+  "ycoding.v5.SessionReview_DecisionValue2_kind": {
+    "1": "subagent_question",
+  },
+  "ycoding.v5.SessionReview_DecisionValue3_kind": {
+    "1": "guardrail",
+  },
+  "ycoding.v5.SessionReview_DecisionValue4_kind": {
+    "1": "permission",
+  },
+  "ycoding.v5.SessionReview_DecisionValue5_kind": {
+    "1": "recovery",
+  },
+  "ycoding.v5.SessionReview_DecisionValue5_choice": {
+    "1": "continue",
+    "2": "stop",
+  },
+  "ycoding.v5.SessionReview_DecisionValue6_kind": {
+    "1": "question",
+    "2": "subagent_question",
   },
   "ycoding.v5.Connector_CapturedGroup_status": {
     "1": "created",
@@ -1092,6 +1317,14 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.RemoteEnrollmentPartialFailure__tag": {
     "1": "RemoteEnrollmentPartialFailure",
   },
+  "ycoding.v5.SessionsQuery_status": {
+    "1": "running",
+    "2": "idle",
+    "3": "waiting",
+  },
+  "ycoding.v5.SessionsQuery_searchFields": {
+    "1": "summary",
+  },
   "ycoding.v5.PublicEvent_models_dev_refreshed_type": {
     "1": "models-dev.refreshed",
   },
@@ -1131,6 +1364,38 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.SessionLogItemValue5_type": {
     "1": "session.project-artifacts-ended",
+  },
+  "ycoding.v5.SessionLogItemValue53_type": {
+    "1": "session.guardrail.dismissed",
+  },
+  "ycoding.v5.SessionLogItemValue54_type": {
+    "1": "session.guardrail.escalated",
+  },
+  "ycoding.v5.SessionLogItemValue55_type": {
+    "1": "session.guardrail.decided",
+  },
+  "ycoding.v5.SessionLogItemValue56_type": {
+    "1": "session.review.deferred",
+  },
+  "ycoding.v5.SessionReview_Kind": {
+    "1": "question",
+    "2": "subagent_question",
+    "3": "guardrail",
+    "4": "permission",
+    "5": "recovery",
+  },
+  "ycoding.v5.SessionLogItemValue57_type": {
+    "1": "session.review.decided",
+  },
+  "ycoding.v5.SessionLogItemValue58_type": {
+    "1": "session.review.withdrawn",
+  },
+  "ycoding.v5.SessionLogItemValue58_data_reason": {
+    "1": "reverted",
+    "2": "task_closed",
+  },
+  "ycoding.v5.SessionLogItemValue59_type": {
+    "1": "session.review.consumed",
   },
   "ycoding.v5.SessionLogItemValue6_type": {
     "1": "session.moved",
@@ -1244,6 +1509,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionLogItemValue24_data_changeValue6_type": {
     "1": "question_answered",
   },
+  "ycoding.v5.SessionLogItemValue24_data_changeValue12_type": {
+    "1": "question_timed_out",
+  },
   "ycoding.v5.SessionLogItemValue24_data_changeValue7_type": {
     "1": "cancel_requested",
   },
@@ -1258,6 +1526,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.SessionLogItemValue24_data_changeValue11_type": {
     "1": "lost",
+  },
+  "ycoding.v5.SessionLogItemValue24_data_changeValue13_type": {
+    "1": "resumed",
   },
   "ycoding.v5.SessionLogItemValue25_type": {
     "1": "session.synthetic",
@@ -1293,6 +1564,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.SessionLogItemValue32_type": {
     "1": "session.step.failed",
+  },
+  "ycoding.v5.SessionLogItemValue60_type": {
+    "1": "session.step.rerouted",
   },
   "ycoding.v5.SessionLogItemValue33_type": {
     "1": "session.text.started",
@@ -1332,7 +1606,7 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionLogItemValue39_type": {
     "1": "session.tool.called",
   },
-  "ycoding.v5.SessionLogItemValue40_type": {
+  "ycoding.v5.PublicEvent_session_tool_progress_type": {
     "1": "session.tool.progress",
   },
   "ycoding.v5.SessionLogItemValue41_type": {
@@ -1397,11 +1671,17 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.PublicEvent_permission_replied_type": {
     "1": "permission.replied",
   },
+  "ycoding.v5.PublicEvent_permission_deferred_type": {
+    "1": "permission.deferred",
+  },
   "ycoding.v5.PublicEvent_guardrail_asked_type": {
     "1": "guardrail.asked",
   },
   "ycoding.v5.PublicEvent_guardrail_replied_type": {
     "1": "guardrail.replied",
+  },
+  "ycoding.v5.PublicEvent_guardrail_replied_data_decidedBy": {
+    "1": "decision-model",
   },
   "ycoding.v5.PublicEvent_guardrail_decided_type": {
     "1": "guardrail.decided",
@@ -1411,6 +1691,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "2": "ask",
     "3": "deny",
     "4": "cap_exceeded",
+  },
+  "ycoding.v5.PublicEvent_guardrail_deferred_type": {
+    "1": "guardrail.deferred",
   },
   "ycoding.v5.PublicEvent_plugin_added_type": {
     "1": "plugin.added",
@@ -1449,6 +1732,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.PublicEvent_shell_created_type": {
     "1": "shell.created",
   },
+  "ycoding.v5.PublicEvent_shell_updated_type": {
+    "1": "shell.updated",
+  },
   "ycoding.v5.PublicEvent_shell_exited_type": {
     "1": "shell.exited",
   },
@@ -1458,6 +1744,7 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
+    "6": "queued",
   },
   "ycoding.v5.PublicEvent_shell_deleted_type": {
     "1": "shell.deleted",
@@ -1471,6 +1758,12 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.PublicEvent_question_rejected_type": {
     "1": "question.rejected",
   },
+  "ycoding.v5.PublicEvent_question_timed_out_type": {
+    "1": "question.timed_out",
+  },
+  "ycoding.v5.PublicEvent_question_deferred_type": {
+    "1": "question.deferred",
+  },
   "ycoding.v5.PublicEvent_form_created_type": {
     "1": "form.created",
   },
@@ -1479,6 +1772,12 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   },
   "ycoding.v5.PublicEvent_form_cancelled_type": {
     "1": "form.cancelled",
+  },
+  "ycoding.v5.PublicEvent_form_timed_out_type": {
+    "1": "form.timed_out",
+  },
+  "ycoding.v5.PublicEvent_form_deferred_type": {
+    "1": "form.deferred",
   },
   "ycoding.v5.PublicEvent_todo_updated_type": {
     "1": "todo.updated",
@@ -1601,6 +1900,9 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.SessionBusyError__tag": {
     "1": "SessionBusyError",
   },
+  "ycoding.v5.ReviewItemNotFoundError__tag": {
+    "1": "ReviewItemNotFoundError",
+  },
   "ycoding.v5.SkillNotFoundError__tag": {
     "1": "SkillNotFoundError",
   },
@@ -1708,16 +2010,27 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.ProviderNotFoundError__tag": {
     "1": "ProviderNotFoundError",
   },
+  "ycoding.v5.UsageForecast_Quota_state": {
+    "1": "estimated",
+    "2": "insufficient",
+    "3": "exhausted",
+    "4": "unlimited",
+  },
+  "ycoding.v5.UsageForecast_Quota_method": {
+    "1": "quota-delta-ema",
+    "2": "window-mean",
+  },
+  "ycoding.v5.UsageForecast_Quota_evidence": {
+    "1": "low",
+    "2": "medium",
+    "3": "insufficient",
+  },
   "ycoding.v5.ProviderRequest_Summary_modelsItem_costProvenance": {
     "1": "recorded",
     "2": "current_catalog",
   },
   "ycoding.v5.SessionCapturedChanges_Input_contentItem_type": {
     "1": "tool",
-  },
-  "ycoding.v5.SessionsQuery_status": {
-    "1": "running",
-    "2": "idle",
   },
   "ycoding.v5.SessionLogItemValue22_data_deltaEntryValueValue2": {
     "1": "removed",

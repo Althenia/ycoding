@@ -211,7 +211,7 @@ test("surfaces a pending root guardrail review that arrives as a live event", as
 
 test("surfaces a pending subagent guardrail review from the durable list", async () => {
   listed = [childRequest]
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("↑ Guardrail surface", childID)
   try {
     await waitForFrameText(screen, "Guardrail blocked")
     expect(screen.frame()).toContain("Subagent ses_guardrail_child in ses_guardrail_parent")
@@ -222,7 +222,7 @@ test("surfaces a pending subagent guardrail review from the durable list", async
 
 test("surfaces a pending subagent guardrail review that arrives as a live event", async () => {
   listed = []
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("↑ Guardrail surface", childID)
   try {
     expect(screen.frame()).not.toContain("Guardrail blocked")
     await screen.waitForEventStream()
@@ -237,7 +237,7 @@ test("renders a transcript row for a subagent review and replies against the roo
   listed = [childRequest]
   replies.length = 0
   repliedTo.length = 0
-  const screen = await settle("SUBAGENT ECONOMICS", childID)
+  const screen = await settle("↑ Guardrail surface", childID)
   try {
     await waitForFrameText(screen, "Guardrail blocked")
     expect(screen.frame()).toContain("rm -rf packages/one packages/two")

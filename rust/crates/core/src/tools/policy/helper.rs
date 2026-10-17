@@ -511,6 +511,7 @@ pub struct StreamInput<'a> {
     pub cancellation: &'a crate::tools::code_mode::Cancellation,
     pub byte_limit: Option<usize>,
     pub require_stop: bool,
+    pub attribution: crate::session::usage_attribution::Attribution,
 }
 pub struct Streamed {
     pub text: LosslessString,
@@ -525,8 +526,7 @@ pub async fn stream(
     executor: &ycoding_ai::route::Executor,
     mut input: StreamInput<'_>,
 ) -> Result<Streamed, String> {
-    use crate::session::{cache_diagnostics, prompt_cache, provider_request, usage};
-    use ycoding_ai::llm;
+    use crate::session::{prompt_cache, provider_request};
     let request_id = provider_request::new_id().map_err(|error| error.to_string())?;
     input.request.id = Some(request_id.as_lossless().clone());
     let begin = provider_request::Begin {
@@ -555,9 +555,52 @@ pub async fn stream(
         tool_digest: prompt_cache::tool_digest(&input.request.tools),
     };
     let pending = store
-        .begin_provider_request_with_id(&begin, request_id)
+        .begin_provider_request_attributed_with_id(&begin, request_id, input.attribution.clone())
         .await
         .map_err(|error| error.to_string())?;
+    consume(
+        store,
+        &input,
+        begin,
+        pending,
+        executor.stream(&input.request),
+    )
+    .await
+}
+
+trait Events {
+    fn next(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<ycoding_ai::llm::Event>, ycoding_ai::Error>>
+    + Send;
+}
+
+impl Events for ycoding_ai::route::EventStream {
+    async fn next(&mut self) -> Result<Option<ycoding_ai::llm::Event>, ycoding_ai::Error> {
+        ycoding_ai::route::EventStream::next(self).await
+    }
+}
+
+async fn consume<S: Events>(
+    store: &crate::session::store::Service,
+    input: &StreamInput<'_>,
+    begin: crate::session::provider_request::Begin,
+    pending: crate::session::provider_request::Pending,
+    open: impl std::future::Future<Output = Result<S, ycoding_ai::Error>>,
+) -> Result<Streamed, String> {
+    use crate::session::{cache_diagnostics, usage};
+    use ycoding_ai::llm;
+    let mut settlement = Settlement {
+        store,
+        input,
+        begin,
+        pending: Some(pending),
+        tokens: None,
+        totals: [0.0; 5],
+        cost: None,
+        timing: None,
+        cache_read_reported: false,
+    };
     let mut result = Streamed {
         text: "".into(),
         tokens: None,
@@ -568,11 +611,7 @@ pub async fn stream(
     };
     let mut units = Vec::new();
     let mut bytes = 0;
-    let mut totals = [0.0; 5];
-    let mut cost = None;
-    let mut timing = None;
-    let mut cache_read_reported = false;
-    let opened = tokio::select! {biased; _ = input.cancellation.cancelled() => {result.cancelled = true; None}, opened = executor.stream(&input.request) => Some(opened)};
+    let opened = tokio::select! {biased; _ = input.cancellation.cancelled() => {result.cancelled = true; None}, opened = open => Some(opened)};
     match opened {
         None => {}
         Some(Err(_)) => result.failed = true,
@@ -592,17 +631,24 @@ pub async fn stream(
                 }
                 Ok(Some(llm::Event::Finish(finish))) => {
                     result.finished = true;
-                    if input.require_stop && finish.reason != llm::FinishReason::Stop {
+                    if (input.require_stop && finish.reason != llm::FinishReason::Stop)
+                        || (input.source == "title"
+                            && finish.reason == llm::FinishReason::ContentFilter)
+                    {
                         result.failed = true;
                     }
                 }
                 Ok(Some(llm::Event::StepFinish { finish, .. })) => {
+                    if input.source == "title" && finish.reason == llm::FinishReason::ContentFilter
+                    {
+                        result.failed = true;
+                    }
                     if finish.usage.is_some() || input.source == "title" {
                         let reported = finish.usage.as_ref();
                         let normalized = usage::tokens(reported);
                         let decoded = ycoding_schema::token_usage::Info::decode(&normalized)
                             .map_err(|error| error.to_string())?;
-                        for (total, value) in totals.iter_mut().zip([
+                        for (total, value) in settlement.totals.iter_mut().zip([
                             decoded.input.get(),
                             decoded.output.get(),
                             decoded.reasoning.get(),
@@ -611,16 +657,16 @@ pub async fn stream(
                         ]) {
                             *total += value;
                         }
-                        result.tokens = Some(
+                        settlement.tokens = Some(
                             ObjectEncoder::new()
-                                .field("input", &totals[0])
-                                .field("output", &totals[1])
-                                .field("reasoning", &totals[2])
+                                .field("input", &settlement.totals[0])
+                                .field("output", &settlement.totals[1])
+                                .field("reasoning", &settlement.totals[2])
                                 .field(
                                     "cache",
                                     &ObjectEncoder::new()
-                                        .field("read", &totals[3])
-                                        .field("write", &totals[4])
+                                        .field("read", &settlement.totals[3])
+                                        .field("write", &settlement.totals[4])
                                         .finish(),
                                 )
                                 .finish(),
@@ -632,10 +678,10 @@ pub async fn stream(
                         )
                         .filter(|priced| input.source != "title" || *priced != 0.0)
                         {
-                            cost = Some(cost.unwrap_or(0.0) + priced);
+                            settlement.cost = Some(settlement.cost.unwrap_or(0.0) + priced);
                         }
-                        timing = usage::timing(reported);
-                        cache_read_reported |= cache_diagnostics::reported(
+                        settlement.timing = usage::timing(reported);
+                        settlement.cache_read_reported |= cache_diagnostics::reported(
                             &input.request.model.route.id,
                             input
                                 .resolved
@@ -659,64 +705,159 @@ pub async fn stream(
         },
     }
     result.text = LosslessString::from_utf16(units);
-    let now = chrono::Utc::now().timestamp_millis();
-    if let Some(tokens) = &result.tokens {
-        publish(
-            store,
-            &input.session.id,
-            "session.usage.recorded.1",
-            ObjectEncoder::new()
-                .field("sessionID", &input.session.id)
-                .field("source", input.source)
-                .field("cost", &cost.unwrap_or(0.0))
-                .field("tokens", tokens)
-                .finish(),
-            now,
-        )
-        .await?;
-    }
-    let tokens = result.tokens.clone().unwrap_or_else(|| usage::tokens(None));
-    let fields = provider_request::recorded_fields(
-        &begin,
-        &pending,
-        &provider_request::Completion {
-            source: input.source,
-            agent: &input.agent.id,
-            invalidation: if totals[3] > 0.0 {
-                "stable-hit"
-            } else {
-                pending.default_invalidation
-            },
-            continuation: "full",
-            attempts: 1,
-            cache_read_reported: (input.source != "title").then_some(cache_read_reported),
-            timing,
-            cost,
-            tokens: &tokens,
-            time: now,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    let JsonValue::Object(mut fields) = fields else {
-        unreachable!()
-    };
-    fields.insert(
-        "sessionID".into(),
-        ycoding_schema::DomainEncode::encode(&input.session.id),
-    );
-    if let Some(id) = input.input_id {
-        fields.insert("inputID".into(), ycoding_schema::DomainEncode::encode(id));
-    }
-    publish(
-        store,
-        &input.session.id,
-        "session.provider.request.recorded.1",
-        JsonValue::Object(fields),
-        now,
-    )
-    .await?;
+    result.tokens = settlement.tokens.clone();
+    settlement
+        .submit()?
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(result)
 }
+
+struct Settlement<'a> {
+    store: &'a crate::session::store::Service,
+    input: &'a StreamInput<'a>,
+    begin: crate::session::provider_request::Begin,
+    pending: Option<crate::session::provider_request::Pending>,
+    tokens: Option<JsonValue>,
+    totals: [f64; 5],
+    cost: Option<f64>,
+    timing: Option<JsonValue>,
+    cache_read_reported: bool,
+}
+
+impl Settlement<'_> {
+    fn submit(&mut self) -> Result<ycoding_store::Receipt<()>, String> {
+        use crate::session::{projector, provider_request, usage};
+        let pending = self
+            .pending
+            .take()
+            .expect("helper settlement is submitted once");
+        let request_id = pending.id.as_lossless().to_utf8().unwrap_or_default();
+        let events = (|| {
+            let now = chrono::Utc::now().timestamp_millis();
+            let mut events = Vec::with_capacity(2);
+            if let Some(tokens) = &self.tokens {
+                events.push(ycoding_store::session::NewEvent {
+                    id: projector::random_event_id()?.as_lossless().clone(),
+                    aggregate_id: self.input.session.id.as_lossless().clone(),
+                    type_: "session.usage.recorded.1".into(),
+                    created: now,
+                    data: ObjectEncoder::new()
+                        .field("sessionID", &self.input.session.id)
+                        .field("source", self.input.source)
+                        .field("cost", &self.cost.unwrap_or(0.0))
+                        .field("tokens", tokens)
+                        .finish(),
+                });
+            }
+            let tokens = self.tokens.clone().unwrap_or_else(|| usage::tokens(None));
+            let fields = provider_request::recorded_fields(
+                &self.begin,
+                &pending,
+                &provider_request::Completion {
+                    source: self.input.source,
+                    agent: &self.input.agent.id,
+                    invalidation: if self.totals[3] > 0.0 {
+                        "stable-hit"
+                    } else {
+                        pending.default_invalidation
+                    },
+                    continuation: "full",
+                    attempts: 1,
+                    cache_read_reported: (self.input.source != "title")
+                        .then_some(self.cache_read_reported),
+                    timing: self.timing.take(),
+                    cost: self.cost,
+                    tokens: &tokens,
+                    time: now,
+                },
+            )?;
+            let JsonValue::Object(mut fields) = fields else {
+                unreachable!()
+            };
+            fields.insert(
+                "sessionID".into(),
+                ycoding_schema::DomainEncode::encode(&self.input.session.id),
+            );
+            if let Some(id) = self.input.input_id {
+                fields.insert("inputID".into(), ycoding_schema::DomainEncode::encode(id));
+            }
+            events.push(ycoding_store::session::NewEvent {
+                id: projector::random_event_id()?.as_lossless().clone(),
+                aggregate_id: self.input.session.id.as_lossless().clone(),
+                type_: "session.provider.request.recorded.1".into(),
+                created: now,
+                data: JsonValue::Object(fields),
+            });
+            Ok::<_, ycoding_store::Error>(events)
+        })()
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id, category = "encoding", "Helper settlement failed");
+            error.to_string()
+        })?;
+        let observed_id = request_id.clone();
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        self.store
+            .client
+            .submit_owned(
+                move |tx| {
+                    for event in events {
+                        projector::append(tx, &event)?;
+                    }
+                    Ok(())
+                },
+                move |result| {
+                    if let Err(error) = result {
+                        tracing::dispatcher::with_default(&dispatch, || {
+                            tracing::error!(request_id = %observed_id, category = settlement_error(error), "Helper settlement failed");
+                        });
+                    }
+                    drop(pending);
+                },
+            )
+            .map_err(|error| {
+                tracing::error!(request_id = %request_id, category = settlement_error(&error), "Helper settlement admission failed");
+                error.to_string()
+            })
+    }
+}
+
+impl Drop for Settlement<'_> {
+    fn drop(&mut self) {
+        if self.pending.is_some() {
+            drop(self.submit());
+        }
+    }
+}
+
+fn settlement_error(error: &ycoding_store::Error) -> &'static str {
+    use ycoding_store::Error;
+    match error {
+        Error::QueueFull => "queue_full",
+        Error::Closed => "closed",
+        Error::WriterFenced => "writer_fenced",
+        Error::WriterPanicked => "writer_panicked",
+        Error::CommitUncertain(_) => "commit_uncertain",
+        Error::RollbackFailed(_) => "rollback_failed",
+        Error::Io(_) | Error::Storage(_) => "storage",
+        Error::Reentrant => "reentrant",
+        Error::SnapshotLimit => "snapshot_limit",
+        Error::InvalidConfiguration(_)
+        | Error::Incompatible(_)
+        | Error::UnregisteredTable(_)
+        | Error::UnregisteredIndex
+        | Error::UniqueViolation { .. }
+        | Error::TransactionAborted
+        | Error::Rejected(_)
+        | Error::Domain { .. }
+        | Error::Record(_) => "transaction_rejected",
+    }
+}
+
+#[cfg(test)]
+#[path = "helper_deadline_test.rs"]
+mod deadline_tests;
+
 pub async fn publish(
     store: &crate::session::store::Service,
     session: &ycoding_schema::session::Id,

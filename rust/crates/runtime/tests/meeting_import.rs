@@ -199,7 +199,10 @@ async fn beta_first_start_imports_the_ts_meeting_store_and_serves_retained_histo
             assert!(!fixture.stable.join("bridge.json").exists());
             assert!(!fixture.stable.join("runtime.lock").exists());
             let report = fixture.report();
-            assert_eq!(report.importer_version, 1);
+            assert_eq!(
+                report.importer_version,
+                ycoding_core::ycoding_store::import::IMPORTER_VERSION
+            );
             assert_eq!(report.tables.len(), 9);
             assert!(report.tables.iter().all(|table| table.rows == 1));
             let ycoding_core::ycoding_schema::JsonValue::Object(marker) = read(&fixture.marker())
@@ -338,7 +341,7 @@ async fn invalid_completion_or_missing_imported_store_is_not_replaced() {
             diagnostics.contains(if marker.contains("version") {
                 "unsupported v1 import marker"
             } else {
-                "Invalid beta import selection"
+                "Invalid import selection"
             }),
             "{diagnostics}"
         );
@@ -362,7 +365,7 @@ async fn an_existing_unmarked_store_without_provenance_is_never_overwritten() {
     database.close().await.unwrap();
     let diagnostics = fixture.finish(fixture.start().await);
     assert!(
-        diagnostics.contains("Invalid beta import selection"),
+        diagnostics.contains("Invalid import selection"),
         "{diagnostics}"
     );
     assert!(!fixture.beta.join("bridge.json").exists());

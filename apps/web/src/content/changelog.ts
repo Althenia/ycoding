@@ -74,6 +74,406 @@ export const RELEASES: readonly ReleaseEntry[] = [
     ],
   },
   {
+    version: "0.10.12",
+    date: "2026-10-17",
+    title: "Named autonomy levels, per-Session auto-answer, and Meeting owner settings",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      {
+        tag: "Added",
+        text: "Meeting owner settings select the model and variant for future Ask AI questions and add, remove, enable, or disable MCP connector bindings. Open the private owner link from the CLI or TUI; ordinary view links cannot change configuration. Knowledge writes still require approval, and changing a variant preserves the selected account profile.",
+      },
+      {
+        tag: "Changed",
+        text: "YOLO has three named levels: 0 Ask first (manual), 1 Allow tools (approves permission asks only), and 2 Tools + reviews (also approves ordinary guardrail reviews while awake). A Session saved at level 3 moves to 2 automatically, and asking for level 3 is rejected. A goal only continues work; it approves no permissions, answers no questions, and settles no reviews.",
+      },
+      {
+        tag: "Changed",
+        text: "Automatic question, form, and subagent-question answers are a durable per-Session `/auto-answer` toggle, off by default. It is independent of YOLO level, goals, and sleep, applies only to the Session it is set on, and is not inherited by subagents or the parent. While asleep with it off, those requests wait in the review box without calling the model.",
+      },
+      {
+        tag: "Changed",
+        text: "The global `auto_answer` setting is replaced by `/auto-answer`. Remove `auto_answer` from your configuration and turn `/auto-answer` on in each Session that needs automatic answers.",
+      },
+      {
+        tag: "Changed",
+        text: "The terminal and web controls show the Session's actual effective approval and auto-answer settings. Hard guardrail reviews are still enforced when ordinary guardrail reviews are disabled.",
+      },
+      {
+        tag: "Fixed",
+        text: 'Idle or running root Sessions whose background-work result was lost show "Background result lost" instead of "Waiting for you" when no permission, question, or review is open, and the System alert says a background result was lost. Loss-only roots stay out of the Waiting filter, order, and dots. Update the connected runtime to receive the reason; an older runtime cannot send it.',
+      },
+    ],
+  },
+  {
+    version: "0.10.11",
+    date: "2026-10-17",
+    title: "Fallback models, model incidents, restart recovery, and opt-in automation",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      {
+        tag: "Added",
+        text: "Compare retained usage by provider, profile and model, including measured generation-speed median, p90 and sample coverage.",
+      },
+      {
+        tag: "Added",
+        text: "See prompt costs and recursive subagent-task costs in Usage, with unknown prices and incomplete history identified.",
+      },
+      {
+        tag: "Added",
+        text: "See recent token consumption and quota exhaustion estimates where provider limits and fresh observations support them.",
+      },
+      {
+        tag: "Added",
+        text: "Fallback models. List up to three models for a model under `model_fallbacks`, and a step that fails on that model before any output reruns on the next one: when the model is unavailable, out of quota, has no route, asks you to wait more than two minutes, or still fails after its retries. Authentication, content-policy, invalid-request, and context-overflow failures never switch models. The rest of that run stays on the model it switched to; your selected model is unchanged and the next run starts on it again. Usage and cost count against the model that answered.",
+      },
+      {
+        tag: "Added",
+        text: "Model incidents. Usage in the terminal and web lists retained model fallbacks and guardrail escalations and rejections per model or per model and agent, with recent incidents. A model with repeated guardrail stops gets short fixed guidance notes in its instructions; Clear model guidance ignores earlier incidents for that model without deleting them. `analytics_retention.incident_days` (default 30) sets retention, and `capabilities.builtin_instructions` can turn `model-guidance` off.",
+      },
+      {
+        tag: "Added",
+        text: "After a managed-server restart, subagent children that were running resume with one new step, or complete if their final answer was already written. A child whose tools may have had side effects waits for you to Continue or Stop it in the review box; a stopped child can still be continued once later. Root Sessions never resume on their own.",
+      },
+      {
+        tag: "Added",
+        text: "`ycoding run --format json` lists every model a switched step used in `run_finish.models`.",
+      },
+      {
+        tag: "Added",
+        text: "The terminal transcript shows each switch under the answer, naming the model it switched from, the model it switched to, and why.",
+      },
+      {
+        tag: "Changed",
+        text: "Shell views group commands within the current Session family, including nested children in other directories. Opened shells show complete commands and refresh output while queued, running and settling; Team lists retain bounded command previews.",
+      },
+      {
+        tag: "Changed",
+        text: "Shell read failures offer explicit retry, kill failures stay visible, and confirmed removals clear stale rows and controls.",
+      },
+      {
+        tag: "Changed",
+        text: "Usage statistics retain request activity independently of Session deletion, and Location reports keep requests where they ran. A retained row without a Session title identifies its Session and says the title is unreported.",
+      },
+      {
+        tag: "Changed",
+        text: "Global retention settings control Session-owned records (`session_retention.records_days`, default 7 idle days), usage analytics (`analytics_retention.usage_days`, default 30 request-date days), and machine-local latency (`analytics_retention.latency_days`, default 30 server-receipt days). Whole-family `session_retention.days` stays separate and defaults to 7.",
+      },
+      {
+        tag: "Changed",
+        text: "Record cleanup protects executing Sessions. Resuming keeps available ordinary transcript content but cannot replay provider state, captured changes or context exclusions that expired; analytics are not used to reconstruct them.",
+      },
+      {
+        tag: "Changed",
+        text: "Session generation speed uses the selected model's recent output, including short responses and marked estimates. Switching effort or profile keeps that model's samples, and subagent views in the terminal and web show each child's own rate.",
+      },
+      {
+        tag: "Changed",
+        text: "Guardrail reviews grade every available decision with bounded, redacted evidence. Awake YOLO 1–3 approves ordinary reviews first; remaining reviews use the model only when `guardrails.decide_reviews` is true (default false); otherwise they ask you awake or wait in the review box asleep. Ordinary Always approval requires confidence 0.9, approval once requires 0.8 (0.95 for hard reviews), and rejection requires 0.8. Conflicting grades, escalation, uncertainty, refusal, failure, or timeout opens human review awake or waits in the review box asleep. With model reviews enabled, `guardrails.decide_hard_reviews: false` sends hard reviews straight to humans awake or the review box asleep.",
+      },
+      {
+        tag: "Changed",
+        text: "The `decision` tool supports `grade: true` on choice questions to grade every alternative independently with confidence and evidence instead of picking one.",
+      },
+      {
+        tag: "Changed",
+        text: "`auto_answer` (automatic question, form, and subagent-question answers) is off by default, independent of `guardrails.decide_reviews`, including during YOLO 2–3, goals, and sleep; disabled requests ask you awake or wait in the review box asleep. `/sleep` no longer turns either setting on, and `guardrails.decide_reviews` replaces `/guardrail-decision`. Advisory `decision` calls are unaffected. Guardrail settings apply when the backend restarts or a Location's services are rebuilt; `auto_answer` follows configuration reloads.",
+      },
+      {
+        tag: "Changed",
+        text: "While you sleep, anything the decision model cannot settle confidently now waits in a review box instead of being rejected or guessed: guardrail reviews, questions, forms, subagent questions, and permission asks. Entering sleep moves pending requests into the box. After you wake, you decide each item; answers reach the waiting Session, and an approved action may be re-issued once exactly as reviewed. Deciding an item does not end sleep by itself.",
+      },
+      {
+        tag: "Changed",
+        text: "Escalated review prompts identify the model handoff. Completed outcomes, escalation history, and deferred guardrail items retain the selected choice, confidence, and available per-choice grades with redacted evidence, including after restart; interrupted reviews and actions are not restored or replayed.",
+      },
+      {
+        tag: "Changed",
+        text: "Completed decision-model guardrail rows and dismissed standard-rule matches expand to show the reviewed tool call, its command or targets, the rule, the outcome, and the reported confidence, including after a reload.",
+      },
+      {
+        tag: "Changed",
+        text: "Web Sessions put families waiting for you before running and recent activity, with an exclusive Waiting filter and attention-styled Waiting for you carousel cards that update live. Paged lists preserve your reading position through live reordering and stay usable when a refresh around that position fails.",
+      },
+      {
+        tag: "Changed",
+        text: "The shell queue runs as many commands as free memory and CPU allow, up to 10 at once on the machine and one per Session by default. Commands that start together cannot all count on the same free memory or CPU.",
+      },
+      {
+        tag: "Changed",
+        text: "When no queued command is running, the next queued command starts even if memory or CPU is short, so the queue never stalls.",
+      },
+      {
+        tag: "Changed",
+        text: "A queued command takes one of its Session family's shell slots only when it starts, so waiting commands leave those slots free for ordinary shell commands.",
+      },
+      {
+        tag: "Changed",
+        text: "A repeated queued command needs only as much free memory as its recent runs used: the highest peak of its last five recorded runs for the same command and working directory, capped by its memory limit. Only a run that exits successfully after at least one measurement can lower that amount; other runs can only raise it.",
+      },
+      {
+        tag: "Fixed",
+        text: "`/suggest` accepts predictions in languages written without spaces between words, such as Japanese and Chinese, instead of discarding them as one-word replies.",
+      },
+      {
+        tag: "Fixed",
+        text: "Prompts that were already consumed no longer stay marked Queued in the terminal transcript after the transcript reloads or reconnects.",
+      },
+      {
+        tag: "Fixed",
+        text: "A tool call cut off by the model's output limit fails with a retryable error instead of leaving the call open, so the run continues instead of the next request being rejected by the provider.",
+      },
+      {
+        tag: "Fixed",
+        text: "Streamed provider errors retain readable messages and failure classifications instead of displaying `[object Object]`.",
+      },
+      {
+        tag: "Fixed",
+        text: "Subagent routing guidance honors explicit profile, provider, and model selections across providers, keeps task-based sizing and permission ceilings, and sets a child model only when its exact provider, model, and variant are known to be available; otherwise the child runs on the session's model.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in primary agents implement or delegate according to their own roles: GSD, God, and Yangi handle small and tightly coupled changes directly, and Architech delegates only independent components with settled interfaces.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in primary agents keep working while subagents and background shells run: they continue every independent ready task, start long commands in the background when other work remains, and stop only when the remaining work waits on running tasks or on the user.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in agents keep their todo lists current: items move to in progress, completed, or cancelled as the work changes, rejected updates are fixed and resent, and the list matches the actual state before the agent stops.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in agents verify suggested causes, paths, and fixes by reproducing the reported symptom and confirming that a fix removes it; when the actual cause differs, they fix it within the requested scope and say so. Before overwriting or deleting existing data, they check whether version control can restore it.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in agent reports name each changed file path, and agents keep a todo list only for work with three or more steps.",
+      },
+      {
+        tag: "Fixed",
+        text: "Goal steers and synthesized goals are plain text without Markdown, including backticks around names, paths, or commands.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in subagents return destructive or irreversible changes that need an undecidable choice, such as rewriting untracked data, as blockers with the facts needed to decide, leave the choice of a rule for settling conflicting data to the parent, and report corrected premises.",
+      },
+      {
+        tag: "Fixed",
+        text: "Pending guardrail review status stays reachable when the terminal transcript is shorter than its content.",
+      },
+      {
+        tag: "Fixed",
+        text: "Model-generated Session titles reject filtered responses and refusal text, using the existing first-prompt title instead. Title-provider errors are logged without failing the Session, and reported usage is retained.",
+      },
+      {
+        tag: "Fixed",
+        text: "Pending compaction appears in transcript snapshots as soon as its job is admitted and retains the same message while work runs and settles.",
+      },
+      {
+        tag: "Fixed",
+        text: "A failed compaction does not trigger another attempt when its context, policy, and target are unchanged.",
+      },
+      {
+        tag: "Fixed",
+        text: "Project-artifact evaluation retains the goal outcome when an execution finishes immediately after starting.",
+      },
+      {
+        tag: "Fixed",
+        text: "A background shell command that finishes after its subagent child already completed wakes the child with the completion notice, and the child's next completion notifies the parent once. Failed, cancelled, and lost children are not revived.",
+      },
+      {
+        tag: "Fixed",
+        text: "Stopping a shell command checks its process-group identity, cleans up descendants that ignore graceful termination, and reports cancellation after cleanup succeeds. Failed cleanup remains tracked and reports an error. Timeouts and memory limits end output capture within one second of cleanup even while escaped descendants keep writing, and a normally exiting command keeps late output instead of cutting it off after 100 ms; cancelling a waiting command releases its queue capacity immediately. Lost shell notices from finished subagents stop keeping their root Session marked as waiting for attention.",
+      },
+      {
+        tag: "Fixed",
+        text: "One-time review approvals apply only to the operation and content reviewed, including MCP argument values. Pending child answers stay reserved for human review through delivery and restart, and converted questions cancel their existing timers. Permission replies and sleep conversion cannot settle the same request twice.",
+      },
+      {
+        tag: "Fixed",
+        text: "Subagent approvals distinguish launch prompts and models from control actions and individual children. Other permission approvals retain the reviewed request's range, payload, source, and resource identity.",
+      },
+      {
+        tag: "Fixed",
+        text: "A failed child-answer delivery leaves its review item open for another attempt. Successful answer delivery and the review decision settle together.",
+      },
+      {
+        tag: "Fixed",
+        text: "Browser permission approvals survive a fresh observation of the same semantic target. Changed or ambiguous targets cannot reuse the approval, and stale observations still fail before dispatch.",
+      },
+      {
+        tag: "Fixed",
+        text: "Free-text questions wait in the review box while you sleep, including forms with suggested defaults. Review answers obey the same validation as live forms, and repeated decisions report that the item is already settled.",
+      },
+      {
+        tag: "Fixed",
+        text: "Reverting a conversation withdraws affected review items and unused approvals, with notices retained in history. Open review items prevent completion reports and goal retry consumption after waking. A failed sleep-entry conversion does not leave other producer kinds waiting on an unavailable user.",
+      },
+      {
+        tag: "Fixed",
+        text: "Deleting a Session whose directory no longer exists works. The TUI session list and the API previously failed with an HTTP 500 error for such Sessions; opening them with `GET /api/session/:sessionID` now succeeds, and deleting one removes the Session and all of its subagent Sessions without recreating the directory.",
+      },
+      {
+        tag: "Fixed",
+        text: "Commands retain their output when they finish before capture starts or while capture is backpressured. Removing a command remains responsive while its final output write is pending.",
+      },
+      {
+        tag: "Fixed",
+        text: "Printing, searching, or commenting SQL such as `DROP TABLE` in a read-only command or shell comment no longer triggers the destructive database review; SQL that can execute, including through pipes, redirects, heredocs, wrappers, and interpreters, is still reviewed.",
+      },
+    ],
+  },
+  {
+    version: "0.10.10",
+    date: "2026-10-15",
+    title: "Sleep mode, shell command queue, and faster web",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      {
+        tag: "Added",
+        text: "The shell tool has a queue channel for expensive commands such as typechecks, builds, and package-wide test suites. Queued commands from every YCoding process on the machine share running limits (two at once and one per Session by default), wait for enough free memory and a low enough CPU load, and report completion like background commands. Set the limits under shell_queue; the TUI and the web Team view show queued commands and their position.",
+      },
+      {
+        tag: "Added",
+        text: "/sleep lets the agent keep working while you are away: the root Session family answers its own questions and forms, settles guardrail reviews with the decision model, and keeps the machine awake. /wake or any message you send in the family ends sleep and restores your earlier review setting.",
+      },
+      {
+        tag: "Added",
+        text: "/guardrail-decision toggles decision-model review for a root Session family. A review is approved once when the model approves with confidence 0.8 or higher and rejected otherwise; explicit denies still apply and YOLO levels are unchanged.",
+      },
+      {
+        tag: "Added",
+        text: "Before a standard guardrail review reaches you, the decision model checks whether the action really matches the rule, and a confident false match is dismissed without a review.",
+      },
+      {
+        tag: "Added",
+        text: "/keep-awake toggles keeping the machine awake, also from web Settings → Machine. On macOS it keeps the Mac awake with the lid closed where lid control is available. Sleep holds keep-awake on until the last sleeping Session family wakes.",
+      },
+      {
+        tag: "Added",
+        text: "Unanswered questions, forms, and subagent questions time out after question_timeout_seconds (default 300; 0 disables). The agent then proceeds on its own judgment, and a late answer is rejected.",
+      },
+      {
+        tag: "Added",
+        text: "Before history pruning first deletes anything, YCoding writes a one-time verified copy of the database beside it as <database>.pre-prune-backup, for example ycoding.db.pre-prune-backup. With less free space than the database size plus 1 GiB, it prunes nothing and shows a warning at most once an hour. To restore the copy, stop every YCoding process, replace the database file with it, and delete the database's -wal and -shm files; delete the copy with rm once you no longer need it.",
+      },
+      {
+        tag: "Changed",
+        text: "Built-in agents commit only complete, self-contained changes: each commit includes its code, tests, docs, and release-note entries, is made after its checks pass, and has a summary that states its intent and a body that states why it exists, what behavior changed, and how it was verified.",
+      },
+      {
+        tag: "Changed",
+        text: "Built-in agents reply and write documentation, instruction files, code comments, and commit messages as directives and facts from verified evidence in the reader's own terms, without unrequested explanations, copying the request's wording, or mentioning the request or its style instructions.",
+      },
+      {
+        tag: "Changed",
+        text: "The Usage page shows the monthly provider total and its unit inside the donut ring. A total too wide for the ring is shortened to one decimal with a k, m, or b suffix, such as $2.0k; the exact total stays available on hover, on keyboard focus, and to screen readers, and the legend keeps each provider's exact value.",
+      },
+      {
+        tag: "Changed",
+        text: "Primary built-in agents start every remaining task that does not depend on running background work instead of waiting for it, and name the dependency of each task they hold back; a queued typecheck, build, or test suite delays only other heavy checks, not code-writing or review work.",
+      },
+      {
+        tag: "Changed",
+        text: "Settled Session history takes much less disk space. About a minute after a Session's work ends, and at startup and every hour, YCoding deletes the stored events that repeat what its saved messages and records already hold; resume, transcripts, forks, reverts, snapshots, and usage keep working from what remains.",
+      },
+      {
+        tag: "Changed",
+        text: "In Sessions idle for 24 hours, images in tool results are replaced with a short placeholder giving the image type and size, which the model also sees if the Session resumes. Base64 data longer than tool_output.max_bytes (50 KiB by default) is omitted from stored tool metadata.",
+      },
+      {
+        tag: "Changed",
+        text: "Tool progress is shown live but no longer stored: session.tool.progress is a live-only event and no longer appears in session.log or among the durable event types of the API and its clients.",
+      },
+      {
+        tag: "Changed",
+        text: "Standard GPT-6 requests on the OpenAI API no longer turn on OpenAI's automatic context compaction by default; YCoding's own Session compaction handles long contexts, which lets effort changes keep the provider cache. Configured context management still applies.",
+      },
+      {
+        tag: "Fixed",
+        text: "A shell command that runs git push and later another command with -f, such as rm -f or grep -f, no longer asks for a force-push hard review. Destructive Git and force-push checks now read each command of a compound command separately.",
+      },
+      {
+        tag: "Fixed",
+        text: "The web client opens and refreshes Sessions with fewer requests. Selecting a Session reads its transcript without waiting for the subscription to be confirmed; a Session-list change rereads the open transcript only when it missed events; list refreshes keep the visible rows instead of showing loading and run at most once per 750 ms; captured changes for a Session with many subagents are read once and shared; and Usage reads only when its page opens.",
+      },
+      {
+        tag: "Fixed",
+        text: "Usage reports no longer stall other requests. Each report reads through a separate read-only database connection in steps of at most 10,000 requests, so the TUI, web, and running Sessions keep responding while it runs; on a 9 GB database the summary report dropped from about 7.8 seconds to under half a second. Startup adds three usage indexes once.",
+      },
+      {
+        tag: "Fixed",
+        text: 'A subagent\'s "awaiting input" timer in the TUI header counts from when it asked its question and keeps counting while it waits, instead of showing the time since the subagent started.',
+      },
+      {
+        tag: "Fixed",
+        text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once.",
+      },
+      {
+        tag: "Fixed",
+        text: "Session speed no longer disappears when a provider's output token count is missing or unusable. YCoding then estimates tok/s from the output it streams, marked with ≈ in the TUI sidebar and the web composer; estimates never enter speed trends or Usage report throughput. A failed or interrupted step replaces the previous step's speed, a step retried after compaction shows its own speed, and a step without a usable sample shows unreported with its reason instead of an older rate.",
+      },
+      {
+        tag: "Fixed",
+        text: "Session speed and its trend match the selected provider, model, variant, and profile, and the web Usage page labels models whose identity includes a profile correctly.",
+      },
+      {
+        tag: "Fixed",
+        text: "Changing only a model's variant, such as its effort, no longer changes YCoding's prompt-cache key on any route. Where the provider documents a mid-conversation effort change, YCoding sends the new effort as an in-conversation update so the cached prompt prefix stays valid: GPT-6 on the OpenAI API, supported Claude models with adaptive thinking on the Anthropic API and Vertex, and GPT-6, Claude Fable 5.1, and Claude Opus 5 on OpenRouter. On Claude, an effort change made during a tool loop takes effect with your next message. Subscription routes (ChatGPT/Codex and Claude Code), the AI SDK OpenRouter and Vertex adapters, and other providers still change effort for the whole request and may rebuild the provider cache once.",
+      },
+    ],
+  },
+  {
+    version: "0.10.9",
+    date: "2026-10-14",
+    title: "Muse quota on the usage dashboard",
+    tags: ["Fixed"],
+    changes: [
+      {
+        tag: "Fixed",
+        text: "Muse (Meta) subscription quota now appears on the usage dashboard (the TUI Usage screen and the web Usage page) and survives quota refreshes, instead of disappearing after a quota was reported from a Muse response. Quota is still reported only after a Muse response and is retained in memory.",
+      },
+    ],
+  },
+  {
+    version: "0.10.8",
+    date: "2026-10-14",
+    title: "Smaller database and eval run controls",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      {
+        tag: "Added",
+        text: "A capabilities configuration object turns capabilities off for a run: global or project AGENTS.md files (or individual files by path pattern), including nested files the read tool injects, built-in instruction blocks by name, skills, tools, MCP servers, and external plugins by allow and deny lists, managed project artifacts, the ~/.agents and ~/.claude roots, and it can pin the websearch provider. It works in any configuration layer, including YCODING_CONFIG_CONTENT.",
+      },
+      {
+        tag: "Added",
+        text: "ycoding run --config <file> applies a JSON/JSONC configuration document as the highest-priority layer of a private server for that run.",
+      },
+      {
+        tag: "Added",
+        text: "ycoding run --isolated runs on a private server with a temporary data directory and database that are removed afterwards, so the run never touches your Sessions or database. Stored credentials are unavailable in an isolated run; provide provider keys through environment variables or configuration.",
+      },
+      {
+        tag: "Added",
+        text: "ycoding run --format json reports metrics for evaluation harnesses: step_start includes the agent and model, step_finish includes the context limit, context breakdown, and provider cache diagnostics when reported, and one final run_finish line gives the status, duration, steps, turns, tokens, cost, context size, and models, plus the usage, steps, and turns of the whole run including subagents and helper Sessions. Default text output is unchanged.",
+      },
+      {
+        tag: "Changed",
+        text: "History that a finished local compaction removed from model context is deleted by the startup and hourly retention sweep, shrinking the database. Sessions compacted by Codex remote compaction keep their full history. Copy and export start at the compaction checkpoint summary. Forking or reverting to a message in removed history reports an error and changes nothing. Failure events from the removed range are kept for 7 days.",
+      },
+      {
+        tag: "Fixed",
+        text: "Opening the shared database from another YCoding process, such as ycoding run --standalone or serve --stdio, no longer marks a running service's active child tasks as lost. Each active child task records its owning process, and only tasks whose owner process has exited are marked lost when a process starts.",
+      },
+      {
+        tag: "Fixed",
+        text: "Built-in guidance for a tool the agent cannot use, such as workspace memory while memory is disabled or decision while it is denied, is no longer included in the instructions.",
+      },
+    ],
+  },
+  {
     version: "0.10.7",
     date: "2026-10-13",
     title: "Background Chrome and computer use",

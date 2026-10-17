@@ -50,6 +50,50 @@ const review = {
   metadata: { workdir: "/fixture/project" },
 }
 
+test("an escalated review identifies the human handoff and keeps its chronological transcript notice", async () => {
+  const relay = await startRelayDouble({
+    advertisedSessions: ["ses_a"],
+    guardrailRequests: [{ ...review, sessionID: "ses_a", escalation: { choice: "reject", confidence: 0.7 } }],
+    messages: {
+      ses_a: [
+        {
+          id: "msg_escalation",
+          type: "system",
+          text: "Decision model escalated this guardrail review · choice reject · confidence 0.7",
+          time: { created: 2 },
+        },
+      ],
+    },
+  })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(
+      `http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`,
+    )
+    await wait(page, `document.querySelector('.request__note[role="status"]') !== null`)
+    expect(await page.evaluate<string>(`document.querySelector('.request').textContent`)).toContain(
+      "Decision model escalated this review to you",
+    )
+    expect(await page.evaluate<string>(`document.body.textContent`)).toContain("choice reject · confidence 0.7")
+    expect(
+      await page.evaluate<string[]>(
+        `[...document.querySelectorAll('.request__actions button')].map(button => button.textContent.trim())`,
+      ),
+    ).toEqual(["Approve once", "Reject"])
+    await page.evaluate(`document.querySelector('.request__actions button').click()`)
+    await wait(page, `document.querySelector('.request') === null`)
+    expect(await page.evaluate<string>(`document.body.textContent`)).toContain(
+      "Decision model escalated this guardrail review",
+    )
+    expect(relay.requests.filter((request) => request.operation === "session.guardrail.reply")).toMatchObject([
+      { input: { reply: "once" } },
+    ])
+  } finally {
+    await page.close()
+    await relay.stop()
+  }
+})
+
 test("missing concrete context disables approval, explains why, and leaves human rejection usable", async () => {
   const relay = await startRelayDouble({
     advertisedSessions: ["ses_a"],

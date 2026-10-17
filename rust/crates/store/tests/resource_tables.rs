@@ -105,6 +105,7 @@ fn owner(id: &str) -> session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 fn revision(id: &str, n: i64) -> session::Revision {
@@ -148,6 +149,7 @@ fn request(id: &str, count: i64) -> resources::Request {
         cost: None,
         tokens: doc(r#"{"input":-1,"output":2,"reasoning":3,"cache":{"read":0,"write":0}}"#),
         time_created: i64::MIN,
+        usage_anchor: None,
     }
 }
 fn usage() -> resources::Usage {

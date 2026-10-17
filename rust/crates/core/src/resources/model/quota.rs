@@ -11,6 +11,7 @@ use ycoding_schema::{
     provider_usage::{Snapshot, Window},
     schema::NonNegativeInt,
 };
+pub mod forecast;
 mod service;
 pub use service::{Endpoints, Service};
 pub use ycoding_ai::muse::{normalize_usage, unreported};

@@ -1,4 +1,4 @@
-import { createContext, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
+import { createContext, createSignal, onCleanup, onMount, Show, useContext, type ParentProps } from "solid-js"
 import type { KeepAwake } from "@ycoding-ai/schema/keep-awake"
 import { Keymap } from "./context/keymap"
 import { useClient } from "./context/client"
@@ -10,8 +10,13 @@ export type KeepAwakeStatus = KeepAwake.Status
 
 export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): string {
   if (!status) return "Checking"
-  const lid = status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"
-  return `${status.state} · ${status.state === "on" ? "idle + " : ""}lid ${lid}${status.sleepHold ? " + sleep-held" : ""}`
+  if (status.state !== "on")
+    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep-held" : ""}`
+  const parts = ["idle"]
+  if (status.lid === "on") parts.push("lid")
+  if (status.lid !== "on") parts.push(`lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}`)
+  if (status.sleepHold) parts.push("sleep-held")
+  return `on · ${parts.join(" + ")}`
 }
 
 type KeepAwakeServer = {
@@ -22,16 +27,41 @@ type KeepAwakeServer = {
 type KeepAwakeContextValue = {
   status: () => KeepAwakeStatus | undefined
   toggle: () => Promise<void>
+  refresh: () => Promise<void>
 }
 
 const Context = createContext<KeepAwakeContextValue>()
 const unavailable: KeepAwakeContextValue = {
   status: () => undefined,
   toggle: async () => {},
+  refresh: async () => {},
 }
 
 export function useKeepAwake() {
   return useContext(Context) ?? unavailable
+}
+
+export function KeepAwakeIndicator() {
+  const awake = useKeepAwake()
+  const { theme } = useTheme()
+  const status = () => {
+    const current = awake.status()
+    return current && current.state !== "off" ? current : undefined
+  }
+  return (
+    <Show when={status()}>
+      {(current) => (
+        <text
+          flexShrink={0}
+          wrapMode="word"
+          fg={current().state === "on" ? theme.text.feedback.success.default
+            : current().state === "error" ? theme.text.feedback.error.default : theme.text.feedback.warning.default}
+        >
+          keep awake {keepAwakeStatusLabel(current()).replace("sleep-held", "sleep held")}
+        </text>
+      )}
+    </Show>
+  )
 }
 
 export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer }>) {
@@ -73,11 +103,22 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
       if (disposed || cycle !== generation) return
       setStatus(next)
       if (next.state === "on" && !enabled && next.sleepHold)
-        toast.show({ variant: "info", title: "Keep machine awake", message: "Held on by a sleeping session; your manual preference is off until the last family hold is released.", duration: 6000 })
+        toast.show({
+          variant: "info",
+          title: "Keep machine awake",
+          message: "Held on by a sleeping session; your manual setting is off and applies when the last session wakes.",
+          duration: 6000,
+        })
       if (next.state === "on" && enabled)
-        toast.show({ variant: "info", title: "Keep machine awake", message: next.lid === "on"
-          ? "Idle and lid-closed sleep held off; on battery this drains the battery and a closed lid traps heat. Choosing Sleep still sleeps."
-          : "Idle sleep held off; closing the lid may still sleep this machine. Keep-awake drains the battery and a closed lid traps heat.", duration: 6000 })
+        toast.show({
+          variant: "info",
+          title: "Keep machine awake",
+          message:
+            next.lid === "on"
+              ? "Idle and lid-closed sleep held off; on battery this drains the battery and a closed lid traps heat. Choosing Sleep still sleeps."
+              : "Idle sleep held off; closing the lid may still sleep this machine. On battery keep-awake drains the battery and a closed lid traps heat.",
+          duration: 6000,
+        })
       if (next.state === "error" || next.state === "unsupported")
         toast.show({ variant: "error", title: "Keep machine awake", message: next.message ?? "Keep machine awake is unavailable.", duration: 6000 })
     } catch (error) {
@@ -97,7 +138,12 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
     if (poll) clearInterval(poll)
   })
 
-  return <Context.Provider value={{ status, toggle }}><KeepAwakeCommands />{props.children}</Context.Provider>
+  return (
+    <Context.Provider value={{ status, toggle, refresh }}>
+      <KeepAwakeCommands />
+      {props.children}
+    </Context.Provider>
+  )
 }
 
 function KeepAwakeCommands() {

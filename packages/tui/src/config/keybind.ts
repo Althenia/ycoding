@@ -98,7 +98,7 @@ export const Definitions = {
   session_interrupt: keybind("escape", "Interrupt current session"),
   session_background: keybind("ctrl+b", "Background blocking session tools"),
   session_compact: keybind("<leader>c", "Compact the session"),
-  session_autonomy_normal: keybind("<leader>y", "Disable YOLO"),
+  session_autonomy_normal: keybind("<leader>y", "Ask first (approval level 0)"),
   session_queued_prompts: keybind("<leader>q", "Manage queued prompts"),
   session_skill_conflict_resolve: keybind("<leader>i", "Resolve a session skill conflict"),
   session_child_first: keybind("down,<leader>down", "Toggle subagent picker"),

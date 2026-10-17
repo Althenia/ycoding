@@ -89,6 +89,7 @@ const permission = Layer.mock(Permission.Service, {
   }),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) =>
     Effect.sync(() => {
       guardrailRequests.push(input)
@@ -140,6 +141,7 @@ describe("BrowserTool", () => {
     }),
   )
   const reviewDenied = browserTests(permission, Layer.mock(SessionGuardrail.Service, {
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     assert: (input) => Effect.fail(new SessionGuardrail.BlockedError({
       rootSessionID: sessionID, sessionID, action: input.action, ruleIDs: ["test"], reason: "Human review denied",
     })),
@@ -394,6 +396,7 @@ describe("BrowserTool", () => {
     }),
   )
   const blocked = browserTests(permission, Layer.mock(SessionGuardrail.Service, {
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     assert: () => Effect.fail(new SessionGuardrail.BlockedError({
       rootSessionID: sessionID, sessionID, action: "browser_owned_open", ruleIDs: ["test"], reason: "Human review required",
     })),

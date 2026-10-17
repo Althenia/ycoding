@@ -249,49 +249,38 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.autonomy.get",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.autonomy.get(ctx.params.sessionID).pipe(
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-            ),
-          }
+          const data = yield* session.autonomy.get(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return { data: { ...data, effective } }
         }),
       )
       .handle(
         "session.autonomy.set",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.autonomy.set({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
-              Effect.catchTag("SessionGoal.Error", (error) => Effect.gen(function* () {
-                if (error.code === "goal.no_retained_goal")
-                  return yield* new InvalidRequestError({ message: "No retained goal to resume. Set a goal with /goal <text>.", field: "goal" })
-                if (error.code === "goal.stale_calculation")
-                  return yield* new ConflictError({ message: "Goal changed while calculation was running. Review the current goal before retrying.", resource: ctx.params.sessionID })
-                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
-                yield* Effect.logWarning("Goal calculation failed", { sessionID: ctx.params.sessionID, category: error.code, ref })
-                return yield* new UnknownError({
-                  message: error.code === "goal.model_unavailable"
-                    ? "Goal model is unavailable. Check the goal model configuration before retrying."
-                    : "Goal calculation failed. The existing goal was not replaced; retry when the provider is available.",
-                  ref,
-                })
-              })),
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-            ),
-          }
+          if ("sleep" in ctx.payload)
+            return yield* new InvalidRequestError({
+              message: "Sleep requires the native runtime.",
+              field: "sleep",
+            })
+          const data = yield* session.autonomy.set({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+            Effect.catchTag("SessionGoal.Error", (error) => Effect.gen(function* () {
+              if (error.code === "goal.no_retained_goal")
+                return yield* new InvalidRequestError({ message: "No retained goal to resume. Set a goal with /goal <text>.", field: "goal" })
+              if (error.code === "goal.stale_calculation")
+                return yield* new ConflictError({ message: "Goal changed while calculation was running. Review the current goal before retrying.", resource: ctx.params.sessionID })
+              const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+              yield* Effect.logWarning("Goal calculation failed", { sessionID: ctx.params.sessionID, category: error.code, ref })
+              return yield* new UnknownError({
+                message: error.code === "goal.model_unavailable"
+                  ? "Goal model is unavailable. Check the goal model configuration before retrying."
+                  : "Goal calculation failed. The existing goal was not replaced; retry when the provider is available.",
+                ref,
+              })
+            })),
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+          )
+          const effective = yield* session.autonomy.effective(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return { data: { ...data, effective } }
         }),
       )
       .handle(

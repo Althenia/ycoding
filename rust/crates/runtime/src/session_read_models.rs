@@ -7,14 +7,27 @@ use std::{
     hash::{BuildHasher, Hasher},
 };
 use ycoding_core::ycoding_schema::{
-    DomainDecode, LosslessString, ObjectEncoder, provider_request, schema::NonNegativeInt, session,
-    session_captured_changes, session_compaction, token_usage,
+    DomainDecode, DomainEncode, LosslessString, ObjectEncoder, provider_request,
+    schema::NonNegativeInt, session, session_captured_changes, session_compaction, token_usage,
 };
 use ycoding_core::ycoding_store::Error;
 use ycoding_protocol::v5;
 
-const GROUPS: [&str; 7] = [
-    "model", "hour", "day", "month", "session", "project", "agent",
+const GROUPS: [&str; 14] = [
+    "model",
+    "hour",
+    "day",
+    "month",
+    "session",
+    "project",
+    "agent",
+    "provider",
+    "provider-profile-model",
+    "provider-model",
+    "model-id",
+    "profile",
+    "prompt",
+    "task",
 ];
 const SORTS: [&str; 9] = [
     "key",
@@ -197,6 +210,30 @@ pub(crate) fn report_input(
         .map(|order| name(&ORDERS, order).map(LosslessString::from))
         .transpose()?;
     let value = ObjectEncoder::new()
+        .optional(
+            "providerID",
+            &query
+                .provider_id
+                .as_ref()
+                .map(convert::domain)
+                .transpose()?,
+        )
+        .optional(
+            "modelID",
+            &query.model_id.as_ref().map(convert::domain).transpose()?,
+        )
+        .optional(
+            "profile",
+            &query.profile.as_ref().map(convert::domain).transpose()?,
+        )
+        .optional(
+            "selectedEffort",
+            &query
+                .selected_effort
+                .as_ref()
+                .map(convert::domain)
+                .transpose()?,
+        )
         .field("group", &LosslessString::from(name(&GROUPS, query.group)?))
         .optional("timeZone", &time_zone)
         .optional("from", &query.from.map(|value| value as f64))
@@ -238,6 +275,14 @@ pub(crate) fn wire_report(
         .iter()
         .map(|row| {
             Ok(v5::ProviderRequestReportRowsItem {
+                model: row
+                    .model
+                    .as_ref()
+                    .map(|model| convert::model_ref(&model.encode()))
+                    .transpose()
+                    .map_err(|_| unrepresentable())?,
+                dimensions: row.dimensions.as_ref().map(wire_dimensions).transpose()?,
+                cost_coverage: row.metrics.cost_coverage.as_ref().map(wire_coverage),
                 key: convert::wire(&row.key),
                 label: convert::wire(&row.label),
                 logical: count(row.metrics.logical),
@@ -255,6 +300,11 @@ pub(crate) fn wire_report(
                     .transpose()?,
                 cache_read_reported: row.metrics.cache_read_reported,
                 speed: row.speed.as_ref().map(|speed| v5::ProviderRequestSpeed {
+                    generation_samples: count(speed.generation_samples),
+                    provider_timed_samples: count(speed.provider_timed_samples),
+                    observed_samples: count(speed.observed_samples),
+                    generation_p50_tokens_per_second: speed.generation_p50_tokens_per_second,
+                    generation_p90_tokens_per_second: speed.generation_p90_tokens_per_second,
                     first_output_p50_ms: speed.first_output_p50_ms.map(count),
                     first_output_p95_ms: speed.first_output_p95_ms.map(count),
                     total_p50_ms: speed.total_p50_ms.map(count),
@@ -270,6 +320,7 @@ pub(crate) fn wire_report(
         group: tag(&GROUPS, literal(&report.group.0)?)?,
         rows: v5::ProviderRequestReportRows { items: rows },
         total: v5::ProviderRequestReportTotal {
+            cost_coverage: total.cost_coverage.as_ref().map(wire_coverage),
             logical: count(total.logical),
             physical: count(total.physical),
             helpers: count(total.helpers),
@@ -283,6 +334,92 @@ pub(crate) fn wire_report(
         row_count: count(report.row_count),
         next_offset: report.next_offset.map(count),
     })
+}
+
+pub(crate) fn wire_coverage(
+    coverage: &provider_request::CostCoverage,
+) -> v5::ProviderRequestCostCoverage {
+    v5::ProviderRequestCostCoverage {
+        priced_requests: count(coverage.priced_requests),
+        unpriced_requests: count(coverage.unpriced_requests),
+    }
+}
+
+fn wire_dimensions(
+    value: &provider_request::ReportDimensions,
+) -> Result<v5::ProviderRequestReportDimensions, Failure> {
+    use provider_request::ReportDimensions;
+    use v5::provider_request_report_dimensions::Kind;
+    let kind = match value {
+        ReportDimensions::Provider { provider_id } => {
+            Kind::Value1(v5::ProviderRequestReportDimensionsValue1 {
+                group: 1,
+                provider_id: convert::wire(&provider_id.0),
+            })
+        }
+        ReportDimensions::ProviderProfileModel {
+            provider_id,
+            profile,
+            model_id,
+        } => Kind::Value2(v5::ProviderRequestReportDimensionsValue2 {
+            group: 1,
+            provider_id: convert::wire(&provider_id.0),
+            profile: profile.as_ref().map(|value| convert::wire(&value.0)),
+            profile_state: if profile.is_some() { 1 } else { 2 },
+            model_id: convert::wire(model_id),
+        }),
+        ReportDimensions::ProviderModel {
+            provider_id,
+            model_id,
+        } => Kind::Value3(v5::ProviderRequestReportDimensionsValue3 {
+            group: 1,
+            provider_id: convert::wire(&provider_id.0),
+            model_id: convert::wire(model_id),
+        }),
+        ReportDimensions::ModelId { model_id } => {
+            Kind::Value4(v5::ProviderRequestReportDimensionsValue4 {
+                group: 1,
+                model_id: convert::wire(model_id),
+            })
+        }
+        ReportDimensions::Profile {
+            provider_id,
+            profile,
+        } => Kind::Value5(v5::ProviderRequestReportDimensionsValue5 {
+            group: 1,
+            provider_id: convert::wire(&provider_id.0),
+            profile: profile.as_ref().map(|value| convert::wire(&value.0)),
+            profile_state: if profile.is_some() { 1 } else { 2 },
+        }),
+        ReportDimensions::Prompt {
+            anchor,
+            attribution,
+        } => Kind::Value6(v5::ProviderRequestReportDimensionsValue6 {
+            group: 1,
+            anchor: anchor.as_ref().map(|value| v5::UsageAnchorRef {
+                session_id: convert::wire(value.session_id.as_lossless()),
+                input_id: convert::wire(value.input_id.as_lossless()),
+            }),
+            attribution: tag(
+                &["complete", "partial", "unattributed"],
+                attribution.as_str(),
+            )?,
+        }),
+        ReportDimensions::Task {
+            session_id,
+            attribution,
+        } => Kind::Value7(v5::ProviderRequestReportDimensionsValue7 {
+            group: 1,
+            session_id: session_id
+                .as_ref()
+                .map(|value| convert::wire(value.as_lossless())),
+            attribution: tag(
+                &["complete", "partial", "unattributed"],
+                attribution.as_str(),
+            )?,
+        }),
+    };
+    Ok(v5::ProviderRequestReportDimensions { kind: Some(kind) })
 }
 
 fn wire_captured(
@@ -391,4 +528,41 @@ fn wire_history(
         completed_count: count(history.completed_count),
         total_saved_tokens: history.total_saved_tokens.get(),
     })
+}
+
+#[cfg(test)]
+mod usage_wire_tests {
+    use super::{report_input, wire_report};
+    use crate::convert;
+    use ycoding_core::ycoding_schema::{DomainDecode, DomainEncode, parse_json, provider_request};
+    use ycoding_protocol::v5;
+
+    #[test]
+    fn usage_wire_preserves_filters_and_report_populations() {
+        let input = report_input(&v5::SessionUsageReportRequestQuery {
+            group: 1,
+            provider_id: Some(convert::text("p")),
+            model_id: Some(convert::text("m")),
+            profile: Some(convert::text("work")),
+            selected_effort: Some(convert::text("high")),
+            ..Default::default()
+        })
+        .unwrap();
+        let encoded = ycoding_core::ycoding_schema::stringify_json(&input.encode());
+        for name in ["providerID", "modelID", "profile", "selectedEffort"] {
+            assert!(encoded.contains(name), "{name}");
+        }
+        let report = provider_request::Report::decode(&parse_json(r#"{"group":"model","rows":[{"key":"k","label":"l","model":{"providerID":"p","id":"m"},"logical":2,"physical":2,"helpers":0,"continued":0,"fallback":0,"tokens":{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"costCoverage":{"pricedRequests":1,"unpricedRequests":1},"speed":{"samples":3,"generationSamples":2,"providerTimedSamples":1,"observedSamples":1,"generationP50TokensPerSecond":4,"generationP90TokensPerSecond":8}}],"total":{"logical":2,"physical":2,"helpers":0,"continued":0,"fallback":0,"tokens":{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"costCoverage":{"pricedRequests":1,"unpricedRequests":1}},"rowCount":1}"#).unwrap()).unwrap();
+        let wire = wire_report(&report).unwrap();
+        let row = &wire.rows.items[0];
+        assert!(row.model.is_some());
+        assert_eq!(row.cost_coverage.as_ref().unwrap().unpriced_requests, 1);
+        assert_eq!(wire.total.cost_coverage.unwrap().priced_requests, 1);
+        let speed = row.speed.as_ref().unwrap();
+        assert_eq!(speed.generation_samples, 2);
+        assert_eq!(speed.provider_timed_samples, 1);
+        assert_eq!(speed.observed_samples, 1);
+        assert_eq!(speed.generation_p50_tokens_per_second, Some(4.0));
+        assert_eq!(speed.generation_p90_tokens_per_second, Some(8.0));
+    }
 }

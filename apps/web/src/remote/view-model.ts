@@ -8,11 +8,28 @@
  */
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
-import type { RemoteTransportStatus } from "./transport"
+import type { KeepAwakeState } from "./keep-awake"
+import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
+import { describeOutcome } from "./outcome"
 import type { PendingMutation } from "./store"
 import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
+
+export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: string; readonly tone: "success" | "danger" | "attention"; readonly detail?: string } | undefined {
+  if (awake.read === "idle" || awake.read === "loading") return
+  if (awake.read === "outdated") return { label: "keep-awake unsupported", tone: "attention" }
+  if (awake.read !== "ready") return { label: "keep-awake error", tone: "danger", detail: awake.message }
+  const status = awake.status
+  if (status === undefined || status.state === "off") return
+  if (status.state === "error") return { label: "keep-awake error", tone: "danger", detail: status.message }
+  if (status.state === "unsupported") return { label: "keep-awake unsupported", tone: "attention", detail: status.message }
+  return {
+    label: `keep-awake on · lid ${status.lid === "on" || status.lid === "held" ? "held" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep held" : ""}`,
+    tone: status.lid === "error" ? "danger" : status.lid === "unsupported" ? "attention" : "success",
+    detail: status.message,
+  }
+}
 
 export function nextMessagePrediction(view: SessionView | undefined, draft: string, dismissedSource?: string) {
   const prediction = view?.prediction
@@ -151,8 +168,10 @@ export type RemoteSessionSummary = {
   readonly agent?: string
   readonly model?: string
   readonly autonomy?: RemoteAutonomyMode
-  readonly yoloLevel?: number
-  readonly guardrailsEnforced?: boolean
+  readonly yoloLevel?: 0 | 1 | 2
+  readonly goalActive?: boolean
+  readonly asleep?: boolean
+  readonly autoAnswer?: boolean
   readonly updatedAt?: string
 }
 
@@ -231,7 +250,7 @@ export type ConnectionSummary = {
 
 export type SessionChip = {
   readonly label: string
-  readonly tone: "neutral" | "attention" | "success"
+  readonly tone: "neutral" | "attention" | "success" | "danger"
 }
 
 export function capturedChangesVisible(status: SessionView["status"] | undefined, messages: readonly { readonly id: string; readonly kind: string }[], placementMessageID: string): boolean {
@@ -331,8 +350,27 @@ export function connectionLabel(state: RemoteConnectionState, transport: RemoteT
   return state.kind === "connected" && transport.kind === "open" && transport.rttMs !== undefined ? `${label} · ${transport.rttMs} ms` : label
 }
 
-export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string> } | undefined): boolean {
-  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id))
+export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string>; readonly lost: ReadonlySet<string> } | undefined): boolean {
+  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id) && !status.lost.has(id))
+}
+
+export function sessionListRefreshNotice(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>): string {
+  if (outcome.status === "failed" && outcome.error.code === "invalid_message" && /^Unknown input field "(?:around|before)"$/.test(outcome.error.message))
+    return "Update YCoding on this machine to refresh the Session list around your reading position. Existing Sessions remain available."
+  return describeOutcome(outcome, "Session list refresh")
+}
+
+export function sessionActivityGroup(session: { readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean; readonly running?: boolean }): "waiting" | "running" | "idle" {
+  if (session.attention && !session.failed && !session.lost) return "waiting"
+  return session.running ? "running" : "idle"
+}
+
+export const lostResultLabel = "Background result lost"
+
+export function carouselSessionStatus(session: { readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean; readonly running?: boolean }) {
+  if (session.lost) return lostResultLabel
+  const group = sessionActivityGroup(session)
+  return group === "waiting" ? "Waiting for you" : group === "running" ? "Running" : undefined
 }
 
 export function sessionStateChips(session: RemoteSessionSummary): readonly SessionChip[] {
@@ -343,13 +381,13 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.status === "failed") chips.push({ label: "Failed", tone: "neutral" })
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
-  if (session.autonomy === "goal") chips.push({ label: "Goal", tone: "neutral" })
-  else if (session.autonomy === "yolo") {
-    chips.push({ label: session.yoloLevel === undefined ? "YOLO" : `YOLO ${session.yoloLevel}`, tone: "attention" })
-  } else if (session.autonomy === "normal") chips.push({ label: "Standard", tone: "neutral" })
+  if (session.autonomy !== undefined) {
+    chips.push(session.yoloLevel === 1 ? { label: "Allow tools", tone: "attention" } : session.yoloLevel === 2 ? { label: "Tools + reviews", tone: "attention" } : { label: "Ask first", tone: "neutral" })
+    if (session.goalActive === true || session.autonomy === "goal") chips.push({ label: "goal", tone: "neutral" })
+    if (session.asleep === true) chips.push({ label: "asleep", tone: "success" })
+    if (session.autoAnswer === true) chips.push({ label: "auto-answer", tone: "neutral" })
+  }
 
-  if (session.guardrailsEnforced === true) chips.push({ label: "Guardrails enforced", tone: "neutral" })
-  if (session.guardrailsEnforced === false) chips.push({ label: "Guardrails auto", tone: "attention" })
   return chips
 }
 

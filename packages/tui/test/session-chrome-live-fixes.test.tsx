@@ -20,6 +20,7 @@ import { createApi, createFetch } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "./viewport"
+import { localAutonomyView } from "../src/util/session-autonomy"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
 const mint = RGBA.fromHex("#67D7A4").toInts()
@@ -68,7 +69,7 @@ describe("session footer identity", () => {
                       <Footer
                         branch="main"
                         sessionID="ses_0085fc701234567"
-                        autonomy={{ mode: "normal", yolo: false }}
+                        autonomy={localAutonomyView({ mode: "normal", yolo: false })}
                       />
                     </RouteProvider>
                   </DataProvider>
@@ -87,7 +88,7 @@ describe("session footer identity", () => {
       const frame = app.captureCharFrame()
       expect(frame).toContain("main")
       expect(frame).toContain("goal off")
-      expect(frame).toContain("YOLO off")
+      expect(frame).toContain("Ask first")
       expect(frame).toContain("subagents 0")
       expect(frame).toContain("shells 0")
       expect(frame).not.toContain("ses_")
@@ -166,7 +167,7 @@ describe("landing hero", () => {
 })
 
 describe("subagent economics band", () => {
-  test("carries a full-width top rule without moving its rows or columns", async () => {
+  test("carries a full-width top rule with equal-width aligned columns including generation speed", async () => {
     const app = await render(
       () => (
         <box width={DESIGN_VIEWPORT.width} flexDirection="column">
@@ -174,6 +175,7 @@ describe("subagent economics band", () => {
             economics={{
               strip: [],
               context: "54.0K/1.0M",
+              speed: "≈ 100 tok/s",
               cacheHit: "74%",
               reads: "900",
               writes: "12",
@@ -193,13 +195,13 @@ describe("subagent economics band", () => {
       expect(lines.findIndex((line) => line.includes("SUBAGENT ECONOMICS"))).toBe(1)
       expect(lines.findIndex((line) => line.includes("Context"))).toBe(3)
       expect(lines.findIndex((line) => line.includes("54.0K/1.0M"))).toBe(5)
-      // Board 15 columns: Context 3, Cache hit 31, Reads 58, Writes 85, Spent 112, Rolls up to 140.
-      expect(lines[3]?.indexOf("Context")).toBe(3)
-      expect(lines[3]?.indexOf("Cache hit")).toBe(31)
-      expect(lines[3]?.indexOf("Reads")).toBe(58)
-      expect(lines[3]?.indexOf("Writes")).toBe(85)
-      expect(lines[3]?.indexOf("Spent")).toBe(112)
-      expect(lines[3]?.indexOf("Rolls up to")).toBe(140)
+      // Seven equal columns share the width inside the three-column inset: floor((189 - 6) / 7) cells each.
+      const width = Math.floor((DESIGN_VIEWPORT.width - 6) / 7)
+      const labels = ["Context", "Speed", "Cache hit", "Reads", "Writes", "Spent", "Rolls up to"]
+      expect(labels.map((label) => lines[3]?.indexOf(label))).toEqual(labels.map((_, index) => 3 + index * width))
+      expect(lines[5]?.indexOf("≈ 100 tok/s")).toBe(lines[3]?.indexOf("Speed"))
+      expect(lines[5]?.indexOf("74%")).toBe(lines[3]?.indexOf("Cache hit"))
+      expect(lines[5]?.indexOf("Parent session")).toBe(lines[3]?.indexOf("Rolls up to"))
       expect(lines[3]).not.toContain("Prefix")
       expect(lines[6]?.trim()).toBe("")
 

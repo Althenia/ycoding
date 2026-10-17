@@ -125,7 +125,7 @@ describe("Permission", () => {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
-      for (const yolo of [0, 1, 2, 3]) {
+      for (const yolo of [0, 1, 2]) {
         yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo })
         expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: yolo === 0 ? "ask" : "allow" })
         if (yolo === 0) {
@@ -135,6 +135,19 @@ describe("Permission", () => {
         yield* service.assert(assertion())
         expect(yield* service.list()).toEqual([])
       }
+    }),
+  )
+
+  it.effect("an active goal does not auto allow ask decisions at YOLO 0", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const autonomy = yield* SessionAutonomy.Service
+      const service = yield* Permission.Service
+      yield* autonomy.setGoal({ sessionID: Session.ID.make("ses_test"), text: "Ship safely" })
+      expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "ask" })
+      expect(yield* service.get(Permission.ID.create("per_test"))).toBeDefined()
+      yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
+      expect(yield* service.list()).toEqual([])
     }),
   )
 

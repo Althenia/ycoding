@@ -131,6 +131,15 @@ impl Service {
     pub async fn request(&self, id: &session::Id, input: Input) -> Option<String> {
         let dependencies = &self.dependencies;
         let ticket = self.active.begin(&dependencies.feed, id, CANCELLING_EVENTS);
+        let attribution =
+            super::usage_attribution::entry(&dependencies.store.client, id.as_lossless())
+                .await
+                .ok()?;
+        let _activity = super::usage_activity::contribute(
+            &dependencies.store.client,
+            id.clone(),
+            attribution.anchor().cloned(),
+        );
         let cancelled = || ticket.cancellation.is_cancelled();
         let session = dependencies.store.get(id).ok()??;
         let intent = trim(&input.intent);
@@ -203,6 +212,7 @@ impl Service {
                 user: stringify_json(&message),
                 character_limit: OUTPUT_UNITS,
                 cancellation: &ticket.cancellation,
+                attribution,
             })
             .await?;
         let text = accept(&output)?;

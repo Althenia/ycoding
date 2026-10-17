@@ -116,7 +116,7 @@ async fn internal_symlink_escape_is_never_an_authorizable_external_target() {
     let outside = Fixture::new();
     std::os::unix::fs::symlink(&outside.0, inside.0.join("link")).unwrap();
     let policy = policy_fixture::Fixture::default();
-    let session = policy.session("ses_escape", None, 1, false, None);
+    let session = policy.session("ses_escape", None, 2, false, None);
     let permissions = policy.permissions();
     let result = Location::new(&inside.0)
         .unwrap()

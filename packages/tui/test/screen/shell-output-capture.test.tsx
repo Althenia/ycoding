@@ -78,9 +78,9 @@ test("shell-output route renders identity header, stream, metadata, and footer",
       expect(text).toContain("back")
       expect(text).not.toContain("Message YCoding")
       expect(text).not.toContain("SHELLS")
-      expect(rows[9]).toContain("bun test v1.3.14")
-      expect(rows[23]).toContain("14 pass · 2 fail · 1 skip")
-      expect(rows[25]).toContain("…streaming")
+      expect(rows[10]).toContain("bun test v1.3.14")
+      expect(rows[24]).toContain("14 pass · 2 fail · 1 skip")
+      expect(rows[26]).toContain("…streaming")
       expect(rows.slice(55, 66).join("\n")).toContain("Capture")
       await mkdir(renders, { recursive: true })
       await Bun.write(path.join(renders, `shell-output-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
@@ -109,13 +109,34 @@ test("shell-output route renders an exited shell without a kill action", async (
   }
 }, 60_000)
 
+test("shell-output shows a child shell's output as it arrives while running", async () => {
+  process.env.YCODING_ROUTE = JSON.stringify({ type: "shell-output", sessionID, shellID })
+  try {
+    const rows = await captureRoute({
+      ...DESIGN_VIEWPORT,
+      route: liveRoute,
+      settle: "line 5",
+      stable: ["line 1", "line 5", "reviewer · Live child"],
+    })
+    const text = rows.join("\n")
+    expect(text).toContain("line 1")
+    expect(text).toContain("line 3")
+    expect(text).toContain("line 5")
+    expect(text).toContain("reviewer · Live child")
+    expect(text).not.toContain("No captured output")
+    expect(text).not.toContain("Unknown session")
+  } finally {
+    delete process.env.YCODING_ROUTE
+  }
+}, 60_000)
+
 const route: FetchHandler = (url) => {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session })
-  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/subagent`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
+  if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: null })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
@@ -124,6 +145,7 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/agent") return json({ location, data: [{ id: "general", name: "General", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }] })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/mcp", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
   if (url.pathname === "/api/shell") return json({ location, data: [shellData] })
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}`) return json({ location, data: shellData })
   if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}/output`) return json({ location, data: { output: "$ bun test provider\n\n\nbun test v1.3.14\n\npackages/core/test/usage.test.ts:\n\n✓ records cache read counters   [2.11ms]\n\n✓ records cache write counters  [0.94ms]\n\n✗ returns 0 ratio when nothing read  [1.02ms]\n\n    expected: 0   received: undefined\n\n\n\n14 pass · 2 fail · 1 skip\n\n…streaming", cursor: 999, size: 200, truncated: false } })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
@@ -131,12 +153,48 @@ const route: FetchHandler = (url) => {
   return undefined
 }
 
+const childID = "ses_shell_child"
+const childDirectory = "/tmp/ycoding/shell-output-child"
+const childSession = {
+  ...session,
+  id: childID,
+  parentID: sessionID,
+  title: "Live child",
+  agent: "reviewer",
+  location: { directory: childDirectory },
+}
+const liveStarted = Date.now()
+const liveLines = ["line 1\n", "line 2\n", "line 3\n", "line 4\n", "line 5\n"]
+
+const liveRoute: FetchHandler = (url, request) => {
+  if (url.pathname === "/api/session") return json({ data: url.searchParams.get("parentID") === sessionID ? [childSession] : url.searchParams.has("parentID") ? [] : [session], cursor: {} })
+  if (url.pathname === `/api/session/${childID}`) return json({ data: childSession })
+  if (url.pathname === "/api/shell")
+    return json({
+      location: { ...location, directory: url.searchParams.get("location[directory]") ?? directory },
+      data: url.searchParams.get("location[directory]") === childDirectory ? [{ ...shellData, command: "for i in 1 2 3 4 5; do echo line $i; sleep 1; done", cwd: childDirectory, metadata: { sessionID: childID } }] : [],
+    })
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}`) return url.searchParams.get("location[directory]") === childDirectory
+    ? json({ location: { ...location, directory: childDirectory }, data: { ...shellData, cwd: childDirectory, metadata: { sessionID: childID } } })
+    : json({}, { status: 404 })
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}/output`) {
+    if (!decodeURIComponent(url.search).includes(childDirectory))
+      return json({ error: { code: "shell.not_found" } }, { status: 404 })
+    const count = Math.min(liveLines.length, 1 + Math.floor((Date.now() - liveStarted) / 1_100))
+    const available = liveLines.slice(0, count).join("")
+    const cursor = Math.min(Number(url.searchParams.get("cursor") ?? 0) || 0, available.length)
+    return json({ location, data: { output: available.slice(cursor), cursor: available.length, size: available.length, truncated: false } })
+  }
+  return route(url, request)
+}
+
 const terminalRoute: FetchHandler = (url, request) => {
   if (url.pathname === "/api/shell")
     return json({
       location,
-      data: [{ ...shellData, status: "exited", time: { started: now - 10_000, completed: now }, exit: 1 }],
+      data: [],
     })
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}`) return json({ location, data: { ...shellData, status: "exited", time: { started: now - 10_000, completed: now }, exit: 1 } })
   if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}/output`)
     return json({ location, data: { output: "", cursor: 0, size: 0, truncated: false } })
   return route(url, request)

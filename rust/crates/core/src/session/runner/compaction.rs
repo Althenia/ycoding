@@ -8,6 +8,7 @@ use crate::session::{
     context_pressure::{self, Capabilities, Usage},
     live_state, projector, prompt_cache,
     run_coordinator::{Error, Outcome},
+    usage_attribution::Attribution,
 };
 use crate::tools::policy::helper::{CompactionScope, Role};
 use std::{future::Future, ops::Bound, pin::Pin};
@@ -234,6 +235,16 @@ impl Local {
         job: &Job,
     ) -> Result<Job, compaction_job::CompactionError> {
         let services = &self.0.services;
+        let attribution = Attribution::explicit(
+            job.usage_anchor
+                .as_ref()
+                .and_then(|anchor| anchor.domain().ok()),
+        );
+        let _activity = crate::session::usage_activity::contribute(
+            &services.store.client,
+            owner.id.clone(),
+            attribution.anchor().cloned(),
+        );
         let helper = self.resolve_helper(owner, selection).await;
         let helper_session = match &helper {
             Some(helper) => Some(self.helper_session(owner, helper, job).await?),
@@ -242,9 +253,11 @@ impl Local {
         let resolved = helper.as_ref().zip(helper_session.as_ref());
         let generate =
             |prompt: String| -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+                let attribution = attribution.clone();
                 Box::pin(async move {
                     let (helper, session) = resolved?;
-                    self.helper_request(helper, session, prompt).await
+                    self.helper_request(helper, session, prompt, attribution)
+                        .await
                 })
             };
         let generate: Generate<'_> = &generate;
@@ -375,6 +388,7 @@ impl Local {
         helper: &Helper,
         session: &session::Id,
         prompt: String,
+        attribution: Attribution,
     ) -> Option<String> {
         let streamed = self
             .stream_helper(StreamInput {
@@ -388,6 +402,7 @@ impl Local {
                 cancellation: None,
                 character_limit: None,
                 require_stop: true,
+                attribution,
             })
             .await?;
         (!streamed.failed && !streamed.text.trim().is_empty()).then_some(streamed.text)
@@ -439,7 +454,7 @@ fn complete(row: &ycoding_store::session::Message) -> bool {
             &row.data,
             JsonValue::Object(data) if matches!(
                 data.get(&"status".into()),
-                Some(JsonValue::String(status)) if matches!(status.as_str(), Some("completed" | "failed"))
+                Some(JsonValue::String(status)) if status.as_str() == Some("completed")
             )
         ),
         _ => true,

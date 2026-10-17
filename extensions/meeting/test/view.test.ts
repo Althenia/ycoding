@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
-import { describeView, formatSeconds, questionError, readViewKey } from "../view/model.js"
+import { describeView, formatSeconds, questionError, readCredentials } from "../view/model.js"
 import { createCapture } from "../view/capture.js"
 import { createDelivery } from "../view/delivery.js"
 
 describe("Meeting Passage live view-model", () => {
   test("requires the view credential only in a single canonical fragment field", () => {
     const key = "a".repeat(64)
-    expect(readViewKey(`#key=${key}`)).toBe(key)
+    expect(readCredentials(`#key=${key}`)).toEqual({ key })
     for (const hash of ["", "#key=short", `#key=${key}&key=${key}`, `#key=${key}&token=other`])
-      expect(readViewKey(hash)).toBeUndefined()
+      expect(readCredentials(hash)).toBeUndefined()
   })
 
   test("unknown metrics remain unreported, while actual zero retains its unit", () => {

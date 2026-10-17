@@ -284,7 +284,7 @@ async fn timeout_does_not_report_a_trapped_success_exit() {
 }
 
 #[tokio::test]
-async fn removal_fails_waiters_instead_of_overwriting_them_with_settlement() {
+async fn removal_settles_existing_waiters_as_killed_after_cleanup_and_publishes_only_deleted() {
     let fixture = Fixture::new();
     let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
     let shell = std::sync::Arc::new(
@@ -297,6 +297,7 @@ async fn removal_fails_waiters_instead_of_overwriting_them_with_settlement() {
         .await
         .unwrap(),
     );
+    let mut events = shell.subscribe();
     let mut prepared = shell
         .prepare(input("exec tail -f /dev/null", 5000, None), &config)
         .unwrap();
@@ -305,9 +306,385 @@ async fn removal_fails_waiters_instead_of_overwriting_them_with_settlement() {
     let id = created.id.clone();
     let waiter = tokio::spawn(async move { waiting_shell.wait(&id).await });
     shell.remove(&created.id).await.unwrap();
-    let result = waiter.await.unwrap();
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    let settled = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("removal must settle existing waiters with terminal Info");
+    assert_eq!(settled.status, Status::Killed);
+    assert_eq!(settled.exit, None);
+    assert!(settled.time.completed.is_some());
+    assert!(!ycoding_core::platform::process::is_alive(created.pid.unwrap().get() as u32).unwrap());
+    assert!(matches!(events.recv().await.unwrap(), Event::Created(_)));
+    assert!(matches!(events.recv().await.unwrap(), Event::Deleted(_)));
+    assert!(events.try_recv().is_err());
+    assert_eq!(
+        shell.get(&created.id).await.unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    shell.shutdown().await.unwrap();
+}
+
+struct Escaped {
+    marker: PathBuf,
+    owned: std::sync::Mutex<Option<(i32, i32)>>,
+}
+
+impl Escaped {
+    fn new(marker: PathBuf) -> Self {
+        Self {
+            marker,
+            owned: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn launch(&self, body: &str) -> String {
+        format!(
+            "perl -e 'setpgrp(0,0); exec @ARGV' /bin/sh -c \"echo \\$\\$ > '{}'; {body}\" & while [ ! -s '{}' ]; do sleep 0.01; done",
+            self.marker.display(),
+            self.marker.display()
+        )
+    }
+
+    async fn adopt(&self, leader: &ycoding_schema::shell::Info) {
+        let writer = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(text) = fs::read_to_string(&self.marker)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the escaped writer never started");
+        let (group, session) = unsafe { (libc::getpgid(writer), libc::getsid(writer)) };
+        if group == -1 || session == -1 {
+            return;
+        }
+        assert_eq!(group, writer, "the escaped writer must lead its own group");
+        assert_eq!(
+            session,
+            leader.pid.unwrap().get() as i32,
+            "the escaped writer must stay in the spawned shell's session"
+        );
+        *self.owned.lock().unwrap() = Some((writer, session));
+    }
+}
+
+impl Drop for Escaped {
+    fn drop(&mut self) {
+        if let Some((writer, session)) = *self.owned.lock().unwrap()
+            && unsafe { libc::getpgid(writer) } == writer
+            && unsafe { libc::getsid(writer) } == session
+        {
+            unsafe {
+                libc::kill(-writer, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+async fn ready(shell: &Shell, id: &ycoding_schema::shell::Id, text: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !shell
+            .output(id, 0, 1 << 20)
+            .await
+            .unwrap()
+            .output
+            .contains(text)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("command never reported readiness");
+}
+
+async fn leader_exited(info: &ycoding_schema::shell::Info) {
+    let pid = info.pid.unwrap().get() as u32;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ycoding_core::platform::process::is_alive(pid).unwrap() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the leader never exited");
+}
+
+#[tokio::test]
+async fn timeout_and_memory_enforcement_bound_the_drain_of_an_escaped_writer() {
+    for memory in [false, true] {
+        let fixture = Fixture::new();
+        let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+        let shell = Shell::new(
+            &Roots::development(&fixture.0).unwrap(),
+            fixture.0.clone(),
+            "project",
+            fixture.1.client(),
+        )
+        .await
+        .unwrap();
+        let escaped = Escaped::new(fixture.0.join("escaped-writer"));
+        let leader = if memory {
+            "printf READY; exec perl -e '$x = \"a\" x 50_000_000; sleep 60'"
+        } else {
+            "printf READY; exec tail -f /dev/null"
+        };
+        let command = format!(
+            "{}; {leader}",
+            escaped.launch("while :; do printf x; sleep 0.02; done")
+        );
+        let created = shell
+            .create(
+                &mut shell
+                    .prepare(input(&command, 0, memory.then_some(20)), &config)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        escaped.adopt(&created).await;
+        ready(&shell, &created.id, "READY").await;
+        if !memory {
+            shell.timeout(&created.id, 1).await.unwrap();
+        }
+        let settled = tokio::time::timeout(Duration::from_secs(4), shell.wait(&created.id))
+            .await
+            .expect("an escaped writer held enforcement settlement past its drain bound")
+            .unwrap();
+        assert_eq!(
+            settled.status,
+            if memory {
+                Status::MemoryLimit
+            } else {
+                Status::Timeout
+            }
+        );
+        drop(escaped);
+        shell.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_normal_exit_cleans_up_group_members_before_settling_with_its_exit_code() {
+    let fixture = Fixture::new();
+    let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+    let shell = Shell::new(
+        &Roots::development(&fixture.0).unwrap(),
+        fixture.0.clone(),
+        "project",
+        fixture.1.client(),
+    )
+    .await
+    .unwrap();
+    let marker = fixture.0.join("member");
+    let command = format!(
+        "sleep 30 & echo $! > '{}'; printf early; exit 3",
+        marker.display()
+    );
+    let created = shell
+        .create(&mut shell.prepare(input(&command, 0, None), &config).unwrap())
+        .await
+        .unwrap();
+    let group = created.pid.unwrap().get() as i32;
+    let settled = tokio::time::timeout(Duration::from_secs(5), shell.wait(&created.id)).await;
+    let member = fs::read_to_string(&marker)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok());
+    if settled.is_err()
+        && let Some(member) = member
+        && unsafe { libc::getpgid(member as i32) } == group
+        && unsafe { libc::getsid(member as i32) } == group
+    {
+        unsafe {
+            libc::kill(member as i32, libc::SIGKILL);
+        }
+    }
+    let settled = settled
+        .expect("a group member holding the capture pipe kept a normal exit unsettled")
+        .unwrap();
+    assert_eq!(settled.status, Status::Exited);
+    assert_eq!(settled.exit.unwrap().get(), 3.0);
+    assert!(
+        shell
+            .output(&created.id, 0, 1 << 20)
+            .await
+            .unwrap()
+            .output
+            .contains("early")
+    );
+    assert!(!ycoding_core::platform::process::is_alive(member.unwrap()).unwrap());
+    shell.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_normal_exit_retains_late_output_from_an_escaped_writer() {
+    let fixture = Fixture::new();
+    let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+    let shell = Shell::new(
+        &Roots::development(&fixture.0).unwrap(),
+        fixture.0.clone(),
+        "project",
+        fixture.1.client(),
+    )
+    .await
+    .unwrap();
+    let escaped = Escaped::new(fixture.0.join("late-writer"));
+    let command = format!(
+        "{}; printf early; exit 0",
+        escaped.launch("sleep 0.3; printf late")
+    );
+    let created = shell
+        .create(&mut shell.prepare(input(&command, 0, None), &config).unwrap())
+        .await
+        .unwrap();
+    escaped.adopt(&created).await;
+    let settled = tokio::time::timeout(Duration::from_secs(5), shell.wait(&created.id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.status, Status::Exited);
+    assert_eq!(settled.exit.unwrap().get(), 0.0);
+    let output = shell.output(&created.id, 0, 1 << 20).await.unwrap().output;
+    assert!(
+        output.contains("early") && output.ends_with("late"),
+        "{output:?}"
+    );
+    drop(escaped);
+    shell.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn timeout_during_a_normal_exit_drain_bounds_it_and_keeps_the_exit_status() {
+    let fixture = Fixture::new();
+    let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+    let shell = Shell::new(
+        &Roots::development(&fixture.0).unwrap(),
+        fixture.0.clone(),
+        "project",
+        fixture.1.client(),
+    )
+    .await
+    .unwrap();
+    let escaped = Escaped::new(fixture.0.join("draining-writer"));
+    let command = format!(
+        "{}; exit 3",
+        escaped.launch("while :; do printf x; sleep 0.02; done")
+    );
+    let created = shell
+        .create(&mut shell.prepare(input(&command, 0, None), &config).unwrap())
+        .await
+        .unwrap();
+    escaped.adopt(&created).await;
+    leader_exited(&created).await;
+    assert_eq!(
+        shell.get(&created.id).await.unwrap().status,
+        Status::Running
+    );
+    shell.timeout(&created.id, 1).await.unwrap();
+    let settled = tokio::time::timeout(Duration::from_secs(3), shell.wait(&created.id))
+        .await
+        .expect("enforcement did not bound an already-started normal-exit drain")
+        .unwrap();
+    assert_eq!(settled.status, Status::Exited);
+    assert_eq!(settled.exit.unwrap().get(), 3.0);
+    drop(escaped);
+    shell.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn removal_and_teardown_interrupt_a_pending_normal_exit_drain() {
+    for teardown in [false, true] {
+        let fixture = Fixture::new();
+        let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+        let shell = Shell::new(
+            &Roots::development(&fixture.0).unwrap(),
+            fixture.0.clone(),
+            "project",
+            fixture.1.client(),
+        )
+        .await
+        .unwrap();
+        let mut events = shell.subscribe();
+        let escaped = Escaped::new(fixture.0.join("held-writer"));
+        let command = format!(
+            "{}; exit 0",
+            escaped.launch("while :; do printf x; sleep 0.02; done")
+        );
+        let created = shell
+            .create(&mut shell.prepare(input(&command, 0, None), &config).unwrap())
+            .await
+            .unwrap();
+        escaped.adopt(&created).await;
+        leader_exited(&created).await;
+        if teardown {
+            tokio::time::timeout(Duration::from_secs(3), shell.shutdown())
+                .await
+                .expect("teardown waited for an escaped writer")
+                .unwrap();
+            drop(escaped);
+            continue;
+        }
+        tokio::time::timeout(Duration::from_secs(3), shell.remove(&created.id))
+            .await
+            .expect("removal waited for an escaped writer")
+            .unwrap();
+        assert!(matches!(events.recv().await.unwrap(), Event::Created(_)));
+        assert!(matches!(events.recv().await.unwrap(), Event::Deleted(_)));
+        drop(escaped);
+        shell.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_notice_admitted_while_the_command_runs_keeps_its_process_identity_row() {
+    use ycoding_store::resources::ShellTable;
+    let fixture = Fixture::new();
+    let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+    let shell = Shell::new(
+        &Roots::development(&fixture.0).unwrap(),
+        fixture.0.clone(),
+        "project",
+        fixture.1.client(),
+    )
+    .await
+    .unwrap();
+    let info = shell
+        .create(
+            &mut shell
+                .prepare(input("exec tail -f /dev/null", 0, None), &config)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    shell
+        .notice_owed(
+            &info.id,
+            ycoding_schema::session_id::SessionId::new("ses_live_notice").unwrap(),
+        )
+        .await
+        .unwrap();
+    shell.notice_admitted(&info.id).await.unwrap();
+    let rows = || {
+        fixture
+            .1
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<ShellTable>(std::ops::Bound::Unbounded, std::ops::Bound::Unbounded, 2)
+            .unwrap()
+    };
+    let retained = rows();
+    assert_eq!(
+        retained.len(),
+        1,
+        "a live command lost its process identity row when its notice was admitted"
+    );
+    assert_eq!(retained[0].notice_pending, 0);
+    assert_eq!(retained[0].pid, info.pid.unwrap().get());
+    shell.remove(&info.id).await.unwrap();
+    assert!(rows().is_empty());
     shell.shutdown().await.unwrap();
 }
 #[tokio::test]

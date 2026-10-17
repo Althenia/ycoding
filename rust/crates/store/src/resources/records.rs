@@ -2,6 +2,7 @@ use super::codec::{Document, Field, check, key, require, table};
 use crate::{Error, IndexDefinition, KeyPart, TableSpec, tuple_key};
 use ycoding_schema::{
     JsonValue, LosslessString, credential, domain, model, provider_request, telemetry, token_usage,
+    usage_anchor,
 };
 
 #[derive(Clone, PartialEq)]
@@ -159,7 +160,8 @@ table!(RequestTable, Request, "session_provider_request", {
     connection_identity_digest: Option<LosslessString>, source: LosslessString, agent: LosslessString, model: Document<model::Ref>,
     route_id: LosslessString, prompt_cache_key: LosslessString, system_digest: LosslessString, tool_digest: LosslessString,
     request: i64, attempts: i64, invalidation: LosslessString, continuation: LosslessString, cache_read_reported: Option<i64>,
-    timing: Option<Document<provider_request::Timing>>, cost: Option<f64>, tokens: Document<token_usage::Info>, time_created: i64
+    timing: Option<Document<provider_request::Timing>>, cost: Option<f64>, tokens: Document<token_usage::Info>, time_created: i64,
+    usage_anchor: Option<Document<usage_anchor::Ref>>
 }, r, key(&r.id), &[
     IndexDefinition::unique("session_provider_request_session_request_idx"), IndexDefinition::secondary("session_provider_request_session_source_idx")
 ], index, match index.name {
@@ -169,6 +171,20 @@ table!(RequestTable, Request, "session_provider_request", {
 }, Ok::<_, Error>(()), tx, {
     require::<crate::session::SessionTable>(tx, &key(&r.session_id))?;
     super::source_changed(tx, "session_provider_request", Self::primary_key(r), false)?;
+});
+
+table!(UsageAnalyticsRequestTable, UsageAnalyticsRequest, "usage_analytics_request", {
+    id: LosslessString, session_id: LosslessString, project_id: LosslessString, directory: LosslessString,
+    workspace_id: Option<LosslessString>, session_updated: i64, agent: LosslessString, source: LosslessString,
+    model: Document<model::Ref>, usage_anchor: Option<Document<usage_anchor::Ref>>, task_path: Document<Vec<LosslessString>>,
+    request: i64, attempts: i64, continuation: LosslessString, invalidation: LosslessString, prompt_cache_key: LosslessString,
+    cache_read_reported: Option<i64>, tokens: Document<token_usage::Info>, cost: Option<f64>,
+    timing: Option<Document<provider_request::Timing>>, time_created: i64
+}, r, key(&r.id), &[IndexDefinition::secondary("usage_analytics_request_time_created_id_idx")], index, match index.name {
+    "usage_analytics_request_time_created_id_idx" => Ok(Some(tuple_key(&[KeyPart::I64(r.time_created), KeyPart::String(&r.id)]))),
+    _ => Err(Error::UnregisteredIndex)
+}, Ok::<_, Error>(()), tx, {
+    super::source_changed(tx, "usage_analytics_request", Self::primary_key(r), false)?;
 });
 
 table!(UsageTable, Usage, "session_usage", {

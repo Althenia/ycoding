@@ -25,7 +25,7 @@ const question: Question.Info = {
   options: [{ label: "One", description: "First option" }],
 }
 
-const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "yolo" | "goal") {
+const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "yolo" | "goal" | "autoAnswer") {
   const { db } = yield* Database.Service
   const directory = AbsolutePath.make("/project")
   yield* db
@@ -48,7 +48,9 @@ const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "
   const autonomy = yield* SessionAutonomy.Service
   yield* mode === "goal"
     ? autonomy.setGoal({ sessionID, text: "Finish safely" })
-    : autonomy.setMode({ sessionID, mode })
+    : mode === "autoAnswer"
+      ? autonomy.set({ sessionID, autoAnswer: true })
+      : autonomy.setMode({ sessionID, mode })
 })
 
 const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
@@ -68,36 +70,43 @@ const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
 })
 
 describe("Question", () => {
-  for (const yolo of [0, 1, 2, 3] as const) {
-    it.effect(`questions are automatic only at YOLO 2-3: level ${yolo}`, () => Effect.gen(function* () {
+  for (const yolo of [0, 1, 2] as const) {
+    it.effect(`questions follow only the Session autoAnswer toggle at YOLO ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID, yolo })
       const service = yield* Question.Service
-      if (yolo >= 2) {
-        expect(yield* service.ask({ sessionID, questions: [question] })).toEqual([["One"]])
-        expect(yield* service.list()).toEqual([])
-        return
-      }
       const pending = yield* waitForAsk(service, { sessionID, questions: [question] })
       expect(yield* service.list()).toEqual([pending.request])
       yield* service.reply({ requestID: pending.request.id, answers: [["Manual"]] })
       expect(yield* Fiber.join(pending.fiber)).toEqual([["Manual"]])
+      yield* autonomy.set({ sessionID, autoAnswer: true })
+      expect(yield* service.ask({ sessionID, questions: [question] })).toEqual([["One"]])
+      expect(yield* service.list()).toEqual([])
+      expect((yield* autonomy.get(sessionID)).yolo).toBe(yolo)
     }))
   }
-  it.effect("auto answers questions in yolo and goal mode without pending requests", () =>
+  it.effect("auto answers questions only when the Session autoAnswer toggle is on", () =>
     Effect.gen(function* () {
       const service = yield* Question.Service
       const fallback: Question.Info = { question: "Continue?", header: "Continue", options: [] }
+      yield* setupAutonomy("autoAnswer")
+      expect(yield* service.ask({ sessionID, questions: [question, fallback] })).toEqual([
+        ["One"],
+        ["Continue with the safest reasonable default."],
+      ])
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
 
-      for (const mode of ["yolo", "goal"] as const) {
-        yield* setupAutonomy(mode)
-        expect(yield* service.ask({ sessionID, questions: [question, fallback] })).toEqual([
-          ["One"],
-          ["Continue with the safest reasonable default."],
-        ])
-        expect(yield* service.list()).toEqual([])
-      }
+  it.effect("an active goal does not answer questions without the Session autoAnswer toggle", () =>
+    Effect.gen(function* () {
+      const service = yield* Question.Service
+      yield* setupAutonomy("goal")
+      const pending = yield* waitForAsk(service, { sessionID, questions: [question] })
+      expect(yield* service.list()).toEqual([pending.request])
+      yield* service.reply({ requestID: pending.request.id, answers: [["Manual"]] })
+      expect(yield* Fiber.join(pending.fiber)).toEqual([["Manual"]])
     }),
   )
 

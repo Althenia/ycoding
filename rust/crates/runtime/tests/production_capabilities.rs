@@ -115,6 +115,7 @@ async fn flow() {
         .await
         .unwrap();
     let core = Core::production(store.client(), Production {
+        analytics: roots.data.join("analytics"),
         configuration: config::LoadOptions { directory, roots: roots.clone(), project: true, file: None, content: None, env: BTreeMap::from([("OPENAI_API_KEY".into(), "synthetic-key".into())]) },
         catalog: models_dev::Options { source: "https://models.dev".into(), cache: roots.cache.join("models.json"), file: None, bundled: Some(parse_json(r#"{"openai":{"id":"openai","name":"OpenAI","env":["OPENAI_API_KEY"],"npm":"@ai-sdk/openai-compatible","models":{"gpt-runtime":{"id":"gpt-runtime","name":"Runtime","release_date":"2026-01-01","attachment":false,"reasoning":false,"tool_call":true,"limit":{"context":128000,"output":8192}}}}}"#).unwrap()), fetch: false, user_agent: "ycoding-test".into() },
         cursor: None, steer: None, ripgrep: "rg".into(), meeting: false,

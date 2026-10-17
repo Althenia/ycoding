@@ -22,7 +22,7 @@ export type RunInput = {
   readonly file: string[]
   readonly title?: string
   readonly thinking?: boolean
-  readonly yolo?: 0 | 1 | 2 | 3
+  readonly yolo?: 0 | 1 | 2
 }
 
 export function runCommand(input: RunInput) {
@@ -59,6 +59,7 @@ const privateServerEnvironment = Effect.fnUntraced(function* (input: RunInput) {
           XDG_STATE_HOME: path.join(data, "state"),
           TMPDIR: path.join(data, "tmp"),
           TEMP: path.join(data, "tmp"),
+          YCODING_SQLITE_IMPORT_SOURCE: "",
           YCODING_DB: path.join(data, InstallationChannel === "beta" ? "ycoding-beta" : "ycoding", "ycoding.redb"),
         }),
   }

@@ -9,7 +9,7 @@ import { MeetingPage, type MeetingContext } from "../src/tui"
 import { isMeetingView } from "../src/view"
 import { viewAssets, viewPolicy } from "../view/assets"
 import { createDelivery } from "../view/delivery.js"
-import { describeView, readViewKey } from "../view/model.js"
+import { describeView, readCredentials } from "../view/model.js"
 import { readFile } from "node:fs/promises"
 
 test("existing discovery, native control, page delivery and TUI consume the real Rust Meeting bridge", async () => {
@@ -23,9 +23,59 @@ test("existing discovery, native control, page delivery and TUI consume the real
   if (typeof page !== "object" || page === null || !("url" in page) || typeof page.url !== "string")
     throw new Error("Missing Rust live page URL")
   const url = new URL(page.url)
-  const key = readViewKey(url.hash)
+  const key = readCredentials(url.hash)?.key
   if (!key) throw new Error("Rust view key is not usable by the live page")
+  expect(readCredentials(url.hash)).toEqual({ key })
   expect(key).not.toBe(descriptor.token)
+  const ownerPage = await control({ action: "owner-view" })
+  if (typeof ownerPage !== "object" || ownerPage === null || !("url" in ownerPage) || typeof ownerPage.url !== "string")
+    throw new Error("Missing Rust owner page URL")
+  const ownerURL = new URL(ownerPage.url)
+  expect(ownerURL.origin).toBe(url.origin)
+  expect(ownerURL.pathname).toBe("/view")
+  const ownerCredentials = readCredentials(ownerURL.hash)
+  if (!ownerCredentials?.owner) throw new Error("Rust owner key is not usable by the live page")
+  expect(ownerCredentials.key).toBe(key)
+  expect(ownerCredentials.owner).not.toBe(key)
+  expect(ownerCredentials.owner).not.toBe(descriptor.token)
+  const ownerRequest = (credential: string, body?: unknown) =>
+    fetch(new URL("/view/owner/settings", url), {
+      method: body === undefined ? "GET" : "POST",
+      headers: { authorization: `Bearer ${credential}`, "content-type": "application/json", origin: url.origin },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+  expect((await ownerRequest(key)).status).toBe(401)
+  expect((await ownerRequest(String(descriptor.token))).status).toBe(401)
+  const released = { providerID: "p", id: "m1", variant: "deep", profile: "acct" }
+  const offline = { server: "offline", search: "find", read: "get", write: "put", enabled: false }
+  const owner = await ownerRequest(ownerCredentials.owner)
+  expect(owner.status).toBe(200)
+  const settings: unknown = await owner.json()
+  expect(settings).toMatchObject({ models: expect.any(Array) })
+  expect(settings).toEqual({
+    askModel: released,
+    analysisModel: "inherit",
+    models: expect.any(Array),
+    servers: [],
+    knowledge: {
+      mcpEnabled: true,
+      autoApply: false,
+      requireApproval: true,
+      bindings: [{ ...offline, writeCapability: "unavailable" }],
+    },
+  })
+  const unavailableModel = await ownerRequest(ownerCredentials.owner, { askModel: { providerID: "p", id: "m1" } })
+  expect(unavailableModel.status).toBe(422)
+  expect(await unavailableModel.json()).toEqual({ error: "selection_unavailable" })
+  const connectorsOff = await ownerRequest(ownerCredentials.owner, {
+    knowledge: { mcpEnabled: false, bindings: [offline] },
+  })
+  expect(connectorsOff.status).toBe(200)
+  const saved = JSON.parse(await readFile(`${await meetingDirectory(directory)}/settings.json`, "utf8"))
+  expect(saved.analysis.askModel).toEqual(released)
+  expect(saved.analysis.model).toBe("inherit")
+  expect(saved.knowledge).toMatchObject({ mcpEnabled: false, autoApply: false, requireApproval: true, bindings: [offline] })
+  expect(await (await viewRequestFor(url, key, "/view/state")).text()).not.toContain(ownerCredentials.owner)
   for (const [route, asset] of viewAssets) {
     const response = await fetch(new URL(route, url))
     expect(response.status).toBe(200)
@@ -130,3 +180,7 @@ test("existing discovery, native control, page delivery and TUI consume the real
     screen.renderer.destroy()
   }
 })
+
+function viewRequestFor(url: URL, key: string, route: string) {
+  return fetch(new URL(route, url), { headers: { authorization: `Bearer ${key}`, origin: url.origin } })
+}

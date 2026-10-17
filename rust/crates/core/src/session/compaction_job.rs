@@ -88,8 +88,24 @@ pub struct FailInput {
 
 impl Service {
     pub async fn compaction_admit(&self, input: AdmitInput, now: i64) -> Settled<Job> {
+        self.compaction_admit_attributed(input, now, super::usage_attribution::Attribution::Unset)
+            .await
+    }
+
+    pub async fn compaction_admit_attributed(
+        &self,
+        input: AdmitInput,
+        now: i64,
+        attribution: super::usage_attribution::Attribution,
+    ) -> Settled<Job> {
+        let usage_anchor = super::usage_attribution::dispatch(
+            &self.client,
+            input.session.as_lossless(),
+            &attribution,
+        )
+        .await?;
         self.client
-            .submit(move |tx| admit(tx, &input, now))?
+            .submit(move |tx| admit(tx, &input, now, usage_anchor))?
             .await?
     }
 
@@ -155,7 +171,12 @@ impl Service {
     }
 }
 
-fn admit(tx: &mut Write<'_>, input: &AdmitInput, now: i64) -> Result<Settled<Job>, Error> {
+fn admit(
+    tx: &mut Write<'_>,
+    input: &AdmitInput,
+    now: i64,
+    usage_anchor: Option<ycoding_schema::usage_anchor::Ref>,
+) -> Result<Settled<Job>, Error> {
     let session = input.session.as_lossless();
     if let Some(id) = &input.id
         && let Some(exact) = tx.get::<JobTable>(&key(&text(id)))?
@@ -237,6 +258,10 @@ fn admit(tx: &mut Write<'_>, input: &AdmitInput, now: i64) -> Result<Settled<Job
         time_created: now,
         time_started: None,
         time_ended: None,
+        usage_anchor: usage_anchor
+            .as_ref()
+            .map(Document::from_domain)
+            .transpose()?,
     };
     JobTable::insert(tx, &job)?;
     publish(
@@ -248,6 +273,7 @@ fn admit(tx: &mut Write<'_>, input: &AdmitInput, now: i64) -> Result<Settled<Job
             .field("sessionID", &input.session)
             .field("jobID", &id)
             .optional("pressure", &input.pressure)
+            .optional("usageAnchor", &usage_anchor)
             .finish(),
     )?;
     Ok(Ok(job))

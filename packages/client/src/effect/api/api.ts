@@ -379,6 +379,10 @@ type Endpoint5_34Request = Parameters<RawClient["server.session"]["session.usage
 export type Endpoint5_34Input = {
   readonly sessionID: Endpoint5_34Request["params"]["sessionID"]
   readonly group: Endpoint5_34Request["query"]["group"]
+  readonly providerID?: Endpoint5_34Request["query"]["providerID"]
+  readonly profile?: Endpoint5_34Request["query"]["profile"]
+  readonly modelID?: Endpoint5_34Request["query"]["modelID"]
+  readonly selectedEffort?: Endpoint5_34Request["query"]["selectedEffort"]
   readonly timeZone?: Endpoint5_34Request["query"]["timeZone"]
   readonly from?: Endpoint5_34Request["query"]["from"]
   readonly to?: Endpoint5_34Request["query"]["to"]
@@ -390,187 +394,203 @@ export type Endpoint5_34Input = {
 export type Endpoint5_34Output = EffectValue<ReturnType<RawClient["server.session"]["session.usageReport"]>>["data"]
 export type SessionUsageReportOperation<E = never> = (input: Endpoint5_34Input) => Effect.Effect<Endpoint5_34Output, E>
 
-type Endpoint5_35Request = Parameters<RawClient["server.session"]["session.skills"]>[0]
-export type Endpoint5_35Input = { readonly sessionID: Endpoint5_35Request["params"]["sessionID"] }
-export type Endpoint5_35Output = EffectValue<ReturnType<RawClient["server.session"]["session.skills"]>>["data"]
-export type SessionSkillsOperation<E = never> = (input: Endpoint5_35Input) => Effect.Effect<Endpoint5_35Output, E>
+type Endpoint5_35Request = Parameters<RawClient["server.session"]["session.promptCosts"]>[0]
+export type Endpoint5_35Input = {
+  readonly sessionID: Endpoint5_35Request["params"]["sessionID"]
+  readonly inputIDs: Endpoint5_35Request["query"]["inputIDs"]
+}
+export type Endpoint5_35Output = EffectValue<ReturnType<RawClient["server.session"]["session.promptCosts"]>>["data"]
+export type SessionPromptCostsOperation<E = never> = (input: Endpoint5_35Input) => Effect.Effect<Endpoint5_35Output, E>
 
-type Endpoint5_36Request = Parameters<RawClient["server.session"]["session.resolveSkillConflict"]>[0]
+type Endpoint5_36Request = Parameters<RawClient["server.session"]["session.taskCosts"]>[0]
 export type Endpoint5_36Input = {
   readonly sessionID: Endpoint5_36Request["params"]["sessionID"]
-  readonly winner: Endpoint5_36Request["payload"]["winner"]
-  readonly loser: Endpoint5_36Request["payload"]["loser"]
+  readonly sessionIDs: Endpoint5_36Request["query"]["sessionIDs"]
 }
-export type Endpoint5_36Output = EffectValue<ReturnType<RawClient["server.session"]["session.resolveSkillConflict"]>>
-export type SessionResolveSkillConflictOperation<E = never> = (
-  input: Endpoint5_36Input,
-) => Effect.Effect<Endpoint5_36Output, E>
+export type Endpoint5_36Output = EffectValue<ReturnType<RawClient["server.session"]["session.taskCosts"]>>["data"]
+export type SessionTaskCostsOperation<E = never> = (input: Endpoint5_36Input) => Effect.Effect<Endpoint5_36Output, E>
 
-type Endpoint5_37Request = Parameters<RawClient["server.session"]["session.synthetic"]>[0]
-export type Endpoint5_37Input = {
-  readonly sessionID: Endpoint5_37Request["params"]["sessionID"]
-  readonly id?: Endpoint5_37Request["payload"]["id"]
-  readonly text: Endpoint5_37Request["payload"]["text"]
-  readonly description?: Endpoint5_37Request["payload"]["description"]
-  readonly metadata?: Endpoint5_37Request["payload"]["metadata"]
-  readonly delivery?: Endpoint5_37Request["payload"]["delivery"]
-  readonly resume?: Endpoint5_37Request["payload"]["resume"]
-}
-export type Endpoint5_37Output = EffectValue<ReturnType<RawClient["server.session"]["session.synthetic"]>>["data"]
-export type SessionSyntheticOperation<E = never> = (input: Endpoint5_37Input) => Effect.Effect<Endpoint5_37Output, E>
+type Endpoint5_37Request = Parameters<RawClient["server.session"]["session.skills"]>[0]
+export type Endpoint5_37Input = { readonly sessionID: Endpoint5_37Request["params"]["sessionID"] }
+export type Endpoint5_37Output = EffectValue<ReturnType<RawClient["server.session"]["session.skills"]>>["data"]
+export type SessionSkillsOperation<E = never> = (input: Endpoint5_37Input) => Effect.Effect<Endpoint5_37Output, E>
 
-type Endpoint5_38Request = Parameters<RawClient["server.session"]["session.shell"]>[0]
+type Endpoint5_38Request = Parameters<RawClient["server.session"]["session.resolveSkillConflict"]>[0]
 export type Endpoint5_38Input = {
   readonly sessionID: Endpoint5_38Request["params"]["sessionID"]
-  readonly id?: Endpoint5_38Request["payload"]["id"]
-  readonly command: Endpoint5_38Request["payload"]["command"]
+  readonly winner: Endpoint5_38Request["payload"]["winner"]
+  readonly loser: Endpoint5_38Request["payload"]["loser"]
 }
-export type Endpoint5_38Output = EffectValue<ReturnType<RawClient["server.session"]["session.shell"]>>
-export type SessionShellOperation<E = never> = (input: Endpoint5_38Input) => Effect.Effect<Endpoint5_38Output, E>
+export type Endpoint5_38Output = EffectValue<ReturnType<RawClient["server.session"]["session.resolveSkillConflict"]>>
+export type SessionResolveSkillConflictOperation<E = never> = (
+  input: Endpoint5_38Input,
+) => Effect.Effect<Endpoint5_38Output, E>
 
-type Endpoint5_39Request = Parameters<RawClient["server.session"]["session.compact"]>[0]
+type Endpoint5_39Request = Parameters<RawClient["server.session"]["session.synthetic"]>[0]
 export type Endpoint5_39Input = {
   readonly sessionID: Endpoint5_39Request["params"]["sessionID"]
   readonly id?: Endpoint5_39Request["payload"]["id"]
+  readonly text: Endpoint5_39Request["payload"]["text"]
+  readonly description?: Endpoint5_39Request["payload"]["description"]
+  readonly metadata?: Endpoint5_39Request["payload"]["metadata"]
+  readonly delivery?: Endpoint5_39Request["payload"]["delivery"]
+  readonly resume?: Endpoint5_39Request["payload"]["resume"]
 }
-export type Endpoint5_39Output = EffectValue<ReturnType<RawClient["server.session"]["session.compact"]>>["data"]
-export type SessionCompactOperation<E = never> = (input: Endpoint5_39Input) => Effect.Effect<Endpoint5_39Output, E>
+export type Endpoint5_39Output = EffectValue<ReturnType<RawClient["server.session"]["session.synthetic"]>>["data"]
+export type SessionSyntheticOperation<E = never> = (input: Endpoint5_39Input) => Effect.Effect<Endpoint5_39Output, E>
 
-type Endpoint5_40Request = Parameters<RawClient["server.session"]["session.compaction.list"]>[0]
-export type Endpoint5_40Input = { readonly sessionID: Endpoint5_40Request["params"]["sessionID"] }
-export type Endpoint5_40Output = EffectValue<ReturnType<RawClient["server.session"]["session.compaction.list"]>>
+type Endpoint5_40Request = Parameters<RawClient["server.session"]["session.shell"]>[0]
+export type Endpoint5_40Input = {
+  readonly sessionID: Endpoint5_40Request["params"]["sessionID"]
+  readonly id?: Endpoint5_40Request["payload"]["id"]
+  readonly command: Endpoint5_40Request["payload"]["command"]
+}
+export type Endpoint5_40Output = EffectValue<ReturnType<RawClient["server.session"]["session.shell"]>>
+export type SessionShellOperation<E = never> = (input: Endpoint5_40Input) => Effect.Effect<Endpoint5_40Output, E>
+
+type Endpoint5_41Request = Parameters<RawClient["server.session"]["session.compact"]>[0]
+export type Endpoint5_41Input = {
+  readonly sessionID: Endpoint5_41Request["params"]["sessionID"]
+  readonly id?: Endpoint5_41Request["payload"]["id"]
+}
+export type Endpoint5_41Output = EffectValue<ReturnType<RawClient["server.session"]["session.compact"]>>["data"]
+export type SessionCompactOperation<E = never> = (input: Endpoint5_41Input) => Effect.Effect<Endpoint5_41Output, E>
+
+type Endpoint5_42Request = Parameters<RawClient["server.session"]["session.compaction.list"]>[0]
+export type Endpoint5_42Input = { readonly sessionID: Endpoint5_42Request["params"]["sessionID"] }
+export type Endpoint5_42Output = EffectValue<ReturnType<RawClient["server.session"]["session.compaction.list"]>>
 export type SessionCompactionListOperation<E = never> = (
-  input: Endpoint5_40Input,
-) => Effect.Effect<Endpoint5_40Output, E>
+  input: Endpoint5_42Input,
+) => Effect.Effect<Endpoint5_42Output, E>
 
-type Endpoint5_41Request = Parameters<RawClient["server.session"]["session.wait"]>[0]
-export type Endpoint5_41Input = { readonly sessionID: Endpoint5_41Request["params"]["sessionID"] }
-export type Endpoint5_41Output = EffectValue<ReturnType<RawClient["server.session"]["session.wait"]>>
-export type SessionWaitOperation<E = never> = (input: Endpoint5_41Input) => Effect.Effect<Endpoint5_41Output, E>
-
-type Endpoint5_42Request = Parameters<RawClient["server.session"]["session.revert.stage"]>[0]
-export type Endpoint5_42Input = {
-  readonly sessionID: Endpoint5_42Request["params"]["sessionID"]
-  readonly messageID: Endpoint5_42Request["payload"]["messageID"]
-  readonly files?: Endpoint5_42Request["payload"]["files"]
-}
-export type Endpoint5_42Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.stage"]>>["data"]
-export type SessionRevertStageOperation<E = never> = (input: Endpoint5_42Input) => Effect.Effect<Endpoint5_42Output, E>
-
-type Endpoint5_43Request = Parameters<RawClient["server.session"]["session.revert.clear"]>[0]
+type Endpoint5_43Request = Parameters<RawClient["server.session"]["session.wait"]>[0]
 export type Endpoint5_43Input = { readonly sessionID: Endpoint5_43Request["params"]["sessionID"] }
-export type Endpoint5_43Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.clear"]>>
-export type SessionRevertClearOperation<E = never> = (input: Endpoint5_43Input) => Effect.Effect<Endpoint5_43Output, E>
+export type Endpoint5_43Output = EffectValue<ReturnType<RawClient["server.session"]["session.wait"]>>
+export type SessionWaitOperation<E = never> = (input: Endpoint5_43Input) => Effect.Effect<Endpoint5_43Output, E>
 
-type Endpoint5_44Request = Parameters<RawClient["server.session"]["session.revert.commit"]>[0]
-export type Endpoint5_44Input = { readonly sessionID: Endpoint5_44Request["params"]["sessionID"] }
-export type Endpoint5_44Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.commit"]>>
-export type SessionRevertCommitOperation<E = never> = (input: Endpoint5_44Input) => Effect.Effect<Endpoint5_44Output, E>
+type Endpoint5_44Request = Parameters<RawClient["server.session"]["session.revert.stage"]>[0]
+export type Endpoint5_44Input = {
+  readonly sessionID: Endpoint5_44Request["params"]["sessionID"]
+  readonly messageID: Endpoint5_44Request["payload"]["messageID"]
+  readonly files?: Endpoint5_44Request["payload"]["files"]
+}
+export type Endpoint5_44Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.stage"]>>["data"]
+export type SessionRevertStageOperation<E = never> = (input: Endpoint5_44Input) => Effect.Effect<Endpoint5_44Output, E>
 
-type Endpoint5_45Request = Parameters<RawClient["server.session"]["session.context"]>[0]
+type Endpoint5_45Request = Parameters<RawClient["server.session"]["session.revert.clear"]>[0]
 export type Endpoint5_45Input = { readonly sessionID: Endpoint5_45Request["params"]["sessionID"] }
-export type Endpoint5_45Output = EffectValue<ReturnType<RawClient["server.session"]["session.context"]>>["data"]
-export type SessionContextOperation<E = never> = (input: Endpoint5_45Input) => Effect.Effect<Endpoint5_45Output, E>
+export type Endpoint5_45Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.clear"]>>
+export type SessionRevertClearOperation<E = never> = (input: Endpoint5_45Input) => Effect.Effect<Endpoint5_45Output, E>
 
-type Endpoint5_46Request = Parameters<RawClient["server.session"]["session.fileChange.list"]>[0]
+type Endpoint5_46Request = Parameters<RawClient["server.session"]["session.revert.commit"]>[0]
 export type Endpoint5_46Input = { readonly sessionID: Endpoint5_46Request["params"]["sessionID"] }
-export type Endpoint5_46Output = EffectValue<ReturnType<RawClient["server.session"]["session.fileChange.list"]>>["data"]
-export type SessionFileChangeListOperation<E = never> = (
-  input: Endpoint5_46Input,
-) => Effect.Effect<Endpoint5_46Output, E>
+export type Endpoint5_46Output = EffectValue<ReturnType<RawClient["server.session"]["session.revert.commit"]>>
+export type SessionRevertCommitOperation<E = never> = (input: Endpoint5_46Input) => Effect.Effect<Endpoint5_46Output, E>
 
-type Endpoint5_47Request = Parameters<RawClient["server.session"]["session.pending.list"]>[0]
+type Endpoint5_47Request = Parameters<RawClient["server.session"]["session.context"]>[0]
 export type Endpoint5_47Input = { readonly sessionID: Endpoint5_47Request["params"]["sessionID"] }
-export type Endpoint5_47Output = EffectValue<ReturnType<RawClient["server.session"]["session.pending.list"]>>["data"]
-export type SessionPendingListOperation<E = never> = (input: Endpoint5_47Input) => Effect.Effect<Endpoint5_47Output, E>
+export type Endpoint5_47Output = EffectValue<ReturnType<RawClient["server.session"]["session.context"]>>["data"]
+export type SessionContextOperation<E = never> = (input: Endpoint5_47Input) => Effect.Effect<Endpoint5_47Output, E>
 
-type Endpoint5_48Request = Parameters<RawClient["server.session"]["session.instructions.entry.list"]>[0]
+type Endpoint5_48Request = Parameters<RawClient["server.session"]["session.fileChange.list"]>[0]
 export type Endpoint5_48Input = { readonly sessionID: Endpoint5_48Request["params"]["sessionID"] }
-export type Endpoint5_48Output = EffectValue<
-  ReturnType<RawClient["server.session"]["session.instructions.entry.list"]>
->["data"]
-export type SessionInstructionsEntryListOperation<E = never> = (
+export type Endpoint5_48Output = EffectValue<ReturnType<RawClient["server.session"]["session.fileChange.list"]>>["data"]
+export type SessionFileChangeListOperation<E = never> = (
   input: Endpoint5_48Input,
 ) => Effect.Effect<Endpoint5_48Output, E>
 
-type Endpoint5_49Request = Parameters<RawClient["server.session"]["session.instructions.entry.put"]>[0]
-export type Endpoint5_49Input = {
-  readonly sessionID: Endpoint5_49Request["params"]["sessionID"]
-  readonly key: Endpoint5_49Request["params"]["key"]
-  readonly value: Endpoint5_49Request["payload"]["value"]
-}
-export type Endpoint5_49Output = EffectValue<ReturnType<RawClient["server.session"]["session.instructions.entry.put"]>>
-export type SessionInstructionsEntryPutOperation<E = never> = (
-  input: Endpoint5_49Input,
-) => Effect.Effect<Endpoint5_49Output, E>
+type Endpoint5_49Request = Parameters<RawClient["server.session"]["session.pending.list"]>[0]
+export type Endpoint5_49Input = { readonly sessionID: Endpoint5_49Request["params"]["sessionID"] }
+export type Endpoint5_49Output = EffectValue<ReturnType<RawClient["server.session"]["session.pending.list"]>>["data"]
+export type SessionPendingListOperation<E = never> = (input: Endpoint5_49Input) => Effect.Effect<Endpoint5_49Output, E>
 
-type Endpoint5_50Request = Parameters<RawClient["server.session"]["session.instructions.entry.remove"]>[0]
-export type Endpoint5_50Input = {
-  readonly sessionID: Endpoint5_50Request["params"]["sessionID"]
-  readonly key: Endpoint5_50Request["params"]["key"]
-}
+type Endpoint5_50Request = Parameters<RawClient["server.session"]["session.instructions.entry.list"]>[0]
+export type Endpoint5_50Input = { readonly sessionID: Endpoint5_50Request["params"]["sessionID"] }
 export type Endpoint5_50Output = EffectValue<
-  ReturnType<RawClient["server.session"]["session.instructions.entry.remove"]>
->
-export type SessionInstructionsEntryRemoveOperation<E = never> = (
+  ReturnType<RawClient["server.session"]["session.instructions.entry.list"]>
+>["data"]
+export type SessionInstructionsEntryListOperation<E = never> = (
   input: Endpoint5_50Input,
 ) => Effect.Effect<Endpoint5_50Output, E>
 
-type Endpoint5_51Request = Parameters<RawClient["server.session"]["session.generate"]>[0]
+type Endpoint5_51Request = Parameters<RawClient["server.session"]["session.instructions.entry.put"]>[0]
 export type Endpoint5_51Input = {
   readonly sessionID: Endpoint5_51Request["params"]["sessionID"]
-  readonly prompt: Endpoint5_51Request["payload"]["prompt"]
+  readonly key: Endpoint5_51Request["params"]["key"]
+  readonly value: Endpoint5_51Request["payload"]["value"]
 }
-export type Endpoint5_51Output = EffectValue<ReturnType<RawClient["server.session"]["session.generate"]>>["data"]
-export type SessionGenerateOperation<E = never> = (input: Endpoint5_51Input) => Effect.Effect<Endpoint5_51Output, E>
+export type Endpoint5_51Output = EffectValue<ReturnType<RawClient["server.session"]["session.instructions.entry.put"]>>
+export type SessionInstructionsEntryPutOperation<E = never> = (
+  input: Endpoint5_51Input,
+) => Effect.Effect<Endpoint5_51Output, E>
 
-type Endpoint5_52Request = Parameters<RawClient["server.session"]["session.prediction"]>[0]
+type Endpoint5_52Request = Parameters<RawClient["server.session"]["session.instructions.entry.remove"]>[0]
 export type Endpoint5_52Input = {
   readonly sessionID: Endpoint5_52Request["params"]["sessionID"]
-  readonly memory: Endpoint5_52Request["payload"]["memory"]
-  readonly hint?: Endpoint5_52Request["payload"]["hint"]
+  readonly key: Endpoint5_52Request["params"]["key"]
 }
-export type Endpoint5_52Output = EffectValue<ReturnType<RawClient["server.session"]["session.prediction"]>>["data"]
-export type SessionPredictionOperation<E = never> = (input: Endpoint5_52Input) => Effect.Effect<Endpoint5_52Output, E>
+export type Endpoint5_52Output = EffectValue<
+  ReturnType<RawClient["server.session"]["session.instructions.entry.remove"]>
+>
+export type SessionInstructionsEntryRemoveOperation<E = never> = (
+  input: Endpoint5_52Input,
+) => Effect.Effect<Endpoint5_52Output, E>
 
-type Endpoint5_53Request = Parameters<RawClient["server.session"]["session.promptGenerate"]>[0]
+type Endpoint5_53Request = Parameters<RawClient["server.session"]["session.generate"]>[0]
 export type Endpoint5_53Input = {
   readonly sessionID: Endpoint5_53Request["params"]["sessionID"]
-  readonly mode: Endpoint5_53Request["payload"]["mode"]
-  readonly intent: Endpoint5_53Request["payload"]["intent"]
-  readonly memory: Endpoint5_53Request["payload"]["memory"]
+  readonly prompt: Endpoint5_53Request["payload"]["prompt"]
 }
-export type Endpoint5_53Output = EffectValue<ReturnType<RawClient["server.session"]["session.promptGenerate"]>>["data"]
-export type SessionPromptGenerateOperation<E = never> = (
-  input: Endpoint5_53Input,
-) => Effect.Effect<Endpoint5_53Output, E>
+export type Endpoint5_53Output = EffectValue<ReturnType<RawClient["server.session"]["session.generate"]>>["data"]
+export type SessionGenerateOperation<E = never> = (input: Endpoint5_53Input) => Effect.Effect<Endpoint5_53Output, E>
 
-type Endpoint5_54Request = Parameters<RawClient["server.session"]["session.log"]>[0]
+type Endpoint5_54Request = Parameters<RawClient["server.session"]["session.prediction"]>[0]
 export type Endpoint5_54Input = {
   readonly sessionID: Endpoint5_54Request["params"]["sessionID"]
-  readonly after?: Endpoint5_54Request["query"]["after"]
-  readonly follow?: Endpoint5_54Request["query"]["follow"]
+  readonly memory: Endpoint5_54Request["payload"]["memory"]
+  readonly hint?: Endpoint5_54Request["payload"]["hint"]
 }
-export type Endpoint5_54Output = StreamValue<EffectValue<ReturnType<RawClient["server.session"]["session.log"]>>>
-export type SessionLogOperation<E = never> = (input: Endpoint5_54Input) => Stream.Stream<Endpoint5_54Output, E>
+export type Endpoint5_54Output = EffectValue<ReturnType<RawClient["server.session"]["session.prediction"]>>["data"]
+export type SessionPredictionOperation<E = never> = (input: Endpoint5_54Input) => Effect.Effect<Endpoint5_54Output, E>
 
-type Endpoint5_55Request = Parameters<RawClient["server.session"]["session.interrupt"]>[0]
-export type Endpoint5_55Input = { readonly sessionID: Endpoint5_55Request["params"]["sessionID"] }
-export type Endpoint5_55Output = EffectValue<ReturnType<RawClient["server.session"]["session.interrupt"]>>
-export type SessionInterruptOperation<E = never> = (input: Endpoint5_55Input) => Effect.Effect<Endpoint5_55Output, E>
-
-type Endpoint5_56Request = Parameters<RawClient["server.session"]["session.background"]>[0]
-export type Endpoint5_56Input = { readonly sessionID: Endpoint5_56Request["params"]["sessionID"] }
-export type Endpoint5_56Output = EffectValue<ReturnType<RawClient["server.session"]["session.background"]>>
-export type SessionBackgroundOperation<E = never> = (input: Endpoint5_56Input) => Effect.Effect<Endpoint5_56Output, E>
-
-type Endpoint5_57Request = Parameters<RawClient["server.session"]["session.message"]>[0]
-export type Endpoint5_57Input = {
-  readonly sessionID: Endpoint5_57Request["params"]["sessionID"]
-  readonly messageID: Endpoint5_57Request["params"]["messageID"]
+type Endpoint5_55Request = Parameters<RawClient["server.session"]["session.promptGenerate"]>[0]
+export type Endpoint5_55Input = {
+  readonly sessionID: Endpoint5_55Request["params"]["sessionID"]
+  readonly mode: Endpoint5_55Request["payload"]["mode"]
+  readonly intent: Endpoint5_55Request["payload"]["intent"]
+  readonly memory: Endpoint5_55Request["payload"]["memory"]
 }
-export type Endpoint5_57Output = EffectValue<ReturnType<RawClient["server.session"]["session.message"]>>["data"]
-export type SessionMessageOperation<E = never> = (input: Endpoint5_57Input) => Effect.Effect<Endpoint5_57Output, E>
+export type Endpoint5_55Output = EffectValue<ReturnType<RawClient["server.session"]["session.promptGenerate"]>>["data"]
+export type SessionPromptGenerateOperation<E = never> = (
+  input: Endpoint5_55Input,
+) => Effect.Effect<Endpoint5_55Output, E>
+
+type Endpoint5_56Request = Parameters<RawClient["server.session"]["session.log"]>[0]
+export type Endpoint5_56Input = {
+  readonly sessionID: Endpoint5_56Request["params"]["sessionID"]
+  readonly after?: Endpoint5_56Request["query"]["after"]
+  readonly follow?: Endpoint5_56Request["query"]["follow"]
+}
+export type Endpoint5_56Output = StreamValue<EffectValue<ReturnType<RawClient["server.session"]["session.log"]>>>
+export type SessionLogOperation<E = never> = (input: Endpoint5_56Input) => Stream.Stream<Endpoint5_56Output, E>
+
+type Endpoint5_57Request = Parameters<RawClient["server.session"]["session.interrupt"]>[0]
+export type Endpoint5_57Input = { readonly sessionID: Endpoint5_57Request["params"]["sessionID"] }
+export type Endpoint5_57Output = EffectValue<ReturnType<RawClient["server.session"]["session.interrupt"]>>
+export type SessionInterruptOperation<E = never> = (input: Endpoint5_57Input) => Effect.Effect<Endpoint5_57Output, E>
+
+type Endpoint5_58Request = Parameters<RawClient["server.session"]["session.background"]>[0]
+export type Endpoint5_58Input = { readonly sessionID: Endpoint5_58Request["params"]["sessionID"] }
+export type Endpoint5_58Output = EffectValue<ReturnType<RawClient["server.session"]["session.background"]>>
+export type SessionBackgroundOperation<E = never> = (input: Endpoint5_58Input) => Effect.Effect<Endpoint5_58Output, E>
+
+type Endpoint5_59Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+export type Endpoint5_59Input = {
+  readonly sessionID: Endpoint5_59Request["params"]["sessionID"]
+  readonly messageID: Endpoint5_59Request["params"]["messageID"]
+}
+export type Endpoint5_59Output = EffectValue<ReturnType<RawClient["server.session"]["session.message"]>>["data"]
+export type SessionMessageOperation<E = never> = (input: Endpoint5_59Input) => Effect.Effect<Endpoint5_59Output, E>
 
 export interface SessionApi<E = never> {
   readonly list: SessionListOperation<E>
@@ -608,6 +628,8 @@ export interface SessionApi<E = never> {
   readonly skill: SessionSkillOperation<E>
   readonly usage: SessionUsageOperation<E>
   readonly usageReport: SessionUsageReportOperation<E>
+  readonly promptCosts: SessionPromptCostsOperation<E>
+  readonly taskCosts: SessionTaskCostsOperation<E>
   readonly skills: SessionSkillsOperation<E>
   readonly resolveSkillConflict: SessionResolveSkillConflictOperation<E>
   readonly synthetic: SessionSyntheticOperation<E>
@@ -751,24 +773,35 @@ export interface ProviderApi<E = never> {
   readonly get: ProviderGetOperation<E>
 }
 
-type Endpoint11_0Request = Parameters<RawClient["server.providerUsage"]["providerUsage.list"]>[0]
+type Endpoint11_0Request = Parameters<RawClient["server.providerUsage"]["providerUsage.forecast"]>[0]
 export type Endpoint11_0Input = {
   readonly location?: Endpoint11_0Request["query"]["location"]
-  readonly refresh?: Endpoint11_0Request["query"]["refresh"]
+  readonly localScope: Endpoint11_0Request["query"]["localScope"]
 }
-export type Endpoint11_0Output = EffectValue<ReturnType<RawClient["server.providerUsage"]["providerUsage.list"]>>
-export type ProviderUsageListOperation<E = never> = (input?: Endpoint11_0Input) => Effect.Effect<Endpoint11_0Output, E>
+export type Endpoint11_0Output = EffectValue<ReturnType<RawClient["server.providerUsage"]["providerUsage.forecast"]>>
+export type ProviderUsageForecastOperation<E = never> = (
+  input: Endpoint11_0Input,
+) => Effect.Effect<Endpoint11_0Output, E>
 
-type Endpoint11_1Request = Parameters<RawClient["server.providerUsage"]["providerUsage.get"]>[0]
+type Endpoint11_1Request = Parameters<RawClient["server.providerUsage"]["providerUsage.list"]>[0]
 export type Endpoint11_1Input = {
-  readonly providerID: Endpoint11_1Request["params"]["providerID"]
   readonly location?: Endpoint11_1Request["query"]["location"]
   readonly refresh?: Endpoint11_1Request["query"]["refresh"]
 }
-export type Endpoint11_1Output = EffectValue<ReturnType<RawClient["server.providerUsage"]["providerUsage.get"]>>
-export type ProviderUsageGetOperation<E = never> = (input: Endpoint11_1Input) => Effect.Effect<Endpoint11_1Output, E>
+export type Endpoint11_1Output = EffectValue<ReturnType<RawClient["server.providerUsage"]["providerUsage.list"]>>
+export type ProviderUsageListOperation<E = never> = (input?: Endpoint11_1Input) => Effect.Effect<Endpoint11_1Output, E>
+
+type Endpoint11_2Request = Parameters<RawClient["server.providerUsage"]["providerUsage.get"]>[0]
+export type Endpoint11_2Input = {
+  readonly providerID: Endpoint11_2Request["params"]["providerID"]
+  readonly location?: Endpoint11_2Request["query"]["location"]
+  readonly refresh?: Endpoint11_2Request["query"]["refresh"]
+}
+export type Endpoint11_2Output = EffectValue<ReturnType<RawClient["server.providerUsage"]["providerUsage.get"]>>
+export type ProviderUsageGetOperation<E = never> = (input: Endpoint11_2Input) => Effect.Effect<Endpoint11_2Output, E>
 
 export interface ProviderUsageApi<E = never> {
+  readonly forecast: ProviderUsageForecastOperation<E>
   readonly list: ProviderUsageListOperation<E>
   readonly get: ProviderUsageGetOperation<E>
 }
@@ -1956,6 +1989,10 @@ export type UsageGetOperation<E = never> = () => Effect.Effect<Endpoint32_0Outpu
 type Endpoint32_1Request = Parameters<RawClient["server.usage"]["usage.report"]>[0]
 export type Endpoint32_1Input = {
   readonly group: Endpoint32_1Request["query"]["group"]
+  readonly providerID?: Endpoint32_1Request["query"]["providerID"]
+  readonly profile?: Endpoint32_1Request["query"]["profile"]
+  readonly modelID?: Endpoint32_1Request["query"]["modelID"]
+  readonly selectedEffort?: Endpoint32_1Request["query"]["selectedEffort"]
   readonly timeZone?: Endpoint32_1Request["query"]["timeZone"]
   readonly from?: Endpoint32_1Request["query"]["from"]
   readonly to?: Endpoint32_1Request["query"]["to"]
@@ -1972,39 +2009,110 @@ export interface UsageApi<E = never> {
   readonly report: UsageReportOperation<E>
 }
 
-export type Endpoint33_0Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.get"]>>["data"]
-export type RemoteGetOperation<E = never> = () => Effect.Effect<Endpoint33_0Output, E>
+type Endpoint33_0Request = Parameters<RawClient["server.incident"]["incident.report"]>[0]
+export type Endpoint33_0Input = {
+  readonly group: Endpoint33_0Request["query"]["group"]
+  readonly from?: Endpoint33_0Request["query"]["from"]
+  readonly to?: Endpoint33_0Request["query"]["to"]
+  readonly offset?: Endpoint33_0Request["query"]["offset"]
+  readonly limit?: Endpoint33_0Request["query"]["limit"]
+}
+export type Endpoint33_0Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.report"]>>["data"]
+export type IncidentReportOperation<E = never> = (input: Endpoint33_0Input) => Effect.Effect<Endpoint33_0Output, E>
 
-type Endpoint33_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
-export type Endpoint33_1Input = { readonly enabled: Endpoint33_1Request["payload"]["enabled"] }
-export type Endpoint33_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
-export type RemoteSetOperation<E = never> = (input: Endpoint33_1Input) => Effect.Effect<Endpoint33_1Output, E>
+type Endpoint33_1Request = Parameters<RawClient["server.incident"]["incident.recent"]>[0]
+export type Endpoint33_1Input = {
+  readonly provider: Endpoint33_1Request["query"]["provider"]
+  readonly model: Endpoint33_1Request["query"]["model"]
+  readonly agent?: Endpoint33_1Request["query"]["agent"]
+  readonly limit?: Endpoint33_1Request["query"]["limit"]
+}
+export type Endpoint33_1Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.recent"]>>["data"]
+export type IncidentRecentOperation<E = never> = (input: Endpoint33_1Input) => Effect.Effect<Endpoint33_1Output, E>
+
+type Endpoint33_2Request = Parameters<RawClient["server.incident"]["incident.guidance.get"]>[0]
+export type Endpoint33_2Input = {
+  readonly provider: Endpoint33_2Request["query"]["provider"]
+  readonly model: Endpoint33_2Request["query"]["model"]
+  readonly location?: Endpoint33_2Request["query"]["location"]
+}
+export type Endpoint33_2Output = EffectValue<ReturnType<RawClient["server.incident"]["incident.guidance.get"]>>["data"]
+export type IncidentGuidanceGetOperation<E = never> = (input: Endpoint33_2Input) => Effect.Effect<Endpoint33_2Output, E>
+
+type Endpoint33_3Request = Parameters<RawClient["server.incident"]["incident.guidance.clear"]>[0]
+export type Endpoint33_3Input = {
+  readonly provider: Endpoint33_3Request["query"]["provider"]
+  readonly model: Endpoint33_3Request["query"]["model"]
+  readonly location?: Endpoint33_3Request["query"]["location"]
+}
+export type Endpoint33_3Output = EffectValue<
+  ReturnType<RawClient["server.incident"]["incident.guidance.clear"]>
+>["data"]
+export type IncidentGuidanceClearOperation<E = never> = (
+  input: Endpoint33_3Input,
+) => Effect.Effect<Endpoint33_3Output, E>
+
+export interface IncidentApi<E = never> {
+  readonly report: IncidentReportOperation<E>
+  readonly recent: IncidentRecentOperation<E>
+  readonly guidance: {
+    readonly get: IncidentGuidanceGetOperation<E>
+    readonly clear: IncidentGuidanceClearOperation<E>
+  }
+}
+
+export type Endpoint34_0Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.get"]>>["data"]
+export type RemoteGetOperation<E = never> = () => Effect.Effect<Endpoint34_0Output, E>
+
+type Endpoint34_1Request = Parameters<RawClient["server.remote"]["remote.set"]>[0]
+export type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
+export type Endpoint34_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
+export type RemoteSetOperation<E = never> = (input: Endpoint34_1Input) => Effect.Effect<Endpoint34_1Output, E>
 
 export interface RemoteApi<E = never> {
   readonly get: RemoteGetOperation<E>
   readonly set: RemoteSetOperation<E>
 }
 
-export type Endpoint34_0Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.get"]>>["data"]
-export type KeepAwakeGetOperation<E = never> = () => Effect.Effect<Endpoint34_0Output, E>
+export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.get"]>>["data"]
+export type KeepAwakeGetOperation<E = never> = () => Effect.Effect<Endpoint35_0Output, E>
 
-type Endpoint34_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
-export type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload"]["enabled"] }
-export type Endpoint34_1Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.set"]>>["data"]
-export type KeepAwakeSetOperation<E = never> = (input: Endpoint34_1Input) => Effect.Effect<Endpoint34_1Output, E>
+type Endpoint35_1Request = Parameters<RawClient["server.keepAwake"]["keepAwake.set"]>[0]
+export type Endpoint35_1Input = { readonly enabled: Endpoint35_1Request["payload"]["enabled"] }
+export type Endpoint35_1Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.set"]>>["data"]
+export type KeepAwakeSetOperation<E = never> = (input: Endpoint35_1Input) => Effect.Effect<Endpoint35_1Output, E>
 
 export interface KeepAwakeApi<E = never> {
   readonly get: KeepAwakeGetOperation<E>
   readonly set: KeepAwakeSetOperation<E>
 }
 
-type Endpoint35_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
-export type Endpoint35_0Input = { readonly location?: Endpoint35_0Request["query"]["location"] }
-export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
-export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint35_0Input) => Effect.Effect<Endpoint35_0Output, E>
+type Endpoint36_0Request = Parameters<RawClient["server.config"]["config.diagnostics"]>[0]
+export type Endpoint36_0Input = { readonly location?: Endpoint36_0Request["query"]["location"] }
+export type Endpoint36_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.diagnostics"]>>
+export type ConfigDiagnosticsOperation<E = never> = (input?: Endpoint36_0Input) => Effect.Effect<Endpoint36_0Output, E>
 
 export interface ConfigApi<E = never> {
   readonly diagnostics: ConfigDiagnosticsOperation<E>
+}
+
+type Endpoint37_0Request = Parameters<RawClient["server.review"]["session.review.list"]>[0]
+export type Endpoint37_0Input = { readonly sessionID: Endpoint37_0Request["params"]["sessionID"] }
+export type Endpoint37_0Output = EffectValue<ReturnType<RawClient["server.review"]["session.review.list"]>>["data"]
+export type ReviewListOperation<E = never> = (input: Endpoint37_0Input) => Effect.Effect<Endpoint37_0Output, E>
+
+type Endpoint37_1Request = Parameters<RawClient["server.review"]["session.review.decide"]>[0]
+export type Endpoint37_1Input = {
+  readonly sessionID: Endpoint37_1Request["params"]["sessionID"]
+  readonly itemID: Endpoint37_1Request["params"]["itemID"]
+  readonly decision: Endpoint37_1Request["payload"]["decision"]
+}
+export type Endpoint37_1Output = EffectValue<ReturnType<RawClient["server.review"]["session.review.decide"]>>
+export type ReviewDecideOperation<E = never> = (input: Endpoint37_1Input) => Effect.Effect<Endpoint37_1Output, E>
+
+export interface ReviewApi<E = never> {
+  readonly list: ReviewListOperation<E>
+  readonly decide: ReviewDecideOperation<E>
 }
 
 export interface AppApi<E = never> {
@@ -2041,7 +2149,9 @@ export interface AppApi<E = never> {
   readonly browser: BrowserApi<E>
   readonly isolatedBrowser: IsolatedBrowserApi<E>
   readonly usage: UsageApi<E>
+  readonly incident: IncidentApi<E>
   readonly remote: RemoteApi<E>
   readonly keepAwake: KeepAwakeApi<E>
   readonly config: ConfigApi<E>
+  readonly review: ReviewApi<E>
 }

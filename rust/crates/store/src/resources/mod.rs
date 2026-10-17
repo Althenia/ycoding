@@ -19,6 +19,7 @@ pub const TABLES: &[TableDeclaration] = &[
     TableDeclaration::of::<StateBlobTable>(),
     TableDeclaration::of::<StateLinkTable>(),
     TableDeclaration::of::<RequestTable>(),
+    TableDeclaration::of::<UsageAnalyticsRequestTable>(),
     TableDeclaration::of::<UsageTable>(),
     TableDeclaration::of::<LatencyTable>(),
 ];

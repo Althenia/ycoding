@@ -70,7 +70,7 @@ cases.append(("http-credit", "Credit", 'ledger: BULK consumed_through: 1 transfe
 rows = []
 encoded = {}
 def encode(message, text):
-    return subprocess.run([os.environ.get("PROTOC", "/opt/homebrew/bin/protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", *[file.relative_to(source).as_posix() for file in sorted((source / "ycoding/v5").glob("*.proto"))]], input=text.encode(), capture_output=True, check=True).stdout
+    return subprocess.run([os.environ.get("PROTOC", "protoc"), f"--proto_path={source}", f"--encode=ycoding.v5.{message}", *[file.relative_to(source).as_posix() for file in sorted((source / "ycoding/v5").glob("*.proto"))]], input=text.encode(), capture_output=True, check=True).stdout
 for name, message, text, sender in cases:
     encoded[name] = encode(message, text)
     rows.append(f"{name}\tycoding.v5.{message}\tvalid\t{sender}\t{encoded[name].hex()}")

@@ -43,6 +43,7 @@ import { SessionTodo } from "@ycoding-ai/schema/session-todo"
 import { EventLog } from "@ycoding-ai/schema/event-log"
 import { SessionSkillStatus } from "@ycoding-ai/schema/session-skill-status"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { UsageAccounting } from "@ycoding-ai/schema/usage-accounting"
 import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
 import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 
@@ -60,8 +61,13 @@ const ParentIDFilter = Schema.Union([
 
 export const SessionCompletionsQuery = Schema.Struct({
   after: Session.ID.pipe(Schema.optional),
-  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))), Schema.optional),
+  limit: Schema.NumberFromString.pipe(
+    Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))),
+    Schema.optional,
+  ),
 })
+
+export const SessionListBefore = NonNegativeInt.check(Schema.isLessThanOrEqualTo(199))
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
@@ -179,7 +185,6 @@ export const SessionAutonomyYoloLevel = Schema.Union([
   Schema.Literal(0),
   Schema.Literal(1),
   Schema.Literal(2),
-  Schema.Literal(3),
 ]).annotate({
   identifier: "SessionAutonomyYoloLevel",
 })
@@ -187,26 +192,65 @@ export const SessionAutonomyYolo = Schema.Union([SessionAutonomyYoloLevel, Schem
   .pipe(
     Schema.decodeTo(SessionAutonomyYoloLevel, {
       decode: SchemaGetter.transform((value: unknown) => {
-        if (typeof value === "boolean") return (value ? 2 : 0) as 0 | 1 | 2 | 3
-        if (value === 0 || value === 1 || value === 2 || value === 3) return value as 0 | 1 | 2 | 3
+        if (typeof value === "boolean") return (value ? 2 : 0) as 0 | 1 | 2
+        if (value === 0 || value === 1 || value === 2) return value
         throw new Error(`Invalid yolo level: ${String(value)}`)
       }),
-      encode: SchemaGetter.transform((value: 0 | 1 | 2 | 3) => value),
+      encode: SchemaGetter.transform((value: 0 | 1 | 2) => value),
     }),
   )
   .annotate({ identifier: "SessionAutonomyYolo" })
+export const SessionAutonomySleep = Schema.Struct({})
+  .pipe(
+    Schema.decodeTo(Schema.Struct({}), {
+      decode: SchemaGetter.transform(() => ({})),
+      encode: SchemaGetter.transform(() => ({})),
+    }),
+  )
+  .annotate({ identifier: "SessionAutonomySleep" })
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
   yolo: SessionAutonomyYolo,
+  autoAnswer: Schema.Boolean.pipe(Schema.optional),
   goal: SessionAutonomyGoal.pipe(Schema.optional),
+  sleep: SessionAutonomySleep.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
+export const SessionAutonomyEffective = Schema.Struct({
+  yolo: SessionAutonomyYoloLevel,
+  asleep: Schema.Boolean,
+  guardrailsEnabled: Schema.Boolean,
+  ordinaryReviewsAuto: Schema.Boolean,
+  modelReviews: Schema.Boolean,
+  hardModelReviews: Schema.Boolean,
+}).annotate({ identifier: "SessionAutonomyEffective" })
+export const SessionAutonomyView = Schema.Struct({
+  ...SessionAutonomyState.fields,
+  effective: SessionAutonomyEffective,
+}).annotate({ identifier: "SessionAutonomyView" })
 export const SessionAutonomySet = Schema.Union([
   Schema.Struct({
     yolo: SessionAutonomyYolo.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
     goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Literal(true), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
-  Schema.Struct({ yolo: SessionAutonomyYolo, goal: Schema.Never.pipe(Schema.optional) }),
+  Schema.Struct({
+    yolo: SessionAutonomyYolo,
+    goal: Schema.Never.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    sleep: Schema.Boolean,
+    goal: Schema.Never.pipe(Schema.optional),
+    yolo: Schema.Never.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    autoAnswer: Schema.Boolean,
+    goal: Schema.Never.pipe(Schema.optional),
+    yolo: Schema.Never.pipe(Schema.optional),
+    sleep: Schema.Never.pipe(Schema.optional),
+  }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 
 export const SessionSubagentLaunch = Schema.Struct({
@@ -238,6 +282,10 @@ export const SessionSubagentListQuery = Schema.Struct({
 
 export const SessionUsageReportQuery = Schema.Struct({
   group: ProviderRequest.ReportGroup,
+  providerID: ProviderRequest.ReportInput.fields.providerID,
+  profile: ProviderRequest.ReportInput.fields.profile,
+  modelID: ProviderRequest.ReportInput.fields.modelID,
+  selectedEffort: ProviderRequest.ReportInput.fields.selectedEffort,
   timeZone: Schema.String.pipe(Schema.optional),
   from: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
   to: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
@@ -277,7 +325,10 @@ export const SessionProjection = Schema.Struct({
 export type SessionProjection = typeof SessionProjection.Type
 
 export const SessionSnapshotQuery = Schema.Struct({
-  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))), Schema.optional),
+  limit: Schema.NumberFromString.pipe(
+    Schema.decodeTo(PositiveInt.check(Schema.isLessThanOrEqualTo(200))),
+    Schema.optional,
+  ),
   before: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)).pipe(Schema.optional),
 }).annotate({ identifier: "SessionSnapshotQuery" })
 
@@ -342,12 +393,18 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.outstanding", "/api/session/outstanding", {
         query: SessionOutstandingQuery,
-        success: Schema.Struct({ data: Schema.Array(Session.ID), running: Schema.Array(Session.ID), failed: Schema.Array(Session.ID), lost: Schema.Array(Session.ID) }),
+        success: Schema.Struct({
+          data: Schema.Array(Session.ID),
+          running: Schema.Array(Session.ID),
+          failed: Schema.Array(Session.ID),
+          lost: Schema.Array(Session.ID),
+        }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.outstanding",
           summary: "List outstanding Session work",
-          description: "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts. `lost` lists Sessions whose background shell completion notice a server restart lost, until that Session next starts an execution; loss is attention, not failed or outstanding work.",
+          description:
+            "List Sessions with executing drains, admitted inputs, background shell notices, active subagent tasks or notices, or active goals in this process. Separately report Sessions with executing drains or live shell jobs as running; a settled shell awaiting notification is outstanding but not running. Optionally include roots whose latest execution failed until their family next starts. `lost` lists Sessions whose background shell completion notice a server restart lost, until that Session next starts an execution; loss is attention, not failed or outstanding work.",
         }),
       ),
     )
@@ -359,7 +416,8 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         OpenApi.annotations({
           identifier: "session.completions",
           summary: "List accepted root work completions",
-          description: "Return the latest accepted durable completion receipt per root Session, ordered by Session ID with an exclusive after cursor. Limit defaults to 200 and must be between 1 and 200. Receipt sequence numbers belong to their own Session, not a global event cursor.",
+          description:
+            "Return the latest accepted durable completion receipt per root Session, ordered by Session ID with an exclusive after cursor. Limit defaults to 200 and must be between 1 and 200. Receipt sequence numbers belong to their own Session, not a global event cursor.",
         }),
       ),
     )
@@ -402,11 +460,14 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         error: [SessionNotFoundError, AttachmentNotFoundError, AttachmentTooLargeError, InvalidRequestError],
       })
         .middleware(sessionLocationMiddleware)
-        .annotateMerge(OpenApi.annotations({
-          identifier: "session.attachment.read",
-          summary: "Read a Session's managed user attachment",
-          description: "Return bounded base64 content only for a managed file referenced by this Session's projected user messages.",
-        })),
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.attachment.read",
+            summary: "Read a Session's managed user attachment",
+            description:
+              "Return bounded base64 content only for a managed file referenced by this Session's projected user messages.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.get("session.diagnostics", "/api/session/:sessionID/diagnostics", {
@@ -427,7 +488,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.autonomy.get", "/api/session/:sessionID/autonomy", {
         params: { sessionID: Session.ID },
-        success: Schema.Struct({ data: SessionAutonomyState }),
+        success: Schema.Struct({ data: SessionAutonomyView }),
         error: SessionNotFoundError,
       })
         .middleware(sessionLocationMiddleware)
@@ -435,7 +496,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           OpenApi.annotations({
             identifier: "session.autonomy.get",
             summary: "Get session autonomy",
-            description: "Retrieve the durable Normal, YOLO, or Goal execution mode for a session.",
+            description: "Retrieve durable Session autonomy and effective approval settings.",
           }),
         ),
     )
@@ -443,7 +504,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.put("session.autonomy.set", "/api/session/:sessionID/autonomy", {
         params: { sessionID: Session.ID },
         payload: SessionAutonomySet,
-        success: Schema.Struct({ data: SessionAutonomyState }),
+        success: Schema.Struct({ data: SessionAutonomyView }),
         error: [SessionNotFoundError, InvalidRequestError, ConflictError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
@@ -451,7 +512,8 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           OpenApi.annotations({
             identifier: "session.autonomy.set",
             summary: "Set session autonomy",
-            description: "Set YOLO level; calculate and activate a user-supplied goal string, resume the retained goal with true without recalculating its objective, or stop it with null.",
+            description:
+              "Set YOLO level, sleep, or automatic answers; calculate and activate a user-supplied goal string, resume the retained goal with true without recalculating its objective, or stop it with null.",
           }),
         ),
     )
@@ -823,6 +885,30 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.get("session.promptCosts", "/api/session/:sessionID/usage/prompts", {
+        params: { sessionID: Session.ID },
+        query: UsageAccounting.PromptInput,
+        success: Schema.Struct({ data: UsageAccounting.PromptCosts }),
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({ identifier: "session.promptCosts", summary: "Read retained prompt costs" }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.taskCosts", "/api/session/:sessionID/usage/tasks", {
+        params: { sessionID: Session.ID },
+        query: UsageAccounting.TaskInput,
+        success: Schema.Struct({ data: UsageAccounting.TaskCosts }),
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({ identifier: "session.taskCosts", summary: "Read recursive retained task costs" }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.skills", "/api/session/:sessionID/skills", {
         params: { sessionID: Session.ID },
         success: Schema.Struct({ data: Schema.Array(SessionSkillStatus.Info) }),
@@ -975,9 +1061,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         error: [SessionNotFoundError, SessionBusyError],
       })
         .middleware(sessionLocationMiddleware)
-        .annotateMerge(
-          OpenApi.annotations({ identifier: "session.revert.commit", summary: "Commit staged revert" }),
-        ),
+        .annotateMerge(OpenApi.annotations({ identifier: "session.revert.commit", summary: "Commit staged revert" })),
     )
     .add(
       HttpApiEndpoint.get("session.context", "/api/session/:sessionID/context", {

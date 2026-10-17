@@ -1,35 +1,73 @@
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { readableForeground } from "../../theme/component"
-import { yoloLevel } from "../../util/session-autonomy"
+import { autoAnswerOn, autonomyModeParts } from "../../util/session-autonomy"
 
-export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on" | "warning" | "danger" }
+export type ModeChip = {
+  key: "goal" | "yolo" | "sleep" | "review" | "answers"
+  label: string;
+  tone: "off" | "on" | "warning" | "danger"
+}
 
-/**
- * Autonomy chips for the composer status row. Off states stay muted and on states invert, because an
- * active autonomy mode is the most consequential fact on screen. A review still waiting while autonomy is on marks
- * the goal chip as blocked: hard reviews at any level, or ordinary reviews under a goal at YOLO 0.
- */
-export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }): ModeChip[] {
-  const active = input.autonomy?.goal?.status === "active"
-  const level = yoloLevel(input.autonomy ?? { yolo: 0 })
-  const blocked = (level > 0 || active) && !!input.guardrailPending
+export function modeChips(input: {
+  autonomy?: SessionAutonomyView;
+  guardrailPending?: boolean
+  machineAwake?: boolean
+  review?: number
+}): ModeChip[] {
+  const parts = autonomyModeParts(input.autonomy)
+  const active = parts.includes("goal")
+  const level = input.autonomy?.effective?.yolo
+  const asleep = parts.includes("asleep")
   return [
     {
       key: "goal",
-      label: blocked ? "guardrail blocked" : active ? "goal" : "goal off",
-      tone: blocked ? "warning" : active ? "on" : "off",
+      label: active ? "goal" : "goal off",
+      tone: active ? "on" : "off",
     },
     {
       key: "yolo",
-      label: level > 0 ? `YOLO ${level}` : "YOLO off",
-      tone: level > 0 ? "danger" : "off",
+      label: parts[0],
+      tone: level !== undefined && level > 0 ? "danger" : "off",
     },
+    ...(asleep
+      ? [
+          {
+            key: "sleep" as const,
+            label: input.machineAwake === false ? "asleep · machine may sleep" : "asleep",
+            tone: input.machineAwake === false ? ("warning" as const) : ("on" as const),
+          },
+        ]
+      : []),
+    ...(autoAnswerOn(input.autonomy)
+      ? [
+          {
+            key: "answers" as const,
+            label: "answers auto",
+            tone: "warning" as const,
+          },
+        ]
+      : []),
+    ...(input.review
+      ? [
+          {
+            key: "review" as const,
+            label: `review ${input.review}`,
+            tone: "warning" as const,
+          },
+        ]
+      : []),
   ]
 }
 
-export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }) {
+export function ModeChips(props: {
+  autonomy?: SessionAutonomyView;
+  guardrailPending?: boolean
+  machineAwake?: boolean
+  review?: number
+  keys?: readonly ModeChip["key"][]
+}) {
   const { theme } = useTheme()
   const style = (tone: ModeChip["tone"]) => {
     if (tone === "danger")
@@ -47,7 +85,14 @@ export function ModeChips(props: { autonomy?: SessionAutonomyState; guardrailPen
   }
 
   return (
-    <For each={modeChips({ autonomy: props.autonomy, guardrailPending: props.guardrailPending })}>
+    <For
+      each={modeChips({
+        autonomy: props.autonomy,
+        guardrailPending: props.guardrailPending,
+        machineAwake: props.machineAwake,
+        review: props.review,
+      }).filter((chip) => !props.keys || props.keys.includes(chip.key))}
+    >
       {(chip) => {
         if (chip.tone === "warning") return <FilledWarningChip label={chip.label} />
         return (

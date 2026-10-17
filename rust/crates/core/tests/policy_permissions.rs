@@ -132,7 +132,7 @@ fn saved_allows_and_goals_cannot_escalate_child_ceiling() {
         resource: "private/*".into(),
         effect: permission::Effect("deny".into()),
     }];
-    let child = fixture.session("ses_child", Some("ses_root"), 3, true, Some(denied));
+    let child = fixture.session("ses_child", Some("ses_root"), 2, true, Some(denied));
     fixture.rules.lock().unwrap().push(permission::Rule {
         action: "*".into(),
         resource: "*".into(),

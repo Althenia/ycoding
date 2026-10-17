@@ -17,11 +17,40 @@ test("slash goal and YOLO use autonomy actions, server commands run, slash skill
   expect(optionsForTrigger("/", "go", catalog, []).map((option) => option.label)).toContain("/goal")
   expect(optionsForTrigger("/", "yo", catalog, []).map((option) => option.label)).toContain("/yolo")
   expect(submission("/goal keep progress. Ship this safely", [], catalog, "steer")).toEqual({ kind: "goal", input: { goal: "keep progress. Ship this safely" } })
-  expect(submission("/yolo 3", [], catalog, "steer")).toEqual({ kind: "yolo", input: { level: 3 } })
+  expect(submission("/yolo 2", [], catalog, "steer")).toEqual({ kind: "yolo", input: { level: 2 } })
+  expect(submission("/yolo 3", [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /yolo with a level from 0 to 2." })
+  expect(submission("/yolo", [], catalog, "steer")).toEqual({ kind: "yolo", input: {} })
   expect(submission("/plan now", [], catalog, "queue")).toEqual({ kind: "command", input: { command: "plan", arguments: "now", delivery: "queue" } })
   expect(submission("/research", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
   expect(optionsForTrigger("/", "editor", catalog, [])).toEqual([])
   expect(submission("/editor", [], catalog, "steer")).toMatchObject({ kind: "invalid" })
+})
+
+test("sleep, wake, and keep-awake are Session actions that never become prompts", () => {
+  for (const [command, kind] of [["sleep", "sleep"], ["wake", "wake"], ["keep-awake", "keepAwake"]] as const) {
+    expect(optionsForTrigger("/", command, catalog, []).map((option) => option.label)).toContain(`/${command}`)
+    expect(optionsForTrigger("/", command, catalog, [], false).map((option) => option.label)).not.toContain(`/${command}`)
+    expect(submission(`/${command}`, [], catalog, "steer")).toEqual({ kind })
+    expect(submission(`  /${command}  `, [], catalog, "queue")).toEqual({ kind })
+    expect(submission(`/${command} now`, [], catalog, "steer")).toEqual({ kind: "invalid", message: `Use /${command} without arguments.` })
+    const configured = { ...catalog, commands: [...catalog.commands, { name: command }] }
+    expect(submission(`/${command}`, [], configured, "steer")).toEqual({ kind })
+    expect(optionsForTrigger("/", command, configured, []).filter((option) => option.label === `/${command}`)).toHaveLength(1)
+  }
+  expect(submission("/sleepy", [], catalog, "steer")).toMatchObject({ kind: "prompt" })
+  expect(optionsForTrigger("/", "guardrail-decision", catalog, [])).toEqual([])
+})
+
+test("auto-answer toggles only this Session and never becomes a prompt", () => {
+  expect(optionsForTrigger("/", "auto", catalog, []).map((option) => option.label)).toContain("/auto-answer")
+  expect(optionsForTrigger("/", "auto", catalog, [], false).map((option) => option.label)).not.toContain("/auto-answer")
+  expect(submission("/auto-answer", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: {} })
+  expect(submission("/auto-answer on", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: { enabled: true } })
+  expect(submission("/auto-answer off", [], catalog, "queue")).toEqual({ kind: "autoAnswer", input: { enabled: false } })
+  expect(submission("/auto-answer yes", [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /auto-answer, /auto-answer on, or /auto-answer off." })
+  const configured = { ...catalog, commands: [...catalog.commands, { name: "auto-answer" }] }
+  expect(submission("/auto-answer", [], configured, "steer")).toEqual({ kind: "autoAnswer", input: {} })
+  expect(optionsForTrigger("/", "auto-answer", configured, []).filter((option) => option.label === "/auto-answer")).toHaveLength(1)
 })
 
 test("unmatched slash heads, including paths, remain complete ordinary prompts", () => {

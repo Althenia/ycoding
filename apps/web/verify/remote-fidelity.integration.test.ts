@@ -722,9 +722,9 @@ describe("remote responsive state behavior", () => {
       const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
         const control = document.querySelector('.composer button[aria-label="Autonomy level"]');
-        return { label: control?.textContent?.trim().startsWith('Standard') ? 'Standard' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
+        return { label: control?.textContent?.trim().startsWith('Ask first') ? 'Ask first' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
       })()`)
-      expect(status).toEqual({ label: "Standard", visible: true })
+      expect(status).toEqual({ label: "Ask first", visible: true })
       expect(
         await page.evaluate<boolean>(
           `document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`,

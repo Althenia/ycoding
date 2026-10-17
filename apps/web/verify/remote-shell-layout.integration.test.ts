@@ -483,13 +483,13 @@ describe("remote shell layout", () => {
     try {
       await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
       await page.evaluate(
-        `[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('YOLO 3'))?.click()`,
+        `[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('Allow tools'))?.click()`,
       )
       for (
         let attempt = 0;
         attempt < 40 &&
         !(await page.evaluate<boolean>(
-          `document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('YOLO 3') === true`,
+          `document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('Allow tools') === true`,
         ));
         attempt += 1
       )
@@ -523,7 +523,7 @@ describe("remote shell layout", () => {
         await page.evaluate<{ readonly goal: string; readonly yolo: string }>(
           `({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`,
         ),
-      ).toEqual({ goal: "0", yolo: "YOLO 3" })
+      ).toEqual({ goal: "0", yolo: "Allow tools" })
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       expect(
         await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent ?? ''`),
@@ -556,7 +556,7 @@ describe("remote shell layout", () => {
         await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(
           `({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`,
         ),
-      ).toEqual({ goal: "Goal off", count: false, yolo: "YOLO 3" })
+      ).toEqual({ goal: "Goal off", count: false, yolo: "Allow tools" })
       expect(
         await page.evaluate<number>(labelAsymmetry(".workspace__main .session-status__goal-trigger")),
       ).toBeLessThanOrEqual(1)
@@ -796,12 +796,12 @@ describe("remote shell layout", () => {
           `({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`,
         )
         expect(before.rows).toBeGreaterThanOrEqual(25)
-        await page.evaluate(`window.remoteHoldSessionLists(); window.remoteInvalidateSessions()`)
+        await page.evaluate(`window.remoteInvalidateSessions()`)
         for (
           let attempt = 0;
           attempt < 80 &&
           !(await page.evaluate<boolean>(
-            `window.remotePendingSessionLists() > 0 && window.remoteInventoryReport().workspaceRequests > ${before.requests}`,
+            `window.remoteInventoryReport().listStatus === 'loading' && window.remoteInventoryReport().workspaceRequests > ${before.requests}`,
           ));
           attempt += 1
         )
@@ -1983,7 +1983,7 @@ describe("remote shell layout", () => {
           expect(details.description.length, `${label} task description`).toBeGreaterThan(0)
           expect(details.metrics.length, `${label} metric cells`).toBeGreaterThan(0)
           expect(
-            details.metrics.every((metric) => /^(Model|Tokens|Cache|Cost|Context):.+/.test(metric)),
+            details.metrics.every((metric) => /^(Model|Tokens \(inclusive\)|Cache|Cost \(inclusive\)|Context):.+/.test(metric)),
             `${label} metric labels ${details.metrics.join("|")}`,
           ).toBe(true)
           expect(details.rollup, `${label} roll-up`).toContain("Rolls up to")

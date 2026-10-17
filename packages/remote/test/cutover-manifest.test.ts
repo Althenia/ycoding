@@ -9,8 +9,8 @@ const root = path.resolve(import.meta.dir, "../../..")
 
 test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
   const manifest = await generateManifest(root)
-  expect(manifest.counts).toEqual({ endpoint: 198, connector: 66, notice: 4 })
-  expect(manifest.members).toHaveLength(268)
+  expect(manifest.counts).toEqual({ endpoint: 203, connector: 72, notice: 4 })
+  expect(manifest.members).toHaveLength(279)
   expect(manifest.unresolved).toEqual([])
   const keys = manifest.members.map((member) => `${member.kind}:${member.name}`)
   expect(new Set(keys).size).toBe(keys.length)

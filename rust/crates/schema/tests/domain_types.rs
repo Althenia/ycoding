@@ -11,7 +11,7 @@ use ycoding_schema::{
     question, reference, remote, schema, server_event, session, session_cache_diagnostics,
     session_captured_changes, session_compaction, session_compaction_event, session_delivery,
     session_error, session_event, session_id, session_message, session_message_id,
-    session_orchestration, session_pending, session_revert, session_skill_status,
+    session_orchestration, session_pending, session_revert, session_review, session_skill_status,
     session_status_event, session_todo, session_work_completion, shell, skill, snapshot,
     source_epoch, stringify_json, telemetry, token_usage, tui_event, vcs, vcs_event, workspace,
     workspace_event, workspace_id, worktree_event,
@@ -466,6 +466,30 @@ fn effect_domain_goldens() {
             "SessionEvent.session.revert.committed" => {
                 round_trip::<session_event::RevertCommitted>(&input)
             }
+            "SessionEvent.session.review.deferred" => {
+                round_trip::<session_event::ReviewDeferred>(&input)
+            }
+            "SessionEvent.session.review.decided" => {
+                round_trip::<session_event::ReviewDecided>(&input)
+            }
+            "SessionEvent.session.review.withdrawn" => {
+                round_trip::<session_event::ReviewWithdrawn>(&input)
+            }
+            "SessionEvent.session.review.consumed" => {
+                round_trip::<session_event::ReviewConsumed>(&input)
+            }
+            "SessionEvent.session.step.rerouted" => {
+                round_trip::<session_event::StepRerouted>(&input)
+            }
+            "SessionEvent.session.guardrail.dismissed" => {
+                round_trip::<session_event::GuardrailDismissed>(&input)
+            }
+            "SessionEvent.session.guardrail.escalated" => {
+                round_trip::<session_event::GuardrailEscalated>(&input)
+            }
+            "SessionEvent.session.guardrail.decided" => {
+                round_trip::<session_event::GuardrailDecided>(&input)
+            }
             "Event.IntegrationUpdated" => {
                 round_trip::<event::EphemeralPayload<integration::Updated>>(&input)
             }
@@ -895,6 +919,8 @@ fn effect_domain_goldens() {
             "Form.Event.Cancelled" => {
                 round_trip::<event::EphemeralPayload<form::Cancelled>>(&input)
             }
+            "Form.Event.TimedOut" => round_trip::<event::EphemeralPayload<form::TimedOut>>(&input),
+            "Form.Event.Deferred" => round_trip::<event::EphemeralPayload<form::Deferred>>(&input),
             "Question.ID" => round_trip::<question::Id>(&input),
             "Question.Option" => round_trip::<question::Option>(&input),
             "Question.Info" => round_trip::<question::Info>(&input),
@@ -911,6 +937,15 @@ fn effect_domain_goldens() {
             }
             "Question.Event.Rejected" => {
                 round_trip::<event::EphemeralPayload<question::Rejected>>(&input)
+            }
+            "Question.Event.TimedOut" => {
+                round_trip::<event::EphemeralPayload<question::TimedOut>>(&input)
+            }
+            "Question.Event.Deferred" => {
+                round_trip::<event::EphemeralPayload<question::Deferred>>(&input)
+            }
+            "Permission.Event.Deferred" => {
+                round_trip::<event::EphemeralPayload<permission::Deferred>>(&input)
             }
             "Guardrail.RequestID" => round_trip::<guardrail::RequestId>(&input),
             "Guardrail.RuleSource" => round_trip::<guardrail::RuleSource>(&input),
@@ -932,6 +967,40 @@ fn effect_domain_goldens() {
             "Guardrail.Event.Decided" => {
                 round_trip::<event::EphemeralPayload<guardrail::Decided>>(&input)
             }
+            "Guardrail.Event.Deferred" => {
+                round_trip::<event::EphemeralPayload<guardrail::Deferred>>(&input)
+            }
+            "Guardrail.Source" => round_trip::<guardrail::Source>(&input),
+            "Guardrail.DecisionChoice" => round_trip::<guardrail::DecisionChoice>(&input),
+            "Guardrail.Confidence" => round_trip::<guardrail::Confidence>(&input),
+            "Guardrail.Grade" => round_trip::<guardrail::Grade>(&input),
+            "Guardrail.Escalation" => round_trip::<guardrail::Escalation>(&input),
+            "SessionReview.ID" => round_trip::<session_review::Id>(&input),
+            "SessionReview.Kind" => round_trip::<session_review::Kind>(&input),
+            "SessionReview.Reason" => round_trip::<session_review::Reason>(&input),
+            "SessionReview.Origin" => round_trip::<session_review::Origin>(&input),
+            "SessionReview.Fingerprint" => round_trip::<session_review::Fingerprint>(&input),
+            "SessionReview.FormPayload" => round_trip::<session_review::FormPayload>(&input),
+            "SessionReview.QuestionPayload" => {
+                round_trip::<session_review::QuestionPayload>(&input)
+            }
+            "SessionReview.SubagentQuestionPayload" => {
+                round_trip::<session_review::SubagentQuestionPayload>(&input)
+            }
+            "SessionReview.GuardrailPayload" => {
+                round_trip::<session_review::GuardrailPayload>(&input)
+            }
+            "SessionReview.PermissionPayload" => {
+                round_trip::<session_review::PermissionPayload>(&input)
+            }
+            "SessionReview.RecoveryTool" => round_trip::<session_review::RecoveryTool>(&input),
+            "SessionReview.RecoveryPayload" => {
+                round_trip::<session_review::RecoveryPayload>(&input)
+            }
+            "SessionReview.Payload" => round_trip::<session_review::Payload>(&input),
+            "SessionReview.Deferral" => round_trip::<session_review::Deferral>(&input),
+            "SessionReview.Item" => round_trip::<session_review::Item>(&input),
+            "SessionReview.Decision" => round_trip::<session_review::Decision>(&input),
             "Shell.ID" => round_trip::<shell::Id>(&input),
             "Shell.Status" => round_trip::<shell::Status>(&input),
             "Shell.MemoryLimitMb" => round_trip::<shell::MemoryLimitMb>(&input),
@@ -939,6 +1008,7 @@ fn effect_domain_goldens() {
             "Shell.Metadata" => round_trip::<shell::Metadata>(&input),
             "Shell.Info" => round_trip::<shell::Info>(&input),
             "Shell.Event.Created" => round_trip::<event::EphemeralPayload<shell::Created>>(&input),
+            "Shell.Event.Updated" => round_trip::<event::EphemeralPayload<shell::Updated>>(&input),
             "Shell.Event.Exited" => round_trip::<event::EphemeralPayload<shell::Exited>>(&input),
             "Shell.Event.Deleted" => round_trip::<event::EphemeralPayload<shell::Deleted>>(&input),
             "Shell.CreateInput" => round_trip::<shell::CreateInput>(&input),
@@ -1298,7 +1368,8 @@ fn ported_event_definition_helpers_preserve_event_types() {
         permission::definitions().map(|definition| definition.event_type),
         [
             LosslessString::from("permission.asked"),
-            LosslessString::from("permission.replied")
+            LosslessString::from("permission.replied"),
+            LosslessString::from("permission.deferred")
         ]
     );
     assert_eq!(

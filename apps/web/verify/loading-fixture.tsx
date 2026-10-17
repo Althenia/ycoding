@@ -155,6 +155,7 @@ render(
           onCancel={async () => ({ status: "ok" })}
           onAnswer={async () => ({ status: "ok" })}
           onPin={async () => ({ status: "ok" })}
+          onContinueRecovery={async () => ({ status: "ok" })}
           onLoadOlder={async () => {
             setPageLoading(true)
           }}

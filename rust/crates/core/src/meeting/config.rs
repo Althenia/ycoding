@@ -1,5 +1,6 @@
 use serde_json::{Map, Value, json};
 use std::fmt;
+use ycoding_schema::{DomainDecode, LosslessString, ObjectEncoder, model};
 
 pub const DEFAULT_MODEL: &str = "biodatlab/whisper-th-large-v3-combined";
 
@@ -59,9 +60,56 @@ pub enum AnalysisModel {
     },
 }
 
+impl AnalysisModel {
+    pub fn reference(&self) -> Result<Option<model::Ref>, ConfigError> {
+        let Self::Explicit {
+            id,
+            provider_id,
+            variant,
+            profile,
+        } = self
+        else {
+            return Ok(None);
+        };
+        model::Ref::decode(
+            &ObjectEncoder::new()
+                .field("id", id.as_str())
+                .field("providerID", provider_id.as_str())
+                .optional("variant", &variant.as_deref().map(LosslessString::from))
+                .optional("profile", &profile.as_deref().map(LosslessString::from))
+                .finish(),
+        )
+        .map(Some)
+        .map_err(|error| ConfigError(error.to_string()))
+    }
+
+    pub fn to_value(&self) -> Value {
+        let Self::Explicit {
+            id,
+            provider_id,
+            variant,
+            profile,
+        } = self
+        else {
+            return json!("inherit");
+        };
+        let mut model = Map::new();
+        model.insert("id".into(), json!(id));
+        model.insert("providerID".into(), json!(provider_id));
+        if let Some(variant) = variant {
+            model.insert("variant".into(), json!(variant));
+        }
+        if let Some(profile) = profile {
+            model.insert("profile".into(), json!(profile));
+        }
+        Value::Object(model)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisConfig {
     pub model: AnalysisModel,
+    pub ask_model: AnalysisModel,
     pub incremental: bool,
     pub max_characters: u32,
 }
@@ -72,6 +120,21 @@ pub struct KnowledgeBinding {
     pub search: String,
     pub read: String,
     pub write: Option<String>,
+    pub enabled: bool,
+}
+
+impl KnowledgeBinding {
+    pub fn to_value(&self) -> Value {
+        let mut value = Map::new();
+        value.insert("server".into(), json!(self.server));
+        value.insert("search".into(), json!(self.search));
+        value.insert("read".into(), json!(self.read));
+        if let Some(write) = &self.write {
+            value.insert("write".into(), json!(write));
+        }
+        value.insert("enabled".into(), json!(self.enabled));
+        Value::Object(value)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -149,21 +212,8 @@ impl MeetingConfig {
                 "model": self.fallback.model,
             },
             "analysis": {
-                "model": match &self.analysis.model {
-                    AnalysisModel::Inherit => json!("inherit"),
-                    AnalysisModel::Explicit { id, provider_id, variant, profile } => {
-                        let mut model = Map::new();
-                        model.insert("id".into(), json!(id));
-                        model.insert("providerID".into(), json!(provider_id));
-                        if let Some(variant) = variant {
-                            model.insert("variant".into(), json!(variant));
-                        }
-                        if let Some(profile) = profile {
-                            model.insert("profile".into(), json!(profile));
-                        }
-                        Value::Object(model)
-                    }
-                },
+                "model": self.analysis.model.to_value(),
+                "askModel": self.analysis.ask_model.to_value(),
                 "incremental": self.analysis.incremental,
                 "maxCharacters": self.analysis.max_characters,
             },
@@ -172,16 +222,7 @@ impl MeetingConfig {
                 "autoApply": false,
                 "requireApproval": true,
                 "retrievalTTL": self.knowledge.retrieval_ttl,
-                "bindings": self.knowledge.bindings.iter().map(|binding| {
-                    let mut value = Map::new();
-                    value.insert("server".into(), json!(binding.server));
-                    value.insert("search".into(), json!(binding.search));
-                    value.insert("read".into(), json!(binding.read));
-                    if let Some(write) = &binding.write {
-                        value.insert("write".into(), json!(write));
-                    }
-                    Value::Object(value)
-                }).collect::<Vec<_>>(),
+                "bindings": self.knowledge.bindings.iter().map(KnowledgeBinding::to_value).collect::<Vec<_>>(),
             },
             "storage": {
                 "provider": "sqlite",
@@ -357,47 +398,11 @@ impl AnalysisConfig {
         let map = object(
             value.unwrap_or(&empty),
             "analysis",
-            &["model", "incremental", "maxCharacters"],
+            &["model", "askModel", "incremental", "maxCharacters"],
         )?;
-        let model = match map.get("model") {
-            None => AnalysisModel::Inherit,
-            Some(Value::String(literal)) if literal == "inherit" => AnalysisModel::Inherit,
-            Some(value @ Value::Object(_)) => {
-                let model = object(
-                    value,
-                    "analysis.model",
-                    &["id", "providerID", "variant", "profile"],
-                )?;
-                let required = |key: &str| match model.get(key) {
-                    Some(Value::String(text)) if !text.is_empty() => Ok(text.clone()),
-                    _ => Err(invalid(
-                        "analysis.model",
-                        key,
-                        "is required and must not be empty",
-                    )),
-                };
-                let optional = |key: &str| match model.get(key) {
-                    None => Ok(None),
-                    Some(Value::String(text)) => Ok(Some(text.clone())),
-                    Some(_) => Err(invalid("analysis.model", key, "must be a string")),
-                };
-                AnalysisModel::Explicit {
-                    id: required("id")?,
-                    provider_id: required("providerID")?,
-                    variant: optional("variant")?,
-                    profile: optional("profile")?,
-                }
-            }
-            Some(_) => {
-                return Err(invalid(
-                    "analysis",
-                    "model",
-                    "must be \"inherit\" or a model reference",
-                ));
-            }
-        };
         Ok(Self {
-            model,
+            model: selection(map, "model")?,
+            ask_model: selection(map, "askModel")?,
             incremental: boolean(map, "analysis", "incremental", true)?,
             max_characters: integer(map, "analysis", "maxCharacters", 8000, 64000, 32000)? as u32,
         })
@@ -438,7 +443,7 @@ impl KnowledgeConfig {
                     let binding = object(
                         item,
                         "knowledge.bindings",
-                        &["server", "search", "read", "write"],
+                        &["server", "search", "read", "write", "enabled"],
                     )?;
                     let name = |key: &str| {
                         text(binding, "knowledge.bindings", key, 1, 200, || {
@@ -453,6 +458,7 @@ impl KnowledgeConfig {
                             None => None,
                             Some(_) => Some(name("write")?),
                         },
+                        enabled: boolean(binding, "knowledge.bindings", "enabled", true)?,
                     })
                 })
                 .collect::<Result<_, ConfigError>>()?,
@@ -494,6 +500,37 @@ impl StorageConfig {
             Some(_) => Some(integer(map, "storage", "retentionDays", 1, 36500, 0)? as u32),
         };
         Ok(Self { retention_days })
+    }
+}
+
+fn selection(map: &Map<String, Value>, key: &str) -> Result<AnalysisModel, ConfigError> {
+    let path = format!("analysis.{key}");
+    match map.get(key) {
+        None => Ok(AnalysisModel::Inherit),
+        Some(Value::String(literal)) if literal == "inherit" => Ok(AnalysisModel::Inherit),
+        Some(value @ Value::Object(_)) => {
+            let model = object(value, &path, &["id", "providerID", "variant", "profile"])?;
+            let required = |field: &str| match model.get(field) {
+                Some(Value::String(text)) if !text.is_empty() => Ok(text.clone()),
+                _ => Err(invalid(&path, field, "is required and must not be empty")),
+            };
+            let optional = |field: &str| match model.get(field) {
+                None => Ok(None),
+                Some(Value::String(text)) => Ok(Some(text.clone())),
+                Some(_) => Err(invalid(&path, field, "must be a string")),
+            };
+            Ok(AnalysisModel::Explicit {
+                id: required("id")?,
+                provider_id: required("providerID")?,
+                variant: optional("variant")?,
+                profile: optional("profile")?,
+            })
+        }
+        Some(_) => Err(invalid(
+            "analysis",
+            key,
+            "must be \"inherit\" or a model reference",
+        )),
     }
 }
 

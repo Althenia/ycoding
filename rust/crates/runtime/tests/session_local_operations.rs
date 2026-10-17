@@ -453,6 +453,7 @@ async fn file_changes_accumulate_latest_patch_and_include_only_completed_direct_
                         revision: 1,
                         time_created: 1,
                         time_updated: 1,
+                        usage_anchor: None,
                     },
                 )?;
             }

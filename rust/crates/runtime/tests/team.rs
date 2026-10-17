@@ -29,9 +29,7 @@ fn yolo(level: u8) -> v5::SessionAutonomyYolo {
 fn level(yolo: &v5::SessionAutonomyYolo) -> f64 {
     use v5::session_autonomy_yolo::Kind;
     match yolo.kind.unwrap() {
-        Kind::Value1(value) | Kind::Value2(value) | Kind::Value3(value) | Kind::Value4(value) => {
-            value
-        }
+        Kind::Value1(value) | Kind::Value2(value) | Kind::Value3(value) => value,
     }
 }
 
@@ -86,7 +84,7 @@ async fn autonomy_get_and_set_round_trip_the_durable_state() {
         assert_eq!(level(&initial.data.yolo), 0.0);
         assert!(initial.data.goal.is_none());
 
-        for expected in [0, 1, 2, 3] {
+        for expected in [0, 1, 2] {
             let set: v5::SessionAutonomySetResult = success(
                 client
                     .call(
@@ -207,23 +205,24 @@ async fn autonomy_get_and_set_round_trip_the_durable_state() {
         );
         assert!(core.autonomy.get(&id).unwrap().goal.unwrap().is_active());
 
-        let out_of_range = rejected(
-            client
-                .call(
-                    "session.autonomy.set",
-                    scope(),
-                    autonomy_set(
-                        "ses_auto",
-                        v5::session_autonomy_set::Kind::Value2(v5::SessionAutonomySetValue2 {
-                            yolo: v5::SessionAutonomyYolo {
-                                kind: Some(v5::session_autonomy_yolo::Kind::Value1(7.0)),
-                            },
-                        }),
-                    ),
-                )
-                .await,
-        );
-        assert_eq!(out_of_range.type_name, v5::InvalidRequestError::full_name());
+        for invalid in [3, 7] {
+            let out_of_range = rejected(
+                client
+                    .call(
+                        "session.autonomy.set",
+                        scope(),
+                        autonomy_set(
+                            "ses_auto",
+                            v5::session_autonomy_set::Kind::Value2(v5::SessionAutonomySetValue2 {
+                                yolo: yolo(invalid),
+                            }),
+                        ),
+                    )
+                    .await,
+            );
+            assert_eq!(out_of_range.type_name, v5::InvalidRequestError::full_name());
+            assert_eq!(core.autonomy.get(&id).unwrap().yolo.get(), 1);
+        }
 
         let missing = rejected(
             client

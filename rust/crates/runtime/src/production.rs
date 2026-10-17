@@ -50,6 +50,7 @@ use ycoding_core::{
 
 pub struct Production {
     pub configuration: config::LoadOptions,
+    pub analytics: std::path::PathBuf,
     pub catalog: models_dev::Options,
     pub cursor: Option<Cursor>,
     pub steer: Option<Arc<dyn autonomy::Steer>>,
@@ -95,6 +96,7 @@ pub struct Composed {
     pending: crate::locations::Pending,
     closed: std::sync::atomic::AtomicBool,
     _registration: Registration,
+    queued_shells: tools::QueuedShells,
     _meeting: Option<Registration>,
     _session_tools: Option<Registration>,
 }
@@ -113,6 +115,7 @@ pub(crate) struct Prepared {
 
 pub(crate) struct Factory {
     options: config::LoadOptions,
+    settings: Arc<dyn Fn() -> retention::Settings + Send + Sync>,
     catalog_refresh: bool,
     client: Client,
     events: Feed,
@@ -133,13 +136,38 @@ pub(crate) struct Factory {
 
 #[derive(Default)]
 struct Started {
+    recover: bool,
     execution: Option<&'static execution::Execution>,
     locations: Option<Locations>,
     maintenance: Option<Arc<Maintenance>>,
 }
 
+async fn sleep_holds(
+    client: &Client,
+    awake: ycoding_core::platform::keep_awake::Service,
+) -> Result<autonomy::Service, Failure> {
+    let autonomy = autonomy::Service::new(client.clone()).with_keep_awake(awake);
+    autonomy
+        .migrate_stored_yolo()
+        .await
+        .map_err(|_| unavailable("stored autonomy levels"))?;
+    autonomy
+        .rehydrate()
+        .await
+        .map_err(|_| unavailable("sleep keep-awake holds"))?;
+    Ok(autonomy)
+}
+
 impl Core {
     pub async fn production(client: Client, production: Production) -> Result<Self, Failure> {
+        Self::production_with_recovery(client, production, false).await
+    }
+
+    pub(crate) async fn production_with_recovery(
+        client: Client,
+        production: Production,
+        recover: bool,
+    ) -> Result<Self, Failure> {
         production
             .configuration
             .roots
@@ -155,6 +183,7 @@ impl Core {
             events.clone(),
             git.clone(),
             true,
+            production.analytics.clone(),
         ) {
             Ok(globals) => globals,
             Err(error) => {
@@ -164,7 +193,10 @@ impl Core {
                 return Err(error);
             }
         };
-        let mut started = Started::default();
+        let mut started = Started {
+            recover,
+            ..Default::default()
+        };
         match Self::bootstrap(
             client,
             production,
@@ -209,6 +241,7 @@ impl Core {
         })?;
         let feed = events.clone();
         let factory = Arc::new(Factory {
+            settings: retention_settings(&production.configuration)?,
             options: production.configuration,
             catalog_refresh: production.catalog.fetch,
             client: client.clone(),
@@ -242,13 +275,20 @@ impl Core {
         let configuration = factory.configuration(&global)?;
         let sessions = Service::new(client.clone());
         reconcile(&sessions, &client).await?;
-        let autonomy = autonomy::Service::new(client.clone());
+        let keep_awake = ycoding_core::platform::keep_awake::Service::open(
+            factory.options.roots.state.join("keep-awake-lid.json"),
+        )
+        .await;
+        let autonomy = sleep_holds(&client, keep_awake.clone()).await?;
+        let (reviews, delivery) = crate::session_review::service(sessions.clone());
+        let review_limit = configuration.guardrails.limits.reviews as usize;
         let locations = Locations::new(
             client.clone(),
             sessions.clone(),
             configuration,
             events.clone(),
             autonomy.clone(),
+            reviews.clone(),
         )
         .with_factory(factory.clone());
         started.locations = Some(locations.clone());
@@ -288,16 +328,32 @@ impl Core {
         let orchestration = orchestration::Service::new(
             sessions.clone(),
             Arc::new(crate::services::LocalExecution(execution)),
-        );
+        )
+        .with_reviews(policy::Reviews {
+            service: reviews.clone(),
+            limit: review_limit,
+        });
         let _ = factory.orchestration.set(orchestration.clone());
-        orchestration
-            .reconcile_stale()
-            .await
-            .map_err(|_| unavailable("stale tasks"))?;
+        delivery.bind(orchestration.clone(), execution);
+        if started.recover {
+            orchestration
+                .recover_restart()
+                .await
+                .map_err(|_| unavailable("managed task recovery"))?;
+        } else {
+            orchestration
+                .reconcile_stale()
+                .await
+                .map_err(|_| unavailable("stale tasks"))?;
+        }
         orchestration
             .dispatch_notifications()
             .await
             .map_err(|_| unavailable("notification outbox"))?;
+        reviews
+            .reconcile(crate::ids::now_millis())
+            .await
+            .map_err(|_| unavailable("review reconciliation"))?;
         let publisher = factory.publisher.clone();
         let credentials = factory.credentials.clone();
         let pricing_locations = locations.clone();
@@ -536,9 +592,9 @@ impl Core {
         let remote = crate::connector::Control::open(&factory.options.roots.state)
             .await
             .map_err(|_| unavailable("remote control"))?;
-        let lid_file = factory.options.roots.state.join("keep-awake-lid.json");
         let maintenance = Arc::new(Maintenance::new(&factory));
         started.maintenance = Some(maintenance.clone());
+        let telemetry_settings = factory.settings.clone();
         maintenance
             .start(
                 sessions.clone(),
@@ -548,6 +604,7 @@ impl Core {
                 orchestration.clone(),
             )
             .await?;
+        let incidents = ycoding_core::model_incident::Service::new(client.clone());
         Ok(Self {
             captured: crate::remote_derived::captured::Cache::attach(&client),
             integrations: Some(integrations),
@@ -561,18 +618,21 @@ impl Core {
             isolated_browser: Some(isolated),
             platform: Some(platform),
             platform_default_location: None,
-            telemetry: ycoding_core::telemetry::Service::new(client),
-            keep_awake: ycoding_core::platform::keep_awake::Service::open(lid_file).await,
+            telemetry: ycoding_core::telemetry::Service::new(client, telemetry_settings.clone()),
+            keep_awake,
             provider_usage: Some(provider_usage),
             usage_pricer: Some(Arc::new(move |reference| {
                 pricing_locations.pricing(reference)
             })),
+            retention: telemetry_settings,
             sessions: sessions.clone(),
             execution,
             autonomy,
             events,
             locations,
             orchestration,
+            reviews,
+            incidents,
             maintenance: Some(maintenance),
         })
     }
@@ -901,6 +961,9 @@ impl Factory {
                 custom: tools::guardrails(disk),
                 enabled: field(settings, "enabled") != Some(&JsonValue::Bool(false)),
                 limits,
+                decide_reviews: field(settings, "decide_reviews") == Some(&JsonValue::Bool(true)),
+                decide_hard_reviews: field(settings, "decide_hard_reviews")
+                    != Some(&JsonValue::Bool(false)),
             },
             snapshots: SnapshotSettings {
                 git: self.git.clone(),
@@ -1119,7 +1182,7 @@ impl Factory {
                 .map(|previous| previous.computer.clone())
                 .unwrap_or_else(|| Arc::new(self.globals.computer.service()));
             let pending = services.pending();
-            let (registry, registration) = tools::compose(
+            let (registry, registration, queued_shells) = tools::compose(
                 self,
                 services,
                 prepared.disk.clone(),
@@ -1226,6 +1289,7 @@ impl Factory {
                         git: &self.git,
                         directory: &directory,
                         mcp: mcp.clone(),
+                        models: prepared.models.clone(),
                     },
                 )
                 .await;
@@ -1245,6 +1309,15 @@ impl Factory {
                 store: Service::new(self.client.clone()),
                 settings: helpers.clone(),
             });
+            let decisions = Arc::new(ycoding_core::resources::decision::Service {
+                store: Service::new(self.client.clone()),
+                agents: services.agents.clone(),
+                models: helper_models.clone(),
+                executor: self.executor.clone(),
+            });
+            services.guardrails.clone().with_decision(decisions.clone());
+            services.questions.clone().with_decision(decisions.clone());
+            services.forms.clone().with_decision(decisions);
             let generate_cursor = cursor_host()?.map(Arc::new);
             let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
                 prepared.disk.clone(),
@@ -1472,6 +1545,7 @@ impl Factory {
                 pending,
                 closed: std::sync::atomic::AtomicBool::new(false),
                 _registration: registration,
+                queued_shells,
                 _meeting: meeting_history,
                 _session_tools: session_registration,
             };
@@ -1701,7 +1775,11 @@ impl Factory {
             context::consumers::{SessionDependencies, SessionTools},
         };
         let execution = execution::Execution::global()?;
-        let orchestration = self.orchestration.get()?.clone();
+        let orchestration = self
+            .orchestration
+            .get()?
+            .clone()
+            .with_review_limit(prepared.configuration.guardrails.limits.reviews as usize);
         let store = Service::new(self.client.clone()).with_artifact_source(prepared.source.clone());
         let source = prepared.source.clone();
         let feed = self.events.clone();
@@ -1821,6 +1899,15 @@ impl execution::Runner for LocationRunner {
         let lease = self.0.clone();
         Box::pin(async move {
             let composed = lease.production.as_ref().expect("production runner");
+            let queued = if matches!(&outcome, Err(run_coordinator::Error::Interrupted(_))) {
+                composed
+                    .cancel_queued_shells(&id)
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| run_coordinator::Error::Closed)
+            } else {
+                Ok(())
+            };
             let lifecycle = match &outcome {
                 Ok(()) => ycoding_core::platform::browser::service::Lifecycle::ExecutionSucceeded,
                 Err(run_coordinator::Error::Interrupted(_)) => {
@@ -1834,14 +1921,44 @@ impl execution::Runner for LocationRunner {
             let released = composed.paired.lifecycle(&browser_id, lifecycle).await;
             let settled = execution::Runner::settled(&composed.runner, id, outcome).await;
             released.map_err(|_| run_coordinator::Error::Closed)?;
+            queued?;
             settled
         })
     }
 }
 
+fn retention_settings(
+    options: &config::LoadOptions,
+) -> Result<Arc<dyn Fn() -> retention::Settings + Send + Sync>, Failure> {
+    let options = options.clone();
+    let load = move || {
+        let mut options = options.clone();
+        if options.content.is_none() {
+            options.directory = options.roots.config.clone();
+        }
+        options.project = false;
+        config::Configuration::load(options)
+            .map(|configuration| retention::settings(&configuration))
+    };
+    let last = Arc::new(Mutex::new(
+        load().map_err(|_| unavailable("global configuration"))?,
+    ));
+    Ok(Arc::new(move || {
+        let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+        match load() {
+            Ok(settings) => *last = settings,
+            Err(_) => tracing::error!(
+                "retention configuration reload failed; keeping the last loaded settings"
+            ),
+        }
+        *last
+    }))
+}
+
 pub(crate) struct Maintenance {
     stop: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
+    telemetry: Mutex<Option<JoinHandle<()>>>,
     credentials: credential::Service,
     globals: Arc<globals::Globals>,
     cleanups: tokio::sync::Mutex<Option<ycoding_core::session::cleanups::Maintenance>>,
@@ -1853,11 +1970,64 @@ impl Maintenance {
         Self {
             stop: watch::channel(false).0,
             task: Mutex::new(None),
+            telemetry: Mutex::new(None),
             credentials: factory.credentials.clone(),
             globals: factory.globals.clone(),
             cleanups: tokio::sync::Mutex::new(None),
             notifications: Mutex::new(None),
         }
+    }
+
+    async fn housekeeping(&self, factory: &Factory) -> Result<(), Failure> {
+        let task =
+            ycoding_core::telemetry::Service::new(factory.client.clone(), factory.settings.clone())
+                .housekeeping(self.stop.subscribe(), |_| {
+                    tracing::error!("Web latency pruning failed")
+                })
+                .await
+                .map_err(|_| unavailable("telemetry pruning"))?;
+        *self
+            .telemetry
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(task);
+        Ok(())
+    }
+
+    async fn cleanups(&self, factory: &Factory) -> Result<(), Failure> {
+        let mut cleanup = ycoding_core::session::cleanups::Maintenance::start(
+            ycoding_core::session::cleanups::Cleanups::process(
+                factory.client.clone(),
+                &factory.options.roots,
+                factory.settings.clone(),
+            ),
+        )
+        .await
+        .map_err(|_| unavailable("session cleanup startup"))?;
+        let failures = &cleanup.startup().failures;
+        let deferred = failures
+            .iter()
+            .filter(|(_, error)| {
+                matches!(
+                    error,
+                    ycoding_core::session::cleanups::Error::Analytics(analytics)
+                        if ycoding_core::telemetry::derived_engine_unavailable(analytics)
+                )
+            })
+            .count();
+        if deferred < failures.len() {
+            if cleanup.close().await.is_err() {
+                tracing::error!("session cleanup shutdown failed");
+            }
+            return Err(unavailable("session cleanup startup"));
+        }
+        if deferred > 0 {
+            tracing::error!(
+                deferred,
+                "derived analytics cleanup deferred while the analytics engine is unavailable"
+            );
+        }
+        *self.cleanups.lock().await = Some(cleanup);
+        Ok(())
     }
 
     async fn start(
@@ -1868,21 +2038,8 @@ impl Maintenance {
         factory: Arc<Factory>,
         orchestration: orchestration::Service,
     ) -> Result<(), Failure> {
-        let mut cleanup = ycoding_core::session::cleanups::Maintenance::start(
-            ycoding_core::session::cleanups::Cleanups::process(
-                factory.client.clone(),
-                &factory.options.roots,
-            ),
-        )
-        .await
-        .map_err(|_| unavailable("session cleanup startup"))?;
-        if !cleanup.startup().failures.is_empty() {
-            if cleanup.close().await.is_err() {
-                tracing::error!("session cleanup shutdown failed");
-            }
-            return Err(unavailable("session cleanup startup"));
-        }
-        *self.cleanups.lock().await = Some(cleanup);
+        self.housekeeping(&factory).await?;
+        self.cleanups(&factory).await?;
         let notify = Arc::new(tokio::sync::Notify::new());
         let notified = notify.clone();
         let subscriber = factory
@@ -2014,6 +2171,11 @@ impl Maintenance {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        let telemetry = self
+            .telemetry
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         let results = [
             match task {
                 Some(task) => task.await.map_err(|_| unavailable("runtime maintenance")),
@@ -2023,6 +2185,12 @@ impl Maintenance {
                 Some(task) => task
                     .await
                     .map_err(|_| unavailable("task notifications worker")),
+                None => Ok(()),
+            },
+            match telemetry {
+                Some(task) => task
+                    .await
+                    .map_err(|_| unavailable("telemetry housekeeping")),
                 None => Ok(()),
             },
             match self.cleanups.lock().await.take() {
@@ -2083,6 +2251,16 @@ async fn notifications(
 }
 
 impl Composed {
+    pub(crate) async fn cancel_queued_shells(
+        &self,
+        session: &ycoding_core::ycoding_schema::session::Id,
+    ) -> Result<usize, Failure> {
+        self.queued_shells
+            .cancel(session)
+            .await
+            .map_err(|_| unavailable("queued shell cancellation"))
+    }
+
     async fn stop_tasks(&self) -> Result<(), Failure> {
         self.watch_stop.send_replace(true);
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));

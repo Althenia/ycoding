@@ -247,6 +247,9 @@ async fn change(
     let core = invocation.core()?;
     let id = invocation.session(session_id)?;
     let archive = change == Change::Archive;
+    if archive {
+        crate::session_autonomy::wake_root(core, &id).await?;
+    }
     match core.sessions.change(&id, change).await {
         Ok(true) => {
             if archive {

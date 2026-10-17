@@ -8,6 +8,7 @@ import {
   cacheHitPercent,
   contextModelLabel,
   formatDiagnosticsModel,
+  generationSpeedLabel,
 } from "../../util/cache-diagnostics"
 import { Locale } from "../../util/locale"
 import { railMetrics, railWidth } from "../../routes/session/rail"
@@ -93,15 +94,10 @@ export function SidebarCacheContent(props: {
   })
   const speed = createMemo(() => {
     const value = diagnostics()?.generationSpeed
-    const latest = value?.latest
-    if (!latest) return undefined
-    const selected = props.selectedModel?.()
-    if (selected && (selected.providerID !== latest.model.providerID || selected.id !== latest.model.id ||
-      selected.variant !== latest.model.variant)) return undefined
-    const rate = latest.tokensPerSecond >= 1
-      ? Math.round(latest.tokensPerSecond).toLocaleString("en-US") : latest.tokensPerSecond.toPrecision(2)
-    const label = Locale.truncateWidth(`${rate} tok/s`, Math.max(1, rowWidth() - "Speed".length - 1))
-    if (!value || value.recent.length < 2) return label
+    const text = generationSpeedLabel(value, props.selectedModel?.())
+    if (!text) return undefined
+    const label = Locale.truncateWidth(text, Math.max(1, rowWidth() - "Speed".length - 1))
+    if (!value || value.recent.length < 2 || value.latest?.estimated) return label
     const peak = Math.max(...value.recent.map((sample) => sample.tokensPerSecond))
     const levels = "▁▂▃▄▅▆▇█"
     const trend = value.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")

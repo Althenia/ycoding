@@ -4,7 +4,9 @@ import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { SessionID } from "./session-id.js"
+import { SessionMessageID } from "./session-message-id.js"
 import { NonNegativeInt, optional, statics } from "./schema.js"
+import { SessionReviewID } from "./session-review-id.js"
 
 const NonEmptyStrings = Schema.Array(Schema.String).check(
   Schema.makeFilter<ReadonlyArray<string>>((value) => value.length > 0, {
@@ -17,6 +19,31 @@ export const RequestID = Schema.String.check(Schema.isStartsWith("grq_")).pipe(
   statics((schema) => ({ create: (id?: string) => schema.make(id ?? "grq_" + ascending()) })),
 )
 export type RequestID = typeof RequestID.Type
+
+export interface Source extends Schema.Schema.Type<typeof Source> {}
+export const Source = Schema.Struct({
+  messageID: SessionMessageID.ID,
+  callID: Schema.String,
+}).annotate({ identifier: "Guardrail.Source" })
+
+export const DecisionChoice = Schema.Literals(["approve_all", "approve", "reject", "escalate"]).annotate({
+  identifier: "Guardrail.DecisionChoice",
+})
+export type DecisionChoice = typeof DecisionChoice.Type
+
+export interface Grade extends Schema.Schema.Type<typeof Grade> {}
+export const Grade = Schema.Struct({
+  choice: DecisionChoice,
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  evidence: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)),
+}).annotate({ identifier: "Guardrail.Grade" })
+
+export interface Escalation extends Schema.Schema.Type<typeof Escalation> {}
+export const Escalation = Schema.Struct({
+  choice: DecisionChoice.pipe(optional),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+  grades: Schema.Array(Grade).pipe(optional),
+}).annotate({ identifier: "Guardrail.Escalation" })
 
 export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({
   identifier: "Guardrail.RuleSource",
@@ -66,6 +93,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   standard: Schema.Boolean,
   hardReview: Schema.Boolean.pipe(optional),
   risk: Risk.pipe(optional),
+  escalation: Escalation.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 
@@ -87,9 +115,36 @@ export class Status extends Schema.Class<Status>("Guardrail.Status")({
   blocked: NonNegativeInt,
   counters: Schema.Array(Counter),
   invalidFiles: Schema.Array(Schema.String),
+  dismissals: Schema.Array(
+    Schema.Struct({
+      sessionID: SessionID,
+      created: NonNegativeInt,
+      eventID: Schema.String,
+      ruleID: Schema.String,
+      confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0.9, maximum: 1 })),
+      source: Source.pipe(optional),
+    }),
+  ).pipe(optional),
+  decisions: Schema.Array(
+    Schema.Struct({
+      sessionID: SessionID,
+      created: NonNegativeInt,
+      requestID: Schema.String,
+      reply: Reply,
+      choice: DecisionChoice.pipe(optional),
+      confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+      grades: Schema.Array(Grade).pipe(optional),
+      ruleIDs: Schema.Array(Schema.String).pipe(optional),
+      source: Source.pipe(optional),
+    }),
+  ).pipe(optional),
 }) {}
 
 const Asked = ephemeral({ type: "guardrail.asked", schema: Request.fields })
+export const Confidence = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).annotate({
+  identifier: "Guardrail.Confidence",
+})
+export type Confidence = typeof Confidence.Type
 const Replied = ephemeral({
   type: "guardrail.replied",
   schema: {
@@ -97,6 +152,10 @@ const Replied = ephemeral({
     sessionID: SessionID,
     requestID: RequestID,
     reply: Reply,
+    decidedBy: Schema.Literal("decision-model").pipe(optional),
+    choice: DecisionChoice.pipe(optional),
+    confidence: Confidence.pipe(optional),
+    grades: Schema.Array(Grade).pipe(optional),
   },
 })
 const Decided = ephemeral({
@@ -110,4 +169,8 @@ const Decided = ephemeral({
   },
 })
 
-export const Event = { Asked, Replied, Decided, Definitions: inventory(Asked, Replied, Decided) }
+const Deferred = ephemeral({
+  type: "guardrail.deferred",
+  schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID, itemID: SessionReviewID },
+})
+export const Event = { Asked, Replied, Decided, Deferred, Definitions: inventory(Asked, Replied, Decided, Deferred) }

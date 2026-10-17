@@ -65,9 +65,11 @@ impl Service {
                 &window.messages,
                 session.revert.as_ref().map(|revert| &revert.message_id),
             )? {
-                super::diagnostics::generation_speed(&super::provider_request::recent_steps_in(
-                    &snapshot, id,
-                )?)
+                super::diagnostics::generation_speed_in(
+                    &snapshot,
+                    id,
+                    session.revert.as_ref().map(|revert| &revert.message_id),
+                )?
             } else {
                 None
             },

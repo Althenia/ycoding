@@ -14,6 +14,123 @@ impl DomainEncode for RequestId {
         self.0.encode()
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Source {
+    pub message_id: crate::session_message_id::Id,
+    pub call_id: LosslessString,
+}
+impl DomainDecode for Source {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            message_id: o.field("messageID")?,
+            call_id: o.field("callID")?,
+        })
+    }
+}
+impl DomainEncode for Source {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("messageID", &self.message_id)
+            .field("callID", &self.call_id)
+            .finish()
+    }
+}
+crate::schema::literal_enum_type!(DecisionChoice,{ApproveAll=>"approve_all",Approve=>"approve",Reject=>"reject",Escalate=>"escalate"});
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Confidence(f64);
+impl Confidence {
+    pub fn new(value: f64) -> Result<Self, DecodeError> {
+        Self::decode_at(&JsonValue::Number(value), &JsonPath::default())
+    }
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+impl DomainDecode for Confidence {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        crate::domain::number_range(v, 0.0, 1.0, p).map(Self)
+    }
+}
+impl DomainEncode for Confidence {
+    fn encode(&self) -> JsonValue {
+        JsonValue::Number(self.0)
+    }
+}
+pub(crate) fn has_non_whitespace(text: &LosslessString) -> bool {
+    text.code_units().any(|unit| {
+        !matches!(
+            unit,
+            0x0009..=0x000d
+                | 0x0020
+                | 0x00a0
+                | 0x1680
+                | 0x2000..=0x200a
+                | 0x2028
+                | 0x2029
+                | 0x202f
+                | 0x205f
+                | 0x3000
+                | 0xfeff
+        )
+    })
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Grade {
+    pub choice: DecisionChoice,
+    pub confidence: Confidence,
+    pub evidence: LosslessString,
+}
+impl DomainDecode for Grade {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        let path = p.key("evidence");
+        let evidence =
+            crate::domain::bounded_string(&o.field::<JsonValue>("evidence")?, 0, 500, &path)?;
+        if !has_non_whitespace(&evidence) {
+            return Err(path.error(DecodeErrorKind::Expected("non-blank evidence")));
+        }
+        Ok(Self {
+            choice: o.field("choice")?,
+            confidence: o.field("confidence")?,
+            evidence,
+        })
+    }
+}
+impl DomainEncode for Grade {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("choice", &self.choice)
+            .field("confidence", &self.confidence)
+            .field("evidence", &self.evidence)
+            .finish()
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Escalation {
+    pub choice: Option<DecisionChoice>,
+    pub confidence: Option<Confidence>,
+    pub grades: Option<Vec<Grade>>,
+}
+impl DomainDecode for Escalation {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            choice: o.optional("choice")?,
+            confidence: o.optional("confidence")?,
+            grades: o.optional("grades")?,
+        })
+    }
+}
+impl DomainEncode for Escalation {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .optional("choice", &self.choice)
+            .optional("confidence", &self.confidence)
+            .optional("grades", &self.grades)
+            .finish()
+    }
+}
 crate::schema::literal_enum_type!(RuleSource,{Standard=>"standard",Custom=>"custom"});
 crate::schema::literal_enum_type!(RuleDecision,{Allow=>"allow",Ask=>"ask",HardReview=>"hard_review",Deny=>"deny"});
 crate::schema::literal_enum_type!(Decision,{Allow=>"allow",Ask=>"ask",Deny=>"deny",CapExceeded=>"cap_exceeded"});
@@ -132,6 +249,7 @@ pub struct Request {
     pub standard: bool,
     pub hard_review: Option<bool>,
     pub risk: Option<Risk>,
+    pub escalation: Option<Escalation>,
     pub metadata: Option<JsonObject>,
 }
 impl DomainDecode for Request {
@@ -154,6 +272,7 @@ impl DomainDecode for Request {
             standard: o.field("standard")?,
             hard_review: o.optional("hardReview")?,
             risk: o.optional("risk")?,
+            escalation: o.optional("escalation")?,
             metadata,
         })
     }
@@ -171,6 +290,7 @@ impl DomainEncode for Request {
             .field("standard", &self.standard)
             .optional("hardReview", &self.hard_review)
             .optional("risk", &self.risk)
+            .optional("escalation", &self.escalation)
             .optional("metadata", &self.metadata)
             .finish()
     }
@@ -214,6 +334,90 @@ pub struct Status {
     pub blocked: crate::schema::NonNegativeInt,
     pub counters: Vec<Counter>,
     pub invalid_files: Vec<LosslessString>,
+    pub dismissals: Option<Vec<Dismissal>>,
+    pub decisions: Option<Vec<StatusDecision>>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dismissal {
+    pub session_id: crate::session_id::SessionId,
+    pub created: crate::schema::NonNegativeInt,
+    pub event_id: LosslessString,
+    pub rule_id: LosslessString,
+    pub confidence: f64,
+    pub source: Option<Source>,
+}
+impl DomainDecode for Dismissal {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            session_id: o.field("sessionID")?,
+            created: o.field("created")?,
+            event_id: o.field("eventID")?,
+            rule_id: o.field("ruleID")?,
+            confidence: crate::domain::number_range(
+                &o.field::<JsonValue>("confidence")?,
+                0.9,
+                1.0,
+                &p.key("confidence"),
+            )?,
+            source: o.optional("source")?,
+        })
+    }
+}
+impl DomainEncode for Dismissal {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("created", &self.created)
+            .field("eventID", &self.event_id)
+            .field("ruleID", &self.rule_id)
+            .field("confidence", &self.confidence)
+            .optional("source", &self.source)
+            .finish()
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusDecision {
+    pub session_id: crate::session_id::SessionId,
+    pub created: crate::schema::NonNegativeInt,
+    pub request_id: LosslessString,
+    pub reply: Reply,
+    pub choice: Option<DecisionChoice>,
+    pub confidence: Option<Confidence>,
+    pub grades: Option<Vec<Grade>>,
+    pub rule_ids: Option<Vec<LosslessString>>,
+    pub source: Option<Source>,
+}
+impl DomainDecode for StatusDecision {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            session_id: o.field("sessionID")?,
+            created: o.field("created")?,
+            request_id: o.field("requestID")?,
+            reply: o.field("reply")?,
+            choice: o.optional("choice")?,
+            confidence: o.optional("confidence")?,
+            grades: o.optional("grades")?,
+            rule_ids: o.optional("ruleIDs")?,
+            source: o.optional("source")?,
+        })
+    }
+}
+impl DomainEncode for StatusDecision {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("created", &self.created)
+            .field("requestID", &self.request_id)
+            .field("reply", &self.reply)
+            .optional("choice", &self.choice)
+            .optional("confidence", &self.confidence)
+            .optional("grades", &self.grades)
+            .optional("ruleIDs", &self.rule_ids)
+            .optional("source", &self.source)
+            .finish()
+    }
 }
 impl DomainDecode for Status {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
@@ -226,6 +430,8 @@ impl DomainDecode for Status {
             blocked: o.field("blocked")?,
             counters: o.field("counters")?,
             invalid_files: o.field("invalidFiles")?,
+            dismissals: o.optional("dismissals")?,
+            decisions: o.optional("decisions")?,
         })
     }
 }
@@ -239,6 +445,8 @@ impl DomainEncode for Status {
             .field("blocked", &self.blocked)
             .field("counters", &self.counters)
             .field("invalidFiles", &self.invalid_files)
+            .optional("dismissals", &self.dismissals)
+            .optional("decisions", &self.decisions)
             .finish()
     }
 }
@@ -253,7 +461,12 @@ pub struct RepliedData {
     pub session_id: crate::session_id::SessionId,
     pub request_id: RequestId,
     pub reply: Reply,
+    pub decided_by: Option<DecidedBy>,
+    pub choice: Option<DecisionChoice>,
+    pub confidence: Option<Confidence>,
+    pub grades: Option<Vec<Grade>>,
 }
+crate::schema::literal_enum_type!(DecidedBy,{DecisionModel=>"decision-model"});
 impl DomainDecode for RepliedData {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
@@ -262,6 +475,10 @@ impl DomainDecode for RepliedData {
             session_id: o.field("sessionID")?,
             request_id: o.field("requestID")?,
             reply: o.field("reply")?,
+            decided_by: o.optional("decidedBy")?,
+            choice: o.optional("choice")?,
+            confidence: o.optional("confidence")?,
+            grades: o.optional("grades")?,
         })
     }
 }
@@ -272,6 +489,10 @@ impl DomainEncode for RepliedData {
             .field("sessionID", &self.session_id)
             .field("requestID", &self.request_id)
             .field("reply", &self.reply)
+            .optional("decidedBy", &self.decided_by)
+            .optional("choice", &self.choice)
+            .optional("confidence", &self.confidence)
+            .optional("grades", &self.grades)
             .finish()
     }
 }
@@ -315,4 +536,37 @@ pub struct Decided;
 impl crate::event::EventType for Decided {
     const TYPE: &'static str = "guardrail.decided";
     type Data = DecidedData;
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeferredData {
+    pub root_session_id: crate::session_id::SessionId,
+    pub session_id: crate::session_id::SessionId,
+    pub request_id: RequestId,
+    pub item_id: crate::session_review::Id,
+}
+impl DomainDecode for DeferredData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            root_session_id: o.field("rootSessionID")?,
+            session_id: o.field("sessionID")?,
+            request_id: o.field("requestID")?,
+            item_id: o.field("itemID")?,
+        })
+    }
+}
+impl DomainEncode for DeferredData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("rootSessionID", &self.root_session_id)
+            .field("sessionID", &self.session_id)
+            .field("requestID", &self.request_id)
+            .field("itemID", &self.item_id)
+            .finish()
+    }
+}
+pub struct Deferred;
+impl crate::event::EventType for Deferred {
+    const TYPE: &'static str = "guardrail.deferred";
+    type Data = DeferredData;
 }

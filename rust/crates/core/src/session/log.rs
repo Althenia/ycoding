@@ -77,6 +77,7 @@ impl Service {
             cursor = rows.last().map(|row| row.cursor.clone());
             events.extend(
                 rows.into_iter()
+                    .filter(|row| row.record.type_.as_str() != Some("session.tool.progress.1"))
                     .map(|row| Entry::from_event(&row.record))
                     .collect::<Result<Vec<_>, Error>>()?,
             );

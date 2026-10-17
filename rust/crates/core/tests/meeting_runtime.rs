@@ -172,7 +172,7 @@ async fn open_with(
         directory: directory.clone(),
         database: database.clone(),
         config: MeetingConfig::parse(&config).unwrap(),
-        create_session: Arc::new(|_| Box::pin(async { Ok("analysis-session".to_owned()) })),
+        create_session: Arc::new(|_, _| Box::pin(async { Ok("analysis-session".to_owned()) })),
         provider_factory: Some(factory),
         heartbeat_timeout: HEARTBEAT_TIMEOUT,
         generate,

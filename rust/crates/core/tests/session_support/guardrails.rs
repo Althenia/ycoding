@@ -31,6 +31,8 @@ pub fn guardrails(store: &ycoding_store::Store) -> Guardrails {
             custom: Arc::new(Vec::new),
             enabled: true,
             limits: Limits::default(),
+            decide_reviews: false,
+            decide_hard_reviews: true,
         },
         publisher,
     )

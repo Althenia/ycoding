@@ -8,6 +8,157 @@ pub use state::{Authority, Error, Event, Publisher, SessionAuthority, Wait};
 
 use ycoding_schema::{LosslessString, permission};
 
+pub(crate) async fn answer_options(
+    evaluator: &dyn crate::process::guardrails::decision::Evaluator,
+    session: &ycoding_schema::session::Id,
+    evidence: ycoding_schema::JsonValue,
+    questions: Vec<ycoding_schema::JsonValue>,
+    cancellation: &crate::tools::code_mode::Cancellation,
+) -> Result<ycoding_schema::JsonObject, ycoding_schema::session_review::Reason> {
+    use ycoding_schema::{JsonObject, JsonValue, ObjectEncoder, session_review::Reason};
+    if questions.is_empty() {
+        return Err(Reason::FreeText);
+    }
+    if questions.len() > 32 {
+        return Err(Reason::Error);
+    }
+    let input = ObjectEncoder::new()
+        .field("provider", "agent")
+        .field(
+            "request",
+            &ObjectEncoder::new()
+                .field("state", &evidence)
+                .field("questions", &JsonValue::Array(questions.clone()))
+                .finish(),
+        )
+        .finish();
+    let response = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(Reason::Error),
+        result = tokio::time::timeout(std::time::Duration::from_secs(60), evaluator.evaluate(input, crate::resources::decision::Invocation {
+            session_id: session,
+            input_id: None,
+            cancellation,
+            attribution: crate::session::usage_attribution::Attribution::Unset,
+        })) => result.map_err(|_| Reason::Timeout)?.map_err(|_| Reason::Error)?,
+    };
+    let JsonValue::Object(response) = response else {
+        return Err(Reason::Error);
+    };
+    let Some(JsonValue::Object(response)) = response.get(&"response".into()) else {
+        return Err(Reason::Error);
+    };
+    let Some(JsonValue::Array(answers)) = response.get(&"answers".into()) else {
+        return Err(Reason::Error);
+    };
+    if answers.len() != questions.len() {
+        return Err(Reason::Error);
+    }
+    let mut result = JsonObject::new();
+    for question in questions {
+        let JsonValue::Object(question) = question else {
+            return Err(Reason::Error);
+        };
+        let Some(JsonValue::String(name)) = question.get(&"name".into()) else {
+            return Err(Reason::Error);
+        };
+        let matching = answers
+            .iter()
+            .filter_map(|answer| match answer {
+                JsonValue::Object(answer)
+                    if answer.get(&"name".into()) == Some(&JsonValue::String(name.clone())) =>
+                {
+                    Some(answer)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(Reason::Error);
+        }
+        let answer = matching[0];
+        if answer.get(&"type".into()) == Some(&JsonValue::String("refusal".into())) {
+            return Err(Reason::Refused);
+        }
+        if !matches!(answer.get(&"confidence".into()), Some(JsonValue::Number(value)) if value.is_finite() && *value >= 0.8 && *value <= 1.0)
+        {
+            return Err(Reason::LowConfidence);
+        }
+        let Some(choice) = answer.get(&"choice".into()) else {
+            return Err(Reason::Error);
+        };
+        if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into()))
+            || !matches!(question.get(&"choices".into()), Some(JsonValue::Array(choices)) if choices.iter().any(|entry| matches!(entry, JsonValue::Object(entry) if entry.get(&"value".into()) == Some(choice))))
+        {
+            return Err(Reason::Error);
+        }
+        result.insert(name.clone(), choice.clone());
+    }
+    Ok(result)
+}
+
+pub(crate) fn option_question(
+    name: &str,
+    instructions: &str,
+    choices: Vec<ycoding_schema::JsonValue>,
+) -> ycoding_schema::JsonValue {
+    ycoding_schema::ObjectEncoder::new()
+        .field("type", "choice")
+        .field("name", name)
+        .field("instructions", instructions)
+        .field("choices", &ycoding_schema::JsonValue::Array(choices))
+        .finish()
+}
+
+#[derive(Clone)]
+pub struct Reviews {
+    pub service: crate::session::review::Service,
+    pub limit: usize,
+}
+
+impl Reviews {
+    pub(crate) async fn defer(
+        &self,
+        session_id: &ycoding_schema::session_id::SessionId,
+        kind: ycoding_schema::session_review::Kind,
+        reason: ycoding_schema::session_review::Reason,
+        origin: ycoding_schema::session_review::Origin,
+        payload: ycoding_schema::session_review::Payload,
+        conversion: bool,
+    ) -> Result<ycoding_schema::session_review::Id, crate::session::review::Error> {
+        self.service
+            .open(crate::session::review::OpenInput {
+                session_id: session_id.clone(),
+                kind,
+                reason,
+                choice: None,
+                confidence: None,
+                grades: None,
+                origin,
+                payload,
+                limit: self.limit,
+                conversion,
+                created: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock after epoch")
+                    .as_millis() as i64,
+            })
+            .await
+            .map(|item| item.deferral.item_id)
+    }
+}
+
+pub(crate) fn request_origin(
+    id: &impl ycoding_schema::DomainEncode,
+) -> ycoding_schema::session_review::Origin {
+    match id.encode() {
+        ycoding_schema::JsonValue::String(request_id) => {
+            ycoding_schema::session_review::Origin::Request { request_id }
+        }
+        _ => unreachable!("request identifiers encode as strings"),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect {
     Allow,

@@ -103,11 +103,18 @@ impl Completion {
         {
             return Ok(());
         }
+        let (open, reviews) = super::review_fold::family_open(&snapshot, session_id.as_lossless())?;
+        if open > 0 {
+            return Ok(());
+        }
         drop(snapshot);
         let (jobs, session_id) = (self.jobs.clone(), session_id.clone());
         self.sessions
             .client
             .submit(move |tx| {
+                if !reviews.holds(tx)? {
+                    return Ok(());
+                }
                 let mut reader = Reader::Transaction(tx);
                 let publishable =
                     candidate_is_current(&mut reader, &jobs, &session_id, &active, &candidate)?;

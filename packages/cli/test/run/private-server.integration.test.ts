@@ -162,6 +162,133 @@ test("isolated data is removed after a Rust bootstrap error without changing use
   }
 }, 30_000)
 
+const storeVariables = ["YCODING_DB", "YCODING_SQLITE_IMPORT_SOURCE", "YCODING_DISABLE_CHANNEL_DB", "XDG_DATA_HOME"]
+
+test.each(["local", "beta"])(
+  "isolated %s run withholds a user SQLite import source and store selection from its private server",
+  async (channel) => {
+    const fixture = await stubbedRuntime()
+    try {
+      const result = await spawn(
+        ["run", "--isolated", "--format", "json", "hello"],
+        fixture.environment({
+          YCODING_DB: fixture.user.database,
+          YCODING_SQLITE_IMPORT_SOURCE: fixture.user.source,
+          YCODING_DISABLE_CHANNEL_DB: "1",
+        }),
+        channel,
+      )
+      expect(result.exitCode).not.toBe(0)
+      const [captured] = await fixture.captured(result)
+      expect(captured.YCODING_SQLITE_IMPORT_SOURCE ?? "").toBe("")
+      expect(captured.XDG_DATA_HOME).not.toBe(path.join(fixture.root, "data"))
+      expect(captured.YCODING_DB).toBe(
+        path.join(captured.XDG_DATA_HOME!, channel === "beta" ? "ycoding-beta" : "ycoding", "ycoding.redb"),
+      )
+      expect(await Bun.file(fixture.user.source).exists()).toBe(false)
+    } finally {
+      await fixture.close()
+    }
+  },
+  30_000,
+)
+
+test("private config run passes user store variables through to its server", async () => {
+  const fixture = await stubbedRuntime()
+  try {
+    const config = path.join(fixture.root, "run.jsonc")
+    await fs.writeFile(config, "{}")
+    const user = {
+      YCODING_DB: fixture.user.database,
+      YCODING_SQLITE_IMPORT_SOURCE: fixture.user.source,
+      YCODING_DISABLE_CHANNEL_DB: "1",
+    }
+    const result = await spawn(
+      ["run", "--config", config, "--format", "json", "hello"],
+      fixture.environment(user),
+      "local",
+    )
+    expect(result.exitCode).not.toBe(0)
+    const [captured] = await fixture.captured(result)
+    expect(captured).toMatchObject({ ...user, XDG_DATA_HOME: path.join(fixture.root, "data") })
+  } finally {
+    await fixture.close()
+  }
+}, 30_000)
+
+test("serve entrypoint passes user store variables through to the runtime", async () => {
+  const fixture = await stubbedRuntime()
+  try {
+    const user = {
+      YCODING_DB: fixture.user.database,
+      YCODING_SQLITE_IMPORT_SOURCE: fixture.user.source,
+      YCODING_DISABLE_CHANNEL_DB: "1",
+    }
+    const result = await spawn(["serve", "--stdio", "--port", "0"], fixture.environment(user), "local")
+    const [captured] = await fixture.captured(result)
+    expect(captured).toMatchObject({ ...user, XDG_DATA_HOME: path.join(fixture.root, "data") })
+  } finally {
+    await fixture.close()
+  }
+}, 30_000)
+
+async function stubbedRuntime() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-run-stub-")))
+  const stub = path.join(root, "runtime-stub.ts")
+  const capture = path.join(root, "capture.jsonl")
+  await fs.mkdir(path.join(root, "tmp"))
+  await fs.writeFile(
+    stub,
+    `#!${process.execPath}
+import { appendFileSync } from "node:fs"
+const keys = ${JSON.stringify(storeVariables)}
+appendFileSync(process.env.YCODING_TEST_STUB_CAPTURE!, JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key]]))) + "\\n")
+process.exit(1)
+`,
+    { mode: 0o755 },
+  )
+  const user = {
+    database: path.join(root, "user-data", "user-selected.redb"),
+    source: path.join(root, "user-source.sqlite"),
+  }
+  return {
+    root,
+    user,
+    environment: (ambient: Record<string, string>): NodeJS.ProcessEnv => ({
+      PATH: process.env.PATH,
+      HOME: path.join(root, "home"),
+      YCODING_TEST_HOME: path.join(root, "home"),
+      XDG_CONFIG_HOME: path.join(root, "config"),
+      XDG_DATA_HOME: path.join(root, "data"),
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      XDG_STATE_HOME: path.join(root, "state"),
+      TMPDIR: path.join(root, "tmp"),
+      TEMP: path.join(root, "tmp"),
+      YCODING_DISABLE_MODELS_FETCH: "1",
+      YCODING_DISABLE_AUTOUPDATE: "1",
+      YCODING_RUNTIME_EXECUTABLE: stub,
+      YCODING_TEST_STUB_CAPTURE: capture,
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(root, "bun-cache"),
+      ...ambient,
+    }),
+    captured: async (result: {
+      exitCode: number
+      stdout: string
+      stderr: string
+    }): Promise<Record<string, string | undefined>[]> => {
+      if (!(await Bun.file(capture).exists()))
+        throw new Error(
+          `The runtime stub never started (CLI exit ${result.exitCode}).\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+        )
+      return (await Bun.file(capture).text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+    },
+    close: () => fs.rm(root, { recursive: true, force: true }),
+  }
+}
+
 async function privateRun(channel = "local") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-run-private-")))
   const user = path.join(root, "user")
@@ -209,7 +336,6 @@ async function privateRun(channel = "local") {
     XDG_STATE_HOME: path.join(user, "state"),
     TMPDIR: tmp,
     TEMP: tmp,
-    YCODING_DB: path.join(user, "data", channel === "beta" ? "ycoding-beta" : "ycoding", "ycoding.redb"),
     YCODING_DISABLE_MODELS_FETCH: "1",
     YCODING_DISABLE_AUTOUPDATE: "1",
     PWD: project,
@@ -230,7 +356,10 @@ async function privateRun(channel = "local") {
     stores,
     standIn,
     env,
-    userDatabase: env.YCODING_DB!,
+    userDatabase:
+      channel === "beta"
+        ? path.join(user, "data", "ycoding-beta", "ycoding.redb")
+        : path.join(user, "data", "ycoding", `ycoding-${channel}.redb`),
     runWith,
     run: (...flags: string[]) => runWith({}, ...flags),
     close: async () => {

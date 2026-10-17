@@ -391,6 +391,7 @@ async fn shell_notices_are_admitted_as_steering_input_and_wake_the_session_throu
             shell_id: "shl_exec_notice".into(),
             state: "completed",
             text: "all green".into(),
+            resume: true,
         }),
     )
     .await
@@ -412,5 +413,50 @@ async fn shell_notices_are_admitted_as_steering_input_and_wake_the_session_throu
         "<shell id=\"call_exec_notice\" state=\"completed\" command=\"make test\">\nall green\n</shell>"
     );
     assert!(service.pending_list(&id).unwrap().is_empty());
+    assert!(!world.jobs.outstanding_sessions().contains(&id));
+}
+
+#[tokio::test]
+async fn a_quiet_shell_notice_is_admitted_without_waking_the_session() {
+    let world = &*WORLD;
+    let id = seed(world, "ses_exec_quiet_notice", Script::Idle);
+    let shells = world.execution.job_shells();
+    let job = Job {
+        session_id: id.clone(),
+        call_id: "call_exec_quiet".into(),
+        command: "make test".into(),
+    };
+    drop(shells.background(&job));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        shells.deliver(Notice::Completed {
+            job,
+            shell_id: "shl_exec_quiet".into(),
+            state: "cancelled",
+            text: "cancelled before it started".into(),
+            resume: false,
+        }),
+    )
+    .await
+    .expect("quiet notice delivery settles")
+    .unwrap();
+    let service = Service::new(world.client.clone());
+    assert!(!world.execution.active().contains(&id));
+    assert!(
+        service
+            .snapshot(&id, 100, None)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    let pending = service.pending_list(&id).unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "the quiet notice stays admitted for the next drain"
+    );
+    assert!(
+        ycoding_schema::stringify_json(&pending[0].data).contains("cancelled before it started")
+    );
     assert!(!world.jobs.outstanding_sessions().contains(&id));
 }

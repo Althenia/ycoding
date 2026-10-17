@@ -30,6 +30,7 @@ pub const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<resources::LatencyTable>(),
         TableDeclaration::of::<resources::SequenceTable>(),
         TableDeclaration::of::<resources::RequestTable>(),
+        TableDeclaration::of::<resources::UsageAnalyticsRequestTable>(),
         TableDeclaration::of::<resources::UsageTable>(),
         TableDeclaration::of::<resources::ContinuationGenerationTable>(),
         TableDeclaration::of::<resources::ContinuationTable>(),
@@ -40,6 +41,8 @@ pub const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<session::ExclusionTable>(),
         TableDeclaration::of::<analytics::DeliveryTable>(),
         TableDeclaration::of::<analytics::IntentTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::model_incident::IncidentTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::model_incident::GuidanceClearTable>(),
     ],
 );
 
@@ -76,5 +79,6 @@ pub fn record(id: &str) -> session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }

@@ -478,7 +478,11 @@ pub fn delete_task(tx: &mut Write<'_>, id: &LosslessString) -> Result<bool, Erro
         "session_task_notification_transition_idx",
         &key(id),
     )?;
-    tx.delete::<TaskTable>(&key(id))
+    let removed = tx.delete::<TaskTable>(&key(id))?;
+    if removed {
+        crate::resources::source_changed(tx, "task", key(id), true)?;
+    }
+    Ok(removed)
 }
 
 pub fn delete(tx: &mut Write<'_>, id: &LosslessString) -> Result<bool, Error> {

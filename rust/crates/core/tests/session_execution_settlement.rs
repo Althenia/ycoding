@@ -15,12 +15,14 @@ use ycoding_core::{
         execution::{Execution, Locations, Runner},
         orchestration::{self, Launch},
         pending::Request,
+        review::{self, ChildAnswer, Delivery, DeliveryFuture, RecoveryResolution},
         run_coordinator::{DrainRequest, Error, InterruptReason, Outcome, RunFuture},
         store::Service,
     },
 };
 use ycoding_schema::{
     DomainDecode, location, parse_json, session, session_message, session_pending,
+    session_review::{Decision, RecoveryChoice},
 };
 use ycoding_store::{
     Client, KeyPart,
@@ -122,12 +124,33 @@ impl Locations for Placement {
 
 struct LocalExecution;
 impl orchestration::Execution for LocalExecution {
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        let id = id.clone();
+        Box::pin(async move { WORLD.execution.request_resume(&id).await })
+    }
+
     fn wake(&self, id: &session::Id) -> Outcome {
         WORLD.execution.wake(id)
     }
     fn interrupt(&self, id: &session::Id) -> RunFuture {
         let id = id.clone();
         Box::pin(async move { WORLD.execution.interrupt(&id).await })
+    }
+}
+
+struct RecoveryDelivery(orchestration::Service);
+
+impl Delivery for RecoveryDelivery {
+    fn wake(&self, id: &session::Id) {
+        WORLD.execution.wake(id).unwrap();
+    }
+
+    fn answer_child<'a>(&'a self, answer: ChildAnswer) -> DeliveryFuture<'a> {
+        Box::pin(self.0.answer_review(answer))
+    }
+
+    fn resolve_recovery<'a>(&'a self, resolution: RecoveryResolution) -> DeliveryFuture<'a> {
+        Box::pin(self.0.resolve_recovery(resolution))
     }
 }
 
@@ -398,6 +421,156 @@ async fn waiting_managed_children_do_not_invoke_the_runner_or_consume_pending_in
     assert_eq!(WORLD.sessions.pending_list(&child).unwrap().len(), 1);
     assert_eq!(task_state(&child), "waiting");
     idle(&parent).await;
+}
+
+#[tokio::test]
+async fn human_recovery_holds_block_execution_without_rejecting_durable_input_or_cancellation() {
+    let _execution = EXECUTION_TESTS.lock().await;
+    for stopped in [false, true] {
+        let parent = seed(if stopped {
+            "ses_recovery_stopped_parent"
+        } else {
+            "ses_recovery_open_parent"
+        });
+        let child = task(&parent, "waiting").await;
+        let item = format!("rvw_execution_{}", if stopped { "stopped" } else { "open" });
+        publish(&child, "session.review.deferred.1", json!({
+            "itemID": item, "kind": "recovery", "reason": "restart",
+            "origin": {"questionID": "qst_one"},
+            "payload": {"type": "recovery", "tools": [{"messageID": "msg_unknown", "callID": "call_write", "name": "write"}]},
+        })).await;
+        let reviews = review::Service::new(
+            WORLD.sessions.clone(),
+            Arc::new(RecoveryDelivery(orchestration::Service::new(
+                WORLD.sessions.clone(),
+                Arc::new(LocalExecution),
+            ))),
+        );
+        let decision = |choice| review::DecideInput {
+            session_id: child.clone(),
+            item_id: ycoding_schema::session_review::Id::new(item.clone()).unwrap(),
+            decision: Decision::Recovery { choice },
+            now: 30,
+        };
+        if stopped {
+            reviews
+                .decide(decision(RecoveryChoice::Stop))
+                .await
+                .unwrap();
+        }
+        let request = Request {
+            id: session_message::Id::new(format!("msg_recovery_input_{stopped}")).unwrap(),
+            session_id: child.clone(),
+            input: session_pending::Message::decode(
+                &parse_json(
+                    r#"{"type":"user","data":{"text":"queued while held"},"delivery":"steer"}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new(format!("evt_recovery_input_{stopped}"))
+                .unwrap(),
+            created: 25,
+        };
+        let admitted = WORLD.execution.prompt(request.clone(), None).await.unwrap();
+        let retried = WORLD.execution.prompt(request, None).await.unwrap();
+        assert_eq!(admitted.id, retried.id);
+        WORLD.execution.wake(&child).unwrap();
+        assert!(
+            matches!(WORLD.execution.resume(&child).await, Err(Error::Runner(error)) if error.r#type.as_str() == Some("recovery_required"))
+        );
+        assert!(
+            matches!(WORLD.execution.request_resume(&child).await, Err(Error::Runner(error)) if error.r#type.as_str() == Some("recovery_required"))
+        );
+        assert!(
+            matches!(WORLD.execution.coordinator().run(&child).await, Err(Error::Runner(error)) if error.r#type.as_str() == Some("recovery_required"))
+        );
+        WORLD.execution.coordinator().wake(&child).unwrap();
+        idle(&child).await;
+        WORLD.execution.request_interrupt(&child).unwrap();
+        WORLD.execution.interrupt(&child).await.unwrap();
+        idle(&child).await;
+        assert_eq!(calls(&child), 0);
+        assert_eq!(WORLD.sessions.pending_list(&child).unwrap().len(), 1);
+        assert_eq!(events(&child, "session.input.admitted.1").len(), 1);
+        assert!(events(&child, "session.execution.started.1").is_empty());
+        assert!(events(&child, "session.execution.succeeded.1").is_empty());
+        assert!(events(&child, "session.execution.failed.1").is_empty());
+        assert_eq!(task_state(&child), if stopped { "lost" } else { "waiting" });
+
+        reviews
+            .decide(decision(RecoveryChoice::Continue))
+            .await
+            .unwrap();
+        idle(&child).await;
+        idle(&parent).await;
+        assert_eq!(calls(&child), 1);
+        assert!(WORLD.sessions.pending_list(&child).unwrap().is_empty());
+        assert_eq!(events(&child, "session.execution.started.1").len(), 1);
+        assert!(!reviews.has_open(&child).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn restart_recovery_returns_after_admission_while_the_child_drain_remains_owned_and_active() {
+    let _execution = EXECUTION_TESTS.lock().await;
+    let parent = seed("ses_recovery_active_parent");
+    let child = task(&parent, "running").await;
+    publish(&child, "session.execution.started.1", json!({})).await;
+    publish(&child, "session.step.started.1", json!({"assistantMessageID": "msg_recovery_active", "agent": "reviewer", "model": {"providerID": "test", "id": "test"}})).await;
+    WORLD.sessions.reconcile_interrupted(25).await.unwrap();
+    let key = tuple_key(&[KeyPart::String(child.as_lossless())]);
+    WORLD
+        .client
+        .submit(move |tx| {
+            let mut task = tx.get::<TaskTable>(&key)?.unwrap();
+            task.owner_pid = Some(2_000_000_000);
+            task.owner_started = Some("dead".into());
+            TaskTable::put(tx, &task)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let started = Arc::new(Semaphore::new(0));
+    let entered = started.clone();
+    WORLD.scripts.actions.lock().unwrap().insert(
+        child.clone(),
+        Arc::new(move |mut request| {
+            let entered = entered.clone();
+            Box::pin(async move {
+                assert!(request.force);
+                entered.add_permits(1);
+                Err(Error::Interrupted(request.cancellation.cancelled().await))
+            })
+        }),
+    );
+    let orchestration =
+        orchestration::Service::new(WORLD.sessions.clone(), Arc::new(LocalExecution));
+
+    let owner = ycoding_core::platform::shell::ledger::identify(std::process::id())
+        .await
+        .unwrap();
+    let recovered = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        orchestration.recover_restart_with_processes(|| async { Ok(vec![owner]) }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(recovered, 1);
+    tokio::time::timeout(std::time::Duration::from_secs(30), started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    assert!(WORLD.execution.active().contains(&child));
+    assert_eq!(calls(&child), 1);
+    assert_eq!(task_state(&child), "running");
+    WORLD.execution.interrupt(&child).await.unwrap();
+    idle(&child).await;
+    idle(&parent).await;
+    assert!(!WORLD.execution.active().contains(&child));
 }
 
 #[tokio::test]

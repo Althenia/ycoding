@@ -31,7 +31,23 @@ function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | 
           if (operation === "notice.subscribe")
             return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
           if (operation === "session.autonomy.get")
-            return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
+            return {
+              status: "ok" as const,
+              value: {
+                data: {
+                  mode: "normal",
+                  yolo: 0,
+                  effective: {
+                    yolo: 0,
+                    asleep: false,
+                    guardrailsEnabled: true,
+                    ordinaryReviewsAuto: false,
+                    modelReviews: false,
+                    hardModelReviews: false,
+                  },
+                },
+              },
+            }
           return { status: "ok" as const, value: { data: [] } }
         },
       }

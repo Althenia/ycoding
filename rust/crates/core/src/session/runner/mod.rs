@@ -19,6 +19,7 @@ use super::{
     skill,
     store::Service,
     usage,
+    usage_attribution::Attribution,
 };
 use crate::{
     instructions::Source,
@@ -93,6 +94,7 @@ pub struct Services {
 }
 
 struct Work {
+    attribution: Attribution,
     assistant: session_message::Id,
     tasks: tokio::sync::Mutex<tokio::task::JoinSet<Outcome>>,
     cancellation: code_mode::Cancellation,
@@ -104,8 +106,65 @@ struct Work {
     continuation_used: bool,
     fallback: std::sync::atomic::AtomicBool,
     overflow: std::sync::atomic::AtomicBool,
+    reroutable: std::sync::atomic::AtomicBool,
     text_only: bool,
     start_snapshot: Option<ycoding_schema::snapshot::Id>,
+}
+impl Work {
+    fn new(
+        assistant: session_message::Id,
+        attribution: Attribution,
+        attempts: u32,
+        continuation_used: bool,
+        text_only: bool,
+        start_snapshot: Option<ycoding_schema::snapshot::Id>,
+    ) -> Self {
+        Self {
+            attribution,
+            assistant,
+            tasks: tokio::sync::Mutex::new(tokio::task::JoinSet::new()),
+            cancellation: code_mode::Cancellation::default(),
+            progress_error: Mutex::new(None),
+            usage: Mutex::new(None),
+            attempts: std::sync::atomic::AtomicU32::new(attempts),
+            timing: Mutex::new(Timing {
+                started: std::time::Instant::now(),
+                first_output: None,
+                ended: None,
+                waiting: None,
+                retry_wait: std::time::Duration::ZERO,
+                generation: usage::GenerationTimes::default(),
+                streamed_tool_inputs: std::collections::HashSet::new(),
+            }),
+            recording: Mutex::new(None),
+            continuation_used,
+            fallback: std::sync::atomic::AtomicBool::new(false),
+            overflow: std::sync::atomic::AtomicBool::new(false),
+            reroutable: std::sync::atomic::AtomicBool::new(false),
+            text_only,
+            start_snapshot,
+        }
+    }
+}
+struct Restart {
+    assistant: session_message::Id,
+    attempts: u32,
+    pending: Option<provider_request::Pending>,
+}
+#[derive(Default)]
+struct Route {
+    primary: Option<ycoding_schema::model::Ref>,
+    current: Option<ycoding_schema::model::Ref>,
+    tried: Vec<ycoding_schema::model::Ref>,
+}
+struct Reroute<'a> {
+    session: &'a session::Id,
+    agent: &'a ycoding_schema::agent::Id,
+    assistant: &'a session_message::Id,
+    from: &'a ycoding_schema::model::Ref,
+    to: &'a ycoding_schema::model::Ref,
+    failure: &'a Error,
+    abandoned: Option<(&'a Tracked, &'a Work)>,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Overflow {
@@ -119,6 +178,23 @@ struct Timing {
     waiting: Option<std::time::Instant>,
     retry_wait: std::time::Duration,
     generation: usage::GenerationTimes,
+    streamed_tool_inputs: std::collections::HashSet<ycoding_schema::LosslessString>,
+}
+struct EndOnExit {
+    work: Arc<Work>,
+    clock: Arc<dyn Clock>,
+}
+impl Drop for EndOnExit {
+    fn drop(&mut self) {
+        let ended = self.clock.nanos();
+        self.work
+            .timing
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .generation
+            .ended
+            .get_or_insert(ended);
+    }
 }
 struct Recording {
     tracked: Tracked,
@@ -186,6 +262,34 @@ struct Resolution {
     binding: Option<ycoding_schema::session_event::ProfileBinding>,
 }
 
+struct Unresolved {
+    error: Error,
+    unavailable: bool,
+}
+impl Unresolved {
+    fn other(error: Error) -> Self {
+        Self {
+            error,
+            unavailable: false,
+        }
+    }
+    fn model(
+        selection: &ycoding_schema::model::Ref,
+        cause: model::Error,
+        package: Option<&LosslessString>,
+    ) -> Self {
+        Self {
+            unavailable: matches!(
+                cause,
+                model::Error::ModelUnavailable
+                    | model::Error::VariantUnavailable
+                    | model::Error::UnsupportedPackage
+            ),
+            error: model_resolution_error(selection, cause, package),
+        }
+    }
+}
+
 struct SelectedModel {
     resolved: model::Resolved,
     account_identity: Option<String>,
@@ -238,11 +342,21 @@ impl Local {
         saved: &[credential::Info],
         saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
     ) -> Result<SelectedModel, Error> {
+        self.select_attempt(selection, saved, saved_binding)
+            .map_err(|failure| failure.error)
+    }
+
+    fn select_attempt(
+        &self,
+        selection: &ycoding_schema::model::Ref,
+        saved: &[credential::Info],
+        saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
+    ) -> Result<SelectedModel, Unresolved> {
         let services = &self.0.services;
         let catalog = services.models.catalog();
-        let provider = catalog.provider(&selection.provider_id).ok_or_else(|| {
-            model_resolution_error(selection, model::Error::ModelUnavailable, None)
-        })?;
+        let provider = catalog
+            .provider(&selection.provider_id)
+            .ok_or_else(|| Unresolved::model(selection, model::Error::ModelUnavailable, None))?;
         let integration = provider
             .integration_id
             .as_ref()
@@ -265,10 +379,10 @@ impl Local {
             })
             .transpose()
             .map_err(|_| {
-                error(
+                Unresolved::other(error(
                     "model.profile",
                     "Selected profile is unavailable; select the profile again",
-                )
+                ))
             })?;
         let connection = if let (Some(binding), Some(profile)) = (&binding, &selection.profile) {
             Some(
@@ -276,26 +390,30 @@ impl Local {
                     .credentials
                     .resolve_selection(&selection.provider_id.0, integration, &profile.0, binding)
                     .map_err(|_| {
-                        error(
+                        Unresolved::other(error(
                             "model.profile",
                             "Selected profile is unavailable; select the profile again",
-                        )
+                        ))
                     })?,
             )
         } else {
-            services
-                .credentials
-                .active(integration)
-                .map_err(|_| error("provider.auth", "Provider account is unavailable"))?
+            services.credentials.active(integration).map_err(|_| {
+                Unresolved::other(error("provider.auth", "Provider account is unavailable"))
+            })?
         };
         let resolved = model::resolve_catalog(&catalog, selection, saved, connection.as_ref())
-            .map_err(|cause| model_resolution_error(selection, cause, None))?;
+            .map_err(|cause| Unresolved::model(selection, cause, None))?;
         let account_identity =
             account_identity_digest(connection.as_ref(), &resolved.info, integration);
         let binding = binding
             .map(|binding| binding.domain())
             .transpose()
-            .map_err(|_| error("model.profile", "Selected profile binding is invalid"))?;
+            .map_err(|_| {
+                Unresolved::other(error(
+                    "model.profile",
+                    "Selected profile binding is invalid",
+                ))
+            })?;
         Ok(SelectedModel {
             resolved,
             account_identity,
@@ -310,8 +428,19 @@ impl Local {
         saved: &[credential::Info],
         saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
     ) -> Result<Resolution, Error> {
+        self.resolve_attempt(selection, saved, saved_binding)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    async fn resolve_attempt(
+        &self,
+        selection: &ycoding_schema::model::Ref,
+        saved: &[credential::Info],
+        saved_binding: Option<&ycoding_schema::session_event::ProfileBinding>,
+    ) -> Result<Resolution, Unresolved> {
         let services = &self.0.services;
-        let selected = self.select_model(selection, saved, saved_binding)?;
+        let selected = self.select_attempt(selection, saved, saved_binding)?;
         let SelectedModel {
             resolved,
             account_identity,
@@ -329,24 +458,20 @@ impl Local {
                         services.claude.as_ref().map(|host| &host.accounts),
                     )
                     .await
-                    .map_err(|_| error("model.profile", if connection.integration_id().as_str() == Some("anthropic") {
+                    .map_err(|_| Unresolved::other(error("model.profile", if connection.integration_id().as_str() == Some("anthropic") {
                         ycoding_ai::claude_code::RECONNECT
                     } else {
                         "Selected profile requires reconnect. Sign in to this profile again."
-                    }))?;
-                Some(
-                    prepared
-                        .domain()
-                        .map_err(|_| error("provider.auth", "Provider credentials are invalid"))?,
-                )
+                    })))?;
+                Some(prepared.domain().map_err(|_| {
+                    Unresolved::other(error("provider.auth", "Provider credentials are invalid"))
+                })?)
             }
             None => None,
         };
-        let context = self
-            .0
-            .providers
-            .as_ref()
-            .map_err(|_| error("provider.auth", "Provider context is unavailable"))?;
+        let context = self.0.providers.as_ref().map_err(|_| {
+            Unresolved::other(error("provider.auth", "Provider context is unavailable"))
+        })?;
         let model = context
             .selected_model(
                 &resolved.info,
@@ -358,11 +483,11 @@ impl Local {
             )
             .await
             .map_err(|cause| match cause {
-                model::Error::ProfileUnavailable => error(
+                model::Error::ProfileUnavailable => Unresolved::other(error(
                     "model.profile",
                     "Selected profile requires reconnect. Sign in to this profile again.",
-                ),
-                cause => model_resolution_error(selection, cause, resolved.info.package.as_ref()),
+                )),
+                cause => Unresolved::model(selection, cause, resolved.info.package.as_ref()),
             })?;
         Ok(Resolution {
             resolved,
@@ -525,7 +650,8 @@ impl Local {
         let mut gate_admissions = 0u8;
         let mut gate_rounds = 0u8;
         let mut overflow = None;
-        let mut restart: Option<(session_message::Id, u32, provider_request::Pending)> = None;
+        let mut restart: Option<Restart> = None;
+        let mut route = Route::default();
         let mut request_skills: Vec<(skill_schema::Info, ycoding_schema::LosslessString)> =
             Vec::new();
         loop {
@@ -572,15 +698,221 @@ impl Local {
                 .or_else(|| services.models.catalog().default_selection(&saved))
                 .ok_or_else(|| error("model.not-selected", "No model is selected"))?;
             let saved_binding = services.store.profile_binding(&session.id)?;
-            let Resolution {
+            if route.primary.as_ref().is_some_and(|primary| {
+                primary.provider_id != selection.provider_id || primary.id != selection.id
+            }) {
+                route = Route::default();
+            }
+            let guidance = session
+                .model
+                .clone()
+                .or_else(|| services.models.catalog().default_selection(&saved));
+            let primary = route.primary.clone().unwrap_or_else(|| selection.clone());
+            let selection = route.current.clone().unwrap_or(selection);
+            let next = if recovery {
+                None
+            } else {
+                local.next_fallback(&primary, &selection, &route.tried)
+            };
+            let (resolution, unavailable) = match local
+                .resolve_attempt(&selection, &saved, saved_binding.as_ref())
+                .await
+            {
+                Ok(resolution) => (Some(resolution), None),
+                Err(failure) if failure.unavailable && next.is_some() => {
+                    (None, Some(failure.error))
+                }
+                Err(failure) => return Err(failure.error),
+            };
+            let sources = crate::instructions::combine(vec![
+                services.instructions.clone(),
+                services.store.instruction_entry_sources(&session.id)?,
+                guidance
+                    .filter(|_| local.0.instructions.is_some() || services.configuration.is_some())
+                    .map(|model| {
+                        let clock = services.clock.clone();
+                        crate::model_incident::guidance::source(
+                            services.store.client.clone(),
+                            crate::model_incident::ModelKey {
+                                provider: model.provider_id,
+                                model: model.id,
+                            },
+                            Arc::new(move || clock.now()),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
+            ])
+            .map_err(|_| error("instructions", "Instruction source keys are duplicated"))?;
+            let sources = match &local.0.instructions {
+                Some(context) => context
+                    .sources(
+                        sources,
+                        agent,
+                        session.permission_ceiling.as_deref().unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        error(
+                            "instructions",
+                            "Session instruction catalogs could not be prepared",
+                        )
+                    })?,
+                None => services.configuration.as_ref().map_or_else(
+                    || sources.clone(),
+                    |configuration| {
+                        super::instruction_assembly::select_sources(
+                            &sources,
+                            agent,
+                            session.permission_ceiling.as_deref().unwrap_or_default(),
+                            configuration,
+                            &services.tools,
+                        )
+                    },
+                ),
+            };
+            services
+                .store
+                .prepare_instructions(&session.id, &sources, services.clock.now())
+                .await
+                .map_err(|_| error("instructions", "Session instructions could not be prepared"))?;
+            let assembly = services
+                .store
+                .assemble_instructions(&session.id, &sources)
+                .map_err(|_| {
+                    error(
+                        "instructions",
+                        "Session instructions could not be assembled",
+                    )
+                })?;
+            let mut to_promote = if eligible && !continuation {
+                pending
+                    .iter()
+                    .find(|pending| {
+                        pending
+                            .delivery
+                            .as_ref()
+                            .and_then(|delivery| delivery.as_str())
+                            == Some("queue")
+                    })
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            to_promote.extend(
+                pending
+                    .iter()
+                    .filter(|pending| {
+                        pending
+                            .delivery
+                            .as_ref()
+                            .and_then(|delivery| delivery.as_str())
+                            == Some("steer")
+                    })
+                    .cloned(),
+            );
+            let mut promoted = 0;
+            let mut promoted_skills = Vec::new();
+            let rerouting = restart
+                .as_ref()
+                .is_some_and(|restart| restart.pending.is_none());
+            if !to_promote.is_empty()
+                && !rerouting
+                && !services.store.has_pending_compaction(&session.id)?
+            {
+                for input in to_promote {
+                    let prepared = local
+                        .resolve_requested_skills(&session, agent, std::slice::from_ref(&input))
+                        .await?;
+                    match services
+                        .store
+                        .promote_input(&session.id, &input.id, services.clock.now())
+                        .await?
+                    {
+                        super::pending::Promotion::Promoted => {
+                            promoted += 1;
+                            if input.type_.as_str() == Some("user")
+                                && session.parent_id.is_none()
+                                && let Some(title) = &local.0.title
+                                && services
+                                    .store
+                                    .first_user_message_if_only(&session.id)?
+                                    .is_some_and(|user| user.id.as_lossless() == &input.id)
+                            {
+                                self.start_title(
+                                    title.clone(),
+                                    session.clone(),
+                                    request.cancellation.clone(),
+                                    refreshed.as_ref().map(|current| current.owner.clone()),
+                                );
+                            }
+                        }
+                        super::pending::Promotion::Reconciled => promoted += 1,
+                        super::pending::Promotion::Missing => break,
+                    }
+                    promoted_skills.extend(prepared.clone());
+                    local.activate_skills(&session, &assembly, prepared).await?;
+                }
+            }
+            if promoted > 0 {
+                request_skills = promoted_skills;
+                step = 1;
+                recovery = false;
+                recovery_used = false;
+            }
+            local
+                .activate_skills(&session, &assembly, request_skills.clone())
+                .await?;
+            local
+                .observe_context(
+                    &session.id,
+                    agent.steps.as_ref().map(|maximum| maximum.get() as u64),
+                    step,
+                    recovery,
+                )
+                .await?;
+            if let (Some(failure), Some(next)) = (&unavailable, &next) {
+                let assistant = match restart.take() {
+                    Some(restart) => restart.assistant,
+                    None => {
+                        self.start_step(local, &session.id, &agent.id, &selection)
+                            .await?
+                    }
+                };
+                local
+                    .reroute(Reroute {
+                        session: &session.id,
+                        agent: &agent.id,
+                        assistant: &assistant,
+                        from: &selection,
+                        to: next,
+                        failure,
+                        abandoned: None,
+                    })
+                    .await?;
+                route.tried.push(selection.clone());
+                route.current = Some(next.clone());
+                route.primary = Some(primary.clone());
+                restart = Some(Restart {
+                    assistant,
+                    attempts: 0,
+                    pending: None,
+                });
+                force = true;
+                continue;
+            }
+            let Some(Resolution {
                 resolved,
                 mut model,
                 account_identity,
                 connection,
                 binding,
-            } = local
-                .resolve_model(&selection, &saved, saved_binding.as_ref())
-                .await?;
+            }) = resolution
+            else {
+                unreachable!("an unresolved attempt either reroutes or fails")
+            };
             if let Some(daybreak) = &session.daybreak
                 && resolved.info.provider_id.0 == "openai".into()
                 && matches!(
@@ -697,7 +1029,7 @@ impl Local {
                 overlay.insert(name.clone(), value.clone());
             }
             prepared.http.body = (!overlay.is_empty()).then_some(JsonValue::Object(overlay));
-            if saved_binding != binding {
+            if route.current.is_none() && saved_binding != binding {
                 publish(
                     &services.store,
                     &session.id,
@@ -708,134 +1040,6 @@ impl Local {
                 )
                 .await?;
             }
-            let sources = crate::instructions::combine(vec![
-                services.instructions.clone(),
-                services.store.instruction_entry_sources(&session.id)?,
-            ])
-            .map_err(|_| error("instructions", "Instruction source keys are duplicated"))?;
-            let sources = match &local.0.instructions {
-                Some(context) => context
-                    .sources(
-                        sources,
-                        agent,
-                        session.permission_ceiling.as_deref().unwrap_or_default(),
-                    )
-                    .await
-                    .map_err(|_| {
-                        error(
-                            "instructions",
-                            "Session instruction catalogs could not be prepared",
-                        )
-                    })?,
-                None => services.configuration.as_ref().map_or_else(
-                    || sources.clone(),
-                    |configuration| {
-                        super::instruction_assembly::select_sources(
-                            &sources,
-                            agent,
-                            session.permission_ceiling.as_deref().unwrap_or_default(),
-                            configuration,
-                            &services.tools,
-                        )
-                    },
-                ),
-            };
-            services
-                .store
-                .prepare_instructions(&session.id, &sources, services.clock.now())
-                .await
-                .map_err(|_| error("instructions", "Session instructions could not be prepared"))?;
-            let assembly = services
-                .store
-                .assemble_instructions(&session.id, &sources)
-                .map_err(|_| {
-                    error(
-                        "instructions",
-                        "Session instructions could not be assembled",
-                    )
-                })?;
-            let mut to_promote = if eligible && !continuation {
-                pending
-                    .iter()
-                    .find(|pending| {
-                        pending
-                            .delivery
-                            .as_ref()
-                            .and_then(|delivery| delivery.as_str())
-                            == Some("queue")
-                    })
-                    .cloned()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            to_promote.extend(
-                pending
-                    .iter()
-                    .filter(|pending| {
-                        pending
-                            .delivery
-                            .as_ref()
-                            .and_then(|delivery| delivery.as_str())
-                            == Some("steer")
-                    })
-                    .cloned(),
-            );
-            let mut promoted = 0;
-            let mut promoted_skills = Vec::new();
-            if !to_promote.is_empty() && !services.store.has_pending_compaction(&session.id)? {
-                for input in to_promote {
-                    let prepared = local
-                        .resolve_requested_skills(&session, agent, std::slice::from_ref(&input))
-                        .await?;
-                    match services
-                        .store
-                        .promote_input(&session.id, &input.id, services.clock.now())
-                        .await?
-                    {
-                        super::pending::Promotion::Promoted => {
-                            promoted += 1;
-                            if input.type_.as_str() == Some("user")
-                                && session.parent_id.is_none()
-                                && let Some(title) = &local.0.title
-                                && services
-                                    .store
-                                    .first_user_message_if_only(&session.id)?
-                                    .is_some_and(|user| user.id.as_lossless() == &input.id)
-                            {
-                                self.start_title(
-                                    title.clone(),
-                                    session.clone(),
-                                    request.cancellation.clone(),
-                                    refreshed.as_ref().map(|current| current.owner.clone()),
-                                );
-                            }
-                        }
-                        super::pending::Promotion::Reconciled => promoted += 1,
-                        super::pending::Promotion::Missing => break,
-                    }
-                    promoted_skills.extend(prepared.clone());
-                    local.activate_skills(&session, &assembly, prepared).await?;
-                }
-            }
-            if promoted > 0 {
-                request_skills = promoted_skills;
-                step = 1;
-                recovery = false;
-                recovery_used = false;
-            }
-            local
-                .activate_skills(&session, &assembly, request_skills.clone())
-                .await?;
-            local
-                .observe_context(
-                    &session.id,
-                    agent.steps.as_ref().map(|maximum| maximum.get() as u64),
-                    step,
-                    recovery,
-                )
-                .await?;
             let mut entries = services.store.model_history(&session.id)?;
             entries.extend(assembly.updates);
             entries.sort_by_key(|entry| entry.seq);
@@ -994,6 +1198,7 @@ impl Local {
                         None => session_message::Id::from_event(&projector::random_event_id()?),
                     },
                     call_id: "session.tools".into(),
+                    attribution: Attribution::Unset,
                     progress: None,
                     cancellation: Default::default(),
                 };
@@ -1013,6 +1218,7 @@ impl Local {
                         None => session_message::Id::from_event(&projector::random_event_id()?),
                     },
                     call_id: "session.context".into(),
+                    attribution: Attribution::Unset,
                     progress: None,
                     cancellation: code_mode::Cancellation::default(),
                 };
@@ -1040,23 +1246,64 @@ impl Local {
                 .max_tokens
                 .or(prepared.model.defaults.output_limit);
             let context_window = resolved.info.limit.context.get();
-            let gate = local
-                .ensure_within_limit(compaction::GateInput {
-                    agent: &agent.id,
-                    session: &session,
-                    selection: &selection,
-                    context_window,
-                    request: &prepared,
-                    history: &loaded,
-                    output_limit: resolved.info.limit.output.get(),
-                    force: overflow == Some(Overflow::Pending) && gate_rounds == 0,
-                    admissions: &mut gate_admissions,
-                })
-                .await?;
-            if matches!(gate, compaction::Gate::Restart) {
-                gate_rounds += 1;
-                force = true;
-                continue;
+            if route.current.is_some() {
+                if let Some(next) = &next
+                    && compaction_gate::estimated_provider_input_tokens(&prepared)
+                        >= context_window - services.compaction.context_safety_margin_tokens
+                {
+                    let assistant = match restart.take() {
+                        Some(restart) => restart.assistant,
+                        None => {
+                            self.start_step(local, &session.id, &agent.id, &selection)
+                                .await?
+                        }
+                    };
+                    let message = format!(
+                        "The request exceeds the input budget of {}/{}",
+                        selection.provider_id.0.to_utf8().unwrap_or_default(),
+                        selection.id.to_utf8().unwrap_or_default()
+                    );
+                    local
+                        .reroute(Reroute {
+                            session: &session.id,
+                            agent: &agent.id,
+                            assistant: &assistant,
+                            from: &selection,
+                            to: next,
+                            failure: &error("context.limit", &message),
+                            abandoned: None,
+                        })
+                        .await?;
+                    route.tried.push(selection.clone());
+                    route.current = Some(next.clone());
+                    route.primary = Some(primary.clone());
+                    restart = Some(Restart {
+                        assistant,
+                        attempts: 0,
+                        pending: None,
+                    });
+                    force = true;
+                    continue;
+                }
+            } else {
+                let gate = local
+                    .ensure_within_limit(compaction::GateInput {
+                        agent: &agent.id,
+                        session: &session,
+                        selection: &selection,
+                        context_window,
+                        request: &prepared,
+                        history: &loaded,
+                        output_limit: resolved.info.limit.output.get(),
+                        force: overflow == Some(Overflow::Pending) && gate_rounds == 0,
+                        admissions: &mut gate_admissions,
+                    })
+                    .await?;
+                if matches!(gate, compaction::Gate::Restart) {
+                    gate_rounds += 1;
+                    force = true;
+                    continue;
+                }
             }
             if overflow == Some(Overflow::Pending) {
                 overflow = Some(Overflow::Used);
@@ -1144,6 +1391,7 @@ impl Local {
                 volatile_context_digest: continuation::volatile_digest(&[]),
             };
             let eligible = direct_responses
+                && route.current.is_none()
                 && account_identity.is_some()
                 && efficiency.responses_stored
                 && efficiency.responses_continuation
@@ -1183,7 +1431,7 @@ impl Local {
             };
             let resumed = restart.take();
             let assistant = match &resumed {
-                Some((assistant, ..)) => assistant.clone(),
+                Some(restart) => restart.assistant.clone(),
                 None => session_message::Id::from_event(&projector::random_event_id()?),
             };
             prepared.caller = Some(llm::Caller {
@@ -1192,36 +1440,20 @@ impl Local {
                 message_id: assistant.as_lossless().clone(),
             });
             let tracked = Tracked {
-                pending: match &resumed {
-                    Some((_, _, pending)) => pending.clone(),
+                pending: match resumed.as_ref().and_then(|restart| restart.pending.clone()) {
+                    Some(pending) => pending,
                     None => services.store.begin_provider_request(&begin).await?,
                 },
                 begin,
                 continuation: continuation_plan,
             };
-            let work = Arc::new(Work {
-                assistant: assistant.clone(),
-                tasks: tokio::sync::Mutex::new(tokio::task::JoinSet::new()),
-                cancellation: code_mode::Cancellation::default(),
-                progress_error: Mutex::new(None),
-                usage: Mutex::new(None),
-                attempts: std::sync::atomic::AtomicU32::new(
-                    resumed.as_ref().map_or(0, |(_, attempts, _)| *attempts),
-                ),
-                timing: Mutex::new(Timing {
-                    started: std::time::Instant::now(),
-                    first_output: None,
-                    ended: None,
-                    waiting: None,
-                    retry_wait: std::time::Duration::ZERO,
-                    generation: usage::GenerationTimes::default(),
-                }),
-                recording: Mutex::new(None),
-                continuation_used: tracked.continuation.used,
-                fallback: std::sync::atomic::AtomicBool::new(false),
-                overflow: std::sync::atomic::AtomicBool::new(false),
+            let work = Arc::new(Work::new(
+                assistant.clone(),
+                Attribution::explicit(tracked.pending.usage_anchor.clone()),
+                resumed.as_ref().map_or(0, |restart| restart.attempts),
+                tracked.continuation.used,
                 text_only,
-                start_snapshot: if resumed.is_some() {
+                if resumed.is_some() {
                     services
                         .store
                         .message(&assistant)?
@@ -1237,7 +1469,7 @@ impl Local {
                         .as_ref()
                         .and_then(|snapshots| snapshots.capture())
                 },
-            });
+            ));
             self.0
                 .active
                 .lock()
@@ -1322,6 +1554,7 @@ impl Local {
                     let overflowed = work.overflow.load(std::sync::atomic::Ordering::Relaxed);
                     if overflowed
                         && overflow.is_none()
+                        && route.current.is_none()
                         && compaction_gate::can_reduce(
                             &prepared,
                             &loaded,
@@ -1332,11 +1565,44 @@ impl Local {
                         )
                     {
                         overflow = Some(Overflow::Pending);
-                        restart = Some((
-                            assistant.clone(),
-                            work.attempts.load(std::sync::atomic::Ordering::Relaxed),
-                            tracked.pending.clone(),
-                        ));
+                        restart = Some(Restart {
+                            assistant: assistant.clone(),
+                            attempts: work.attempts.load(std::sync::atomic::Ordering::Relaxed),
+                            pending: Some(tracked.pending.clone()),
+                        });
+                        force = true;
+                        continue;
+                    }
+                    if work.reroutable.load(std::sync::atomic::Ordering::Relaxed)
+                        && let Some(next) = &next
+                    {
+                        local
+                            .reroute(Reroute {
+                                session: &session.id,
+                                agent: &agent.id,
+                                assistant: &assistant,
+                                from: &selection,
+                                to: next,
+                                failure: &failure,
+                                abandoned: Some((&tracked, work.as_ref())),
+                            })
+                            .await?;
+                        work.recording
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take();
+                        work.usage
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .take();
+                        route.tried.push(selection.clone());
+                        route.current = Some(next.clone());
+                        route.primary = Some(primary.clone());
+                        restart = Some(Restart {
+                            assistant: assistant.clone(),
+                            attempts: 0,
+                            pending: None,
+                        });
                         force = true;
                         continue;
                     }
@@ -1552,6 +1818,10 @@ impl Local {
                             failure.context_overflow && !publisher.evidence,
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        work.reroutable.store(
+                            !publisher.evidence && reroutable(&failure, attempt),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                         return Err(ai_error(failure));
                     }
                     publisher.flush(self.0.services.clock.now()).await?;
@@ -1611,6 +1881,21 @@ impl Local {
         consumption: &mut Consumption<'_>,
     ) -> Result<(), AttemptError> {
         let services = &self.0.services;
+        {
+            let mut timing = work
+                .timing
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            timing.generation = usage::GenerationTimes {
+                started: Some(services.clock.nanos()),
+                ..Default::default()
+            };
+            timing.streamed_tool_inputs.clear();
+        }
+        let _ended = EndOnExit {
+            work: work.clone(),
+            clock: services.clock.clone(),
+        };
         let mut stream = services
             .executor
             .stream(request)
@@ -1632,16 +1917,28 @@ impl Local {
                 };
                 let received = services.clock.nanos();
                 match &event {
-                    llm::Event::TextDelta(delta) if generation_output(&delta.text) => {
+                    llm::Event::TextDelta(delta) if !delta.text.is_empty() => {
                         timing.generation.text.get_or_insert(received);
+                        timing.generation.streamed_output_units += delta.text.len() as u64;
                     }
-                    llm::Event::ReasoningDelta(delta) if generation_output(&delta.text) => {
+                    llm::Event::ReasoningDelta(delta) if !delta.text.is_empty() => {
                         timing.generation.reasoning.get_or_insert(received);
+                        timing.generation.streamed_output_units += delta.text.len() as u64;
                     }
-                    llm::Event::ToolInputDelta { text, .. } if generation_output(text) => {
+                    llm::Event::ToolInputDelta { id, text, .. } if !text.is_empty() => {
                         timing.generation.tool_input.get_or_insert(received);
+                        timing.generation.streamed_output_units += text.len() as u64;
+                        timing.streamed_tool_inputs.insert(id.clone());
                     }
-                    llm::Event::StepFinish { .. } => {
+                    llm::Event::ToolCall(call)
+                        if !timing.streamed_tool_inputs.contains(&call.id) =>
+                    {
+                        timing.generation.streamed_output_units +=
+                            ycoding_schema::stringify_json(&call.input)
+                                .encode_utf16()
+                                .count() as u64;
+                    }
+                    llm::Event::StepFinish { .. } | llm::Event::ProviderError { .. } => {
                         timing.generation.ended.get_or_insert(received);
                     }
                     _ => {}
@@ -1730,44 +2027,45 @@ impl Local {
                 let cancellation = work.cancellation.clone();
                 let agent = agent.clone();
                 let progress_work = work.clone();
+                let attribution = work.attribution.clone();
+                let progress_events = self.0.services.events.clone();
+                let progress_location = self.0.services.location.clone();
                 work.tasks.lock().await.spawn(async move {
-                    let progress_store = store.clone();
                     let progress_session = session.clone();
                     let progress_assistant = assistant.clone();
                     let progress_call = call.id.clone();
-                    let progress_clock = clock.clone();
                     let context = Context {
                         session_id: session.clone(),
                         agent,
                         message_id: assistant.clone(),
                         call_id: call.id.clone(),
+                        attribution,
                         cancellation,
                         progress: Some(Arc::new(move |progress: Progress| {
-                            let store = progress_store.clone();
+                            let events = progress_events.clone();
+                            let location = progress_location.clone();
                             let session = progress_session.clone();
                             let assistant = progress_assistant.clone();
                             let call = progress_call.clone();
-                            let clock = progress_clock.clone();
                             let work = progress_work.clone();
                             Box::pin(async move {
-                                if let Err(error) = publish(
-                                    &store,
-                                    &session,
-                                    Some(&assistant),
-                                    "session.tool.progress",
-                                    ObjectEncoder::new()
-                                        .field("callID", &call)
-                                        .field("structured", &progress.structured)
-                                        .field("content", &progress.content)
-                                        .finish(),
-                                    clock.now(),
-                                )
-                                .await
-                                {
+                                if let Err(failure) = events.emit(
+                                    crate::event_feed::Data::SessionToolProgress(Box::new(
+                                        crate::event_feed::ephemeral::ToolProgress {
+                                            session_id: session,
+                                            assistant_message_id: assistant,
+                                            call_id: call,
+                                            structured: progress.structured,
+                                            content: progress.content,
+                                        },
+                                    )),
+                                    Some(location),
+                                ) {
                                     *work
                                         .progress_error
                                         .lock()
-                                        .unwrap_or_else(|error| error.into_inner()) = Some(error);
+                                        .unwrap_or_else(|error| error.into_inner()) =
+                                        Some(error("event.progress", &failure));
                                 }
                             })
                         })),
@@ -1991,6 +2289,152 @@ impl Local {
             services.clock.now(),
         )
         .await
+    }
+
+    fn next_fallback(
+        &self,
+        primary: &ycoding_schema::model::Ref,
+        attempted: &ycoding_schema::model::Ref,
+        tried: &[ycoding_schema::model::Ref],
+    ) -> Option<ycoding_schema::model::Ref> {
+        let JsonValue::Object(chains) = self
+            .0
+            .services
+            .configuration
+            .as_ref()?
+            .latest("model_fallbacks")?
+        else {
+            return None;
+        };
+        let JsonValue::Array(entries) = chains.get(&crate::instructions::join(
+            &[primary.provider_id.0.clone(), primary.id.clone()],
+            "/",
+        ))?
+        else {
+            return None;
+        };
+        entries
+            .iter()
+            .filter_map(fallback_entry)
+            .find(|candidate| candidate != attempted && !tried.contains(candidate))
+    }
+
+    async fn start_step(
+        &self,
+        local: &Local,
+        id: &session::Id,
+        agent: &ycoding_schema::agent::Id,
+        model: &ycoding_schema::model::Ref,
+    ) -> Result<session_message::Id, Error> {
+        let services = &local.0.services;
+        let assistant = session_message::Id::from_event(&projector::random_event_id()?);
+        let work = Arc::new(Work::new(
+            assistant.clone(),
+            Attribution::Unset,
+            0,
+            false,
+            false,
+            services
+                .snapshots
+                .as_ref()
+                .and_then(|snapshots| snapshots.capture()),
+        ));
+        self.0
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(id.clone(), work.clone());
+        publish(
+            &services.store,
+            id,
+            Some(&assistant),
+            "session.step.started",
+            ObjectEncoder::new()
+                .field("agent", agent)
+                .field("model", model)
+                .optional("snapshot", &work.start_snapshot)
+                .finish(),
+            services.clock.now(),
+        )
+        .await?;
+        Ok(assistant)
+    }
+
+    async fn reroute(&self, input: Reroute<'_>) -> Outcome {
+        let services = &self.0.services;
+        let now = services.clock.now();
+        let failure = match input.failure {
+            Error::Runner(error) => error.clone(),
+            failure => ycoding_schema::session_error::Error {
+                r#type: "unknown".into(),
+                message: failure.to_string().into(),
+            },
+        };
+        let zero = usage::tokens(None);
+        let abandoned = match input.abandoned {
+            Some((tracked, work)) => {
+                let begin = provider_request::Begin {
+                    connection_identity_digest: None,
+                    ..tracked.begin.clone()
+                };
+                Some(event(
+                    input.session,
+                    Some(input.assistant),
+                    "session.provider.request.recorded",
+                    provider_request::recorded_fields(
+                        &begin,
+                        &tracked.pending,
+                        &provider_request::Completion {
+                            source: "step",
+                            agent: input.agent,
+                            invalidation: "retry-fallback",
+                            continuation: "fallback",
+                            attempts: work.attempts.load(std::sync::atomic::Ordering::Relaxed),
+                            cache_read_reported: None,
+                            timing: None,
+                            cost: None,
+                            tokens: &zero,
+                            time: now,
+                        },
+                    )?,
+                    now,
+                )?)
+            }
+            None => None,
+        };
+        let rerouted = event(
+            input.session,
+            Some(input.assistant),
+            "session.step.rerouted",
+            ObjectEncoder::new()
+                .field("model", input.to)
+                .field("error", &failure)
+                .finish(),
+            now,
+        )?;
+        let incident = crate::model_incident::record::FallbackInput {
+            session_id: input.session.clone(),
+            agent: input.agent.clone(),
+            from: input.from.clone(),
+            to: input.to.clone(),
+            category: failure.r#type.clone(),
+            time: now,
+        };
+        let id: ycoding_schema::model_incident::Id =
+            crate::tools::policy::state::decode_id("inc_", 0);
+        services
+            .store
+            .client
+            .submit(move |tx| {
+                if let Some(abandoned) = &abandoned {
+                    projector::append(tx, abandoned)?;
+                }
+                projector::append(tx, &rerouted)?;
+                crate::model_incident::record::fallback(tx, &id, &incident)?;
+                Ok(())
+            })?
+            .await?;
+        Ok(())
     }
 
     fn remove(&self, id: &session::Id) {
@@ -2459,10 +2903,6 @@ fn finish(reason: llm::FinishReason) -> &'static str {
     }
 }
 
-fn generation_output(text: &ycoding_schema::LosslessString) -> bool {
-    text.code_units()
-        .any(|unit| !crate::process::guardrails::is_whitespace(unit))
-}
 fn with_usage(
     encoder: ObjectEncoder,
     settlement: &llm::Finish,
@@ -2665,6 +3105,36 @@ fn connection_identity_digest(
             .finish(),
     ))
 }
+fn reroutable(failure: &ycoding_ai::Error, attempt: u32) -> bool {
+    let beyond_ceiling = failure
+        .retry_after_ms
+        .is_some_and(|delay| delay > 120_000.0);
+    !failure.context_overflow
+        && match failure.reason {
+            provider_error::Reason::QuotaExceeded => true,
+            provider_error::Reason::RateLimit | provider_error::Reason::ProviderInternal => {
+                attempt == 10 || beyond_ceiling
+            }
+            provider_error::Reason::Transport => attempt == 10 && !beyond_ceiling,
+            _ => false,
+        }
+}
+
+fn fallback_entry(value: &JsonValue) -> Option<ycoding_schema::model::Ref> {
+    let JsonValue::Object(entry) = value else {
+        return None;
+    };
+    ycoding_schema::model::Ref::decode(
+        &ObjectEncoder::new()
+            .field("providerID", entry.get(&"providerID".into())?)
+            .field("id", entry.get(&"model".into())?)
+            .optional("variant", &entry.get(&"variant".into()).cloned())
+            .optional("profile", &entry.get(&"profile".into()).cloned())
+            .finish(),
+    )
+    .ok()
+}
+
 fn stale_continuation(failure: &ycoding_ai::Error) -> bool {
     let message = failure.message.to_lowercase();
     let previous = message.contains("previous_response") || message.contains("previous response");

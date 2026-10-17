@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { ProviderRequestReport, ProviderRequestSummary } from "@ycoding-ai/client"
+import type { UsageReportOutput, ProviderRequestSummary } from "@ycoding-ai/client"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
@@ -71,7 +71,7 @@ test("renders an unreported cache read as a word instead of a bare placeholder",
   )
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("Unknown/300")
     expect(frame).not.toMatch(/\s-\/300/)
@@ -105,7 +105,7 @@ test.each([
     { width, height },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+  await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
 
   try {
     const frame = app.captureCharFrame()
@@ -113,7 +113,7 @@ test.each([
     const spans = app.captureSpans().lines
     const header = spans.slice(0, 3)
     const footer = spans.slice(-4, -1)
-    const row = lines.find((line) => line.includes("LIFETIME MODEL BREAKDOWN"))
+    const row = lines.find((line) => line.includes("RETAINED MODEL BREAKDOWN"))
 
     expect(lines).toHaveLength(height + 1)
     expect(lines.every((line) => line.length <= width)).toBe(true)
@@ -144,7 +144,7 @@ test.each([
         .find((span) => span.text.includes("Overview"))
         ?.fg.toInts(),
     ).toEqual([...blue])
-    expect(row?.indexOf("LIFETIME MODEL BREAKDOWN")).toBe(3)
+    expect(row?.indexOf("RETAINED MODEL BREAKDOWN")).toBe(3)
     const navigation = lines.slice(3, 6).find((line) => line.includes("Overview"))!
     expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
     const separators = [...navigation.matchAll(/│/g)].map((match) => match.index)
@@ -191,7 +191,7 @@ test("sorts complete overview model rows client-side and keeps Total pinned", as
   )
   app.renderer.start()
   try {
-    await app.waitForFrame((frame) => frame.includes("LIFETIME MODEL BREAKDOWN"))
+    await app.waitForFrame((frame) => frame.includes("RETAINED MODEL BREAKDOWN"))
     app.mockInput.pressKey("i")
     let frame = await app.waitForFrame(
       (value) => value.includes("INPUT▼") && value.indexOf("openrouter/") < value.indexOf("openai/"),
@@ -221,6 +221,7 @@ test.each([
   { width: 80, height: 24 },
   { width: 120, height: 32 },
   { width: 123, height: 32 },
+  { width: 150, height: 32 },
   { width: 189, height: 69 },
   { width: 220, height: 69 },
 ])(
@@ -237,7 +238,7 @@ test.each([
       costProvenance: "recorded" as const,
       cacheReadReported: true,
     }
-    const report: ProviderRequestReport = {
+    const report: UsageReportOutput = {
       group: "model",
       rowCount: 1,
       rows: [{ key: "model-a", label: `openrouter/${longModelID}`, ...metrics }],
@@ -291,12 +292,16 @@ test.each([
         .filter((span) => span.bg.toInts().every((value, index) => value === [29, 33, 40, 255][index]))
         .reduce((total, span) => total + span.text.length, 0)
       expect(selectedWidth).toBeGreaterThanOrEqual(width - 6)
+      if (width === 150) {
+        // The primary columns leave 60 cells for identity, so the 60-character label plus its marker truncates.
+        expect(lines[selectedRow]).toContain("openrouter/deepseek/deepseek-v4-pro")
+        expect(lines[selectedRow]).toContain("…")
+        expect(frame).not.toContain(`openrouter/${longModelID}`)
+      }
       if (width >= 189) {
-        if (width >= 220) expect(frame).toContain(longModelID)
-        if (width < 220) {
-          expect(lines[selectedRow]).toContain("openrouter/deepseek/deepseek-v4-pro")
-          expect(lines[selectedRow]).toContain("…")
-        }
+        // Timing columns fold into the row dialog at these widths, so the identity column holds the complete label.
+        expect(lines[selectedRow]).toContain(`openrouter/${longModelID}`)
+        expect(lines[selectedRow]).not.toContain("…")
         const metricColors = new Set(
           spans[selectedRow].spans.filter((span) => /\d/.test(span.text)).map((span) => span.fg.toInts().join(",")),
         )

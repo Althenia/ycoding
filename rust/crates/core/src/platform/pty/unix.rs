@@ -1,4 +1,7 @@
-use crate::platform::process::Command;
+use crate::platform::process::{
+    Command, KillOptions,
+    tree::{Group, Owned},
+};
 use std::{
     fs::File,
     io::{self, Read, Write},
@@ -12,10 +15,12 @@ pub struct Terminal(AsyncFd<File>);
 pub struct Native {
     pub pid: u32,
     pub terminal: Arc<Terminal>,
-    pub child: tokio::process::Child,
+    child: Owned,
+    group: Group,
 }
 
-pub fn spawn(command: Command, cols: u16, rows: u16) -> io::Result<Native> {
+pub async fn spawn(command: Command, cols: u16, rows: u16) -> io::Result<Native> {
+    let system = command.system.clone();
     let mut master = -1;
     let mut slave = -1;
     let mut size = libc::winsize {
@@ -69,12 +74,15 @@ pub fn spawn(command: Command, cols: u16, rows: u16) -> io::Result<Native> {
             Ok(())
         });
     }
-    let child = cmd.spawn()?;
+    let child = Owned::new(cmd.spawn()?, true);
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("PTY spawn returned no process ID"))?;
+    let group = Group::new(system, pid, true).await;
     Ok(Native {
-        pid: child
-            .id()
-            .ok_or_else(|| io::Error::other("PTY spawn returned no process ID"))?,
+        pid,
         child,
+        group,
         terminal,
     })
 }
@@ -138,25 +146,15 @@ impl Native {
     }
     pub async fn kill(&mut self) -> io::Result<i32> {
         use std::os::unix::process::ExitStatusExt;
-        let status = crate::platform::process::tree::terminate(
-            &mut self.child,
-            self.pid,
-            crate::platform::process::KillOptions {
+        self.group
+            .stop(KillOptions {
                 force_kill_after: Some(std::time::Duration::from_secs(3)),
                 ..Default::default()
-            },
-            true,
-        )
-        .await?;
+            })
+            .await?;
+        let status = self.child.wait().await?;
         Ok(status
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
-    }
-}
-impl Drop for Native {
-    fn drop(&mut self) {
-        if self.child.try_wait().is_ok_and(|status| status.is_none()) {
-            crate::platform::process::tree::force(self.pid, true);
-        }
     }
 }

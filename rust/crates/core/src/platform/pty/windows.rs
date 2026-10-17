@@ -21,7 +21,7 @@ use windows_sys::Win32::{
             CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
             EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTUPINFOEXW,
-            UpdateProcThreadAttribute, WaitForSingleObject,
+            TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
         },
     },
 };
@@ -315,7 +315,9 @@ impl Native {
 impl Drop for Native {
     fn drop(&mut self) {
         if self.exited().is_ok_and(|exit| exit.is_none()) {
-            crate::platform::process::tree::force(self.pid, false);
+            unsafe {
+                TerminateProcess(self.process.as_raw_handle() as HANDLE, 1);
+            }
         }
     }
 }

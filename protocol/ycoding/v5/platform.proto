@@ -292,8 +292,19 @@ enum Telemetry_RequestSample_operation {
   TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_PROVIDERS = 62;
   TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_SUMMARY = 63;
   TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_REPORT = 64;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_USAGEREPORT = 67;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTCOSTS = 68;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TASKCOSTS = 69;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_FORECAST = 70;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_LIST = 71;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_DECIDE = 72;
   TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_GET = 65;
   TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_SET = 66;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_REPORT = 73;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_RECENT = 74;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE = 75;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_GET = 76;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_CLEAR = 77;
 }
 
 enum Telemetry_RequestSample_outcome {
@@ -401,7 +412,7 @@ message browser_action_Request_payload_actionValue6 {
 }
 
 message browser_action_Request_payload_actionValue6_tabIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" count_min: 1 count_max: 8 }];
 }
 
 message browser_action_Request_payload_actionValue7 {
@@ -411,7 +422,7 @@ message browser_action_Request_payload_actionValue7 {
 }
 
 message browser_action_Request_payload_actionValue7_tabIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/browser.ts#makeBrowserGroup" count_min: 1 count_max: 8 }];
 }
 
 message browser_action_Request {
@@ -831,7 +842,7 @@ message isolatedBrowser_action_Request_payload_actionValue6 {
 }
 
 message isolatedBrowser_action_Request_payload_actionValue6_tabIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" count_min: 1 count_max: 8 }];
 }
 
 message isolatedBrowser_action_Request_payload_actionValue7 {
@@ -841,7 +852,7 @@ message isolatedBrowser_action_Request_payload_actionValue7 {
 }
 
 message isolatedBrowser_action_Request_payload_actionValue7_tabIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" utf16_min: 1 utf16_max: 8 count_min: 1 count_max: 8 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/isolated-browser.ts#makeIsolatedBrowserGroup" count_min: 1 count_max: 8 }];
 }
 
 message isolatedBrowser_action_Request {

@@ -6,16 +6,16 @@ import { messages } from "../src/generated/v5/contract.js"
 import type { Constraints } from "../src/v5/constraints.js"
 import path from "node:path"
 
-test("70 live source names resolve to 66 canonical connector and four relay notice operations", () => {
+test("79 live source names resolve to 75 canonical connector and four relay notice operations", () => {
   const expected = [
     ...new Map(
       [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
     ).values(),
   ]
-  expect(expected).toHaveLength(70)
-  expect(new Set(expected.map(([id]) => id)).size).toBe(70)
+  expect(expected).toHaveLength(79)
+  expect(new Set(expected.map(([id]) => id)).size).toBe(79)
   const actual = operations.filter((item) => item.roles.includes(PeerRole.REMOTE_CLIENT))
-  expect(actual).toHaveLength(70)
+  expect(actual).toHaveLength(79)
   expect(actual.map((item) => [item.operationId, item.diagnosticName]).sort()).toEqual(
     expected.map(([id, name]) => [id, name]).sort(),
   )
@@ -28,8 +28,8 @@ test("generated per-role allowlists equal descriptor roles including empty agent
     expect(operationIDsByRole[role]).toEqual(
       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
     )
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
 })
 
 test("descriptor role-scope and event payload metadata append fresh fields", () => {
@@ -162,7 +162,7 @@ test("spec admission table matches the connector inventory, descriptor roles and
 
 test("relay forwards exactly the connector set; agents and servers send no operation requests", () => {
   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
-  expect(actual).toHaveLength(66)
+  expect(actual).toHaveLength(75)
   expect(actual.map((item) => item.operationId).sort()).toEqual(
     [...new Set(Object.values(connectorOperations).map(([id]) => id))].sort(),
   )

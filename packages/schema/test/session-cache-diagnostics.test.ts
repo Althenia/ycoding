@@ -55,16 +55,23 @@ test("preserves missing provider write telemetry instead of fabricating a zero r
 
 test("bounds optional generation speed history without inventing missing latest speed", () => {
   const sample = Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeed)({
-    model: diagnostics.model, tokens: 12, durationNs: 2_000_000,
+    model: diagnostics.model,
+    tokens: 12,
+    durationNs: 2_000_000,
     tokensPerSecond: 6_000,
   })
   expect(decode(diagnostics).generationSpeed).toBeUndefined()
-  expect(decode({ ...diagnostics, generationSpeed: { latest: sample, recent: [sample] } }).generationSpeed)
-    .toEqual({ latest: sample, recent: [sample] })
-  expect(decode({ ...diagnostics, generationSpeed: { recent: [sample] } }).generationSpeed)
-    .toEqual({ recent: [sample] })
+  expect(decode({ ...diagnostics, generationSpeed: { latest: sample, recent: [sample] } }).generationSpeed).toEqual({
+    latest: sample,
+    recent: [sample],
+  })
+  expect(decode({ ...diagnostics, generationSpeed: { recent: [sample] } }).generationSpeed).toEqual({
+    recent: [sample],
+  })
   expect(() => decode({ ...diagnostics, generationSpeed: { recent: Array(9).fill(sample) } })).toThrow()
-  expect(() => decode({ ...diagnostics, generationSpeed: { latest: { ...sample, durationNs: 0 }, recent: [] } })).toThrow()
+  expect(() =>
+    decode({ ...diagnostics, generationSpeed: { latest: { ...sample, durationNs: 0 }, recent: [] } }),
+  ).toThrow()
 })
 
 test("rejects unknown provider cache mechanisms", () => {
@@ -76,13 +83,32 @@ test("rejects unknown provider cache mechanisms", () => {
   ).toThrow()
 })
 
+test("decodes additive estimated and unreported speed fields", () => {
+  const model = { providerID: "anthropic", id: "claude", profile: "work" }
+  const latest = { model, tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6, estimated: true }
+  expect(decode({ ...diagnostics, generationSpeed: { model, latest, recent: [] } }).generationSpeed).toMatchObject({
+    model,
+    latest,
+    recent: [],
+  })
+  expect(
+    decode({ ...diagnostics, generationSpeed: { model, recent: [], unreportedReason: "No streamed output" } })
+      .generationSpeed?.unreportedReason,
+  ).toBe("No streamed output")
+})
+
 test("decodes optional context breakdown in diagnostics, assistant messages, and both terminal events", () => {
   const contextBreakdown = { system: 1, tools: 2, user: 3, assistant: 4, reasoning: 5, toolCalls: 6, other: 0 }
   expect(decode(diagnostics).contextBreakdown).toBeUndefined()
   expect(decode({ ...diagnostics, contextBreakdown }).contextBreakdown).toEqual(contextBreakdown)
   const assistant = {
-    id: "msg_test", sessionID: "ses_test", type: "assistant", agent: "build",
-    model: { providerID: "openai", id: "gpt" }, content: [], time: { created: 1 },
+    id: "msg_test",
+    sessionID: "ses_test",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt" },
+    content: [],
+    time: { created: 1 },
   }
   for (const value of [assistant, { ...assistant, diagnostics: { contextBreakdown } }]) {
     expect(Schema.decodeUnknownSync(SessionMessage.Assistant)(value).diagnostics?.contextBreakdown).toEqual(
@@ -91,11 +117,16 @@ test("decodes optional context breakdown in diagnostics, assistant messages, and
   }
   const base = { sessionID: "ses_test", assistantMessageID: "msg_test" }
   for (const [schema, value] of [
-    [SessionEvent.Step.Ended, { ...base, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }],
+    [
+      SessionEvent.Step.Ended,
+      { ...base, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    ],
     [SessionEvent.Step.Failed, { ...base, error: { type: "aborted", message: "Stopped" } }],
   ] as const) {
     expect(Schema.decodeUnknownSync(schema.data)(value).contextBreakdown).toBeUndefined()
-    expect(Schema.decodeUnknownSync(schema.data)({ ...value, contextBreakdown }).contextBreakdown).toEqual(contextBreakdown)
+    expect(Schema.decodeUnknownSync(schema.data)({ ...value, contextBreakdown }).contextBreakdown).toEqual(
+      contextBreakdown,
+    )
   }
   expect(() => decode({ ...diagnostics, contextBreakdown: { ...contextBreakdown, other: -1 } })).toThrow()
 })

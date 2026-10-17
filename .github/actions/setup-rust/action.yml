@@ -1,0 +1,54 @@
+name: "Setup Rust"
+description: "Select the pinned Rust toolchain with rustfmt and clippy and install a checksum-verified protoc"
+runs:
+  using: "composite"
+  steps:
+    - name: Install Rust toolchain
+      shell: bash
+      env:
+        RUST_VERSION: "1.98.1"
+      run: |
+        set -euo pipefail
+        command -v rustup >/dev/null || { echo "rustup is not installed on this runner; setup-rust requires a runner image that provides rustup" >&2; exit 1; }
+        rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+        echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+        export RUSTUP_TOOLCHAIN="$RUST_VERSION"
+        test "$(rustc --version | cut -d' ' -f2)" = "$RUST_VERSION"
+        cargo --version
+        cargo fmt --version
+        cargo clippy --version
+
+    - name: Install protoc
+      shell: bash
+      env:
+        PROTOC_VERSION: "36.2"
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) asset=linux-x86_64; sha256=121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278 ;;
+          macOS-ARM64) asset=osx-aarch_64; sha256=9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466 ;;
+          macOS-X64) asset=osx-x86_64; sha256=228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078 ;;
+          Windows-X64) asset=win64; sha256=f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3 ;;
+          *) echo "Unsupported runner for protoc $PROTOC_VERSION: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        directory="$RUNNER_TEMP/protoc-$PROTOC_VERSION"
+        archive="$directory/protoc-$PROTOC_VERSION-$asset.zip"
+        rm -rf "$directory"
+        mkdir -p "$directory"
+        curl --fail --silent --show-error --location --retry 3 --output "$archive" "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-$asset.zip"
+        if command -v sha256sum >/dev/null; then actual="$(sha256sum "$archive" | cut -d' ' -f1)"; else actual="$(shasum -a 256 "$archive" | cut -d' ' -f1)"; fi
+        test "$actual" = "$sha256" || { echo "protoc checksum mismatch for $asset: expected $sha256, got $actual" >&2; exit 1; }
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$archive")' -DestinationPath '$(cygpath -w "$directory")'"
+          executable="$directory/bin/protoc.exe"
+        else
+          unzip -q "$archive" -d "$directory"
+          executable="$directory/bin/protoc"
+        fi
+        test "$("$executable" --version | tr -d '\r')" = "libprotoc $PROTOC_VERSION"
+        echo "PROTOC=$executable" >> "$GITHUB_ENV"
+
+    - name: Select prebuilt NASM objects
+      if: runner.os == 'Windows'
+      shell: bash
+      run: echo "AWS_LC_SYS_PREBUILT_NASM=1" >> "$GITHUB_ENV"

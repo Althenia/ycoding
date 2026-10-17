@@ -2,6 +2,202 @@ import { expect, test } from "bun:test"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
 import { messageBoundaryIDs, reduceSessionRows } from "../../../src/routes/session/rows"
 
+test.each(["root", "child"])(
+  "places only %s review provenance chronologically and keeps family pending at the tail",
+  (sessionID) => {
+    const messages: SessionMessageInfo[] = [
+      { type: "user", id: "first", text: "Before reviews", time: { created: 10 } },
+      { type: "user", id: "last", text: "After reviews", time: { created: 50 } },
+    ]
+    const rows = reduceSessionRows(messages, new Set(), false, {
+      sessionID,
+      decisions: [{ sessionID: "root", created: 30, requestID: "decided-root", reply: "once", confidence: 0.9 }],
+      dismissals: [
+        {
+          sessionID: "root",
+          created: 20,
+          eventID: "dismissed-root",
+          ruleID: "standard.review.force-push",
+          confidence: 0.95,
+        },
+        {
+          sessionID: "child",
+          created: 40,
+          eventID: "dismissed-child",
+          ruleID: "standard.review.git-destructive",
+          confidence: 0.96,
+        },
+      ],
+      pending: [
+        {
+          id: "pending",
+          rootSessionID: "root",
+          sessionID: "child",
+          action: "shell",
+          resources: [],
+          ruleIDs: [],
+          reason: "Still pending",
+          standard: true,
+        },
+      ],
+    })
+    expect(
+      rows.map((row) => (row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type)),
+    ).toEqual(
+      sessionID === "root"
+        ? ["first", "dismissed-root", "decided-root", "last", "pending"]
+        : ["first", "dismissed-child", "last", "pending"],
+    )
+    expect(rows.at(-1)).toMatchObject({ type: "guardrail", requestID: "pending" })
+  },
+)
+
+test("guardrail provenance detail reads the linked resident tool call", () => {
+  const messages: SessionMessageInfo[] = [
+    { type: "user", id: "first", text: "Run it", time: { created: 10 } },
+    assistant("assistant-1", [
+      {
+        type: "tool",
+        id: "call-1",
+        name: "shell",
+        state: {
+          status: "completed",
+          input: { workdir: "/repo", command: "rm -rf /tmp/x", apiToken: "hidden" },
+          content: [],
+          structured: {},
+        },
+        time: { created: 20 },
+      },
+    ]),
+  ]
+  const rows = reduceSessionRows(messages, new Set(), false, {
+    sessionID: "root",
+    decisions: [
+      {
+        sessionID: "root",
+        created: 30,
+        requestID: "decided-linked",
+        reply: "reject",
+        confidence: 0.9,
+        source: { messageID: "assistant-1", callID: "call-1" },
+        ruleIDs: ["standard.review.outside-repository"],
+      },
+    ],
+    dismissals: [],
+    pending: [],
+  })
+  const row = rows.find((item) => item.type === "guardrail" && item.requestID === "decided-linked")
+  expect(row?.type).toBe("guardrail")
+  if (row?.type !== "guardrail") return
+  expect(row.detail).toEqual([
+    { label: "tool", value: "shell" },
+    { label: "command", value: "rm -rf /tmp/x" },
+    { label: "workdir", value: "/repo" },
+    { label: "rule", value: "standard.review.outside-repository" },
+    { label: "outcome", value: "decision model rejected · 0.9" },
+  ])
+})
+
+test("guardrail provenance detail omits the tool line without a resident source", () => {
+  const messages: SessionMessageInfo[] = [{ type: "user", id: "first", text: "Run it", time: { created: 10 } }]
+  const rows = reduceSessionRows(messages, new Set(), false, {
+    sessionID: "root",
+    decisions: [
+      {
+        sessionID: "root",
+        created: 30,
+        requestID: "decided-unresident",
+        reply: "once",
+        confidence: 0.85,
+        source: { messageID: "missing", callID: "call-9" },
+        ruleIDs: ["custom.review.deploy"],
+      },
+    ],
+    dismissals: [
+      {
+        sessionID: "root",
+        created: 20,
+        eventID: "dismissed-nosource",
+        ruleID: "standard.review.database-destructive",
+        confidence: 0.99,
+      },
+    ],
+    pending: [],
+  })
+  const decided = rows.find((item) => item.type === "guardrail" && item.requestID === "decided-unresident")
+  const dismissed = rows.find((item) => item.type === "guardrail" && item.requestID === "dismissed-nosource")
+  expect(decided?.type).toBe("guardrail")
+  expect(dismissed?.type).toBe("guardrail")
+  if (decided?.type !== "guardrail" || dismissed?.type !== "guardrail") return
+  expect(decided.detail).toEqual([
+    { label: "rule", value: "custom.review.deploy" },
+    { label: "outcome", value: "decision model approved once · 0.85" },
+  ])
+  expect(dismissed.detail).toEqual([
+    { label: "rule", value: "standard.review.database-destructive" },
+    { label: "outcome", value: "match verifier · not a real match · 0.99" },
+  ])
+})
+
+test("guardrail grades retain every alternative, confidence and escaped evidence", () => {
+  const rows = reduceSessionRows([], new Set(), true, {
+    sessionID: "root",
+    decisions: [
+      {
+        sessionID: "root",
+        created: 30,
+        requestID: "graded",
+        reply: "always",
+        choice: "approve_all",
+        confidence: 1,
+        grades: [
+          { choice: "approve_all", confidence: 1, evidence: "Scoped \u001b[31m change" },
+          { choice: "approve", confidence: 0.799999, evidence: "Below the approval threshold" },
+          { choice: "reject", confidence: 0, evidence: "No destructive effect" },
+          { choice: "escalate", confidence: 0.2, evidence: "No unresolved scope" },
+        ],
+      },
+    ],
+    dismissals: [],
+    pending: [],
+  })
+  const row = rows.find((item) => item.type === "guardrail")
+  expect(row?.type).toBe("guardrail")
+  if (row?.type !== "guardrail") return
+  expect(row.decided).toBe("decision model approved for this session · 1")
+  expect(row.detail).toEqual([
+    { label: "outcome", value: "decision model approved for this session · 1" },
+    { label: "grade approve all (selected)", value: "1 · Scoped \\u001b[31m change" },
+    { label: "grade approve", value: "0.799999 · Below the approval threshold" },
+    { label: "grade reject", value: "0 · No destructive effect" },
+    { label: "grade escalate", value: "0.2 · No unresolved scope" },
+  ])
+})
+
+test("guardrail grades never infer a selected choice from confidence", () => {
+  const rows = reduceSessionRows([], new Set(), true, {
+    sessionID: "root",
+    decisions: [
+      {
+        sessionID: "root",
+        created: 1,
+        requestID: "unselected",
+        reply: "reject",
+        grades: [{ choice: "approve_all", confidence: 1, evidence: "Reported grade without a selected choice" }],
+      },
+    ],
+    dismissals: [],
+    pending: [],
+  })
+  const row = rows.find((item) => item.type === "guardrail")
+  expect(row?.type).toBe("guardrail")
+  if (row?.type !== "guardrail") return
+  expect(row.detail).toEqual([
+    { label: "outcome", value: "decision model rejected · confidence unreported" },
+    { label: "grade approve all", value: "1 · Reported grade without a selected choice" },
+  ])
+})
+
 test("assigns assistant boundaries to the first rendered row instead of the first text row", () => {
   const messages: SessionMessageInfo[] = [
     { type: "user", id: "user-1", text: "Question", time: { created: 0 } },

@@ -2,7 +2,8 @@ use super::codec::key;
 use super::{
     ConsentTable, Continuation, ContinuationGeneration, ContinuationGenerationTable,
     ContinuationTable, Kv, KvTable, Latency, LatencyTable, Request, RequestTable, Sequence,
-    SequenceTable, StateBlob, StateBlobTable, StateLink, StateLinkTable, UsageTable,
+    SequenceTable, StateBlob, StateBlobTable, StateLink, StateLinkTable,
+    UsageAnalyticsRequestTable, UsageTable,
 };
 use crate::{
     Error, IndexCursor, IndexOrder, IndexQuery, KeyPart, Snapshot, TableSpec, Write, analytics,
@@ -352,7 +353,10 @@ fn delete_source<T: TableSpec>(
         return Ok(false);
     }
     super::source_changed(tx, source, identity.to_vec(), true)?;
-    if source == "session_provider_request" || source == "session_usage" {
+    if matches!(
+        source,
+        "session_provider_request" | "session_usage" | "usage_analytics_request"
+    ) {
         analytics::privacy_changed(tx, Vec::new(), true)?;
     }
     Ok(true)
@@ -360,6 +364,11 @@ fn delete_source<T: TableSpec>(
 impl RequestTable {
     pub fn delete(tx: &mut Write<'_>, identity: &[u8]) -> Result<bool, Error> {
         delete_source::<Self>(tx, "session_provider_request", identity)
+    }
+}
+impl UsageAnalyticsRequestTable {
+    pub fn delete(tx: &mut Write<'_>, identity: &[u8]) -> Result<bool, Error> {
+        delete_source::<Self>(tx, "usage_analytics_request", identity)
     }
 }
 impl UsageTable {

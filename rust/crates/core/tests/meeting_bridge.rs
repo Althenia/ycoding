@@ -11,6 +11,8 @@ use ycoding_core::meeting::bridge::{
     Asset, Bridge, CallbackFailed, CaptureMessage, Handlers, Options, ViewAssets,
 };
 use ycoding_core::meeting::client::send_control;
+use ycoding_core::meeting::config::{AnalysisModel, KnowledgeBinding};
+use ycoding_core::meeting::owner::{Knowledge, Outcome, Update};
 use ycoding_core::meeting::pcm::{AudioSource, samples_base64};
 
 const CONTROL: &str = "controller-test-credential-with-32-bytes";
@@ -22,6 +24,7 @@ type CaptureHandler = Box<
         + Sync,
 >;
 type AskHandler = Box<dyn Fn(String) -> Result<Value, CallbackFailed> + Send + Sync>;
+type OwnerUpdateHandler = Box<dyn Fn(&Update) -> Result<Outcome, CallbackFailed> + Send + Sync>;
 
 struct Recorder {
     controls: Mutex<Vec<Value>>,
@@ -32,6 +35,9 @@ struct Recorder {
     control_response: Value,
     view: Option<Value>,
     ask: Option<AskHandler>,
+    owner_read: Option<Result<Value, CallbackFailed>>,
+    owner_update: Option<OwnerUpdateHandler>,
+    owner_updates: Mutex<Vec<Update>>,
 }
 
 impl Recorder {
@@ -45,6 +51,9 @@ impl Recorder {
             control_response: json!({ "ok": true }),
             view: None,
             ask: None,
+            owner_read: None,
+            owner_update: None,
+            owner_updates: Mutex::new(Vec::new()),
         }
     }
 
@@ -84,6 +93,22 @@ impl Handlers for Recorder {
             let answer = ask(question);
             Box::pin(async move { answer }) as BoxFuture<'_, _>
         })
+    }
+
+    fn owner_read(&self) -> Option<BoxFuture<'_, Result<Value, CallbackFailed>>> {
+        self.owner_read
+            .clone()
+            .map(|read| Box::pin(async move { read }) as BoxFuture<'_, _>)
+    }
+
+    fn owner_update(
+        &self,
+        update: Update,
+    ) -> Option<BoxFuture<'_, Result<Outcome, CallbackFailed>>> {
+        let handler = self.owner_update.as_ref()?;
+        let outcome = handler(&update);
+        self.owner_updates.lock().unwrap().push(update);
+        Some(Box::pin(async move { outcome }))
     }
 }
 
@@ -1028,6 +1053,441 @@ async fn a_stop_reply_from_the_backend_retires_the_capture_so_close_does_not_dis
         );
         f.bridge.close().await;
         assert_eq!(f.recorder.disconnects.load(Ordering::SeqCst), 0);
+    })
+    .await;
+}
+
+async fn owner_link(f: &Fixture) -> (String, String) {
+    let page = send_control(f.url(), CONTROL, &json!({ "action": "owner-view" }))
+        .await
+        .unwrap();
+    let url = page["url"].as_str().unwrap().to_owned();
+    let fragment = url
+        .strip_prefix(&format!("{}/view#", f.url()))
+        .unwrap()
+        .to_owned();
+    let fields: Vec<(&str, &str)> = fragment
+        .split('&')
+        .map(|field| field.split_once('=').unwrap())
+        .collect();
+    assert_eq!(fields.len(), 2, "{url}");
+    assert_eq!(fields[0], ("key", f.key.as_str()));
+    assert_eq!(fields[1].0, "owner");
+    (url, fields[1].1.to_owned())
+}
+
+fn owner_recorder() -> Recorder {
+    let mut recorder = Recorder::new();
+    recorder.view = Some(json!({ "meeting": { "id": "m" } }));
+    recorder.ask = Some(Box::new(|_| Ok(json!({ "status": "answered" }))));
+    recorder.owner_read = Some(Ok(json!({ "askModel": "inherit", "models": [] })));
+    recorder.owner_update = Some(Box::new(|_| Ok(Outcome::Saved(json!({ "saved": true })))));
+    recorder
+}
+
+#[tokio::test]
+async fn native_control_issues_a_separate_owner_link_that_no_page_credential_can_obtain() {
+    timed(async {
+        let f = Fixture::start(owner_recorder()).await;
+        let own = f.url().to_owned();
+        let ordinary = send_control(f.url(), CONTROL, &json!({ "action": "view" }))
+            .await
+            .unwrap();
+        assert_eq!(
+            ordinary,
+            json!({ "url": format!("{own}/view#key={}", f.key) })
+        );
+        let (url, owner) = owner_link(&f).await;
+        assert_eq!(url, format!("{own}/view#key={}&owner={owner}", f.key));
+        assert_eq!(owner.len(), 64);
+        assert!(
+            owner
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert_ne!(owner, f.key);
+        assert_ne!(owner, CONTROL);
+        assert_eq!(owner_link(&f).await.1, owner);
+        let request = json!({ "action": "owner-view" });
+        for token in [Some(f.key.as_str()), Some(owner.as_str()), None] {
+            let response = f.post("/control", &request, token, None).await;
+            assert_eq!(response.status(), 401);
+            assert_eq!(body(response).await, json!({ "error": "unauthorized" }));
+        }
+        assert_eq!(
+            f.post("/control", &request, Some(CONTROL), Some(&own))
+                .await
+                .status(),
+            403
+        );
+        let extra = f
+            .post(
+                "/control",
+                &json!({ "action": "owner-view", "meetingID": "m" }),
+                Some(CONTROL),
+                None,
+            )
+            .await;
+        assert_eq!(extra.status(), 400);
+        assert_eq!(body(extra).await, json!({ "error": "invalid_action" }));
+        assert!(f.recorder.controls.lock().unwrap().is_empty());
+        f.bridge.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn owner_settings_accept_only_the_owner_key_and_page_routes_reject_it() {
+    timed(async {
+        let f = Fixture::start(owner_recorder()).await;
+        let own = f.url().to_owned();
+        let (_, owner) = owner_link(&f).await;
+        let random = "f".repeat(64);
+        let read = async |token: Option<&str>, origin: Option<&str>, extra: &[(&str, &str)]| {
+            f.send(
+                Method::GET,
+                "/view/owner/settings",
+                None,
+                token,
+                origin,
+                extra,
+            )
+            .await
+        };
+        for token in [
+            None,
+            Some(f.key.as_str()),
+            Some(CONTROL),
+            Some(random.as_str()),
+        ] {
+            let response = read(token, Some(&own), &[]).await;
+            assert_eq!(response.status(), 401, "{token:?}");
+            assert_eq!(body(response).await, json!({ "error": "unauthorized" }));
+        }
+        let granted = read(Some(&owner), Some(&own), &[]).await;
+        assert_eq!(granted.status(), 200);
+        assert_eq!(granted.headers().get("cache-control").unwrap(), "no-store");
+        assert!(
+            granted
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none()
+        );
+        assert_eq!(
+            body(granted).await,
+            json!({ "askModel": "inherit", "models": [] })
+        );
+        assert_eq!(read(Some(&owner), None, &[]).await.status(), 200);
+        for origin in [
+            "https://example.com",
+            "null",
+            "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            let response = read(Some(&owner), Some(origin), &[]).await;
+            assert_eq!(response.status(), 403);
+            assert_eq!(body(response).await, json!({ "error": "invalid_origin" }));
+        }
+        assert_eq!(
+            read(Some(&owner), None, &[("host", "localhost")])
+                .await
+                .status(),
+            403
+        );
+        assert_eq!(
+            f.send(
+                Method::GET,
+                &format!("/view/owner/settings?owner={owner}"),
+                None,
+                Some(&owner),
+                None,
+                &[]
+            )
+            .await
+            .status(),
+            400
+        );
+        for method in [Method::OPTIONS, Method::PUT, Method::DELETE, Method::PATCH] {
+            let response = f
+                .send(
+                    method.clone(),
+                    "/view/owner/settings",
+                    None,
+                    Some(&owner),
+                    Some(&own),
+                    &[],
+                )
+                .await;
+            assert_eq!(response.status(), 405, "{method}");
+            assert_eq!(
+                body(response).await,
+                json!({ "error": "method_not_allowed" })
+            );
+        }
+        assert_eq!(
+            f.send(
+                Method::GET,
+                "/view/owner",
+                None,
+                Some(&owner),
+                Some(&own),
+                &[]
+            )
+            .await
+            .status(),
+            404
+        );
+        assert_eq!(
+            f.send(
+                Method::GET,
+                "/view/state",
+                None,
+                Some(&owner),
+                Some(&own),
+                &[]
+            )
+            .await
+            .status(),
+            401
+        );
+        for (route, request) in [
+            ("/view/control", json!({ "action": "stop" })),
+            ("/view/ask", json!({ "question": "Hello" })),
+            ("/view/capture", heartbeat()),
+        ] {
+            assert_eq!(
+                f.post(route, &request, Some(&owner), Some(&own))
+                    .await
+                    .status(),
+                401,
+                "{route}"
+            );
+        }
+        assert!(f.recorder.controls.lock().unwrap().is_empty());
+        assert!(f.recorder.received().is_empty());
+        let state = f
+            .send(
+                Method::GET,
+                "/view/state",
+                None,
+                Some(&f.key),
+                Some(&own),
+                &[],
+            )
+            .await;
+        assert_eq!(state.status(), 200);
+        let text = state.text().await.unwrap();
+        assert!(!text.contains(&owner) && !text.contains(CONTROL));
+        f.bridge.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn owner_update_strictly_parses_bounded_settings_before_reaching_the_runtime() {
+    timed(async {
+        let f = Fixture::start(owner_recorder()).await;
+        let own = f.url().to_owned();
+        let (_, owner) = owner_link(&f).await;
+        let post = async |request: &Value| {
+            f.post("/view/owner/settings", request, Some(&owner), Some(&own))
+                .await
+        };
+        let binding = json!({ "server": "docs", "search": "search", "read": "read" });
+        let bound = |field: &str, value: Value| {
+            let mut binding = binding.clone();
+            binding[field] = value;
+            json!({ "knowledge": { "mcpEnabled": true, "bindings": [binding] } })
+        };
+        let long = "x".repeat(201);
+        for rejected in [
+            json!({}),
+            json!([]),
+            json!(null),
+            json!("inherit"),
+            json!({ "action": "approve", "proposalID": "x" }),
+            json!({ "askModel": "inherit", "tool": "search" }),
+            json!({ "askModel": null }),
+            json!({ "askModel": "p/m" }),
+            json!({ "askModel": { "providerID": "p" } }),
+            json!({ "askModel": { "id": "m" } }),
+            json!({ "askModel": { "providerID": "p", "id": "m1", "account": "x" } }),
+            json!({ "askModel": { "providerID": "", "id": "m1" } }),
+            json!({ "askModel": { "providerID": "p", "id": "m1", "variant": "" } }),
+            json!({ "askModel": { "providerID": "p", "id": "m1", "variant": 1 } }),
+            json!({ "askModel": { "providerID": "p", "id": "m1", "profile": long } }),
+            json!({ "askModel": { "providerID": long, "id": "m1" } }),
+            json!({ "knowledge": { "mcpEnabled": true } }),
+            json!({ "knowledge": { "bindings": [] } }),
+            json!({ "knowledge": { "mcpEnabled": "true", "bindings": [] } }),
+            json!({ "knowledge": { "mcpEnabled": true, "autoApply": true, "bindings": [] } }),
+            json!({ "knowledge": { "mcpEnabled": true, "requireApproval": false, "bindings": [] } }),
+            json!({ "knowledge": { "mcpEnabled": true, "retrievalTTL": 0, "bindings": [] } }),
+            json!({ "knowledge": { "mcpEnabled": true, "bindings": {} } }),
+            json!({ "knowledge": { "mcpEnabled": true, "bindings": vec![binding.clone(); 5] } }),
+            bound("server", json!("")),
+            bound("search", json!(long)),
+            bound("read", json!(null)),
+            bound("write", json!("")),
+            bound("enabled", json!("yes")),
+            bound("delete", json!("remove")),
+            json!({ "knowledge": { "mcpEnabled": true, "bindings": [{ "server": "docs", "search": "search" }] } }),
+            json!({ "transcription": { "model": "other" } }),
+        ] {
+            let response = post(&rejected).await;
+            assert_eq!(response.status(), 400, "accepted {rejected}");
+            assert_eq!(body(response).await, json!({ "error": "invalid_settings" }));
+        }
+        assert!(f.recorder.owner_updates.lock().unwrap().is_empty());
+        let invalid = f
+            .send(Method::POST, "/view/owner/settings", Some("{".into()), Some(&owner), Some(&own), &[])
+            .await;
+        assert_eq!(invalid.status(), 400);
+        assert_eq!(body(invalid).await, json!({ "error": "invalid_json" }));
+        assert_eq!(
+            f.send(
+                Method::POST,
+                "/view/owner/settings",
+                Some(json!({ "askModel": "inherit" }).to_string()),
+                Some(&owner),
+                Some(&own),
+                &[("content-type", "text/plain")],
+            )
+            .await
+            .status(),
+            415
+        );
+        let oversized = post(&json!({ "askModel": "inherit", "padding": "x".repeat(16_384) })).await;
+        assert_eq!(oversized.status(), 413);
+        assert_eq!(body(oversized).await, json!({ "error": "payload_too_large" }));
+
+        let thai = "ก".repeat(200);
+        for accepted in [
+            json!({ "askModel": "inherit" }),
+            json!({ "askModel": { "providerID": "p", "id": "vendor/model-x", "variant": "deep", "profile": "acct" } }),
+            json!({ "knowledge": { "mcpEnabled": false, "bindings": [
+                { "server": thai, "search": "search", "read": "read", "write": "replace", "enabled": false },
+                binding,
+            ] } }),
+            json!({ "askModel": { "providerID": "p", "id": "m1" }, "knowledge": { "mcpEnabled": true, "bindings": [] } }),
+        ] {
+            let response = post(&accepted).await;
+            assert_eq!(response.status(), 200, "rejected {accepted}");
+            assert_eq!(body(response).await, json!({ "saved": true }));
+        }
+        let explicit = |id: &str, variant: Option<&str>, profile: Option<&str>| AnalysisModel::Explicit {
+            id: id.into(),
+            provider_id: "p".into(),
+            variant: variant.map(Into::into),
+            profile: profile.map(Into::into),
+        };
+        let entry = |server: &str, write: Option<&str>, enabled: bool| KnowledgeBinding {
+            server: server.into(),
+            search: "search".into(),
+            read: "read".into(),
+            write: write.map(Into::into),
+            enabled,
+        };
+        assert_eq!(
+            *f.recorder.owner_updates.lock().unwrap(),
+            vec![
+                Update { ask_model: Some(AnalysisModel::Inherit), knowledge: None },
+                Update {
+                    ask_model: Some(explicit("vendor/model-x", Some("deep"), Some("acct"))),
+                    knowledge: None,
+                },
+                Update {
+                    ask_model: None,
+                    knowledge: Some(Knowledge {
+                        mcp_enabled: false,
+                        bindings: vec![entry(&thai, Some("replace"), false), entry("docs", None, true)],
+                    }),
+                },
+                Update {
+                    ask_model: Some(explicit("m1", None, None)),
+                    knowledge: Some(Knowledge { mcp_enabled: true, bindings: Vec::new() }),
+                },
+            ]
+        );
+        f.bridge.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn owner_outcomes_map_to_explicit_statuses_without_details() {
+    timed(async {
+        let unavailable = Fixture::start(Recorder::new()).await;
+        let (_, owner) = owner_link(&unavailable).await;
+        let own = unavailable.url().to_owned();
+        let read = unavailable
+            .send(
+                Method::GET,
+                "/view/owner/settings",
+                None,
+                Some(&owner),
+                Some(&own),
+                &[],
+            )
+            .await;
+        assert_eq!(read.status(), 503);
+        assert_eq!(body(read).await, json!({ "error": "owner_unavailable" }));
+        let update = unavailable
+            .post(
+                "/view/owner/settings",
+                &json!({ "askModel": "inherit" }),
+                Some(&owner),
+                Some(&own),
+            )
+            .await;
+        assert_eq!(update.status(), 503);
+        assert_eq!(body(update).await, json!({ "error": "owner_unavailable" }));
+        unavailable.bridge.close().await;
+
+        let mut recorder = owner_recorder();
+        recorder.owner_read = Some(Err(CallbackFailed));
+        recorder.owner_update = Some(Box::new(|update| match &update.ask_model {
+            Some(AnalysisModel::Inherit) => Err(CallbackFailed),
+            _ => Ok(Outcome::SelectionUnavailable),
+        }));
+        let f = Fixture::start(recorder).await;
+        let (_, owner) = owner_link(&f).await;
+        let own = f.url().to_owned();
+        let failed = f
+            .send(
+                Method::GET,
+                "/view/owner/settings",
+                None,
+                Some(&owner),
+                Some(&own),
+                &[],
+            )
+            .await;
+        assert_eq!(failed.status(), 500);
+        assert_eq!(body(failed).await, json!({ "error": "owner_failed" }));
+        let failed = f
+            .post(
+                "/view/owner/settings",
+                &json!({ "askModel": "inherit" }),
+                Some(&owner),
+                Some(&own),
+            )
+            .await;
+        assert_eq!(failed.status(), 500);
+        assert_eq!(body(failed).await, json!({ "error": "owner_failed" }));
+        let missing = f
+            .post(
+                "/view/owner/settings",
+                &json!({ "askModel": { "providerID": "p", "id": "missing" } }),
+                Some(&owner),
+                Some(&own),
+            )
+            .await;
+        assert_eq!(missing.status(), 422);
+        assert_eq!(
+            body(missing).await,
+            json!({ "error": "selection_unavailable" })
+        );
+        f.bridge.close().await;
     })
     .await;
 }

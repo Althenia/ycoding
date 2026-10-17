@@ -5,15 +5,15 @@ use std::{collections::BTreeSet, time::Duration};
 use support::{wire::*, *};
 use ycoding_core::event_feed::{Ephemeral, Payload, Scope, Subscriber};
 use ycoding_core::session::{autonomy::Goal, pending::Request};
-use ycoding_core::tools::builtin::shell::{Job, Jobs};
+use ycoding_core::tools::builtin::shell::{Job, Jobs, Notice};
 use ycoding_core::ycoding_schema::{
-    DomainDecode, JsonValue, LosslessString, event, parse_json, session, session_message,
+    DomainDecode, JsonValue, LosslessString, event, model, parse_json, session, session_message,
     session_pending,
 };
 use ycoding_core::ycoding_store::{
     KeyPart,
     resources::{Shell, ShellTable},
-    session::{NewEvent, SessionTable, append},
+    session::{Document, NewEvent, SessionTable, Task, TaskTable, append},
     tuple_key,
 };
 use ycoding_protocol::v5;
@@ -196,6 +196,145 @@ async fn outstanding_reports_work_owed_running_failed_and_lost_sessions() {
 
         drop(lease);
         server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+fn lost_shell(shell: &str, session: &str) -> Shell {
+    Shell {
+        id: shell.into(),
+        session_id: Some(session.into()),
+        pid: 1,
+        process_started: None,
+        owner_pid: 1,
+        owner_started: "Mon Jan  1 00:00:00 2024".into(),
+        notice_pending: 1,
+        time_created: 1,
+        time_lost: Some(2),
+        start_seq: -1,
+    }
+}
+
+fn child_task(
+    child: &str,
+    parent: &str,
+    state: &str,
+) -> Result<Task, ycoding_core::ycoding_store::Error> {
+    Ok(Task {
+        session_id: child.into(),
+        parent_id: parent.into(),
+        parent_assistant_message_id: "msg_lost_parent".into(),
+        tool_call_id: format!("call_{child}").as_str().into(),
+        input_id: format!("msg_input_{child}").as_str().into(),
+        description: "Work".into(),
+        agent: "build".into(),
+        model: Document::<model::Ref>::new(
+            parse_json(r#"{"providerID":"local","id":"test"}"#).unwrap(),
+        )?,
+        prompt_digest: "0".repeat(64).as_str().into(),
+        background: 1,
+        delivery: "steer".into(),
+        state: state.into(),
+        progress: None,
+        progress_time: None,
+        question_id: None,
+        question: None,
+        question_data: None,
+        question_time: None,
+        attempt_started: 0,
+        owner_pid: None,
+        owner_started: None,
+        revision: 0,
+        time_created: 1,
+        time_updated: 1,
+        usage_anchor: None,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outstanding_lost_excludes_subagents_whose_task_is_terminal() {
+    bounded(async {
+        for session in ["ses_lost_parent", "ses_lost_finished", "ses_lost_working"] {
+            insert_session(session, "/loc/lost", None).await;
+        }
+        adopt("ses_lost_finished", "ses_lost_parent");
+        adopt("ses_lost_working", "ses_lost_parent");
+        world()
+            .store
+            .submit(|tx| {
+                TaskTable::insert(
+                    tx,
+                    &child_task("ses_lost_finished", "ses_lost_parent", "completed")?,
+                )?;
+                TaskTable::insert(
+                    tx,
+                    &child_task("ses_lost_working", "ses_lost_parent", "running")?,
+                )?;
+                for (shell, session) in [
+                    ("shl_lost_parent", "ses_lost_parent"),
+                    ("shl_lost_finished", "ses_lost_finished"),
+                    ("shl_lost_working", "ses_lost_working"),
+                ] {
+                    ShellTable::insert(tx, &lost_shell(shell, session))?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+
+        let (server, mut client) = open().await;
+        let result: v5::SessionOutstandingResult = ask(
+            &mut client,
+            "session.outstanding",
+            machine(),
+            outstanding(false),
+        )
+        .await;
+        let lost = names(&result.lost.items);
+        assert!(lost.contains("ses_lost_parent"), "{lost:?}");
+        assert!(lost.contains("ses_lost_working"), "{lost:?}");
+        assert!(
+            !lost.contains("ses_lost_finished"),
+            "a terminal subagent kept its lost notice: {lost:?}"
+        );
+        server.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_job_shell_notice_for_a_missing_session_fails_as_not_found() {
+    bounded(async {
+        let error = world()
+            .core
+            .execution
+            .job_shells()
+            .deliver(Notice::Completed {
+                job: Job {
+                    session_id: id("ses_job_notice_missing"),
+                    call_id: "call_job_notice_missing".into(),
+                    command: "echo done".into(),
+                },
+                shell_id: "sh_job_notice_missing".into(),
+                state: "completed",
+                text: "done".into(),
+                resume: true,
+            })
+            .await
+            .expect_err("a notice for a missing Session must not be admitted");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+        assert!(
+            world()
+                .store
+                .snapshot()
+                .unwrap()
+                .get::<SessionTable>(&tuple_key(&[KeyPart::String(
+                    &"ses_job_notice_missing".into()
+                )]))
+                .unwrap()
+                .is_none()
+        );
     })
     .await;
 }

@@ -51,7 +51,7 @@ impl DomainDecode for WhenValue {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         match v {
             JsonValue::String(x) => Ok(Self::String(x.clone())),
-            JsonValue::Number(x) => Ok(Self::Number(*x)),
+            JsonValue::Number(_) => crate::domain::finite_number(v, p).map(Self::Number),
             JsonValue::Bool(x) => Ok(Self::Boolean(*x)),
             _ => Err(p.error(DecodeErrorKind::Expected("string, number, or boolean"))),
         }
@@ -163,6 +163,15 @@ impl DomainEncode for StringField {
             .finish()
     }
 }
+fn finite(
+    o: &ObjectDecoder<'_>,
+    p: &JsonPath,
+    key: &str,
+) -> Result<std::option::Option<f64>, DecodeError> {
+    o.optional::<JsonValue>(key)?
+        .map(|value| crate::domain::finite_number(&value, &p.key(key)))
+        .transpose()
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct NumberField {
     pub base: Base,
@@ -176,9 +185,9 @@ impl DomainDecode for NumberField {
         o.literal("type", &JsonValue::String("number".into()))?;
         Ok(Self {
             base: Base::decode(&o)?,
-            minimum: o.optional("minimum")?,
-            maximum: o.optional("maximum")?,
-            default: o.optional("default")?,
+            minimum: finite(&o, p, "minimum")?,
+            maximum: finite(&o, p, "maximum")?,
+            default: finite(&o, p, "default")?,
         })
     }
 }
@@ -206,9 +215,9 @@ impl DomainDecode for IntegerField {
         o.literal("type", &JsonValue::String("integer".into()))?;
         Ok(Self {
             base: Base::decode(&o)?,
-            minimum: o.optional("minimum")?,
-            maximum: o.optional("maximum")?,
-            default: o.optional("default")?,
+            minimum: finite(&o, p, "minimum")?,
+            maximum: finite(&o, p, "maximum")?,
+            default: finite(&o, p, "default")?,
         })
     }
 }
@@ -463,17 +472,28 @@ pub enum State {
     Pending,
     Answered(Answer),
     Cancelled,
+    TimedOut { seconds: crate::schema::PositiveInt },
+    Deferred { item_id: crate::session_review::Id },
 }
 impl DomainDecode for State {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
         match o
-            .tag("status", &["pending", "answered", "cancelled"])?
+            .tag(
+                "status",
+                &["pending", "answered", "cancelled", "timed_out", "deferred"],
+            )?
             .as_str()
         {
             Some("pending") => Ok(Self::Pending),
             Some("answered") => Ok(Self::Answered(o.field("answer")?)),
             Some("cancelled") => Ok(Self::Cancelled),
+            Some("timed_out") => Ok(Self::TimedOut {
+                seconds: o.field("seconds")?,
+            }),
+            Some("deferred") => Ok(Self::Deferred {
+                item_id: o.field("itemID")?,
+            }),
             _ => Err(p.error(DecodeErrorKind::Expected("form state"))),
         }
     }
@@ -490,6 +510,14 @@ impl DomainEncode for State {
                 .finish(),
             Self::Cancelled => ObjectEncoder::new()
                 .field("status", &LosslessString::from("cancelled"))
+                .finish(),
+            Self::TimedOut { seconds } => ObjectEncoder::new()
+                .field("status", &LosslessString::from("timed_out"))
+                .field("seconds", seconds)
+                .finish(),
+            Self::Deferred { item_id } => ObjectEncoder::new()
+                .field("status", &LosslessString::from("deferred"))
+                .field("itemID", item_id)
                 .finish(),
         }
     }
@@ -587,4 +615,61 @@ pub struct Cancelled;
 impl crate::event::EventType for Cancelled {
     const TYPE: &'static str = "form.cancelled";
     type Data = CancelledData;
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimedOutData {
+    pub id: Id,
+    pub session_id: LosslessString,
+}
+impl DomainDecode for TimedOutData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            id: o.field("id")?,
+            session_id: o.field("sessionID")?,
+        })
+    }
+}
+impl DomainEncode for TimedOutData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("id", &self.id)
+            .field("sessionID", &self.session_id)
+            .finish()
+    }
+}
+pub struct TimedOut;
+impl crate::event::EventType for TimedOut {
+    const TYPE: &'static str = "form.timed_out";
+    type Data = TimedOutData;
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeferredData {
+    pub id: Id,
+    pub session_id: LosslessString,
+    pub item_id: crate::session_review::Id,
+}
+impl DomainDecode for DeferredData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            id: o.field("id")?,
+            session_id: o.field("sessionID")?,
+            item_id: o.field("itemID")?,
+        })
+    }
+}
+impl DomainEncode for DeferredData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("id", &self.id)
+            .field("sessionID", &self.session_id)
+            .field("itemID", &self.item_id)
+            .finish()
+    }
+}
+pub struct Deferred;
+impl crate::event::EventType for Deferred {
+    const TYPE: &'static str = "form.deferred";
+    type Data = DeferredData;
 }

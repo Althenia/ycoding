@@ -13,7 +13,7 @@ if (process.argv[2] === "--check-operations") {
     const fixture = path.resolve(process.argv[3]!)
     const run = Bun.spawnSync(
       [
-        process.env.PROTOC ?? "/opt/homebrew/bin/protoc",
+        process.env.PROTOC ?? "protoc",
         `--proto_path=${source}`,
         `--proto_path=${path.dirname(fixture)}`,
         "--include_imports",
@@ -39,7 +39,7 @@ await mkdir(output, { recursive: true })
 const temp = await mkdtemp(path.join(os.tmpdir(), "ycoding-descriptors-"))
 const run = Bun.spawnSync(
   [
-    process.env.PROTOC ?? "/opt/homebrew/bin/protoc",
+    process.env.PROTOC ?? "protoc",
     `--proto_path=${source}`,
     `--plugin=protoc-gen-es=${path.join(root, "packages/protocol/node_modules/.bin/protoc-gen-es")}`,
     `--es_out=${output}`,

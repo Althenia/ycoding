@@ -187,7 +187,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(92)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(96)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })
@@ -198,7 +198,7 @@ describe("composer input semantics", () => {
 
   test("sources slash commands and skills, references/agents/resources/files, and name-filtered #", () => {
     expect(optionsForTrigger("/", "pla", catalog, []).map((item) => item.label)).toEqual(["/plan"])
-    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research", "/suggest"])
+    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research", "/suggest", "/auto-answer"])
     expect(optionsForTrigger("@", "", catalog, [{ path: "src/main.ts", uri: "file:///main", kind: "file" }]).map((item) => item.label)).toEqual(["@docs", "@guide", "@reviewer", "@src/main.ts"])
     expect(optionsForTrigger("$", "audit", catalog, []).map((item) => item.label)).toEqual(["$audit"])
     expect(optionsForTrigger("#", "review", catalog, []).map((item) => item.label)).toEqual(["Reviewer"])

@@ -1,6 +1,6 @@
 pub mod consumers;
 pub mod policy;
-use crate::tools::code_mode::Cancellation;
+use crate::{session::usage_attribution::Attribution, tools::code_mode::Cancellation};
 use std::{future::Future, pin::Pin, sync::Arc};
 use ycoding_schema::{
     JsonObject, LosslessString, agent, llm::ToolContent, session, session_message,
@@ -23,6 +23,7 @@ pub struct Context {
     pub call_id: LosslessString,
     pub progress: Option<ProgressSink>,
     pub cancellation: Cancellation,
+    pub attribution: Attribution,
 }
 
 impl Context {
@@ -39,6 +40,7 @@ impl Context {
             call_id: call_id.into(),
             progress: None,
             cancellation: Cancellation::default(),
+            attribution: Attribution::Unset,
         })
     }
 

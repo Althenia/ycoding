@@ -31,6 +31,7 @@ function landingRoute(url: URL) {
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
   if (url.pathname === "/api/agent")
     return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
+  if (url.pathname === "/api/model/default") return json({ location, data: { selection: session.model } })
   if (url.pathname === "/api/model")
     return json({
       location,
@@ -100,9 +101,10 @@ function sessionRoute(url: URL) {
 describe("screen chrome colour probes", () => {
   test("keeps the landing footer usage and command hints visible at narrow widths", async () => {
     for (const width of [80, 60]) {
-      const screen = await renderScreen({ width, height: 40, route: landingRoute, settle: "Message YCoding…" })
+      const viewport = { width, height: 40 }
+      const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Message YCoding…" })
       try {
-        const footer = screen.lines()[38] ?? ""
+        const footer = screen.lines().slice(viewport.height - 3, viewport.height).find((line) => line.includes("⌃p commands")) ?? ""
         expect(footer).toContain("usage")
         expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("commands"))
       } finally {

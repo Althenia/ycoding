@@ -165,7 +165,7 @@ async fn the_service_registers_the_tool_and_disposes_it_on_shutdown() {
     let mut options = ServiceOptions::new(
         root.join("meeting"),
         MeetingConfig::parse(&json!({})).unwrap(),
-        Arc::new(|_| Box::pin(async { Ok("session".to_owned()) })),
+        Arc::new(|_, _| Box::pin(async { Ok("session".to_owned()) })),
     );
     options.provider_factory = Some(factory);
     let service = MeetingService::start(options).await.unwrap();

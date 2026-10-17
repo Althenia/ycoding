@@ -238,6 +238,7 @@ message Status {
   optional IdentifierList outstanding = 3;
   optional IdentifierList failed = 4;
   optional AttentionList details = 5;
+  optional IdentifierList lost = 6;
 }
 message Completion {
   required string id = 1;

@@ -1372,6 +1372,13 @@ export function Composer(props: {
   const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
   let composerMount: HTMLDivElement | undefined
   const text = () => (props.sessionID ? (remote.state().drafts[props.sessionID] ?? "") : "")
+  const toggleKeepAwake = async () => {
+    const scope = remote.scope()
+    if (!scope) throw new Error("Connect to a machine to keep it awake.")
+    const result = await remote.queries.toggleKeepAwake(scope)
+    if (result.message) throw new Error(result.message)
+    return result.reached
+  }
   return (
     <div class="mini-composer__mount" ref={composerMount}>
       <div ref={setMobileMount} class="composer__mobile-identity" />
@@ -1414,9 +1421,23 @@ export function Composer(props: {
                       ? await remote.store.activateSkill(value.input.skill)
                       : value.kind === "yolo"
                         ? await remote.store.setYolo(
-                            value.input.level ?? ([1, 2, 3, 0] as const)[remote.state().view?.autonomy?.yolo ?? 0] ?? 1,
+                            value.input.level ??
+                              ([1, 2, 0] as const)[
+                                remote.state().view?.autonomy?.effective?.yolo ??
+                                  remote.state().view?.autonomy?.yolo ??
+                                  0
+                              ] ??
+                              1,
                           )
-                        : false
+                        : value.kind === "autoAnswer"
+                          ? await remote.store.setAutoAnswer(
+                              value.input.enabled ?? !(remote.state().view?.autonomy?.autoAnswer === true),
+                            )
+                          : value.kind === "sleep" || value.kind === "wake"
+                            ? await remote.store.setSleep(value.kind === "sleep")
+                            : value.kind === "keepAwake"
+                              ? await toggleKeepAwake()
+                              : false
           if (result !== false && remote.state().drafts[sessionID] === draft) remote.store.setDraft(sessionID, "")
           return result
         }}

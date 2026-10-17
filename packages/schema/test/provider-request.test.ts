@@ -36,10 +36,25 @@ test("encodes optional consent-gated timing and report speed without undefined f
   expect(
     Schema.encodeSync(ProviderRequest.Timing)({ firstOutputMs: undefined, totalMs: undefined, retryWaitMs: undefined }),
   ).toEqual({})
-  expect(Schema.encodeSync(ProviderRequest.Speed)({ samples: 0, firstOutputP50Ms: undefined })).toEqual({ samples: 0 })
+  expect(
+    Schema.encodeSync(ProviderRequest.Speed)({
+      samples: 0,
+      generationSamples: 0,
+      providerTimedSamples: 0,
+      observedSamples: 0,
+      firstOutputP50Ms: undefined,
+    }),
+  ).toEqual({ samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0 })
 })
 
 test("decodes content-free provider request records", () => {
+  expect(
+    Schema.decodeUnknownSync(ProviderRequest.Timing)({
+      estimatedTokens: 12,
+      estimatedGenerationDurationNs: 2_000_000_000,
+    }),
+  ).toEqual({ estimatedTokens: 12, estimatedGenerationDurationNs: 2_000_000_000 })
+  expect(() => Schema.decodeUnknownSync(ProviderRequest.Timing)({ estimatedTokens: 0 })).toThrow()
   const decoded = decode(record)
   expect(decoded.source).toBe("step")
   expect(decoded.attempts).toBe(2)

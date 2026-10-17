@@ -84,6 +84,7 @@ const permission = Layer.mock(Permission.Service, {
   ask: () => Effect.die("project_artifact must not publish permission asks"),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: () => Effect.succeed({ release: Effect.void }),
 })
 const locationLayer = Layer.succeed(Location.Service, Location.Service.of(location))

@@ -1,13 +1,21 @@
-use super::{key, projector::record_error, store::Service};
-use std::ops::Bound;
+use super::{
+    key,
+    projector::record_error,
+    store::Service,
+    usage_activity,
+    usage_attribution::{self, Attribution},
+};
+use std::{ops::Bound, sync::Arc};
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectDecoder, ObjectEncoder, model,
-    provider_request, session, stringify_json, token_usage,
+    provider_request, session, stringify_json, token_usage, usage_anchor,
 };
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Snapshot, Write,
-    resources::{Request, RequestTable, Usage, UsageTable},
-    session::{Document, JobTable},
+    resources::{
+        Request, RequestTable, Usage, UsageAnalyticsRequest, UsageAnalyticsRequestTable, UsageTable,
+    },
+    session::{Document, JobTable, SessionTable, TaskTable},
     tuple_key,
 };
 
@@ -206,16 +214,26 @@ pub(crate) fn summary_in(
 pub(crate) fn recent_steps_in(
     snapshot: &Snapshot,
     id: &session::Id,
+    selected: Option<&model::Ref>,
+    before: Option<i64>,
 ) -> Result<Vec<(model::Ref, Option<provider_request::Timing>)>, Error> {
+    let prefix = key(id.as_lossless());
+    let ceiling =
+        before.map(|before| tuple_key(&[KeyPart::String(id.as_lossless()), KeyPart::I64(before)]));
     let mut after = None;
     let mut records = Vec::new();
+    let mut selected = selected.cloned();
     loop {
-        let page = ycoding_store::resources::requests(
-            snapshot,
-            id.as_lossless(),
-            IndexOrder::Descending,
-            after.as_ref(),
-            128,
+        let page = snapshot.index_range::<RequestTable>(
+            "session_provider_request_session_request_idx",
+            IndexQuery {
+                lower: Bound::Unbounded,
+                upper: ceiling.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+                prefix: Some(&prefix),
+                order: IndexOrder::Descending,
+                after: after.as_ref(),
+                limit: 128,
+            },
         )?;
         let Some(last) = page.last() else {
             break;
@@ -226,21 +244,57 @@ pub(crate) fn recent_steps_in(
             .map(|entry| entry.record)
             .filter(|row| row.source.as_str() == Some("step"))
         {
-            records.push((
-                row.model.domain()?,
-                row.timing
-                    .as_ref()
-                    .map(|timing| timing.domain())
-                    .transpose()?,
-            ));
+            let model = row.model.domain()?;
+            let selected = selected.get_or_insert_with(|| model.clone());
+            if selected.provider_id != model.provider_id || selected.id != model.id {
+                continue;
+            }
+            let timing = row
+                .timing
+                .as_ref()
+                .map(|timing| timing.domain())
+                .transpose()?;
+            if super::diagnostics::generation_sample(&model, timing.as_ref()).is_none() {
+                continue;
+            }
+            records.push((model, timing));
             if records.len() == 8 {
                 records.reverse();
                 return Ok(records);
             }
         }
+        std::thread::yield_now();
     }
     records.reverse();
     Ok(records)
+}
+
+pub(crate) fn newest_request_of(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    assistant: &LosslessString,
+) -> Result<Option<i64>, Error> {
+    let mut after = None;
+    loop {
+        let page = ycoding_store::resources::requests(
+            snapshot,
+            id.as_lossless(),
+            IndexOrder::Descending,
+            after.as_ref(),
+            128,
+        )?;
+        let Some(last) = page.last() else {
+            return Ok(None);
+        };
+        after = Some(last.cursor.clone());
+        if let Some(entry) = page
+            .iter()
+            .find(|entry| entry.record.assistant_message_id.as_ref() == Some(assistant))
+        {
+            return Ok(Some(entry.record.request));
+        }
+        std::thread::yield_now();
+    }
 }
 
 #[derive(Clone)]
@@ -248,6 +302,8 @@ pub struct Pending {
     pub id: provider_request::Id,
     pub request: i64,
     pub default_invalidation: &'static str,
+    pub usage_anchor: Option<usage_anchor::Ref>,
+    _activity: Arc<usage_activity::Contribution>,
 }
 
 pub struct Completion<'a> {
@@ -264,12 +320,14 @@ pub struct Completion<'a> {
 }
 
 impl Service {
-    pub(crate) async fn begin_provider_request_with_id(
+    pub(crate) async fn begin_provider_request_attributed_with_id(
         &self,
         begin: &Begin,
         id: provider_request::Id,
+        attribution: Attribution,
     ) -> Result<Pending, Error> {
-        self.begin_provider_request_with_pending_id(begin, id).await
+        self.begin_provider_request_with_pending_id(begin, id, attribution)
+            .await
     }
 
     pub fn telemetry_enabled(&self) -> Result<bool, Error> {
@@ -314,7 +372,16 @@ impl Service {
     }
 
     pub async fn begin_provider_request(&self, begin: &Begin) -> Result<Pending, Error> {
-        self.begin_provider_request_with_pending_id(begin, new_id()?)
+        self.begin_provider_request_with_pending_id(begin, new_id()?, Attribution::Unset)
+            .await
+    }
+
+    pub async fn begin_provider_request_attributed(
+        &self,
+        begin: &Begin,
+        attribution: Attribution,
+    ) -> Result<Pending, Error> {
+        self.begin_provider_request_with_pending_id(begin, new_id()?, attribution)
             .await
     }
 }
@@ -337,9 +404,14 @@ impl Service {
         &self,
         begin: &Begin,
         id: provider_request::Id,
+        attribution: Attribution,
     ) -> Result<Pending, Error> {
+        let session = begin.session.clone();
+        let usage_anchor =
+            usage_attribution::dispatch(&self.client, session.as_lossless(), &attribution).await?;
         let begin = begin.clone();
-        self.client
+        let (id, request, default_invalidation) = self
+            .client
             .submit(move |tx| {
                 let prefix = key(begin.session.as_lossless());
                 let previous = tx
@@ -367,17 +439,24 @@ impl Service {
                     .map(|previous| compaction_since_previous(tx, previous))
                     .transpose()?
                     .unwrap_or(false);
-                Ok(Pending {
+                Ok((
                     id,
                     request,
-                    default_invalidation: default_invalidation(
-                        previous.as_ref(),
-                        &begin,
-                        compacted_since_previous,
-                    ),
-                })
+                    default_invalidation(previous.as_ref(), &begin, compacted_since_previous),
+                ))
             })?
-            .await
+            .await?;
+        Ok(Pending {
+            _activity: Arc::new(usage_activity::request(
+                &self.client,
+                session,
+                usage_anchor.clone(),
+            )),
+            id,
+            request,
+            usage_anchor,
+            default_invalidation,
+        })
     }
 }
 
@@ -479,6 +558,7 @@ pub fn recorded_fields(
         .optional("cost", &completion.cost)
         .field("tokens", completion.tokens)
         .field("time", &(completion.time as f64))
+        .optional("usageAnchor", &pending.usage_anchor)
         .finish())
 }
 
@@ -505,10 +585,27 @@ pub(crate) fn apply(
     let reported: Option<bool> = object.optional("cacheReadReported").map_err(record_error)?;
     let time: ycoding_schema::schema::DateTimeUtcFromMillis =
         object.field("time").map_err(record_error)?;
+    let agent: LosslessString = object.field("agent").map_err(record_error)?;
+    let prompt_cache_key: LosslessString = object.field("promptCacheKey").map_err(record_error)?;
+    let request = object
+        .field::<ycoding_schema::schema::PositiveInt>("request")
+        .map_err(record_error)?
+        .get();
+    let invalidation: LosslessString = object.field("invalidation").map_err(record_error)?;
+    let usage_anchor: Option<Document<usage_anchor::Ref>> = object
+        .optional::<usage_anchor::Ref>("usageAnchor")
+        .map_err(record_error)?
+        .as_ref()
+        .map(Document::from_domain)
+        .transpose()?;
+    let model_document = Document::from_domain(&model)?;
+    let tokens_document = Document::from_domain(&tokens)?;
+    let timing_document = timing.as_ref().map(Document::from_domain).transpose()?;
+    let cost_value = cost.as_ref().map(|cost| cost.get());
     RequestTable::insert(
         tx,
         &Request {
-            id,
+            id: id.clone(),
             session_id: session_id.clone(),
             input_id: object.optional("inputID").map_err(record_error)?,
             assistant_message_id: object
@@ -518,26 +615,61 @@ pub(crate) fn apply(
                 .optional("connectionIdentityDigest")
                 .map_err(record_error)?,
             source: source.clone(),
-            agent: object.field("agent").map_err(record_error)?,
-            model: Document::from_domain(&model)?,
+            agent: agent.clone(),
+            model: model_document.clone(),
             route_id: object.field("routeID").map_err(record_error)?,
-            prompt_cache_key: object.field("promptCacheKey").map_err(record_error)?,
+            prompt_cache_key: prompt_cache_key.clone(),
             system_digest: object.field("systemDigest").map_err(record_error)?,
             tool_digest: object.field("toolDigest").map_err(record_error)?,
-            request: object
-                .field::<ycoding_schema::schema::PositiveInt>("request")
-                .map_err(record_error)?
-                .get(),
+            request,
             attempts,
-            invalidation: object.field("invalidation").map_err(record_error)?,
+            invalidation: invalidation.clone(),
             continuation: continuation.clone(),
             cache_read_reported: reported.map(i64::from),
-            timing: timing.as_ref().map(Document::from_domain).transpose()?,
-            cost: cost.as_ref().map(|cost| cost.get()),
-            tokens: Document::from_domain(&tokens)?,
+            timing: timing_document.clone(),
+            cost: cost_value,
+            tokens: tokens_document.clone(),
             time_created: time.epoch_millis(),
+            usage_anchor: usage_anchor.clone(),
         },
     )?;
+    if tx.get::<UsageAnalyticsRequestTable>(&key(&id))?.is_none() {
+        let session = tx
+            .get::<SessionTable>(&key(session_id))?
+            .ok_or(Error::Domain {
+                kind: "usage_analytics_session",
+                message: "Usage analytics requires the request Session",
+            })?;
+        let task_path = Document::from_domain(&task_path(tx, session_id)?)?;
+        UsageAnalyticsRequestTable::insert(
+            tx,
+            &UsageAnalyticsRequest {
+                id,
+                session_id: session_id.clone(),
+                project_id: session.project_id,
+                directory: session.directory,
+                workspace_id: session.workspace_id,
+                session_updated: session.time_updated,
+                agent,
+                source: source.clone(),
+                model: model_document,
+                usage_anchor,
+                task_path,
+                request,
+                attempts,
+                continuation: continuation.clone(),
+                invalidation,
+                prompt_cache_key: LosslessString::from_utf16(
+                    prompt_cache_key.code_units().take(8).collect(),
+                ),
+                cache_read_reported: reported.map(i64::from),
+                tokens: tokens_document,
+                cost: cost_value,
+                timing: timing_document,
+                time_created: time.epoch_millis(),
+            },
+        )?;
+    }
     let model_key = stringify_json(&JsonValue::Array(vec![
         model.provider_id.encode(),
         model.id.encode(),
@@ -586,4 +718,29 @@ pub(crate) fn apply(
     usage.cache_read += tokens.cache.read.get() as i64;
     usage.cache_write += tokens.cache.write.get() as i64;
     UsageTable::put(tx, &usage)
+}
+
+fn task_path(
+    tx: &mut Write<'_>,
+    session_id: &LosslessString,
+) -> Result<Vec<LosslessString>, Error> {
+    let mut path = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut current = Some(session_id.clone());
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return Err(Error::Domain {
+                kind: "usage_task_path",
+                message: "Session ancestry contains a cycle",
+            });
+        }
+        let Some(row) = tx.get::<SessionTable>(&key(&id))? else {
+            break;
+        };
+        if tx.get::<TaskTable>(&key(&id))?.is_some() {
+            path.push(id);
+        }
+        current = row.parent_id;
+    }
+    Ok(path)
 }

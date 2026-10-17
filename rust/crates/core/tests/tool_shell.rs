@@ -219,6 +219,7 @@ fn completed(notices: &[Notice]) -> Option<(Job, String, &'static str, String)> 
             shell_id,
             state,
             text,
+            ..
         } => Some((job.clone(), shell_id.clone(), *state, text.clone())),
         Notice::Steer { .. } => None,
     })

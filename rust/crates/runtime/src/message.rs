@@ -665,6 +665,24 @@ fn assistant(json: J) -> R<v5::SessionMessageAssistant> {
                 })
             })
             .transpose()?,
+        reroutes: json
+            .opt("reroutes")
+            .map(|reroutes| {
+                reroutes
+                    .items()?
+                    .iter()
+                    .map(|reroute| {
+                        let reroute = J(reroute);
+                        Ok(v5::SessionMessageAssistantReroute {
+                            from: model_ref(reroute.field("from")?)?,
+                            model: model_ref(reroute.field("model")?)?,
+                            error: structured_error(reroute.field("error")?)?,
+                        })
+                    })
+                    .collect::<R<_>>()
+                    .map(|items| v5::SessionMessageAssistantReroutes { items })
+            })
+            .transpose()?,
     })
 }
 

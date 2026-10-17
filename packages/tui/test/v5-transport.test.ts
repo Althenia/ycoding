@@ -96,6 +96,28 @@ test("the absent wire model default remains undefined rather than an invented se
   }
 })
 
+test("reads canonical review, guardrail, and keep-awake routes through the V5 transport", async () => {
+  const sessionID = "ses_startup_reads"
+  const paths: string[] = []
+  const fixture = createFetch((url) => {
+    paths.push(url.pathname)
+  })
+  const api = createApi(fixture.fetch)
+  try {
+    const results = await Promise.allSettled([
+      api.review.list({ sessionID }),
+      api.guardrail.status({ sessionID }),
+      api.keepAwake.get(),
+    ])
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"])
+    expect(new Set(paths)).toEqual(
+      new Set([`/api/session/${sessionID}/review`, `/api/session/${sessionID}/guardrail`, "/api/keep-awake"]),
+    )
+  } finally {
+    api.transport.close()
+  }
+})
+
 test("finite log export receives decoded items and succeeds only after StreamEnd", async () => {
   const log = createLogStream([{ type: "log.synced", aggregateID: "ses_binary", sourceEpoch: "source-1", seq: 12 }])
   const api = createApi(createFetch((url) => (url.pathname.endsWith("/log") ? log.response : undefined)).fetch)

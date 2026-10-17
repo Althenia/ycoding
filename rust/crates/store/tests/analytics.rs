@@ -1303,6 +1303,85 @@ fn reviewed_report_count_sql_parameter_row_column_and_output_bounds() {
 }
 
 #[test]
+fn report_snapshot_accepts_64_sources_and_rejects_65_as_configuration() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    store
+        .submit(|tx| {
+            tx.put::<Facts>(&Fact {
+                id: 1,
+                amount: 10,
+                scope: b"scope".to_vec(),
+            })
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let columns: &'static [Column] = Box::leak(Box::new([Column {
+        name: "amount",
+        kind: ColumnType::Integer,
+    }]));
+    let names: &'static [&'static str] = Box::leak(
+        (0..64)
+            .map(|index| &*Box::leak(format!("report_source_{index:03}").into_boxed_str()))
+            .collect::<Vec<&'static str>>()
+            .into_boxed_slice(),
+    );
+    let sources = Box::leak(
+        names
+            .iter()
+            .copied()
+            .map(|name| Source {
+                name,
+                version: 1,
+                columns,
+                allowed,
+                load,
+                page,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let engine = Engine::start(store.client(), root.0.join("derived"), sources).unwrap();
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT (SELECT count(*) FROM report_report_source_000)::BIGINT, (SELECT sum(amount) FROM report_report_source_063)::BIGINT",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), names, query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(1), Value::BigInt(10)]]]
+    );
+    let oversized: &'static [&'static str] = Box::leak(
+        names
+            .iter()
+            .copied()
+            .chain([names[0]])
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    assert_eq!(oversized.len(), 65);
+    assert!(matches!(
+        engine.report_snapshot(store.snapshot().unwrap(), oversized, query()),
+        Err(analytics::Error::Configuration)
+    ));
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), names, query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(1), Value::BigInt(10)]]]
+    );
+    engine.shutdown().unwrap();
+}
+
+#[test]
 fn report_scalar_output_budget_rejects_nested_values() {
     let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let root = Root::new();

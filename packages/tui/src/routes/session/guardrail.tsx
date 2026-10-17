@@ -4,6 +4,7 @@ import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
 import { useToast } from "../../ui/toast"
 import { Prompt } from "./permission"
+import { GuardrailEscalation } from "../../guardrail-escalation"
 
 export type GuardrailRequest = GuardrailRequestListOutput[number]
 
@@ -69,6 +70,7 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
       }}
       body={
         <box flexDirection="column">
+          <Show when={props.request.escalation}>{(escalation) => <box paddingLeft={3} paddingRight={3}><text fg={theme.text.feedback.warning.default} wrapMode="word">{GuardrailEscalation.text(escalation())} — your decision is required.</text></box>}</Show>
           <box paddingLeft={3} paddingRight={3}>
             <text fg={theme.text.feedback.info.default}>{presentation().reason}</text>
           </box>

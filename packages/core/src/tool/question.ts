@@ -73,6 +73,12 @@ export const Plugin = {
           Effect.orDie,
           Effect.flatMap((state) => {
             if (state.status === "cancelled") return Effect.die(new CancelledError())
+            if (state.status === "timed_out") return Effect.fail(new ToolFailure({
+              message: `Question timed out after ${state.seconds} seconds; no answer was received.`,
+            }))
+            if (state.status === "deferred") return Effect.fail(new ToolFailure({
+              message: "Question deferred to the review box; no answer was received.",
+            }))
             return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
               const value = state.answer[`q${index}`]
               if (value === undefined) return []

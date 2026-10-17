@@ -121,6 +121,31 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 delta: convert::wire(&data.delta),
             }
         ),
+        Data::SessionToolProgress(data) => envelope!(
+            SessionToolProgress,
+            PublicEventSessionToolProgress,
+            v5::PublicEventSessionToolProgressData {
+                session_id: convert::wire(data.session_id.as_lossless()),
+                assistant_message_id: convert::wire(data.assistant_message_id.as_lossless()),
+                call_id: convert::wire(&data.call_id),
+                structured: v5::PublicEventSessionToolProgressDataStructured {
+                    entries: data
+                        .structured
+                        .iter()
+                        .map(
+                            |(key, value)| v5::PublicEventSessionToolProgressDataStructuredEntry {
+                                key: convert::wire(key),
+                                value: convert::json_to_value(value)
+                            }
+                        )
+                        .collect(),
+                },
+                content: v5::PublicEventSessionToolProgressDataContent {
+                    items: message::tool_contents(message::J(&data.content.encode()))
+                        .map_err(|_| unrepresentable())?,
+                },
+            }
+        ),
         Data::SessionCompactionDelta(data) => envelope!(
             SessionCompactionDelta,
             PublicEventSessionCompactionDelta,
@@ -189,6 +214,15 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 )?,
             }
         ),
+        Data::PermissionDeferred(data) => envelope!(
+            PermissionDeferred,
+            PublicEventPermissionDeferred,
+            v5::PublicEventPermissionDeferredData {
+                session_id: convert::wire(data.session_id.as_lossless()),
+                request_id: convert::identity(&data.request_id)?,
+                item_id: convert::wire(data.item_id.as_lossless()),
+            }
+        ),
         Data::GuardrailAsked(data) => {
             let data = guardrail::wire(data)?;
             envelope!(
@@ -221,6 +255,7 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                                 })
                                 .collect()
                         }),
+                    escalation: data.escalation,
                 }
             )
         }
@@ -233,10 +268,17 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 request_id: crate::message::J(&data.request_id.encode())
                     .text()
                     .map_err(|_| unrepresentable())?,
-                reply: enumeration(
-                    &data.reply.encode(),
-                    &[("once", 1), ("always", 2), ("reject", 3)]
-                )?,
+                reply: convert::guardrail_reply(data.reply),
+                decided_by: data.decided_by.map(|decided_by| match decided_by {
+                    ycoding_core::ycoding_schema::guardrail::DecidedBy::DecisionModel => 1,
+                }),
+                choice: data.choice.map(convert::decision_choice),
+                confidence: data.confidence.map(|confidence| confidence.get()),
+                grades: data.grades.as_ref().map(|grades| {
+                    v5::PublicEventGuardrailRepliedDataGrades {
+                        items: convert::grades(grades),
+                    }
+                }),
             }
         ),
         Data::GuardrailDecided(data) => envelope!(
@@ -253,6 +295,16 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                     &data.decision.encode(),
                     &[("allow", 1), ("ask", 2), ("deny", 3), ("cap_exceeded", 4)]
                 )?,
+            }
+        ),
+        Data::GuardrailDeferred(data) => envelope!(
+            GuardrailDeferred,
+            PublicEventGuardrailDeferred,
+            v5::PublicEventGuardrailDeferredData {
+                root_session_id: convert::wire(data.root_session_id.as_lossless()),
+                session_id: convert::wire(data.session_id.as_lossless()),
+                request_id: convert::identity(&data.request_id)?,
+                item_id: convert::wire(data.item_id.as_lossless()),
             }
         ),
         Data::PluginAdded(data) => envelope!(
@@ -323,6 +375,13 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 info: shell::info(&data.info)?
             }
         ),
+        Data::ShellUpdated(data) => envelope!(
+            ShellUpdated,
+            PublicEventShellUpdated,
+            v5::PublicEventShellUpdatedData {
+                info: shell::info(&data.info)?
+            }
+        ),
         Data::ShellExited(data) => envelope!(
             ShellExited,
             PublicEventShellExited,
@@ -388,6 +447,23 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 request_id: convert::identity(&data.request_id)?
             }
         ),
+        Data::QuestionTimedOut(data) => envelope!(
+            QuestionTimedOut,
+            PublicEventQuestionTimedOut,
+            v5::PublicEventQuestionTimedOutData {
+                session_id: convert::wire(data.session_id.as_lossless()),
+                request_id: convert::identity(&data.request_id)?
+            }
+        ),
+        Data::QuestionDeferred(data) => envelope!(
+            QuestionDeferred,
+            PublicEventQuestionDeferred,
+            v5::PublicEventQuestionDeferredData {
+                session_id: convert::wire(data.session_id.as_lossless()),
+                request_id: convert::identity(&data.request_id)?,
+                item_id: convert::wire(data.item_id.as_lossless()),
+            }
+        ),
         Data::FormCreated(data) => envelope!(
             FormCreated,
             PublicEventFormCreated,
@@ -420,6 +496,23 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
             v5::PublicEventFormCancelledData {
                 id: convert::identity(&data.id)?,
                 session_id: convert::wire(&data.session_id)
+            }
+        ),
+        Data::FormTimedOut(data) => envelope!(
+            FormTimedOut,
+            PublicEventFormTimedOut,
+            v5::PublicEventFormTimedOutData {
+                id: convert::identity(&data.id)?,
+                session_id: convert::wire(&data.session_id)
+            }
+        ),
+        Data::FormDeferred(data) => envelope!(
+            FormDeferred,
+            PublicEventFormDeferred,
+            v5::PublicEventFormDeferredData {
+                id: convert::identity(&data.id)?,
+                session_id: convert::wire(&data.session_id),
+                item_id: convert::wire(data.item_id.as_lossless()),
             }
         ),
         Data::TodoUpdated(data) => envelope!(
@@ -629,21 +722,44 @@ fn tui_command(command: &LosslessString) -> v5::PublicEventTuiCommandExecuteData
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_wire_tool_progress_is_live_only() {
+        let data = Data::decode("session.tool.progress", &ycoding_core::ycoding_schema::parse_json(r#"{"sessionID":"ses_one","assistantMessageID":"msg_one","callID":"call_one","structured":{"stage":"working"},"content":[{"type":"text","text":"Still working"}]}"#).unwrap()).unwrap();
+        let event = record(
+            &Ephemeral {
+                id: "evt_progress".into(),
+                created: 42,
+                session: data.session().unwrap(),
+                location: None,
+                metadata: None,
+                data,
+            },
+            &"epoch".into(),
+        )
+        .unwrap();
+        assert!(event.durable.is_none());
+        let payload = v5::PublicEvent::decode(event.event.payload.as_slice()).unwrap();
+        let Some(v5::public_event::Kind::SessionToolProgress(progress)) = payload.kind else {
+            panic!("missing live progress")
+        };
+        assert_eq!(progress.data.structured.entries.len(), 1);
+        assert_eq!(progress.data.content.items.len(), 1);
+    }
     use super::*;
     use ycoding_core::ycoding_schema::{
         JsonObject, JsonValue, ObjectDecoder, location, parse_json,
     };
 
     #[test]
-    fn all_fifty_ephemeral_variants_match_ts_schema_validated_wire_bytes() {
+    fn all_ephemeral_variants_match_ts_schema_validated_wire_bytes() {
         let fixture =
             parse_json(include_str!("../tests/ephemeral_events/expectations.json")).unwrap();
         let path = Default::default();
         let fixture = ObjectDecoder::new(&fixture, &path).unwrap();
         let variants = fixture.field::<Vec<LosslessString>>("variants").unwrap();
-        assert_eq!(variants.len(), 50);
+        assert_eq!(variants.len(), 57);
         let cases = fixture.field::<Vec<JsonValue>>("cases").unwrap();
-        assert_eq!(cases.len(), 113);
+        assert_eq!(cases.len(), 131);
         for case in cases {
             let case = ObjectDecoder::new(&case, &path).unwrap();
             let name = case.field::<LosslessString>("name").unwrap();

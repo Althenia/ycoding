@@ -43,8 +43,15 @@ jobs:
             runner: macos-26
           - suite: extension
             runner: macos-26
+          - suite: rust
+            runner: ubuntu-24.04
+          - suite: rust-windows
+            runner: windows-2025
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout release source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -86,9 +93,18 @@ jobs:
           test -s "$release_notes" || { echo "Release notes are empty: $release_notes" >&2; exit 1; }
 
       - name: Setup Bun
+        if: matrix.suite != 'rust-windows'
         uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile
+
+      - name: Setup Rust
+        if: matrix.suite == 'rust' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser' || matrix.suite == 'rust-windows'
+        uses: ./.github/actions/setup-rust
+
+      - name: Build debug runtime
+        if: matrix.suite == 'rust' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser'
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
 
       - name: Check workspace and types
         if: matrix.suite == 'types'
@@ -145,7 +161,7 @@ jobs:
 
       - name: Verify installer and web assets
         if: matrix.suite == 'web'
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/rust-ci.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
 
       - name: Verify approved browser host
         if: matrix.suite == 'browser' || matrix.suite == 'extension'
@@ -153,7 +169,20 @@ jobs:
 
       - name: Verify isolated-browser integration suites
         if: matrix.suite == 'browser'
-        run: bun run test:integration:browser
+        run: |
+          set -euo pipefail
+          bun run --cwd packages/core test:integration:browser
+          bun run --cwd packages/server test:integration:browser
+
+      - name: Verify native isolated-browser runtime
+        if: matrix.suite == 'browser'
+        run: bun run rust/crates/runtime/tests/support/ready-runtime.ts "$GITHUB_WORKSPACE/rust/target/debug/ycoding-runtime" bun run --cwd packages/tui test:integration:browser
+
+      - name: Verify Rust isolated-browser integration
+        if: matrix.suite == 'browser'
+        env:
+          YCODING_TEST_ISOLATED_BROWSER_CHROME: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --test browser_native_integration -- --ignored
 
       - name: Provision Chrome for Testing
         if: matrix.suite == 'extension'
@@ -165,6 +194,39 @@ jobs:
       - name: Verify Chrome extension integration suite
         if: matrix.suite == 'extension'
         run: bun run test:integration:extension
+
+      - name: Verify Rust workspace
+        if: matrix.suite == 'rust'
+        run: |
+          set -euo pipefail
+          python3 script/rust-workspace-check.py
+          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+
+      - name: Verify Rust runtime client interoperability
+        if: matrix.suite == 'rust'
+        run: bun run rust/crates/runtime/tests/support/ready-runtime.ts "$GITHUB_WORKSPACE/rust/target/debug/ycoding-runtime" bun run --cwd packages/client test:integration:rust
+
+      - name: Verify Windows process lifecycle
+        if: matrix.suite == 'rust-windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name=platform::process::tree::windows_tests::terminating_an_already_reaped_child_never_signals_the_stored_pid
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --lib platform::process 2>&1 | tee "$RUNNER_TEMP/windows-process-tests.log"
+          grep -Fq "test $test_name ... ok" "$RUNNER_TEMP/windows-process-tests.log" || { echo "Windows process test did not run: $test_name" >&2; exit 1; }
+
+      - name: Fetch locked Rust sources
+        if: matrix.suite == 'rust'
+        run: cargo fetch --locked --manifest-path rust/Cargo.toml
+
+      - name: Verify Rust notices
+        if: matrix.suite == 'rust'
+        run: |
+          set -euo pipefail
+          bun run check:rust-notices
+          bun test --cwd script ./rust-notices.test.ts
 
   build:
     name: build ${{ matrix.target }}
@@ -234,6 +296,9 @@ jobs:
               process.exit(1)
             }
           '
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Import macOS signing identity
         if: runner.os == 'macOS'

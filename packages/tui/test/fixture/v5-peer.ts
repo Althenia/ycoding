@@ -268,6 +268,7 @@ const sessionPaths: Record<string, string> = {
   "todo.list": "todo",
   "pending.list": "pending",
   "compaction.list": "compaction",
+  "review.list": "review",
   switchAgent: "agent",
   switchModel: "model",
   unarchive: "archive",
@@ -275,12 +276,15 @@ const sessionPaths: Record<string, string> = {
   messages: "message",
   capturedInputs: "message/captured-inputs",
   "fileChange.list": "file-change",
+  taskCosts: "usage/tasks",
 }
 const locationPaths: Record<string, string> = {
   "telemetry.append": "server/web-latency",
   "telemetry.list": "server/web-latency",
   "telemetry.consent.get": "server/telemetry/consent",
   "telemetry.consent.set": "server/telemetry/consent",
+  "keepAwake.get": "keep-awake",
+  "keepAwake.set": "keep-awake",
   "mcp.resource.catalog": "mcp/resource",
   "config.diagnostics": "config/diagnostics",
   "permission.request.list": "permission/request",
@@ -288,6 +292,8 @@ const locationPaths: Record<string, string> = {
   "form.request.list": "form/request",
   "model.default": "model/default",
   "providerUsage.list": "provider/usage",
+  "providerUsage.forecast": "provider/usage/forecast",
+  "incident.guidance.clear": "incident/guidance",
   "usage.get": "usage",
   "usage.report": "usage/report",
   "provider.refresh": "provider/refresh",
@@ -326,6 +332,7 @@ function scenario(dispatch: Dispatch) {
       }
       const root = `/api/session/${params.sessionID ?? params.parentID}`
       if (["get", "remove"].includes(action)) return root
+      if (action === "review.decide") return `${root}/review/${params.itemID}/decide`
       if (action.startsWith("subagent.")) {
         const suffix = action.slice("subagent.".length)
         if (["list", "launch"].includes(suffix)) return `${root}/subagent`
@@ -386,6 +393,7 @@ function scenario(dispatch: Dispatch) {
         : name.endsWith(".unarchive") ||
             name.endsWith(".unpin") ||
             name.endsWith(".remove") ||
+            name.endsWith(".clear") ||
             name.endsWith(".forget") ||
             (name.endsWith(".cancel") && !name.startsWith("session.subagent."))
           ? "DELETE"
@@ -399,6 +407,10 @@ function scenario(dispatch: Dispatch) {
     if (value === undefined) return
     if (value === null) {
       url.searchParams.append(key, "null")
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) url.searchParams.append(key, String(item))
       return
     }
     if (typeof value === "object") {

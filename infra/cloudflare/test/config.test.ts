@@ -46,7 +46,7 @@ test("beta selects an isolated Worker, domain, D1 and same-Worker Durable Object
     name: "ycoding-cloud-beta",
     routes: [{ pattern: "beta.ycoding.althenia.app", custom_domain: true }],
     d1_databases: [
-      { binding: "DB", database_name: "ycoding-beta-db", database_id: "REPLACE_WITH_BETA_D1_DATABASE_ID" },
+      { binding: "DB", database_name: "ycoding-beta-db", database_id: "3f94c84b-4b74-4e9f-af3f-fae112369930" },
     ],
     durable_objects: { bindings: [{ name: "DEVICE_RELAY", class_name: "DeviceRelay" }] },
   })

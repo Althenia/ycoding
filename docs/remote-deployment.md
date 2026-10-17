@@ -1,21 +1,21 @@
 # Remote relay deployment and operations
 
-Operator reference for the `ycoding-cloud` Worker in `infra/cloudflare`. It covers the deployment inputs, the logging surfaces and their privacy limits, and the backup, migration, and recovery procedures for the D1 metadata store.
+Operator reference for the `ycoding-cloud` Worker and its beta counterpart `ycoding-cloud-beta` in `infra/cloudflare`. It covers the deployment inputs, the stable and beta environments, the logging surfaces and their privacy limits, and the backup, migration, and recovery procedures for the D1 metadata store.
 
 The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packages/remote/CONTRACT.md); local CLI usage and relay configuration are in [`configuration.md`](./configuration.md#remote-access).
 
 ## Deployment inputs
 
-`infra/cloudflare/wrangler.jsonc` is the committed deployment definition:
+`infra/cloudflare/wrangler.jsonc` declares the deployment targets. The top-level values below define the stable (production) environment; the `beta` environment is described in [Stable and beta environments](#stable-and-beta-environments).
 
-| Input          | Value                                                                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker         | `ycoding-cloud`                                                                                                                        |
-| Custom domain  | `ycoding.althenia.app`                                                                                                                 |
-| Durable Object | `DEVICE_RELAY`, class `DeviceRelay`, SQLite storage, one instance per `userId:deviceId`                                                |
-| D1 binding     | `DB` → database `ycoding-prod-db` (`database_id` `3384fc56-42d6-40a1-af04-5a75bd391132`)                                               |
-| Static assets  | `ASSETS` from `apps/web/dist`, `not_found_handling: single-page-application`                                                           |
-| Cron trigger   | `17 * * * *`, the bounded cleanup sweep                                                                                                |
+| Input          | Value                                                                                                                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker         | `ycoding-cloud`                                                                                                                                                                                                   |
+| Custom domain  | `ycoding.althenia.app`                                                                                                                                                                                            |
+| Durable Object | `DEVICE_RELAY`, class `DeviceRelay`, SQLite storage, one instance per `userId:deviceId`                                                                                                                           |
+| D1 binding     | `DB` → database `ycoding-prod-db` (`database_id` `3384fc56-42d6-40a1-af04-5a75bd391132`)                                                                                                                          |
+| Static assets  | `ASSETS` from `apps/web/dist`, `not_found_handling: single-page-application`                                                                                                                                      |
+| Cron trigger   | `17 * * * *`, the bounded cleanup sweep                                                                                                                                                                           |
 | Secrets        | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, `ADMIN_API_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, set with `wrangler secret put` and never stored in the repository |
 
 `apps/web/public/_headers` serves every content-hashed file under `/assets/` with `Cache-Control: public, max-age=31536000, immutable`. HTML pages, the service worker, the manifest, and other unhashed files keep Cloudflare's default `public, max-age=0, must-revalidate`, so a deployment takes effect on the next load; API and relay responses are `no-store`. `_headers` rules apply only to responses the asset layer serves directly; `/`, `/docs`, `/changelog`, and `/remote` pass through the Worker's `run_worker_first` routes, which return the asset layer's default caching headers with the Worker's security headers. A browser revalidates HTML with `If-None-Match` only while the response keeps its `ETag`; Cloudflare removes the `ETag` from HTML when a feature that rewrites HTML, such as Email Obfuscation or Automatic HTTPS Rewrites, is enabled on the zone.
@@ -27,6 +27,8 @@ Generate a separate operator key locally with `openssl rand -base64 48` and stor
 ```sh
 printf '%s' "$YCODING_ADMIN_API_KEY" | bunx wrangler secret put ADMIN_API_KEY --config infra/cloudflare/wrangler.jsonc
 ```
+
+This command sets the stable Worker's secret. For beta, add `--env beta` and use a separate key; the beta admin API is at `https://beta.ycoding.althenia.app`.
 
 After applying `0003_invite.sql` through the procedure below, create an invite with a label, inspect its non-secret metadata, and delete it by ID when access must end. Creation returns a one-use URL with the secret only in its fragment; hand it directly to the recipient and do not retain the response. Deletion closes the account's device sockets and removes the account.
 
@@ -56,13 +58,31 @@ printf 'header = "Authorization: Bearer %s"\n' "$YCODING_ADMIN_API_KEY" |
 
 HTTP `200` returns `{ "outcome": "accepted" | "rejected" | "expired" | "unreachable", "status"?: <push-service HTTP status> }`. `accepted` confirms push-service acceptance, not OS display. `expired` removes the expired stored subscription; `unreachable` omits the status. A subscription can be tested once per 60 seconds, including unsuccessful delivery attempts. Route errors are `400` for invalid input, `401` for missing or invalid Bearer authentication, `404` for a missing account/subscription pair or disabled admin configuration, `405` for the wrong method, `429` for a rate limit, and `503` for unavailable Web Push configuration. Responses are not cached.
 
-Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
+Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version. Every command, origin, database name, and secret example in this document targets the stable environment unless it states `--env beta`.
 
-### WebSocket v4 cutover
+### Stable and beta environments
 
-The relay accepts WebSockets only at `/ws/v4/client` and `/ws/v4/agent`. Missing-version, v1, v2, v3, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. The v4 operation set uses native Forms for remote human input. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
+`wrangler.jsonc` defines one named environment, `beta`. Select it explicitly with `--env beta` for beta Worker commands and binding resolution. Omitting the flag selects the top-level Worker configuration. Explicit database names and request origins still select their named resources; the environment flag is not a safety boundary. Verify the database identity, Worker name, and origin before each operation.
 
-Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v4/agent` and ensure its managed local server runs that same release before reconnecting; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v4/client`; then restart each connector and reconnect the existing enrolled identity. If an update leaves an older local server running because Sessions are active, wait for them to finish before restarting the service; an intentional forced restart interrupts running work. The connector requires the local server's `lost` Session-status field and rejects an older backend's status read rather than broadcasting partial status. A v3 connector cannot connect after the Worker cutover, and a v3 browser tab must be refreshed. Existing device enrollment remains valid. Back up the local database before upgrading or rolling back the additive shell ledger; do not downgrade while shell rows still need reconciliation by the newer runtime.
+| Input           | Stable (no `--env`)                 | Beta (`--env beta`)                                                                        |
+| --------------- | ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| Worker          | `ycoding-cloud`                     | `ycoding-cloud-beta`                                                                       |
+| Custom domain   | `ycoding.althenia.app`              | `beta.ycoding.althenia.app`                                                                |
+| D1 binding `DB` | `ycoding-prod-db`                   | `ycoding-beta-db` (`database_id` `3f94c84b-4b74-4e9f-af3f-fae112369930`)                   |
+| Durable Object  | `DEVICE_RELAY`, class `DeviceRelay` | `DEVICE_RELAY`, class `DeviceRelay`, bound in the beta Worker                              |
+| Secrets         | Stable Worker secrets               | Set separately with `wrangler secret put <NAME> --env beta`; stable secrets are not shared |
+
+Run `bunx wrangler whoami` and confirm the target before any write. Keys the `beta` block does not redefine follow Wrangler's environment inheritance rules; read the `beta` block in `wrangler.jsonc` for the resources it overrides.
+
+The release workflow deploys a `v*-beta.*` tag with `bun run deploy:cloudflare --env beta` and any other release tag without `--env`. It does not apply D1 migrations. Verify live bindings, applied migrations, and required secret names before deployment; configuration alone does not establish readiness. Deploying, applying a migration, setting a secret, or restoring a database in either environment is a separate operator action that needs its own approval.
+
+For beta, apply the migration, export, and Time Travel procedures below by replacing `ycoding-prod-db` with `ycoding-beta-db` and adding `--env beta` to each `wrangler` command, then confirm the returned database `uuid` and `name` match the beta binding above. The origin for beta health checks, admin requests, and the smoke command is `https://beta.ycoding.althenia.app`. Copy-paste of a command that names `ycoding-prod-db` or `ycoding.althenia.app` always targets stable.
+
+### WebSocket v5 relay paths
+
+The relay accepts WebSockets only at `/ws/v5/client` (browser, cookie-authenticated) and `/ws/v5/agent` (local connector, bearer-authenticated); these are `RemoteWebSocketPath` in `packages/remote/src/binary.ts`, and `RemoteProtocolVersion` is `5`. Any other `/ws` path, including missing-version and earlier-version paths, returns `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. Both environment builds use these routes; verify the deployed version independently.
+
+A coordinated release within one relay origin uses this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v5/agent` and ensure its managed local server runs that same release before reconnecting; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v5/client`; then restart each connector and reconnect its enrolled identity. If an update leaves an older local server running because Sessions are active, wait for them to finish before restarting the service; an intentional forced restart interrupts running work. A connector or browser tab built for an earlier protocol version cannot connect after the Worker deployment. Enrollment and access credentials belong to their relay origin; stable credentials do not establish beta connectivity. Follow the [channel-specific store and import rules](./configuration.md#global-directories) when changing the local runtime's channel.
 
 ### Notification protocol cutover
 
@@ -80,16 +100,16 @@ D1 stores authentication and device metadata and Web Push subscriptions only. It
 
 Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Offline devices remain in these Settings-facing lists, and revoked devices remain until the owner removes them from Settings, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
 
-| Table                            | Contents                                                                                                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `user`, `identity`               | Account identity: internal user ID and the provider plus provider subject.                                     |
-| `browser_session`                | Browser sign-in sessions; the row ID is the SHA-256 digest of the `yc_session` cookie token.                   |
-| `device`                         | Device ID, owner, name, public JWK, algorithm, and timestamps. The device private key never leaves the device. |
-| `device_credential`              | Hashed access and refresh credentials with expiry and revocation markers.                                      |
-| `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                         |
-| `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                      |
+| Table                            | Contents                                                                                                                                                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user`, `identity`               | Account identity: internal user ID and the provider plus provider subject.                                                                                                                                   |
+| `browser_session`                | Browser sign-in sessions; the row ID is the SHA-256 digest of the `yc_session` cookie token.                                                                                                                 |
+| `device`                         | Device ID, owner, name, public JWK, algorithm, and timestamps. The device private key never leaves the device.                                                                                               |
+| `device_credential`              | Hashed access and refresh credentials with expiry and revocation markers.                                                                                                                                    |
+| `enrollment`, `device_challenge` | Short-lived, single-use enrollment and challenge rows.                                                                                                                                                       |
+| `oauth_transaction`              | Google OIDC transaction state, nonce, code verifier, and redirect target.                                                                                                                                    |
 | `push_subscription`              | Web Push endpoint, owning account and verified browser-session identity, the browser's P-256 and auth keys, creation time, a failure count, the three System category choices, and the last test-alert time. |
-| `invite`                         | Invite ID, optional label, dates, user ID after redemption, and SHA-256 hashes of the invite token and access key; neither secret is stored. |
+| `invite`                         | Invite ID, optional label, dates, user ID after redemption, and SHA-256 hashes of the invite token and access key; neither secret is stored.                                                                 |
 
 Single-use rows contain plaintext values required by the protocol: `oauth_transaction.nonce` and `code_verifier` (10-minute lifetime) and `device_challenge.nonce` (2-minute lifetime). The OAuth nonce travels in the Google authorization redirect; the verifier stays server-side. The device challenge nonce is returned to the enrolling agent. Do not log these values.
 
@@ -134,7 +154,7 @@ still requires a browser-side notification check.
 
 ### Minimum sanitized health check
 
-Read-only; request the liveness probe and retain only its outcome. The tail can include other successful GET invocations, so view it only in a private operator terminal and never capture its raw output.
+Request the liveness probe and retain only its outcome. The probe does not write through its own handler, but the router can run its bounded expiry cleanup before `/health` answers, which can delete expired rows; do not describe it as strictly read-only. The commands below target stable; for beta use `bunx wrangler tail ycoding-cloud-beta --env beta ...` and `https://beta.ycoding.althenia.app/health`. The tail can include other successful GET invocations, so view it only in a private operator terminal and never capture its raw output.
 
 ```sh
 # Terminal 1: stream only successful GET invocations as JSON.
@@ -158,7 +178,7 @@ No other retention or backup guarantee exists. The Time Travel window and the Wo
 
 ### Ordered change procedure
 
-1. Confirm the operator session with `bunx wrangler whoami` and identify the production database binding in `infra/cloudflare/wrangler.jsonc`.
+1. Confirm the operator session with `bunx wrangler whoami` and identify the production database binding in `infra/cloudflare/wrangler.jsonc`. The commands in this procedure name the production database; see [Stable and beta environments](#stable-and-beta-environments) before running them against beta.
 2. Record the pre-change recovery point:
 
    ```sh
@@ -204,7 +224,7 @@ No other retention or backup guarantee exists. The Time Travel window and the Wo
 - Production schema change (`d1 migrations apply --remote`): explicit approval.
 - Time Travel restore or any point-in-time recovery: explicit approval; it is destructive and in place.
 - Production database export: explicit approval; keep the file outside Git and out of logs, issues, and CI.
-- Deployment, secret updates, settings changes, and deleting a database are separate operator actions and are not part of these procedures.
+- Deployment, secret updates, settings changes, and deleting a database are separate operator actions and are not part of these procedures. Beta and stable need separate approvals.
 
 ## Repository checks
 
@@ -215,7 +235,7 @@ bun run build:cloudflare      # wrangler deploy --dry-run; builds and validates 
 bun run test:cloudflare       # router, authentication, and relay unit tests
 bun run typecheck:cloudflare  # generated bindings are current plus a Worker typecheck
 bun run test:integration:remote  # local Worker/D1/Durable Object flow
-bun infra/cloudflare/test/smoke.ts <origin>  # read-only, credential-free auth-boundary checks
+bun infra/cloudflare/test/smoke.ts <origin>  # credential-free auth-boundary checks; not strictly read-only
 ```
 
-The smoke command exercises the supplied origin's unauthenticated boundaries. The other commands run locally. None proves authenticated production relay traffic, a production migration, or a restore.
+The smoke command exercises the supplied origin's unauthenticated boundaries and needs no credential. It is not strictly read-only: the router can run its bounded expiry cleanup before it answers `/health`, and the smoke sends `POST` requests to `/api/devices/enrollments` and `/api/devices/challenge` (rejected for a missing `Origin` and an unknown device respectively, so they create no enrollment) plus WebSocket upgrade requests to `/ws/v5/agent` and `/ws/v5/client` that fail authentication. Pass the beta origin to check beta. The other commands run locally. None proves authenticated production relay traffic, a production migration, or a restore.

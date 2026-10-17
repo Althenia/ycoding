@@ -56,6 +56,8 @@ try {
     TMP: smokeHome,
     TEMP: smokeHome,
     YCODING_DB: undefined,
+    YCODING_SQLITE_IMPORT_SOURCE: undefined,
+    YCODING_DISABLE_CHANNEL_DB: undefined,
     YCODING_PASSWORD: undefined,
     YCODING_CONFIG_DIR: undefined,
     YCODING_CONFIG: undefined,

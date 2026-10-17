@@ -25,11 +25,15 @@ describe("shipped TUI command surface", () => {
       "Run YCoding with a message",
       "--model",
       "--yolo",
-      "choices: 0, 1, 2, 3",
+      "choices: 0, 1, 2",
       "Set durable Session YOLO level",
       "omitted preserves it",
+      "0: ask first, 1: allow ask permissions, 2: also allow routine reviews while awake",
     ])
       expect(result.stdout).toContain(text)
+    expect(result.stdout).not.toContain("choices: 0, 1, 2, 3")
+    expect(result.stdout).not.toContain("scope dispatch")
+    expect(result.stdout).not.toContain("questions/forms")
     expect(result.stdout).not.toContain("--auto")
   })
 
@@ -93,7 +97,18 @@ describe("shipped TUI command surface", () => {
     expect(result.exitCode).not.toBe(0)
     expect(result.stdout + result.stderr).toContain("--auto")
   })
-  test.each([0, 1, 2, 3] as const)("run persists --yolo %d before prompt admission", async (level) => {
+  test("run rejects level 3 before contacting the server", async () => {
+    const result = await runTransport(["--yolo", "3"])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.calls).toEqual([])
+  })
+  test("run names the supported levels when --yolo has no value", async () => {
+    const result = await spawnCli(["run", "hello", "--yolo"])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("ycoding: --yolo requires one of 0, 1, or 2")
+    expect(result.stderr).not.toContain("or 3")
+  })
+  test.each([0, 1, 2] as const)("run persists --yolo %d before prompt admission", async (level) => {
     const result = await runTransport(["--yolo", String(level)])
     expect(result.exitCode).toBe(1)
     expect(result.calls.filter((call) => call.name === "session.autonomy.set")).toEqual([
@@ -147,7 +162,7 @@ async function runTransport(args: string[], rejectAutonomy = false, root = false
       return rejectAutonomy
         ? new Error("Rejected")
         : {
-            data: { mode: "normal", yolo: typeof body === "object" && body !== null && "yolo" in body ? body.yolo : 0 },
+            data: autonomyView(typeof body === "object" && body !== null && "yolo" in body ? Number(body.yolo) : 0),
           }
     if (name === "session.prompt") return new Error("Stop after transport assertions")
     throw new Error(name)
@@ -177,5 +192,13 @@ async function spawnCli(args: string[], env: NodeJS.ProcessEnv = {}) {
     return { exitCode, stdout, stderr }
   } finally {
     child.kill()
+  }
+}
+
+function autonomyView(yolo: number) {
+  return {
+    mode: "normal",
+    yolo,
+    effective: { yolo, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: yolo === 2, modelReviews: false, hardModelReviews: false },
   }
 }

@@ -86,6 +86,7 @@ const permission = Layer.mock(Permission.Service, {
   },
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) => {
     calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)
     if ((denyBrowser && input.resources.some((resource) => resource.includes("/webbrowser."))) || (denyStage && input.resources.some((resource) => resource.endsWith("/stage"))))

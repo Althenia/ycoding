@@ -10,6 +10,7 @@ import { LocationProvider } from "../../../src/context/location"
 import { RouteProvider, useRoute } from "../../../src/context/route"
 import { Composer } from "../../../src/routes/session/composer"
 import { ToastProvider } from "../../../src/ui/toast"
+import { DialogProvider } from "../../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -332,6 +333,11 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
   const pinRequests: Array<{ pathname: string; method: string }> = []
   let pinnedAt: number | undefined
   const calls = createFetch((url, request) => {
+    if (url.pathname === "/api/session/ses_parent/usage/tasks") {
+      const breakdown = (amount: number, requests: number) => ({ requests, tokens: { input: requests * 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { known: amount, total: amount, pricedRequests: requests, unpricedRequests: 0 } })
+      const total = breakdown(23, 6)
+      return json({ data: { tasks: [{ sessionID: task.sessionID, status: "so-far", attribution: "complete", history: "retained", total, main: breakdown(13, 4), children: breakdown(10, 2), helpers: [] }], total, history: "retained" } })
+    }
     if (url.pathname === "/api/session/ses_parent/subagent")
       return json({
         data: [{ ...task, ...(pinnedAt === undefined ? {} : { pinnedAt }) }],
@@ -365,9 +371,9 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
                       <LeaderProbe />
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID="ses_parent" open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -383,6 +389,13 @@ test("subagent list p toggles durable pin state and Ctrl+X then K cancels", asyn
 
   try {
     await app.waitForFrame((frame) => frame.includes("starting") && frame.includes("Start review"))
+    expect(app.captureCharFrame()).toContain("c inclusive task cost details")
+    app.mockInput.pressKey("c")
+    await app.waitForFrame((frame) => frame.includes("Recursive task cost (inclusive)") && frame.includes("Task cost (inclusive) $23.00"))
+    expect(app.captureCharFrame()).toContain("Main $13.00 · Children $10.00")
+    expect(app.captureCharFrame()).toContain("r refresh")
+    app.mockInput.pressKey("ESCAPE")
+    await app.waitForFrame((frame) => !frame.includes("Recursive task cost (inclusive)"))
     app.mockInput.pressKey("p")
     await app.waitForFrame((frame) => frame.includes("PINNED"))
     expect(pinRequests).toEqual([{ pathname: "/api/session/ses_child/pin", method: "POST" }])
@@ -519,9 +532,9 @@ test("reads and renders canonical local family economics and activity for the ac
                   <SessionProbe sessionID="ses_parent" />
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID="ses_parent" open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -542,8 +555,7 @@ test("reads and renders canonical local family economics and activity for the ac
     expect(familyRequests).toHaveLength(2)
     for (const request of familyRequests) {
       const url = new URL(request, "http://test")
-      expect(url.searchParams.get("sessionIDs[0]")).toBe("ses_running")
-      expect(url.searchParams.get("sessionIDs[1]")).toBe("ses_completed")
+      expect(url.searchParams.getAll("sessionIDs")).toEqual(["ses_running", "ses_completed"])
     }
     expect(requests.some((url) => /\/ses_(running|completed)\/(diagnostics|snapshot)$/.test(url))).toBe(false)
     expect(app.captureCharFrame()).toContain("74% hit")
@@ -609,9 +621,9 @@ test("shows a retrying family-read state instead of inferred activity after read
                   <SessionProbe sessionID="ses_parent" />
                   <LocationProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID="ses_parent" open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -772,9 +784,9 @@ test("renders section headings while keyboard navigation selects only task rows 
                       }}
                     >
                       <RouteProbe />
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <Composer sessionID="ses_parent" open defaultTab="subagents" />
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -818,4 +830,79 @@ test("renders section headings while keyboard navigation selects only task rows 
   } finally {
     app.renderer.destroy()
   }
+})
+
+test("a stopped task reads stopped and Continue decides the recovery item exactly once, never through subagent control", async () => {
+  const task = {
+    sessionID: "ses_child",
+    parentID: "ses_parent",
+    description: "Wire storage",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-5.6" },
+    background: true,
+    state: "cancelled",
+    stoppedRecovery: { itemID: "rvw_recovery" },
+    revision: 4,
+    time: { created: 1, updated: 4 },
+  } as unknown as SessionOrchestrationTask
+  const decisions: Array<{ pathname: string; method: string; body: unknown }> = []
+  const control: string[] = []
+  const calls = createFetch(async (url, request) => {
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: [task], summary: { total: 1, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_child/review/rvw_recovery/decide") {
+      decisions.push({ pathname: url.pathname, method: request.method, body: await request.json() })
+      return json({ message: "Decision outcome unknown" }, { status: 503 })
+    }
+    if (/\/subagent\/|\/resume|\/prompt/.test(url.pathname) && request.method !== "GET") control.push(url.pathname)
+    return undefined
+  })
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <ToastProvider><DialogProvider><Composer sessionID="ses_parent" open defaultTab="subagents" /></DialogProvider></ToastProvider>
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 32, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Wire storage") && frame.includes("stopped"))
+    expect(app.captureCharFrame()).not.toContain("cancelled")
+    expect(app.captureCharFrame()).toContain("continue")
+    app.mockInput.pressKey("c", { shift: true })
+    await app.waitForFrame((frame) => frame.includes("Continue unresolved"))
+    expect(decisions).toEqual([{ pathname: "/api/session/ses_child/review/rvw_recovery/decide", method: "POST", body: { decision: { kind: "recovery", choice: "continue" } } }])
+    app.mockInput.pressKey("c", { shift: true })
+    app.mockInput.pressKey("c", { shift: true })
+    await app.renderOnce()
+    expect(decisions).toHaveLength(1)
+    expect(control).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a task without stoppedRecovery keeps its state label and offers no Continue", () => {
+  expect(module.taskStatusLabel("cancelled")).toBe("cancelled")
+  expect(module.taskStatusLabel("cancelled", true)).toBe("stopped")
 })

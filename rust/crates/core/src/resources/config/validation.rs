@@ -22,8 +22,10 @@ enum Shape {
     Object(&'static [Field]),
     Union(&'static [Shape]),
     Selection,
+    Fallbacks,
     Color,
     MemoryLimit,
+    Load,
     Advisory,
     McpServer,
     McpTimeout,
@@ -106,6 +108,8 @@ const GUARDRAILS: Shape = Shape::Object(&[
     optional("shell_wait_seconds", POSITIVE),
     optional("max_concurrent_subagents", POSITIVE),
     optional("max_pending_reviews", POSITIVE),
+    optional("decide_reviews", Shape::Bool),
+    optional("decide_hard_reviews", Shape::Bool),
 ]);
 const TIMEOUT: Shape = Shape::Object(&[
     optional("startup", POSITIVE),
@@ -267,8 +271,19 @@ const ROOT: Shape = Shape::Object(&[
         Shape::Enum(&["disabled", "optional", "required"]),
     ),
     optional("shell_memory_limit_mb", Shape::MemoryLimit),
+    optional(
+        "shell_queue",
+        Shape::Object(&[
+            optional("max_running", Shape::Int(1.0, 64.0)),
+            optional("max_running_per_session", Shape::Int(1.0, 64.0)),
+            optional("max_queued_per_session", Shape::Int(1.0, 1_000.0)),
+            optional("memory_reserve_mb", Shape::MemoryLimit),
+            optional("max_load", Shape::Load),
+        ]),
+    ),
     optional("model", Shape::Selection),
     optional("default_agent", Shape::String),
+    optional("model_fallbacks", Shape::Fallbacks),
     optional(
         "autoupdate",
         Shape::Union(&[Shape::Bool, Shape::Enum(&["notify"])]),
@@ -352,7 +367,18 @@ const ROOT: Shape = Shape::Object(&[
     ),
     optional(
         "session_retention",
-        Shape::Object(&[optional("days", POSITIVE)]),
+        Shape::Object(&[
+            optional("days", POSITIVE),
+            optional("records_days", POSITIVE),
+        ]),
+    ),
+    optional(
+        "analytics_retention",
+        Shape::Object(&[
+            optional("usage_days", POSITIVE),
+            optional("latency_days", POSITIVE),
+            optional("incident_days", POSITIVE),
+        ]),
     ),
     optional(
         "memory",
@@ -582,6 +608,53 @@ fn inspect(value: &JsonValue, shape: Shape, path: &JsonPath) -> Result<JsonValue
             }
             None => Err(invalid()),
         },
+        Shape::Fallbacks => {
+            let JsonValue::Object(map) = value else {
+                return Err(invalid());
+            };
+            let mut output = JsonObject::new();
+            for (key, chain) in map.iter() {
+                let key_units = key.code_units().collect::<Vec<_>>();
+                let Some(slash) = key_units.iter().position(|unit| *unit == 47) else {
+                    return Err(invalid());
+                };
+                if slash == 0 || slash + 1 == key_units.len() || key_units.contains(&35) {
+                    return Err(invalid());
+                }
+                let JsonValue::Array(chain) = chain else {
+                    return Err(invalid());
+                };
+                if chain.len() > 3 {
+                    return Err(invalid());
+                }
+                let mut selections = Vec::new();
+                let mut normalized = Vec::new();
+                for entry in chain {
+                    let selected = selection(entry).ok_or_else(invalid)?;
+                    if selected.variant.is_none()
+                        && selected.profile.is_none()
+                        && selected
+                            .provider_id
+                            .0
+                            .code_units()
+                            .eq(key_units[..slash].iter().copied())
+                        && selected
+                            .id
+                            .code_units()
+                            .eq(key_units[slash + 1..].iter().copied())
+                    {
+                        return Err(invalid());
+                    }
+                    if selections.contains(&selected) {
+                        return Err(invalid());
+                    }
+                    normalized.push(inspect(entry, Shape::Selection, path).map_err(|_| invalid())?);
+                    selections.push(selected);
+                }
+                output.insert(key.clone(), JsonValue::Array(normalized));
+            }
+            Ok(JsonValue::Object(output))
+        }
         Shape::Advisory => {
             let output = inspect(value, ADVISORY, path)?;
             if let JsonValue::Object(object) = &output {
@@ -633,6 +706,10 @@ fn inspect(value: &JsonValue, shape: Shape, path: &JsonPath) -> Result<JsonValue
                 Shape::Enum(allowed) => domain::literal_enum(value, allowed, path).is_ok(),
                 Shape::Color => agent::Color::decode(value).is_ok(),
                 Shape::MemoryLimit => shell::MemoryLimitMb::decode(value).is_ok(),
+                Shape::Load => {
+                    schema::Finite::decode(value).is_ok()
+                        && matches!(value, JsonValue::Number(number) if *number > 0.0 && *number <= 64.0)
+                }
                 _ => unreachable!(),
             };
             if valid {

@@ -16,7 +16,7 @@ async fn provider_pin_overrides_environment_for_all_sessions() {
         tools::registry::Tool,
     };
     let fixture = ToolFixture::new();
-    fixture.authority.session("ses_other", None, 1, false, None);
+    fixture.authority.session("ses_other", None, 2, false, None);
     let roots = Roots::development(&fixture.root).unwrap();
     roots.initialize().unwrap();
     let path = roots.config.join("ycoding.json");

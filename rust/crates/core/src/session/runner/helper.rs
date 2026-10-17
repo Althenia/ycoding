@@ -4,6 +4,7 @@ use crate::{
         cache_diagnostics,
         helper_generation::{Generate, Generation, Request, units},
         prompt_cache, provider_request, usage,
+        usage_attribution::Attribution,
     },
     tools::{code_mode::Cancellation, policy::helper::CompactionScope},
 };
@@ -25,6 +26,7 @@ pub(super) struct StreamInput<'a> {
     pub cancellation: Option<&'a Cancellation>,
     pub character_limit: Option<usize>,
     pub require_stop: bool,
+    pub attribution: Attribution,
 }
 
 pub(super) struct Streamed {
@@ -101,7 +103,11 @@ impl Local {
         }
         let pending = services
             .store
-            .begin_provider_request_with_id(&begin, request_id)
+            .begin_provider_request_attributed_with_id(
+                &begin,
+                request_id,
+                input.attribution.clone(),
+            )
             .await
             .ok()?;
         let mut streamed = Streamed {
@@ -372,6 +378,7 @@ impl Generate for Local {
                     cancellation: Some(request.cancellation),
                     character_limit: Some(request.character_limit),
                     require_stop: request.role != crate::tools::policy::helper::Role::Goal,
+                    attribution: request.attribution,
                 })
                 .await?;
             (!streamed.failed

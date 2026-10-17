@@ -55,6 +55,7 @@ impl Tool for Decision {
                         session_id: &context.session_id,
                         input_id: None,
                         cancellation: &context.cancellation,
+                        attribution: context.attribution.clone(),
                     },
                 )
                 .await
@@ -76,7 +77,7 @@ impl Tool for Decision {
     }
 }
 fn invalid_input(input: &JsonValue) -> String {
-    let example = r#"{"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Pick the route","choices":[{"value":"keep","description":"Keep current"},{"value":"change","description":"Use the alternative"}]}]}}"#;
+    let example = r#"{"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Grade each route","grade":true,"choices":[{"value":"keep","description":"Keep current"},{"value":"change","description":"Use the alternative"}]}]}}"#;
     if let JsonValue::Object(input) = input
         && let Some(JsonValue::Object(request)) = input.get(&"request".into())
         && let Some(JsonValue::Array(questions)) = request.get(&"questions".into())
@@ -89,6 +90,14 @@ fn invalid_input(input: &JsonValue) -> String {
                 continue;
             };
             if question.get(&"type".into()).is_some_and(|value| !matches!(value, JsonValue::String(value) if matches!(value.as_str(), Some("predicate" | "choice" | "score")))) {return format!("questions[{index}].type: expected \"predicate\", \"choice\", or \"score\"; received an unsupported value (redacted). Minimal valid request: {example}");}
+            if question
+                .get(&"grade".into())
+                .is_some_and(|grade| !matches!(grade, JsonValue::Bool(_)))
+            {
+                return format!(
+                    "request.questions[{index}].grade: Expected a Boolean; received an invalid value (redacted). Minimal valid request: {example}"
+                );
+            }
             if let Some(JsonValue::Array(choices)) = question.get(&"choices".into()) {
                 for (choice_index, choice) in choices.iter().enumerate() {
                     if let JsonValue::Object(choice) = choice

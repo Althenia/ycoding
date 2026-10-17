@@ -493,3 +493,198 @@ test("unreadable usage stays an error and report paging does not reuse a differe
     await relay.stop()
   }
 })
+
+test("an older connector's invalid_message for a new report group or filter is an update prompt, not a generic error", async () => {
+  const relay = await startRelayDouble({
+    handler: (request) =>
+      request.operation === "usage.report" && (request.input?.group === "prompt" || request.input?.providerID !== undefined)
+        ? { ok: false, code: "invalid_message", message: "Unknown usage report field" }
+        : "default",
+  })
+  const { store, queries, scope, usage } = await connected(relay)
+  try {
+    const grouped = { group: "prompt" as const, limit: 25 }
+    const filtered = { group: "model" as const, providerID: "openai", limit: 25 }
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, grouped))
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, filtered))
+    expect(usage(remoteKeys.usageReport(scope(), grouped))).toEqual({ status: "unsupported" })
+    expect(usage(remoteKeys.usageReport(scope(), filtered))).toEqual({ status: "unsupported" })
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, { group: "model", limit: 25 }))
+    expect(usage(remoteKeys.usageReport(scope(), { group: "model", limit: 25 })).status).toBe("ready")
+  } finally {
+    store.dispose()
+    await relay.stop()
+  }
+})
+
+test("new report groups and filters reach the native report request and decode their frozen dimensions", async () => {
+  const dimensionRow = (group: string, dimensions: Record<string, unknown>) => ({
+    key: `${group}-row`,
+    label: `${group}-row`,
+    dimensions,
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    costCoverage: { pricedRequests: 1, unpricedRequests: 0 },
+    cost: 0,
+    costProvenance: "recorded",
+    tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 3 } },
+    speed: { generationSamples: 2, generationP50TokensPerSecond: 20, providerTimedSamples: 1, observedSamples: 1, samples: 2 },
+  })
+  const dimensions: Record<string, Record<string, unknown>> = {
+    provider: { group: "provider", providerID: "openai" },
+    "provider-profile-model": { group: "provider-profile-model", providerID: "openai", profileState: "provider-default", modelID: "gpt" },
+    profile: { group: "profile", providerID: "openai", profile: "Work", profileState: "recorded" },
+    prompt: { group: "prompt", anchor: { sessionID: "ses_a", inputID: "msg_a" }, attribution: "complete" },
+    task: { group: "task", sessionID: "ses_a", attribution: "complete" },
+  }
+  const relay = await startRelayDouble({
+    usageReport: (input) => ({
+      group: input?.group,
+      rows: [dimensionRow(String(input?.group), dimensions[String(input?.group)] ?? {})],
+      total: {
+        logical: 1,
+        physical: 1,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        costCoverage: { pricedRequests: 1, unpricedRequests: 0 },
+        cost: 0,
+        costProvenance: "recorded",
+        tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 3 } },
+      },
+      rowCount: 1,
+    }),
+  })
+  const { store, queries, scope, usage } = await connected(relay)
+  try {
+    for (const group of ["provider", "provider-profile-model", "profile", "prompt", "task"] as const) {
+      const input = { group, providerID: "openai", profile: "Work", modelID: "gpt", selectedEffort: "high", limit: 25 }
+      await store.queryClient.fetchQuery(queries.usageReport(scope(), true, input))
+      const read = usage<{ rows: { dimensions?: { group: string } }[] }>(remoteKeys.usageReport(scope(), input))
+      expect(read.status).toBe("ready")
+      expect(read.data?.rows[0]?.dimensions?.group).toBe(group)
+    }
+    expect(relay.requests.filter((request) => request.operation === "usage.report").map((request) => request.input)).toEqual(
+      ["provider", "provider-profile-model", "profile", "prompt", "task"].map((group) => ({
+        group,
+        providerID: "openai",
+        profile: "Work",
+        modelID: "gpt",
+        selectedEffort: "high",
+        limit: 25,
+      })),
+    )
+  } finally {
+    store.dispose()
+    await relay.stop()
+  }
+})
+
+test("a report whose row dimensions disagree with the requested group is unreadable", async () => {
+  const relay = await startRelayDouble({
+    usageReport: (input) => ({
+      group: input?.group,
+      rows: [
+        {
+          key: "row",
+          label: "row",
+          dimensions: { group: "provider", providerID: "openai" },
+          logical: 1,
+          physical: 1,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          costCoverage: { pricedRequests: 0, unpricedRequests: 1 },
+          tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      ],
+      total: {
+        logical: 1,
+        physical: 1,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        costCoverage: { pricedRequests: 0, unpricedRequests: 1 },
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      rowCount: 1,
+    }),
+  })
+  const { store, queries, scope, usage } = await connected(relay)
+  try {
+    const input = { group: "profile" as const, limit: 25 }
+    await store.queryClient.fetchQuery(queries.usageReport(scope(), true, input)).catch(() => undefined)
+    expect(usage(remoteKeys.usageReport(scope(), input)).status).toBe("error")
+  } finally {
+    store.dispose()
+    await relay.stop()
+  }
+})
+
+test("the usage forecast is one backend-scoped native read that follows quota refresh", async () => {
+  const forecast = { asOf: 2_000, localScope: "backend", localRates: [], quotas: [] }
+  const relay = await startRelayDouble({ usageForecast: () => forecast })
+  const { store, queries, scope, usage } = await connected(relay)
+  try {
+    const fetch = store.queryClient.fetchQuery.bind(store.queryClient)
+    await Promise.all([fetch(queries.usageForecast(scope(), true)), fetch(queries.usageForecast(scope(), true))])
+    expect(usage(remoteKeys.usageForecast(scope()))).toMatchObject({ status: "ready", data: forecast })
+    expect(relay.requests.filter((request) => request.operation === "providerUsage.forecast").map((request) => request.input)).toEqual([
+      { localScope: "backend" },
+    ])
+    expect(relay.requests.some((request) => request.operation === "usage.forecast")).toBe(false)
+    await fetch(queries.usageProviders(scope(), true))
+    await queries.refreshUsage(scope())
+    const order = relay.requests.map((request) => request.operation).filter((operation) => operation === "providerUsage.list" || operation === "providerUsage.forecast")
+    expect(order).toEqual(["providerUsage.forecast", "providerUsage.list", "providerUsage.list", "providerUsage.forecast"])
+  } finally {
+    store.dispose()
+    await relay.stop()
+  }
+})
+
+test("an unreadable or unavailable forecast is an error that a quota refresh retries", async () => {
+  const unreadable = await startRelayDouble({
+    handler: (request) =>
+      request.operation === "providerUsage.forecast"
+        ? { wire: (peer, dispatch) => peer.malformedResult(dispatch, Uint8Array.of(18, 0)) }
+        : "default",
+  })
+  const first = await connected(unreadable)
+  try {
+    await first.store.queryClient.fetchQuery(first.queries.usageForecast(first.scope(), true)).catch(() => undefined)
+    expect(first.usage(remoteKeys.usageForecast(first.scope())).status).toBe("error")
+  } finally {
+    first.store.dispose()
+    await unreadable.stop()
+  }
+  const source = { failed: true }
+  const relay = await startRelayDouble({
+    usageForecast: () => ({ asOf: 2_000, localScope: "backend", localRates: [], quotas: [] }),
+    handler: (request) =>
+      request.operation === "providerUsage.forecast" && source.failed
+        ? {
+            wire: (peer, dispatch) =>
+              peer.error(dispatch, "ycoding.v5.ServiceUnavailableError", {
+                _tag: "ServiceUnavailableError",
+                message: "Unavailable",
+              }),
+          }
+        : "default",
+  })
+  const second = await connected(relay)
+  try {
+    await second.store.queryClient.fetchQuery(second.queries.usageForecast(second.scope(), true)).catch(() => undefined)
+    expect(second.usage(remoteKeys.usageForecast(second.scope())).status).toBe("error")
+    expect(second.store.state().transport.kind).toBe("open")
+    source.failed = false
+    await second.queries.refreshUsage(second.scope())
+    expect(second.usage(remoteKeys.usageForecast(second.scope()))).toMatchObject({ status: "ready" })
+  } finally {
+    second.store.dispose()
+    await relay.stop()
+  }
+})

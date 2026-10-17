@@ -169,6 +169,7 @@ struct Active {
     state: Mutex<ActiveState>,
     terminal: Arc<Terminal>,
     control: mpsc::Sender<Request>,
+    abandon: Notify,
     done: watch::Sender<Option<Result<Info, String>>>,
     task: tokio::sync::Mutex<Option<JoinHandle<io::Result<()>>>>,
 }
@@ -189,6 +190,7 @@ pub struct Pty {
     state: Arc<Mutex<State>>,
     events: broadcast::Sender<Event>,
     selection: super::shell::select::Options,
+    creating: tokio::sync::Mutex<()>,
 }
 impl Pty {
     pub fn directory(&self) -> &std::path::Path {
@@ -204,6 +206,7 @@ impl Pty {
             })),
             events: broadcast::channel(128).0,
             selection: super::shell::select::Options::default(),
+            creating: tokio::sync::Mutex::new(()),
         }
     }
     pub fn with_shell_options(mut self, selection: super::shell::select::Options) -> Self {
@@ -218,21 +221,24 @@ impl Pty {
         input: CreateInput,
         config: Option<&Configuration>,
     ) -> io::Result<Info> {
+        let _creating = self.creating.lock().await;
         let (info, session, native, requests) = {
-            let mut state = self.state.lock().map_err(poison)?;
-            if state
-                .sessions
-                .values()
-                .filter(|session| {
-                    session
-                        .state
-                        .lock()
-                        .is_ok_and(|state| state.info.status == Status::Running)
-                })
-                .count()
-                >= pty::MAX_ACTIVE
             {
-                return Err(limit("active"));
+                let state = self.state.lock().map_err(poison)?;
+                if state
+                    .sessions
+                    .values()
+                    .filter(|session| {
+                        session
+                            .state
+                            .lock()
+                            .is_ok_and(|state| state.info.status == Status::Running)
+                    })
+                    .count()
+                    >= pty::MAX_ACTIVE
+                {
+                    return Err(limit("active"));
+                }
             }
             let mut env: std::collections::BTreeMap<_, _> = std::env::vars().collect();
             let command = input
@@ -299,7 +305,8 @@ impl Pty {
                 process_command,
                 size.cols.get() as u16,
                 size.rows.get() as u16,
-            )?;
+            )
+            .await?;
             #[cfg(windows)]
             let native = windows::spawn(
                 process_command,
@@ -355,9 +362,11 @@ impl Pty {
                 }),
                 terminal: native.terminal.clone(),
                 control,
+                abandon: Notify::new(),
                 done: watch::channel(None).0,
                 task: tokio::sync::Mutex::new(None),
             });
+            let mut state = self.state.lock().map_err(poison)?;
             state.sessions.insert(info.id.clone(), session.clone());
             (info, session, native, requests)
         };
@@ -682,14 +691,13 @@ impl Drop for Pty {
     fn drop(&mut self) {
         if let Ok(state) = self.state.lock() {
             for session in state.sessions.values() {
+                let _ = session.control.try_send(Request::Kill("service_shutdown"));
                 if session
-                    .control
-                    .try_send(Request::Kill("service_shutdown"))
-                    .is_err()
-                    && let Ok(state) = session.state.lock()
-                    && state.info.status == Status::Running
+                    .state
+                    .lock()
+                    .is_ok_and(|state| state.info.status == Status::Running)
                 {
-                    super::process::tree::force(state.info.pid.get() as u32, true);
+                    session.abandon.notify_one();
                 }
             }
         }
@@ -822,6 +830,7 @@ async fn drive(
                     }
                 }
                 () = &mut deadline, if exit.is_none() => { reason = "timeout"; exit = Some(native.kill().await?); }
+                () = session.abandon.notified(), if exit.is_none() => { reason = "service_shutdown"; exit = Some(native.kill().await?); }
             }
         }
         let exit = exit.ok_or_else(|| io::Error::other("PTY exit settlement missing"))?;

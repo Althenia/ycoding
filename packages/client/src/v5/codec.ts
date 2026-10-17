@@ -129,7 +129,14 @@ function toMessage(
       if (field.proto.label === 2) throw new Error("Missing required domain field")
       return
     }
-    output[field.localName] = toField(field, input[field.name], depth + 1, work)
+    const value = input[field.name]
+    if (field.fieldKind === "list") {
+      if (!Array.isArray(value)) throw new Error("Expected domain list")
+      if (value.length > WireLimit.TOTAL_FIELDS - work.fields) throw new Error("Domain field limit")
+      output[field.localName] = value.map((item) => toField(field, item, depth + 1, work))
+      return
+    }
+    output[field.localName] = toField(field, value, depth + 1, work)
   })
   return create(schema, output)
 }
@@ -211,7 +218,11 @@ function fromMessage(schema: Schema, value: unknown): unknown {
   return Object.fromEntries(
     schema.fields.flatMap((field) => {
       if (!Object.hasOwn(input, field.localName) || input[field.localName] === undefined) return []
-      const decoded = fromField(field, input[field.localName])
+      const value = input[field.localName]
+      const decoded =
+        field.fieldKind === "list" && Array.isArray(value)
+          ? value.map((item) => fromField(field, item))
+          : fromField(field, value)
       return decoded === undefined ? [] : [[field.name, decoded]]
     }),
   )

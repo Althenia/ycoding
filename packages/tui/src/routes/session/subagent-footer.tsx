@@ -91,6 +91,7 @@ export type SubagentEconomics = {
   reads?: string
   writes?: string
   spent?: string
+  speed?: string
   rollsUpTo?: string
 }
 
@@ -107,8 +108,9 @@ function totalTokens(session: Pick<SessionInfo, "tokens">) {
 export function subagentEconomics(
   session: Awaited<ReturnType<V5Client["session"]["team"]["economics"]>>["data"][number] | undefined,
   parentTitle: string | undefined,
+  speed?: string,
 ): SubagentEconomics | undefined {
-  if (!session) return undefined
+  if (!session) return speed ? { strip: [speed], speed } : undefined
   const tokens = totalTokens(session)
   const cacheHit = session.cacheHitRatio === undefined ? undefined : `${Math.round(session.cacheHitRatio * 100)}%`
   const hit = cacheHit === undefined ? undefined : `${cacheHit} hit`
@@ -131,6 +133,7 @@ export function subagentEconomics(
     .filter(Boolean)
     .join(" · ")
   const strip = [
+    speed,
     context ? `Context ${context}` : undefined,
     hit ?? "hit unreported",
     reads === undefined ? "read unreported" : `${reads} read`,
@@ -147,6 +150,7 @@ export function subagentEconomics(
     reads,
     writes,
     spent,
+    speed,
     rollsUpTo: parentTitle,
   }
 }
@@ -333,6 +337,7 @@ export function SubagentFooterContent(props: {
 }
 
 export function SubagentFooter(props: { reviewing?: boolean; economics?: SubagentEconomics }) {
+  const dimensions = useTerminalDimensions()
   const route = useRouteData("session")
   const navigation = useRoute()
   const data = useData()
@@ -370,21 +375,34 @@ export function SubagentFooter(props: { reviewing?: boolean; economics?: Subagen
                 {agent()} ({current()} of {total()})
               </text>
             </box>
-            <box width={13} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">
-                {context()}
-              </text>
-            </box>
-            <box width={10} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">
-                {economics()?.cacheHit === undefined ? "unreported" : `${economics()?.cacheHit} hit`}
-              </text>
-            </box>
-            <box flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">
-                {economics()?.spent ?? "unreported"} · durable · resumable
-              </text>
-            </box>
+            <Show when={dimensions().width >= 110}>
+              <box width={13} flexShrink={0}>
+                <text fg={theme.text.subdued} wrapMode="none">
+                  {context()}
+                </text>
+              </box>
+              <box width={10} flexShrink={0}>
+                <text fg={theme.text.subdued} wrapMode="none">
+                  {economics()?.cacheHit === undefined ? "unreported" : `${economics()?.cacheHit} hit`}
+                </text>
+              </box>
+            </Show>
+            <Show when={economics()?.speed}>
+              {(speed) => (
+                <box paddingRight={1} flexShrink={0}>
+                  <text fg={theme.text.subdued} wrapMode="none">
+                    {speed()}
+                  </text>
+                </box>
+              )}
+            </Show>
+            <Show when={dimensions().width >= 100}>
+              <box flexShrink={0}>
+                <text fg={theme.text.subdued} wrapMode="none">
+                  {economics()?.spent ?? "unreported"} · durable · resumable
+                </text>
+              </box>
+            </Show>
             <box flexGrow={1} />
             <text
               fg={theme.text.action.primary.default}

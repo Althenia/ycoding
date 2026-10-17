@@ -215,6 +215,13 @@ export const AssistantRetry = Schema.Struct({
   error: SessionError.Error,
 }).annotate({ identifier: "Session.Message.Assistant.Retry" })
 
+export interface AssistantReroute extends Schema.Schema.Type<typeof AssistantReroute> {}
+export const AssistantReroute = Schema.Struct({
+  from: Model.Ref,
+  model: Model.Ref,
+  error: SessionError.Error,
+}).annotate({ identifier: "Session.Message.Assistant.Reroute" })
+
 export interface Assistant extends Schema.Schema.Type<typeof Assistant> {}
 export const Assistant = Schema.Struct({
   ...Base,
@@ -238,6 +245,7 @@ export const Assistant = Schema.Struct({
   }).pipe(optional),
   error: SessionError.Error.pipe(optional),
   retry: AssistantRetry.pipe(optional),
+  reroutes: Schema.Array(AssistantReroute).pipe(optional),
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,
     completed: DateTimeUtcFromMillis.pipe(optional),
@@ -334,9 +342,12 @@ export const CompactionFailedCurrent = Schema.Struct({
 export const CompactionFailed = Schema.Union([CompactionFailedV1, CompactionFailedCurrent], { mode: "oneOf" })
 export type CompactionFailed = typeof CompactionFailed.Type
 
-export const Compaction = Schema.Union([CompactionPending, CompactionRunning, CompactionCompleted, CompactionFailed]).pipe(
-  Schema.annotate({ identifier: "Session.Message.Compaction" }),
-)
+export const Compaction = Schema.Union([
+  CompactionPending,
+  CompactionRunning,
+  CompactionCompleted,
+  CompactionFailed,
+]).pipe(Schema.annotate({ identifier: "Session.Message.Compaction" }))
 export type Compaction = typeof Compaction.Type
 
 export const Info = Schema.Union([

@@ -406,6 +406,50 @@ test.each(["status", "inventoryInvalidated"] as const)(
   },
 )
 
+test("a lost background result is forwarded in Status, pushed as lost, and never reaches the wire need enum", async () => {
+  const pushed: unknown[] = []
+  const h = await harness({
+    notifyPush: async (_, event) => {
+      pushed.push(event)
+      return []
+    },
+  })
+  const status = (attention: readonly string[], lost: readonly string[] = []): Frame["body"] => ({
+    case: "control",
+    value: create(ControlSchema, {
+      kind: {
+        case: "status",
+        value: { running: [], attention: [...attention], ...(lost.length === 0 ? {} : { lost: { items: [...lost] } }) },
+      },
+    }),
+  })
+  try {
+    const agent = await h.attach("agent", "agent")
+    await h.attach("browser")
+    agent.enqueue(status([]), frameReservation(status([])), h.now())
+    await h.send("agent")
+    h.receive("browser")
+    agent.enqueue(status(["ses_lost"], ["ses_lost"]), frameReservation(status(["ses_lost"], ["ses_lost"])), h.now())
+    await h.send("agent")
+    const received = h
+      .receive("browser")
+      .flatMap((entry) =>
+        entry.frame?.body.case === "control" && entry.frame.body.value.kind.case === "status"
+          ? [entry.frame.body.value.kind.value]
+          : [],
+      )
+    expect(received.at(-1)?.attention).toEqual(["ses_lost"])
+    expect(received.at(-1)?.lost?.items).toEqual(["ses_lost"])
+    expect(pushed).toEqual([
+      expect.objectContaining({ category: "approval-requested", sessionID: "ses_lost", need: "lost" }),
+    ])
+    expect(h.notices.page().notices.map((notice) => notice.sessionID)).toEqual(["ses_lost"])
+  } finally {
+    h.relay.closeDevice()
+    expect(h.relay.reservation.used).toBe(0)
+  }
+})
+
 test("TEST-035 completion rollback preserves high-water and suppresses notices and push across reconstruction", async () => {
   const database = new Database(":memory:")
   const storage = createNoticeStorage(database)

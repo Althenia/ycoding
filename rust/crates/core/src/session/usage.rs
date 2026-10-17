@@ -59,63 +59,50 @@ pub fn timing(usage: Option<&llm::Usage>) -> Option<JsonValue> {
 
 #[derive(Default)]
 pub struct GenerationTimes {
+    pub started: Option<u64>,
     pub text: Option<u64>,
     pub reasoning: Option<u64>,
     pub tool_input: Option<u64>,
     pub ended: Option<u64>,
+    pub streamed_output_units: u64,
 }
 
+const MAX_SAFE: u64 = 9_007_199_254_740_991;
+
 pub fn generation_timing(usage: Option<&llm::Usage>, times: &GenerationTimes) -> Option<JsonValue> {
-    let output = usage.map_or(0.0, llm::Usage::visible_output_tokens);
-    let reasoning = safe(usage.and_then(|usage| usage.reasoning_tokens));
-    let provider_timed = usage.is_some_and(|usage| usage.generation_duration_ns.is_some());
-    let visible = times.text.into_iter().chain(times.tool_input).min();
-    let folded = times.reasoning.is_some() && reasoning == 0.0;
-    if !provider_timed
-        && usage.is_some_and(|usage| usage.output_may_include_unreported_reasoning == Some(true))
-        && reasoning == 0.0
-    {
-        return None;
-    }
-    let tokens = if provider_timed {
-        output + reasoning
-    } else if folded || visible.is_some() {
-        output
-    } else {
-        0.0
+    let generated = safe(usage.map(llm::Usage::visible_output_tokens))
+        + safe(usage.and_then(|usage| usage.reasoning_tokens));
+    let generated = (generated.fract() == 0.0 && generated > 0.0 && generated <= MAX_SAFE as f64)
+        .then_some(generated);
+    let measured = generated.map(|tokens| ObjectEncoder::new().field("generatedTokens", &tokens));
+    let duration = [times.text, times.reasoning, times.tool_input]
+        .into_iter()
+        .flatten()
+        .min()
+        .or(times.started)
+        .zip(times.ended)
+        .and_then(|(start, ended)| ended.checked_sub(start))
+        .filter(|duration| *duration <= MAX_SAFE)
+        .map(|duration| duration.max(1) as f64);
+    let Some(duration) = duration else {
+        return measured.map(ObjectEncoder::finish);
     };
-    if !tokens.is_finite()
-        || tokens <= 0.0
-        || tokens.fract() != 0.0
-        || tokens > 9_007_199_254_740_991.0
-    {
-        return None;
-    }
-    if provider_timed {
+    if let Some(measured) = measured {
         return Some(
-            ObjectEncoder::new()
-                .field("generatedTokens", &tokens)
+            measured
+                .field("observedGenerationDurationNs", &duration)
                 .finish(),
         );
     }
-    let start = if folded {
-        times.reasoning.into_iter().chain(visible).min()
-    } else {
-        visible
-    }?;
-    let duration = times
-        .ended?
-        .checked_sub(start)
-        .filter(|duration| *duration >= 1_000_000_000 && *duration <= 9_007_199_254_740_991);
-    Some(
+    (times.streamed_output_units > 0).then(|| {
         ObjectEncoder::new()
-            .field("generatedTokens", &tokens)
-            .optional(
-                "observedGenerationDurationNs",
-                &duration.map(|duration| duration as f64),
+            .field(
+                "estimatedTokens",
+                &((times.streamed_output_units.saturating_add(2) / 4).max(1) as f64),
             )
-            .finish(),
-    )
+            .field("estimatedGenerationDurationNs", &duration)
+            .finish()
+    })
 }
 
 pub fn one_hour_cache_writes(usage: Option<&llm::Usage>) -> Option<f64> {

@@ -1,0 +1,19 @@
+$ bun run script/generate-v5.ts
+232 |           if (parameter.type && ts.isTypeReferenceNode(parameter.type))
+233 |             imports.add(parameter.type.typeName.getText(source))
+234 |         })
+235 |         const params = arrow.parameters.map((parameter) => parameter.getText(source)).join(", ")
+236 |         const clientType = "Client" + keys.map((key) => `[${JSON.stringify(key)}]`).join("")
+237 |         if (!operation) throw new Error(`No LocalClient operation descriptor: ${method}`)
+                                        ^
+error: No LocalClient operation descriptor: review.list
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/client/script/generate-v5.ts:237:35)
+      at map (1:11)
+      at emit (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/client/script/generate-v5.ts:213:8)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/client/script/generate-v5.ts:218:46)
+      at map (1:11)
+      at emit (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/client/script/generate-v5.ts:213:8)
+      at /Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/client/script/generate-v5.ts:319:17
+
+Bun v1.4.3 (macOS arm64)
+error: script "generate:v5" exited with code 1

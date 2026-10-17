@@ -111,6 +111,7 @@ fn request(id: &str, session: &str, order: i64, input: f64, cost: f64) -> resour
         )
         .unwrap(),
         time_created: order,
+        usage_anchor: None,
     }
 }
 
@@ -147,6 +148,7 @@ fn session_row(id: &str) -> session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 

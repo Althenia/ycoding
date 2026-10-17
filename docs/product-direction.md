@@ -54,13 +54,9 @@ Durable state owns prompt admission, session history, instructions, compaction r
 
 ### 4. Explicit autonomy
 
-The runtime supports three explicit modes:
+The runtime supports standard interactive execution, YOLO levels 0–2, and durable goal continuation. YOLO 0 (Ask first) is manual; 1 (Allow tools) auto-approves ask permissions only; 2 (Tools + reviews) also auto-approves ordinary guardrail reviews while awake. Requests above level 2 are rejected, and a stored level 3 is migrated once to 2. Goals grant no permission, answer, or review authority. Automatic answers use a per-Session `/auto-answer` toggle (default off), independent of YOLO, goals, and sleep. See [runtime autonomy](./runtime.md#autonomy) and [configuration](./configuration.md#guardrail-configuration-and-custom-files) for review delegation and thresholds.
 
-- `normal`: standard interactive execution;
-- `yolo` (`0-3`): `0` manual, `1` auto-approves ask permissions and ordinary guardrail reviews, `2` also auto-answers questions/forms; `3` retains its numeric level and currently behaves like `2`. Active `goal` grants answers and ask permissions at `0`, while ordinary guardrail auto-approval requires `1` or higher;
-- `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
-
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Effective YOLO 1-3 auto-approves ordinary guardrail reviews; YOLO 0, including an active `goal`, keeps reviews enforced. Hard reviews always require a fresh human decision and cannot be bypassed by autonomy or reusable approval. The expanded AUTONOMY sidebar shows who decides Permissions, Guardrails, and Questions at the effective YOLO level and active goal (`ask you`, `auto`, or `auto · goal`). Completion claims require verification evidence.
+Autonomy remains subject to permission ceilings, explicit denies, Session guardrails, and sleep state. Awake YOLO 2 approval applies only to ordinary reviews; sleep never enables that approval. Model review and standard-match verification require `guardrails.decide_reviews: true` (default false), with hard-review grading controlled beneath that setting. Completion claims require verification evidence; helper judgments do not certify completion.
 
 ### 5. Durable background orchestration
 
@@ -94,7 +90,7 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 The beta supports OpenAI (API key and Codex subscription), Anthropic (API key and Claude Code subscription), OpenRouter, Cursor, Meta (Muse and API key), Cline (`cline-pass`), Z.ai, MiniMax, Kimi, and OpenAI-compatible custom endpoints. Other configured providers receive an unsupported-provider diagnostic and are excluded from the catalog; unrelated valid settings remain available. Dynamic npm provider execution is unsupported.
 
-The hidden decision agent provides structured judgments only when an agent calls the `decision` tool. Main, child, and side-chat Sessions can use it within their effective permissions. The agent chooses when a bounded judgment is useful and supplies authorized evidence and typed questions. The helper uses a configured decision or Session model through its normal authentication route, including supported subscription routes. Confidence is a self-reported, uncalibrated estimate, not a calibrated probability. Insufficient evidence yields an explicit refusal, not a forced choice. Judgments do not execute tools, override owner selections, grant permission, certify completion, or change the user's objective; explicit autonomy and human-only hard reviews remain enforced. See [configuration](./configuration.md#decisions).
+The hidden decision agent provides structured judgments through explicit `decision` tool calls and runtime automation. Guardrail standard-match verification and review grading use runtime automation only when `guardrails.decide_reviews` is enabled (default false); hard-review grading has a separate `guardrails.decide_hard_reviews` switch. A Session's `/auto-answer` toggle enables eligible sleeping option-question and Form answers. Explicit tool judgments remain independent of those switches and retain their own permissions and semantics. Main, child, and side-chat Sessions can use the agent within their effective permissions. It uses a configured decision or Session model through its normal authentication route, including supported subscription routes. Confidence is self-reported and uncalibrated; insufficient evidence yields an explicit refusal, not a forced choice. Judgments do not execute tools, override owner selections, grant permission, certify completion, or change the user's objective. See [runtime autonomy](./runtime.md#autonomy) and [configuration](./configuration.md#decisions).
 
 ### 8. Documentation and distribution
 

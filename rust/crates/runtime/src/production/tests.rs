@@ -153,6 +153,7 @@ fn fixture_with(
     let globals = globals::Globals::start(
         client.clone(),
         &Production {
+            analytics: roots.data.join("analytics"),
             configuration: options,
             catalog: models_dev::Options {
                 source: "https://models.dev".into(),
@@ -171,19 +172,22 @@ fn fixture_with(
         feed.clone(),
         git.clone(),
         false,
+        roots.data.join("analytics"),
     )
     .unwrap();
+    let factory_options = config::LoadOptions {
+        directory,
+        roots: roots.clone(),
+        project: true,
+        file: None,
+        content: None,
+        env,
+    };
     Fixture {
         factory: Arc::new(Factory {
             catalog_refresh: false,
-            options: config::LoadOptions {
-                directory,
-                roots: roots.clone(),
-                project: true,
-                file: None,
-                content: None,
-                env,
-            },
+            settings: retention_settings(&factory_options).unwrap(),
+            options: factory_options,
             client: client.clone(),
             events: feed.clone(),
             credentials,
@@ -226,6 +230,7 @@ impl Fixture {
             self.factory.configuration(&configuration).unwrap(),
             self.feed.clone(),
             autonomy::Service::new(self.store.client()),
+            crate::session_review::service(self.sessions()).0,
         )
         .with_factory(self.factory.clone());
         let _ = self.factory.locations.set(locations.downgrade());
@@ -852,7 +857,9 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
                 resources: vec![f.directory().join("asset").to_str().unwrap().into()],
                 metadata: None,
                 skip_review: false,
-                holder: None
+                holder: None,
+                defer_shell: false,
+                source: None,
             })
             .is_err()
     );
@@ -910,6 +917,8 @@ async fn filesystem_tools_share_location_paths_policy_and_synthetic_instruction_
             }),
             skip_review: false,
             holder: None,
+            defer_shell: false,
+            source: None,
         })
         .unwrap();
     assert_eq!(
@@ -1414,6 +1423,7 @@ async fn cursor_models_require_and_use_a_location_owned_host_context() {
 async fn bootstrap_rejects_invalid_roots_and_unavailable_catalog_without_installing_execution() {
     let f = fixture("{}", "{}");
     let production = |configuration: config::LoadOptions, bundled: Option<JsonValue>| Production {
+        analytics: configuration.roots.data.join("analytics"),
         configuration,
         catalog: models_dev::Options {
             source: "invalid-source".into(),
@@ -1558,6 +1568,45 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
                     )
                     .unwrap(),
                     time_created: row.time_updated,
+                    usage_anchor: None,
+                },
+            )?;
+            ycoding_core::ycoding_store::resources::UsageAnalyticsRequestTable::insert(
+                tx,
+                &ycoding_core::ycoding_store::resources::UsageAnalyticsRequest {
+                    id: "req_one".into(),
+                    session_id: "ses_one".into(),
+                    project_id: row.project_id.clone(),
+                    directory: row.directory.clone(),
+                    workspace_id: row.workspace_id.clone(),
+                    session_updated: row.time_updated,
+                    agent: "god".into(),
+                    source: "step".into(),
+                    model: Document::from_domain(&ycoding_core::ycoding_schema::model::Ref {
+                        provider_id: ycoding_core::ycoding_schema::provider::Id("openai".into()),
+                        id: "gpt-runtime".into(),
+                        profile: None,
+                        variant: None,
+                    })
+                    .unwrap(),
+                    usage_anchor: None,
+                    task_path: Document::new(parse_json("[]").unwrap()).unwrap(),
+                    request: 1,
+                    attempts: 1,
+                    continuation: "full".into(),
+                    invalidation: "first-request".into(),
+                    prompt_cache_key: "namespac".into(),
+                    cache_read_reported: None,
+                    tokens: Document::new(
+                        parse_json(
+                            r#"{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}"#,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                    cost: Some(0.75),
+                    timing: None,
+                    time_created: row.time_updated,
                 },
             )
         })
@@ -1569,6 +1618,7 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
     let start = |client: Client| {
         let credentials = credential::Service::new(client.clone());
         let production = Production {
+            analytics: roots.data.join("analytics"),
             configuration: config::LoadOptions {
                 directory: directory.clone(),
                 roots: roots.clone(),
@@ -1597,6 +1647,7 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
             Feed::attach(&client),
             Arc::new(git::Service::new(16 * 1024 * 1024)),
             true,
+            roots.data.join("analytics"),
         );
         (globals, credentials)
     };
@@ -1645,6 +1696,31 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
     // A non-owned entry makes the private derived-DB directory unusable: every
     // rebuild/report attempt fails until an operator removes it.
     std::fs::write(analytics.join("foreign-file"), b"not an owned generation").unwrap();
+    let expired = Document::from_domain(
+        &ycoding_core::ycoding_schema::telemetry::Sample::decode(
+            &parse_json(
+                r#"{"kind":"client","at":"2026-10-04T12:00:00.000Z","surface":"tui","metric":"stream.delay","durationMs":75}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let received_at = crate::ids::now_millis() - 40 * 86_400_000;
+    store
+        .submit(move |tx| {
+            ycoding_core::ycoding_store::resources::LatencyTable::insert(
+                tx,
+                &ycoding_core::ycoding_store::resources::Latency {
+                    id: 1,
+                    received_at,
+                    sample: expired,
+                },
+            )
+        })
+        .unwrap()
+        .await
+        .unwrap();
 
     let (restarted, credentials) = start(client.clone());
     let restarted = restarted.expect("analytics outage must not fail production startup");
@@ -1680,6 +1756,75 @@ async fn analytics_outage_does_not_block_startup_admission_or_canonical_reads() 
     assert!(
         report(&sessions).is_err(),
         "report reads must expose the analytics outage explicitly, not serve data"
+    );
+
+    let options = config::LoadOptions {
+        directory: directory.clone(),
+        roots: roots.clone(),
+        project: true,
+        file: None,
+        content: None,
+        env: BTreeMap::from([("OPENAI_API_KEY".into(), "environment-key".into())]),
+    };
+    let feed = Feed::attach(&client);
+    let publisher = feed.clone();
+    let factory = Arc::new(Factory {
+        catalog_refresh: false,
+        settings: retention_settings(&options).unwrap(),
+        options,
+        client: client.clone(),
+        events: feed,
+        credentials: credentials.clone(),
+        executor: Arc::new(Executor::new(Executor::http_client().unwrap())),
+        git: Arc::new(git::Service::new(16 * 1024 * 1024)),
+        publisher: Arc::new(move |event| {
+            publisher.publish(crate::services::ephemeral(&event)?);
+            Ok(())
+        }),
+        cursor: None,
+        cursor_agent: None,
+        steer: None,
+        ripgrep: "rg".into(),
+        globals: restarted.clone(),
+        locations: Default::default(),
+        orchestration: Default::default(),
+        generations: Default::default(),
+    });
+    let maintenance = Maintenance::new(&factory);
+    maintenance
+        .housekeeping(&factory)
+        .await
+        .expect("an analytics outage must not fail telemetry startup");
+    maintenance
+        .cleanups(&factory)
+        .await
+        .expect("an analytics outage must not fail cleanup startup");
+    maintenance.stop().await.unwrap();
+    assert!(
+        client
+            .snapshot()
+            .unwrap()
+            .scan::<ycoding_core::ycoding_store::resources::LatencyTable>(
+                std::ops::Bound::Unbounded,
+                std::ops::Bound::Unbounded,
+                10,
+            )
+            .unwrap()
+            .is_empty(),
+        "the expired latency sample is removed canonically during the outage"
+    );
+    assert!(
+        client
+            .snapshot()
+            .unwrap()
+            .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])
+            .unwrap()
+            .is_some_and(|state| state.purge_all || !state.purges.is_empty()),
+        "the derived purge intent stays durable while the engine is unavailable"
+    );
+    assert!(
+        sessions.get(&session_id).unwrap().is_some(),
+        "canonical reads stay available after telemetry startup"
     );
 
     std::fs::remove_dir_all(&analytics).unwrap();
@@ -1860,6 +2005,190 @@ async fn retention_runs_at_boot_waits_an_hour_after_settlement_reloads_global_an
     .await
     .unwrap();
     assert!(maintenance.task.lock().unwrap().is_none());
+}
+
+#[test]
+fn retention_settings_survive_a_failed_reload_and_recover_on_the_next_valid_load() {
+    let f = fixture("{}", "{}");
+    let source = f.roots.config.join("extra.json");
+    let mut options = f.factory.options.clone();
+    options.file = Some(source.clone());
+    std::fs::write(
+        &source,
+        r#"{"analytics_retention":{"latency_days":90,"usage_days":45}}"#,
+    )
+    .unwrap();
+    let settings = retention_settings(&options).unwrap();
+    assert_eq!(
+        (
+            settings().latency_days,
+            settings().usage_days,
+            settings().records_days
+        ),
+        (90, 45, 7)
+    );
+    std::fs::write(&source, r#"{"shell":"{file:missing}"}"#).unwrap();
+    assert_eq!(
+        (
+            settings().latency_days,
+            settings().usage_days,
+            settings().records_days
+        ),
+        (90, 45, 7),
+        "a failed reload must keep the last loaded settings"
+    );
+    std::fs::write(&source, r#"{"analytics_retention":{"latency_days":5}}"#).unwrap();
+    assert_eq!(
+        (settings().latency_days, settings().usage_days),
+        (5, 30),
+        "a valid reload replaces them and keeps per-key defaults"
+    );
+}
+
+#[test]
+fn retention_settings_fail_startup_when_the_first_load_fails() {
+    let f = fixture("{}", "{}");
+    let source = f.roots.config.join("extra.json");
+    std::fs::write(&source, r#"{"shell":"{file:missing}"}"#).unwrap();
+    let mut options = f.factory.options.clone();
+    options.file = Some(source);
+    assert!(matches!(
+        retention_settings(&options),
+        Err(Failure::Unavailable(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telemetry_housekeeping_prunes_expired_latency_samples_at_start_and_joins_on_stop() {
+    use ycoding_core::{
+        ycoding_schema::telemetry,
+        ycoding_store::resources::{Latency, LatencyTable},
+    };
+    let mut f = fixture(r#"{"analytics_retention":{"latency_days":1}}"#, "{}");
+    let client = f.store.client();
+    let credentials = credential::Service::new(client.clone());
+    let globals = globals::Globals::start(
+        client.clone(),
+        &Production {
+            analytics: f.roots.data.join("analytics"),
+            configuration: f.factory.options.clone(),
+            catalog: models_dev::Options {
+                source: "https://models.dev".into(),
+                cache: f.roots.cache.join("models.json"),
+                file: None,
+                bundled: Some(parse_json(MODELS).unwrap()),
+                fetch: false,
+                user_agent: "ycoding-test".into(),
+            },
+            cursor: None,
+            steer: None,
+            ripgrep: "rg".into(),
+            meeting: false,
+        },
+        credentials.clone(),
+        f.feed.clone(),
+        Arc::new(git::Service::new(16 * 1024 * 1024)),
+        true,
+        f.roots.data.join("analytics"),
+    )
+    .unwrap();
+    Arc::get_mut(&mut f.factory).unwrap().globals = globals.clone();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while client.analytics().is_err() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the derived analytics owner never started");
+    let now = crate::ids::now_millis();
+    let sample = Document::from_domain(
+        &telemetry::Sample::decode(
+            &parse_json(
+                r#"{"kind":"client","at":"2026-10-04T12:00:00.000Z","surface":"tui","metric":"stream.delay","durationMs":75}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let (expired, fresh) = (sample.clone(), sample);
+    f.store
+        .submit(move |tx| {
+            LatencyTable::insert(
+                tx,
+                &Latency {
+                    id: 1,
+                    received_at: now - 2 * 86_400_000,
+                    sample: expired,
+                },
+            )?;
+            LatencyTable::insert(
+                tx,
+                &Latency {
+                    id: 2,
+                    received_at: now - 3_600_000,
+                    sample: fresh,
+                },
+            )
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let remaining = || {
+        f.store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<LatencyTable>(std::ops::Bound::Unbounded, std::ops::Bound::Unbounded, 10)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(remaining(), vec![1, 2]);
+    let maintenance = Maintenance::new(&f.factory);
+    let started = maintenance.housekeeping(&f.factory).await;
+    let (pruned, tracked) = (remaining(), maintenance.telemetry.lock().unwrap().is_some());
+    let stopped = maintenance.stop().await;
+    let released = maintenance.telemetry.lock().unwrap().is_none();
+    globals.composition.close().unwrap();
+    credentials.shutdown().await.unwrap();
+    started.unwrap();
+    assert_eq!(
+        pruned,
+        vec![2],
+        "the initial prune must finish before startup returns"
+    );
+    assert!(tracked);
+    stopped.unwrap();
+    assert!(released);
+    assert_eq!(remaining(), vec![2]);
+}
+
+#[tokio::test]
+async fn cleanup_startup_on_a_closed_canonical_store_fails_and_installs_no_owner() {
+    let f = fixture("{}", "{}");
+    let factory = f.factory.clone();
+    f.store.shutdown().unwrap();
+    let maintenance = Maintenance::new(&factory);
+    assert!(matches!(
+        maintenance.cleanups(&factory).await,
+        Err(Failure::Unavailable(_))
+    ));
+    assert!(maintenance.cleanups.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn telemetry_housekeeping_initial_prune_failure_fails_startup_without_a_task() {
+    let f = fixture("{}", "{}");
+    let factory = f.factory.clone();
+    f.store.shutdown().unwrap();
+    let maintenance = Maintenance::new(&factory);
+    assert!(matches!(
+        maintenance.housekeeping(&factory).await,
+        Err(Failure::Unavailable(_))
+    ));
+    assert!(maintenance.telemetry.lock().unwrap().is_none());
 }
 
 #[tokio::test]
@@ -2293,6 +2622,8 @@ async fn ownership_end_cancels_held_generation_requests_and_native_work_without_
                 metadata: None,
                 skip_review: false,
                 holder: None,
+                defer_shell: false,
+                source: None,
             })
             .unwrap();
         let review_id = review.request.unwrap().id;
@@ -2900,4 +3231,138 @@ fn managed_project_artifacts_overlay_the_location_catalogs() {
     );
     drop(services);
     locations.close().unwrap();
+}
+
+fn auto_answer_question(id: &str) -> question::Request {
+    question::Request {
+        id: question::Id::decode(&JsonValue::String(id.into())).unwrap(),
+        session_id: session::Id::new("ses_one").unwrap(),
+        questions: vec![question::Info {
+            question: "Which?".into(),
+            header: "Pick".into(),
+            options: vec![question::Option {
+                label: "One".into(),
+                description: "first".into(),
+            }],
+            multiple: None,
+            custom: None,
+        }],
+        tool: None,
+    }
+}
+
+#[tokio::test]
+async fn only_the_session_auto_answer_toggle_answers_questions() {
+    let f = fixture("{}", "{}");
+    autonomy::Service::new(f.store.client())
+        .set_yolo(
+            &session::Id::new("ses_one").unwrap(),
+            autonomy::YoloLevel::GUARDRAILS,
+        )
+        .await
+        .unwrap();
+    let locations = f.locations();
+    let services = f.services(&locations);
+    let request = auto_answer_question("que_auto_unset");
+    let Admission::Pending(wait) = services.questions.ask(request.clone()).unwrap() else {
+        panic!("YOLO 2 without the Session toggle must not answer")
+    };
+    services
+        .questions
+        .reply(&request.id, vec![vec!["One".into()]])
+        .unwrap();
+    wait.await.unwrap().unwrap();
+    autonomy::Service::new(f.store.client())
+        .set_auto_answer(&session::Id::new("ses_one").unwrap(), true)
+        .await
+        .unwrap();
+    let Admission::Answered(answers) = services
+        .questions
+        .ask(auto_answer_question("que_auto_session"))
+        .unwrap()
+    else {
+        panic!("the Session toggle answers an awake option question")
+    };
+    assert_eq!(answers, vec![vec![LosslessString::from("One")]]);
+}
+
+#[tokio::test]
+async fn guardrail_review_switches_compose_with_released_defaults() {
+    let defaults = fixture("{}", "{}");
+    let directory: LosslessString = defaults.directory().to_str().unwrap().into();
+    let prepared = defaults
+        .factory
+        .prepare(&directory, None, &"prj_one".into(), &directory)
+        .unwrap();
+    assert!(!prepared.configuration.guardrails.decide_reviews);
+    assert!(prepared.configuration.guardrails.decide_hard_reviews);
+    let services = defaults.services(&defaults.locations());
+    assert_eq!(
+        services.guardrails.review_policy(),
+        ycoding_core::process::guardrails::ReviewPolicy {
+            enabled: true,
+            decide_reviews: false,
+            decide_hard_reviews: true,
+        }
+    );
+    let configured = fixture(
+        r#"{"guardrails":{"decide_reviews":true,"decide_hard_reviews":false,"max_pending_reviews":3}}"#,
+        "{}",
+    );
+    let directory: LosslessString = configured.directory().to_str().unwrap().into();
+    let prepared = configured
+        .factory
+        .prepare(&directory, None, &"prj_one".into(), &directory)
+        .unwrap();
+    assert!(prepared.configuration.guardrails.decide_reviews);
+    assert!(!prepared.configuration.guardrails.decide_hard_reviews);
+    assert_eq!(prepared.configuration.guardrails.limits.reviews, 3);
+}
+
+fn fake_keep_awake() -> ycoding_core::platform::keep_awake::Service {
+    use ycoding_core::platform::process::{Command, Input, Output};
+    ycoding_core::platform::keep_awake::Service::with_command(
+        true,
+        Arc::new(|| {
+            let mut command = Command::new("/bin/sleep", ["3600"]);
+            command.stdin = Input::Ignore;
+            command.stdout = Output::Ignore;
+            command.stderr = Output::Ignore;
+            command
+        }),
+    )
+}
+
+#[tokio::test]
+async fn startup_restores_keep_awake_holds_for_sleeping_roots_before_serving() {
+    let awake_fixture = fixture("{}", "{}");
+    let client = awake_fixture.store.client();
+    let awake = fake_keep_awake();
+    sleep_holds(&client, awake.clone()).await.unwrap();
+    assert_eq!(
+        awake.get().sleep_hold,
+        Some(false),
+        "an awake store takes no hold"
+    );
+    awake.close().await;
+
+    let f = fixture("{}", "{}");
+    let client = f.store.client();
+    autonomy::Service::new(client.clone())
+        .set_sleep(&session::Id::new("ses_one").unwrap(), true)
+        .await
+        .unwrap();
+    let awake = fake_keep_awake();
+    let restored = sleep_holds(&client, awake.clone()).await.unwrap();
+    assert_eq!(
+        awake.get().sleep_hold,
+        Some(true),
+        "a durable sleeping root is held again before execution starts"
+    );
+    restored
+        .set_sleep(&session::Id::new("ses_one").unwrap(), false)
+        .await
+        .unwrap();
+    assert_eq!(awake.get().sleep_hold, Some(false));
+    awake.close().await;
 }

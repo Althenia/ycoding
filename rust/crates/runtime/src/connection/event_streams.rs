@@ -64,7 +64,6 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value37(event) => v5::public_event::Kind::SessionToolInputStarted(event),
         Kind::Value38(event) => v5::public_event::Kind::SessionToolInputEnded(event),
         Kind::Value39(event) => v5::public_event::Kind::SessionToolCalled(event),
-        Kind::Value40(event) => v5::public_event::Kind::SessionToolProgress(event),
         Kind::Value41(event) => v5::public_event::Kind::SessionToolSuccess(event),
         Kind::Value42(event) => v5::public_event::Kind::SessionToolFailed(event),
         Kind::Value43(event) => v5::public_event::Kind::SessionFileChangeRecorded(event),
@@ -77,6 +76,14 @@ fn public_event(item: v5::SessionLogItem) -> Result<v5::PublicEvent, ProtocolErr
         Kind::Value50(event) => v5::public_event::Kind::SessionRevertCleared(event),
         Kind::Value51(event) => v5::public_event::Kind::SessionRevertCommitted(event),
         Kind::Value52(_) => return Err(ProtocolError::Malformed),
+        Kind::Value53(event) => v5::public_event::Kind::SessionGuardrailDismissed(event),
+        Kind::Value54(event) => v5::public_event::Kind::SessionGuardrailEscalated(event),
+        Kind::Value55(event) => v5::public_event::Kind::SessionGuardrailDecided(event),
+        Kind::Value56(event) => v5::public_event::Kind::SessionReviewDeferred(event),
+        Kind::Value57(event) => v5::public_event::Kind::SessionReviewDecided(event),
+        Kind::Value58(event) => v5::public_event::Kind::SessionReviewWithdrawn(event),
+        Kind::Value59(event) => v5::public_event::Kind::SessionReviewConsumed(event),
+        Kind::Value60(event) => v5::public_event::Kind::SessionStepRerouted(event),
     };
     Ok(v5::PublicEvent { kind: Some(kind) })
 }
@@ -388,5 +395,72 @@ impl Driver {
         if !self.subs.iter().any(|sub| sub.follow) {
             self.follow = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_guardrail_and_reroute_log_items_keep_their_public_event_branch_and_bytes() {
+        use v5::{public_event::Kind as Public, session_log_item::Kind as Log};
+        let cases = [
+            (
+                Log::Value53(Default::default()),
+                Public::SessionGuardrailDismissed(Default::default()),
+                104,
+            ),
+            (
+                Log::Value54(Default::default()),
+                Public::SessionGuardrailEscalated(Default::default()),
+                105,
+            ),
+            (
+                Log::Value55(Default::default()),
+                Public::SessionGuardrailDecided(Default::default()),
+                106,
+            ),
+            (
+                Log::Value56(Default::default()),
+                Public::SessionReviewDeferred(Default::default()),
+                107,
+            ),
+            (
+                Log::Value57(Default::default()),
+                Public::SessionReviewDecided(Default::default()),
+                108,
+            ),
+            (
+                Log::Value58(Default::default()),
+                Public::SessionReviewWithdrawn(Default::default()),
+                109,
+            ),
+            (
+                Log::Value59(Default::default()),
+                Public::SessionReviewConsumed(Default::default()),
+                110,
+            ),
+            (
+                Log::Value60(Default::default()),
+                Public::SessionStepRerouted(Default::default()),
+                111,
+            ),
+        ];
+        for (item, expected, tag) in cases {
+            let event = public_event(v5::SessionLogItem { kind: Some(item) }).unwrap();
+            assert_eq!(event.kind, Some(expected));
+            let bytes = event.encode_to_vec();
+            assert_eq!(
+                ((bytes[0] as u32 & 0x7f) | (bytes[1] as u32) << 7) >> 3,
+                tag
+            );
+        }
+        assert!(matches!(
+            public_event(v5::SessionLogItem {
+                kind: Some(Log::Value52(Default::default()))
+            }),
+            Err(ProtocolError::Malformed)
+        ));
     }
 }

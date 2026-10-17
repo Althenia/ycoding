@@ -1770,6 +1770,10 @@ default state. `YoloLevel` accepts only 0 through 3 and is stored as given.
 `Effective` is the policy: YOLO 1 auto-approves ask permissions and ordinary
 guardrail reviews, YOLO 2 and 3 also auto-answer, and an active goal grants
 answers and ask-permission approvals at YOLO 0 but never guardrail approval.
+Answers additionally require the caller's Location `auto_answer` flag:
+`can_auto_answer(auto_answer)` is false whenever it is off, and
+`session::autonomy::auto_answer(&Configuration)` reads it as the latest document
+value equal to `true`.
 `can_auto_review(ReviewKind::Hard)` is always false. `Service::effective` takes
 the strongest level and any active goal across the task-parent chain. Tool policy
 authority reads Session and root autonomy through the same `State::read` and
@@ -1845,8 +1849,9 @@ count, limit, running holders, and `guardrails.max_concurrent_subagents`.
 Retries with the same identity return the task; a changed agent, model,
 or prompt is a conflict. `get`, `send`, `answer`, `cancel`, and `resume` verify
 that the task belongs to the named parent. A child question waits for a human
-unless the family is effectively auto-answering, in which case the automatic
-answer is admitted and the child continues. `settle`, `progress`, and
+unless the family is effectively auto-answering and the asking child's Location
+passes `auto_answer` to `question_attributed`, in which case the automatic
+answer is admitted and the child continues; `question` passes `false`. `settle`, `progress`, and
 `question` serve the child side. The `session.task.updated.1` fold maintains the
 `session_task` and `session_task_notification` rows and the parent's
 `orchestration_revision`, and rejects invalid transitions.
@@ -2493,7 +2498,9 @@ catastrophic deny cannot be weakened; an effective custom deny precedes hard
 review, and standard/custom hard review precedes ordinary custom allow.
 
 - Permissions auto-approve ask at YOLO 1–3 or with an active goal.
-- Forms/questions auto-answer at YOLO 2–3 or with an active goal.
+- Forms/questions auto-answer at YOLO 2–3 or with an active goal only when the
+  service was built with `with_auto_answer(true)` from its Location's
+  `auto_answer`.
 - Ordinary guardrail reviews auto-approve only at the root Session's YOLO 1–3;
   an active goal alone does not grant review approval.
 - Hard project/ancestor deletion, direct home-child deletion, destructive Git,

@@ -164,7 +164,7 @@ async fn production_flow() {
     .unwrap();
     std::fs::write(
         root.join("other/ycoding.json"),
-        r#"{"agents":{"god":{"description":"other agent"}}}"#,
+        r#"{"agents":{"god":{"description":"other agent"}},"guardrails":{"max_concurrent_shells":1}}"#,
     )
     .unwrap();
     let catalog_file = roots.cache.join("models.json");
@@ -260,6 +260,11 @@ async fn production_flow() {
                 .unwrap(),
             );
             SessionTable::insert(tx, &other)?;
+            for queued in ["ses_queue_interrupt", "ses_queue_remove"] {
+                let mut row = other.clone();
+                row.id = queued.into();
+                SessionTable::insert(tx, &row)?;
+            }
             let mut record = support::record("ses_production");
             record.directory = directory_copy.into();
             record.time_updated = std::time::SystemTime::now()
@@ -293,6 +298,9 @@ async fn production_flow() {
             idle.time_updated = record.time_updated - 3 * 86400000;
             idle.time_created = idle.time_updated;
             SessionTable::insert(tx, &idle)?;
+            let mut reviewed = record.clone();
+            reviewed.id = "ses_reviewed".into();
+            SessionTable::insert(tx, &reviewed)?;
             let unpriced = Request {
                 id: "req_unpriced".into(),
                 session_id: "ses_production".into(),
@@ -327,6 +335,7 @@ async fn production_flow() {
                 )
                 .unwrap(),
                 time_created: record.time_updated,
+                usage_anchor: None,
             };
             RequestTable::insert(tx, &unpriced)?;
             let mut recorded = unpriced.clone();
@@ -356,6 +365,29 @@ async fn production_flow() {
                 id: id.into(),
                 aggregate_id: "ses_interrupted".into(),
                 created: 2,
+                type_: type_.into(),
+                data: parse_json(data).unwrap(),
+            })
+            .await
+            .unwrap();
+    }
+    for (id, type_, data) in [
+        (
+            "evt_reviewed_deferred",
+            "session.review.deferred.1",
+            r#"{"sessionID":"ses_reviewed","itemID":"rvw_production_reconcile","kind":"question","reason":"sleep_entry","origin":{"requestID":"frm_production_reconcile"},"payload":{"type":"form","title":"Plan","fields":[{"key":"plan","type":"string","required":true}]}}"#,
+        ),
+        (
+            "evt_reviewed_decided",
+            "session.review.decided.1",
+            r#"{"sessionID":"ses_reviewed","itemID":"rvw_production_reconcile","decision":{"kind":"question","answers":{"plan":"A"}}}"#,
+        ),
+    ] {
+        seeded
+            .publish(NewEvent {
+                id: id.into(),
+                aggregate_id: "ses_reviewed".into(),
+                created: 3,
                 type_: type_.into(),
                 data: parse_json(data).unwrap(),
             })
@@ -404,6 +436,7 @@ async fn production_flow() {
     let core = Core::production(
         store.client(),
         Production {
+            analytics: configuration.roots.data.join("analytics"),
             configuration,
             catalog: models_dev::Options {
                 source: format!("{endpoint}/catalog"),
@@ -424,6 +457,13 @@ async fn production_flow() {
     assert!(
         core.execution.active().is_empty(),
         "startup must not wake reconciled or pending Sessions"
+    );
+    let reconciled = ycoding_core::session::review::prompt_id(
+        &ycoding_core::ycoding_schema::session_review::Id::new("rvw_production_reconcile").unwrap(),
+    );
+    assert!(
+        core.sessions.pending(&reconciled).unwrap().is_some(),
+        "startup reconciliation admits a decided review prompt that was never delivered"
     );
     assert!(std::ptr::eq(core.execution, Execution::global().unwrap()));
     let (_, interrupted) = core
@@ -716,7 +756,7 @@ async fn production_flow() {
         .await,
     );
     assert_eq!(usage.data.cost, Some(0.75023));
-    let report: v5::SessionUsageReportResult = support::success(wire.call("session.usageReport", support::session_scope("ses_production"), v5::SessionUsageReportRequest { params: v5::SessionUsageReportRequestParams { session_id: support::text("ses_production") }, query: v5::SessionUsageReportRequestQuery { group: v5::SessionUsageReportRequestQueryGroup::SessionUsagereportRequestQueryGroupModel as i32, time_zone: None, from: None, to: None, offset: None, limit: None, sort: None, order: None } }.encode_to_vec()).await);
+    let report: v5::SessionUsageReportResult = support::success(wire.call("session.usageReport", support::session_scope("ses_production"), v5::SessionUsageReportRequest { params: v5::SessionUsageReportRequestParams { session_id: support::text("ses_production") }, query: v5::SessionUsageReportRequestQuery { group: v5::SessionUsageReportRequestQueryGroup::SessionUsagereportRequestQueryGroupModel as i32, time_zone: None, from: None, to: None, offset: None, limit: None, sort: None, order: None, ..Default::default() } }.encode_to_vec()).await);
     assert_eq!(report.data.total.cost, Some(0.75023));
     let telemetry: v5::TelemetryListResult = support::success(
         wire.call(
@@ -1170,6 +1210,116 @@ async fn production_flow() {
         "shell",
         "every Location must share the one process-global Jobs owner"
     );
+    let other_tools = other
+        .production
+        .as_ref()
+        .unwrap()
+        .tools
+        .materialize(&other.agents.default().unwrap().permissions);
+    let other_shells = other.production.as_ref().unwrap().platform.shell.clone();
+    let session_shells = |session: &str, status: ycoding_core::ycoding_schema::shell::Status| {
+        let session = JsonValue::String(session.into());
+        other_shells
+            .list()
+            .into_iter()
+            .filter(|info| {
+                info.status == status && info.metadata.get(&"sessionID".into()) == Some(&session)
+            })
+            .map(|info| info.id)
+            .collect::<Vec<_>>()
+    };
+    let _shells = ShellShutdown(other_shells.clone());
+    for (session, operation) in [
+        ("ses_queue_interrupt", "session.interrupt"),
+        ("ses_queue_remove", "session.remove"),
+    ] {
+        let running = other_tools
+            .invoke(
+                "shell",
+                parse_json(r#"{"command":"sleep 30","background":true}"#).unwrap(),
+                Context::new(
+                    session,
+                    "god",
+                    "msg_queue",
+                    &format!("call_{session}_running"),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(running.error.is_none(), "{:?}", running.error);
+        let queued = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            other_tools.invoke(
+                "shell",
+                parse_json(r#"{"command":"printf queued-never-runs","channel":"queue"}"#).unwrap(),
+                Context::new(
+                    session,
+                    "god",
+                    "msg_queue",
+                    &format!("call_{session}_queued"),
+                )
+                .unwrap(),
+            ),
+        )
+        .await
+        .expect("a queued shell returns while the family slot is held")
+        .unwrap();
+        assert!(queued.error.is_none(), "{:?}", queued.error);
+        assert_eq!(
+            session_shells(session, ycoding_core::ycoding_schema::shell::Status::Queued).len(),
+            1
+        );
+        let request = match operation {
+            "session.interrupt" => v5::SessionInterruptRequest {
+                params: v5::SessionInterruptRequestParams {
+                    session_id: support::text(session),
+                },
+            }
+            .encode_to_vec(),
+            _ => v5::SessionRemoveRequest {
+                params: v5::SessionRemoveRequestParams {
+                    session_id: support::text(session),
+                },
+            }
+            .encode_to_vec(),
+        };
+        let _: v5::Empty = match operation {
+            "session.interrupt" => {
+                let result: v5::SessionInterruptResult = support::success(
+                    wire.call(operation, support::session_scope(session), request)
+                        .await,
+                );
+                result.data
+            }
+            _ => {
+                let result: v5::SessionRemoveResult = support::success(
+                    wire.call(operation, support::session_scope(session), request)
+                        .await,
+                );
+                result.data
+            }
+        };
+        assert!(
+            session_shells(session, ycoding_core::ycoding_schema::shell::Status::Queued).is_empty(),
+            "{operation} must cancel the Session's queued shells"
+        );
+        assert!(
+            !core
+                .execution
+                .active()
+                .contains(&session::Id::new(session).unwrap()),
+            "quiet queued-shell cancellation must not wake the Session"
+        );
+        for id in session_shells(
+            session,
+            ycoding_core::ycoding_schema::shell::Status::Running,
+        ) {
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(10), other_shells.remove(&id))
+                    .await;
+        }
+    }
     let todos = tools
         .invoke(
             "todowrite",
@@ -1926,6 +2076,8 @@ impl RefreshFlow<'_> {
                 metadata: None,
                 skip_review: false,
                 holder: None,
+                defer_shell: false,
+                source: None,
             })
             .unwrap();
         let JsonValue::String(request_id) = review.request.as_ref().unwrap().id.encode() else {
@@ -2342,4 +2494,19 @@ fn prompt(session: &str) -> Vec<u8> {
         params: v5::SessionPromptGenerateRequestParams { session_id: support::text(session) },
         payload: v5::SessionPromptGenerateRequestPayload { mode: v5::SessionPromptGenerateRequestPayloadMode::SessionPromptgenerateRequestPayloadModeStart as i32, intent: support::text("Verify this change"), memory: v5::SessionPromptGenerateRequestPayloadMemory { items: vec![] } },
     }.encode_to_vec()
+}
+
+struct ShellShutdown(Arc<ycoding_core::platform::shell::Shell>);
+
+impl Drop for ShellShutdown {
+    fn drop(&mut self) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let _ = tokio::time::timeout(Duration::from_secs(10), self.0.shutdown()).await;
+            })
+        });
+    }
 }

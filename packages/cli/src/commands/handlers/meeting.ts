@@ -37,17 +37,20 @@ const present = Effect.fnUntraced(function* (control: Control, open: boolean, he
   if (!["ready", "recording", "stopping"].includes(status ?? ""))
     yield* Effect.tryPromise(() => command(control, { action: "start" }))
   const url = viewURL(yield* Effect.tryPromise(() => command(control, { action: "view" })))
+  const ownerURL = viewURL(yield* Effect.tryPromise(() => command(control, { action: "owner-view" })))
   process.stdout.write(
     [
       heading,
       `Live page: ${url}`,
+      `Owner settings: ${ownerURL}`,
+      "Keep the owner settings link private; it grants model and connector configuration access.",
       "Start recording from the live page after choosing audio and confirming consent.",
       "",
     ].join("\n"),
   )
   if (!open) return
   const { default: openURL } = yield* Effect.promise(() => import("open"))
-  yield* Effect.tryPromise(() => openURL(url))
+  yield* Effect.tryPromise(() => openURL(ownerURL))
 })
 
 async function command(control: Control, input: unknown) {

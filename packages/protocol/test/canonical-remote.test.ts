@@ -29,9 +29,9 @@ test("REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs 
     expect(operation.roles, name).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
   }
   const canonical = new Set<string>(Object.values(connectorOperations).map(([, name]) => name))
-  expect(canonical.size).toBe(66)
-  expect(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY))).toHaveLength(66)
-  expect(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))).toHaveLength(70)
+  expect(canonical.size).toBe(75)
+  expect(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY))).toHaveLength(75)
+  expect(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))).toHaveLength(79)
   expect(operations.find((operation) => operation.diagnosticName === "catalog.get")!.operationId).toBe(5043)
   for (const [, [id]] of Object.entries(noticeOperations))
     expect(operations.find((operation) => operation.operationId === id)!.roles).toEqual([PeerRole.REMOTE_CLIENT])

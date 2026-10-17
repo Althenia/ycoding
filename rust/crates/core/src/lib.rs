@@ -6,6 +6,7 @@ pub mod extension;
 pub mod instructions;
 pub mod job;
 pub mod meeting;
+pub mod model_incident;
 pub mod observability;
 pub mod platform;
 pub mod process;
@@ -15,3 +16,7 @@ pub mod resources;
 pub mod session;
 pub mod telemetry;
 pub mod tools;
+
+#[cfg(test)]
+#[path = "../tests/session_support/mod.rs"]
+mod test_support;

@@ -149,7 +149,21 @@ const route: FetchHandler = (url) => {
   )
     return json({ data: [] })
   if (/^\/api\/session\/ses_(docs_sync|cache_audit)\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`)
+    return json({
+      data: {
+        mode: "normal",
+        yolo: 0,
+        effective: {
+          yolo: 0,
+          asleep: false,
+          ordinaryReviewsAuto: false,
+          guardrailsEnabled: true,
+          modelReviews: false,
+          hardModelReviews: false,
+        },
+      },
+    })
   if (url.pathname === `/api/session/${sessionID}/todo`)
     return json({
       data: [
@@ -360,7 +374,16 @@ test("captures transcript blocks through the real session route", async () => {
         { id: "audit-tools", source: "file", spec: "audit-tools", target: "audit-tools", enabled: true, active: true },
       ],
       settle: "Claude Opus 5",
-      stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "MCP", "Captured changes 1 file"],
+      stable: [
+        "SESSION",
+        "CONTEXT",
+        "TODO LIST",
+        "SUBAGENTS",
+        "MCP",
+        "Captured changes 1 file",
+        "goal off",
+        "Ask first",
+      ],
     })
     const text = lines.join("\n")
 
@@ -374,7 +397,7 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("bun typecheck")
     expect(text).toContain("2 errors")
     expect(text).toContain("goal off")
-    expect(text).toContain("YOLO off")
+    expect(text).toContain("Ask first")
 
     await mkdir(renders, { recursive: true })
     await Bun.write(path.join(renders, `transcript-blocks-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))

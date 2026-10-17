@@ -5,6 +5,7 @@ use super::config::MeetingConfig;
 use super::discovery::{Descriptor, RuntimeLock, publish_descriptor, remove_descriptor};
 use super::history;
 use super::intelligence::{Generate, Mcp, from_generator};
+use super::owner::{Catalog, Outcome, OwnerSettings, Update};
 use super::runtime::{
     HEARTBEAT_TIMEOUT, MeetingRuntime, ProviderFactory, RuntimeOptions, SessionFactory,
 };
@@ -48,6 +49,7 @@ pub struct ServiceOptions {
     pub generator: Option<Arc<Generator>>,
     pub analysis: Option<Arc<Analysis>>,
     pub mcp: Option<Arc<dyn Mcp>>,
+    pub catalog: Option<Catalog>,
     pub assets: ViewAssets,
     pub heartbeat_timeout: Duration,
     pub expiry_interval: Duration,
@@ -64,6 +66,7 @@ impl ServiceOptions {
             generator: None,
             analysis: None,
             mcp: None,
+            catalog: None,
             assets: ViewAssets::default(),
             heartbeat_timeout: HEARTBEAT_TIMEOUT,
             expiry_interval: EXPIRY_INTERVAL,
@@ -74,6 +77,7 @@ impl ServiceOptions {
 struct RuntimeHandlers {
     runtime: Arc<MeetingRuntime>,
     questions: Option<Arc<Questions>>,
+    owner: Option<OwnerSettings>,
 }
 
 impl Handlers for RuntimeHandlers {
@@ -109,6 +113,23 @@ impl Handlers for RuntimeHandlers {
     fn ask(&self, question: String) -> Option<BoxFuture<'_, Result<Value, CallbackFailed>>> {
         let questions = self.questions.clone()?;
         Some(Box::pin(async move { Ok(questions.ask(question).await) }))
+    }
+
+    fn owner_read(&self) -> Option<BoxFuture<'_, Result<Value, CallbackFailed>>> {
+        let owner = self.owner.as_ref()?;
+        Some(Box::pin(async move {
+            owner.read().await.map_err(|_| CallbackFailed)
+        }))
+    }
+
+    fn owner_update(
+        &self,
+        update: Update,
+    ) -> Option<BoxFuture<'_, Result<Outcome, CallbackFailed>>> {
+        let owner = self.owner.as_ref()?;
+        Some(Box::pin(async move {
+            owner.update(update).await.map_err(|_| CallbackFailed)
+        }))
     }
 }
 
@@ -182,7 +203,7 @@ impl MeetingService {
             provider_factory: options.provider_factory,
             heartbeat_timeout: options.heartbeat_timeout,
             generate: generate.clone(),
-            mcp: options.mcp,
+            mcp: options.mcp.clone(),
         })
         .await
         {
@@ -193,9 +214,13 @@ impl MeetingService {
             }
         };
         let questions = generate.map(|generate| Questions::new(runtime.clone(), generate));
+        let owner = options
+            .catalog
+            .map(|catalog| OwnerSettings::new(runtime.clone(), catalog, options.mcp));
         let bridge = match start_bridge(
             &runtime,
             questions.clone(),
+            owner,
             options.assets,
             &options.directory,
         )
@@ -256,6 +281,7 @@ impl MeetingService {
 async fn start_bridge(
     runtime: &Arc<MeetingRuntime>,
     questions: Option<Arc<Questions>>,
+    owner: Option<OwnerSettings>,
     assets: ViewAssets,
     directory: &Path,
 ) -> Result<Bridge, ServiceError> {
@@ -271,6 +297,7 @@ async fn start_bridge(
         Arc::new(RuntimeHandlers {
             runtime: runtime.clone(),
             questions,
+            owner,
         }),
     )
     .await

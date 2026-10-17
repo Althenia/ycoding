@@ -149,7 +149,7 @@ impl Fixture {
         let directory = directory.to_string_lossy().into_owned();
         self.store().submit(move |tx| {
             tx.put::<ycoding_store::session::SessionTable>(&ycoding_store::session::Session {
-                id: name.into(), project_id: project.into(), workspace_id: None, parent_id: parent.map(Into::into), fork_session_id: None, fork_message_id: None, fork_seq: None, directory: directory.into(), path: None, title: "authority".into(), cost: 0.0, tokens_input: 0, tokens_output: 0, tokens_reasoning: 0, tokens_cache_read: 0, tokens_cache_write: 0, revert: None, permission: ceiling.map(|rules| ycoding_store::session::Document::from_domain(&rules).unwrap()), autonomy: Some(ycoding_schema::parse_json(&format!("{{\"mode\":\"normal\",\"yolo\":{yolo},\"goal\":{{\"text\":\"Synthetic goal\",\"iteration\":0,\"noProgress\":0,\"maxNoProgress\":3,\"status\":\"completed\"}}}}")).unwrap()), autonomy_revision: 0, orchestration_revision: 0, agent: Some("build".into()), model: None, profile_binding: None, daybreak: None, time_created: 1, time_updated: 1, time_archived: None, time_active: None, time_pinned: None, time_suspended: None,
+                id: name.into(), project_id: project.into(), workspace_id: None, parent_id: parent.map(Into::into), fork_session_id: None, fork_message_id: None, fork_seq: None, directory: directory.into(), path: None, title: "authority".into(), cost: 0.0, tokens_input: 0, tokens_output: 0, tokens_reasoning: 0, tokens_cache_read: 0, tokens_cache_write: 0, revert: None, permission: ceiling.map(|rules| ycoding_store::session::Document::from_domain(&rules).unwrap()), autonomy: Some(ycoding_schema::parse_json(&format!("{{\"mode\":\"normal\",\"yolo\":{yolo},\"goal\":{{\"text\":\"Synthetic goal\",\"iteration\":0,\"noProgress\":0,\"maxNoProgress\":3,\"status\":\"completed\"}}}}")).unwrap()), autonomy_revision: 0, orchestration_revision: 0, agent: Some("build".into()), model: None, profile_binding: None, daybreak: None, time_created: 1, time_updated: 1, time_archived: None, time_active: None, time_pinned: None, time_suspended: None, usage_pruned_through: None,
             })?;
             Ok(())
         }).unwrap().wait().unwrap();
@@ -210,6 +210,8 @@ impl Fixture {
                 custom,
                 enabled,
                 limits: ycoding_core::process::guardrails::Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             self.publisher(),
         )

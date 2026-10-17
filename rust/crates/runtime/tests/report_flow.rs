@@ -18,11 +18,12 @@ use ycoding_core::session::{
     run_coordinator, store,
 };
 use ycoding_core::ycoding_schema::{
-    DomainDecode, location, model, parse_json, provider, provider_usage, schema::NonNegativeInt,
+    DomainDecode, LosslessString, location, model, parse_json, provider, provider_usage,
+    schema::NonNegativeInt,
 };
 use ycoding_core::ycoding_store::{
     KeyPart, Metadata, Options, Store, analytics, project,
-    resources::{Request, RequestTable},
+    resources::{Request, RequestTable, UsageAnalyticsRequest, UsageAnalyticsRequestTable},
     session::{Document, NewEvent, SessionTable},
     tuple_key,
 };
@@ -140,6 +141,8 @@ fn configuration() -> Configuration {
             custom: Arc::new(Vec::new),
             enabled: true,
             limits: Limits::default(),
+            decide_reviews: false,
+            decide_hard_reviews: true,
         },
         snapshots: SnapshotSettings {
             git: Arc::new(ycoding_core::platform::git::Service::new(16 * 1024 * 1024)),
@@ -274,6 +277,7 @@ fn request(id: &str, session: &str, order: i64, cost: f64) -> Request {
         )
         .unwrap(),
         time_created: 1_761_438_600_000 + order,
+        usage_anchor: None,
     }
 }
 
@@ -298,7 +302,39 @@ async fn insert_usage(usage: &mut Usage, from: usize, to: usize, sessions: &[&st
             .store
             .submit(move |tx| {
                 for row in &rows {
-                    RequestTable::insert(tx, &request(&row.0, &row.1, row.2, row.3))?;
+                    let ledger = request(&row.0, &row.1, row.2, row.3);
+                    RequestTable::insert(tx, &ledger)?;
+                    let session = tx
+                        .get::<SessionTable>(&tuple_key(&[KeyPart::String(&ledger.session_id)]))?
+                        .unwrap();
+                    UsageAnalyticsRequestTable::insert(
+                        tx,
+                        &UsageAnalyticsRequest {
+                            id: ledger.id,
+                            session_id: ledger.session_id,
+                            project_id: session.project_id,
+                            directory: session.directory,
+                            workspace_id: session.workspace_id,
+                            session_updated: session.time_updated,
+                            agent: ledger.agent,
+                            source: ledger.source,
+                            model: ledger.model,
+                            usage_anchor: None,
+                            task_path: Document::new(parse_json("[]").unwrap())?,
+                            request: ledger.request,
+                            attempts: ledger.attempts,
+                            continuation: ledger.continuation,
+                            invalidation: ledger.invalidation,
+                            prompt_cache_key: LosslessString::from_utf16(
+                                ledger.prompt_cache_key.code_units().take(8).collect(),
+                            ),
+                            cache_read_reported: ledger.cache_read_reported,
+                            tokens: ledger.tokens,
+                            cost: ledger.cost,
+                            timing: ledger.timing,
+                            time_created: ledger.time_created,
+                        },
+                    )?;
                 }
                 Ok(())
             })
@@ -314,7 +350,10 @@ async fn delete_usage(usage: &mut Usage, ids: &[&str]) {
         let identity = tuple_key(&[KeyPart::String(&(*id).into())]);
         flow()
             .store
-            .submit(move |tx| RequestTable::delete(tx, &identity).map(|_| ()))
+            .submit(move |tx| {
+                RequestTable::delete(tx, &identity)?;
+                UsageAnalyticsRequestTable::delete(tx, &identity).map(|_| ())
+            })
             .unwrap()
             .await
             .unwrap();
@@ -336,6 +375,7 @@ async fn read_usage(client: &mut Client) -> Outcome {
                     limit: None,
                     sort: None,
                     order: None,
+                    ..Default::default()
                 },
             }
             .encode_to_vec(),
@@ -530,9 +570,15 @@ impl Canonical {
         );
         let diagnostics = diagnostics.data.expect("a recorded provider request");
         assert_eq!(diagnostics.requests.as_ref().unwrap().logical, 1);
-        assert_eq!(diagnostics.generation_speed.is_some(), measured);
-        if let Some(speed) = &diagnostics.generation_speed {
-            assert_eq!(speed.latest.as_ref().unwrap().tokens_per_second, 6.0);
+        let speed = diagnostics
+            .generation_speed
+            .as_ref()
+            .expect("selected model history");
+        assert!(speed.model.is_some());
+        assert_eq!(speed.latest.is_some(), measured);
+        assert_eq!(speed.recent.items.is_empty(), !measured);
+        if let Some(latest) = &speed.latest {
+            assert_eq!(latest.tokens_per_second, 6.0);
         }
         assert_eq!(snapshot.data.generation_speed, diagnostics.generation_speed);
         assert_eq!(quota_state(client).await, (1, 6, 3));

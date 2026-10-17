@@ -303,7 +303,9 @@ test("release workflow verifies the web application and relay before the Cloudfl
   expect(workflow).toContain("bun run build:cloudflare")
   expect(workflow.indexOf("bun run build:web")).toBeLessThan(workflow.indexOf("bun run build:cloudflare"))
   // CLI, helper, and isolated-browser release checks stay in place.
-  expect(workflow).toContain("bun run test:integration:browser")
+  expect(workflow).toContain("bun run --cwd packages/core test:integration:browser")
+  expect(workflow).toContain("bun run --cwd packages/server test:integration:browser")
+  expect(workflow).toContain("bun run --cwd packages/tui test:integration:browser")
   expect(workflow).toContain("isolated-browser-smoke.ts")
 })
 
@@ -381,6 +383,8 @@ test("source verification legs start in parallel with the native builds", () => 
     "tui",
     "browser",
     "extension",
+    "rust",
+    "rust-windows",
   ])
   expect(verify).toContain(["          - suite: browser", "            runner: macos-26"].join("\n"))
   expect(verify).toContain(["          - suite: extension", "            runner: macos-26"].join("\n"))
@@ -400,6 +404,10 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
     ["Provision Chrome for Testing", "matrix.suite == 'extension'"],
     ["Verify Chrome extension integration suite", "matrix.suite == 'extension'"],
+    ["Verify native isolated-browser runtime", "matrix.suite == 'browser'"],
+    ["Verify Rust isolated-browser integration", "matrix.suite == 'browser'"],
+    ["Verify Rust workspace", "matrix.suite == 'rust'"],
+    ["Verify Rust runtime client interoperability", "matrix.suite == 'rust'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
   expect(verify).toContain("uses: ./.github/actions/verify-browser-host")

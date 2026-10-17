@@ -174,6 +174,12 @@ pub struct AssistantRetry {
     pub error: session_error::Error,
 }
 #[derive(Clone, Debug, PartialEq)]
+pub struct AssistantReroute {
+    pub from: model::Ref,
+    pub model: model::Ref,
+    pub error: session_error::Error,
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct SnapshotRange {
     pub start: Option<snapshot::Id>,
     pub end: Option<snapshot::Id>,
@@ -201,6 +207,7 @@ pub struct Assistant {
     pub diagnostics: Option<Diagnostics>,
     pub error: Option<session_error::Error>,
     pub retry: Option<AssistantRetry>,
+    pub reroutes: Option<Vec<AssistantReroute>>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompactionBase {
@@ -888,6 +895,25 @@ impl DomainEncode for AssistantRetry {
             .finish()
     }
 }
+impl DomainDecode for AssistantReroute {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            from: o.field("from")?,
+            model: o.field("model")?,
+            error: o.field("error")?,
+        })
+    }
+}
+impl DomainEncode for AssistantReroute {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("from", &self.from)
+            .field("model", &self.model)
+            .field("error", &self.error)
+            .finish()
+    }
+}
 impl DomainDecode for SnapshotRange {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
@@ -944,6 +970,7 @@ impl DomainDecode for Assistant {
             diagnostics: o.optional("diagnostics")?,
             error: o.optional("error")?,
             retry: o.optional("retry")?,
+            reroutes: o.optional("reroutes")?,
         })
     }
 }
@@ -961,6 +988,7 @@ impl DomainEncode for Assistant {
             .optional("diagnostics", &self.diagnostics)
             .optional("error", &self.error)
             .optional("retry", &self.retry)
+            .optional("reroutes", &self.reroutes)
             .finish()
     }
 }

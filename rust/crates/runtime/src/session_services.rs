@@ -153,7 +153,7 @@ pub async fn synthetic(
     });
     let admitted = core
         .execution
-        .prompt(
+        .prompt_with_origin(
             pending::Request {
                 id,
                 session_id: session_id.clone(),
@@ -162,6 +162,7 @@ pub async fn synthetic(
                 created: ids::now_millis(),
             },
             payload.resume,
+            ycoding_core::session::autonomy::Origin::Runtime,
         )
         .await
         .map_err(|error| match error {

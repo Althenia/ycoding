@@ -212,6 +212,7 @@ test("a resumed Session retains the draft with a catalog warning until its model
     await until(screen, () => screen.frame().includes("model catalog is not available yet"))
     expect(screen.frame()).toContain("held resumed input")
     expect(writes).toEqual([])
+    expect(data.location.model.list(data.session.get(fixture.sessionID)?.location)).toBeUndefined()
     catalog.resolve()
     await until(screen, () => {
       const location = data.session.get(fixture.sessionID)?.location

@@ -164,7 +164,7 @@ pub(super) async fn command(
         .map_err(|_| rejected())?;
     let admitted = services
         .runner
-        .command(
+        .command_from(
             Execution::global().ok_or(rejected())?,
             &services.commands,
             shared.host.mcp.as_deref(),
@@ -177,6 +177,7 @@ pub(super) async fn command(
                 model: model(input.model)?,
                 resume: input.resume,
             },
+            crate::session::autonomy::Origin::Plugin,
         )
         .await
         .map_err(|error| match error {
@@ -198,7 +199,11 @@ pub(super) async fn synthetic(
     let (id, _) = owned_session(host, &input.session)?;
     let admitted = Execution::global()
         .ok_or(rejected())?
-        .prompt(request(id, input.message, input.input, true)?, input.resume)
+        .prompt_with_origin(
+            request(id, input.message, input.input, true)?,
+            input.resume,
+            crate::session::autonomy::Origin::Plugin,
+        )
         .await
         .map_err(admission_error)?;
     Ok(admission(admitted))

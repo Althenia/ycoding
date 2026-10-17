@@ -6,7 +6,7 @@ This document specifies the operator-facing configuration and terminal behavior 
 
 Agent permissions remain an ordered rule list. A later matching rule overrides an earlier matching rule.
 
-The named built-in agents (`GSD`, `architech`, `god`, `yangi`, `occam`, `omoikane`, `wittgenstein`, and `zeus`) explicitly allow `shell` for `*`. GSD's instructions delegate implementation and shell-based validation to workers; its orchestration role does not add a separate permission sandbox. A later configured rule or inherited parent deny still takes precedence. The read-only `BTW` advisor continues to require approval for shell commands.
+The named built-in agents (`GSD`, `architech`, `god`, `yangi`, `occam`, `omoikane`, `wittgenstein`, and `zeus`) explicitly allow `shell` for `*`. Their implementation and delegation instructions do not add a separate permission sandbox. A later configured rule or inherited parent deny still takes precedence. The read-only `BTW` advisor continues to require approval for shell commands.
 
 Agent definition files are discovered from the global or project YCoding config directories:
 
@@ -48,23 +48,23 @@ The same fields can be configured in `ycoding.json` or `ycoding.jsonc`:
       "permissions": [
         { "action": "shell", "resource": "git status*", "effect": "allow" },
         { "action": "shell", "resource": "bun test*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" }
-      ]
-    }
-  }
+        { "action": "shell", "resource": "*", "effect": "ask" },
+      ],
+    },
+  },
 }
 ```
 
 Managed project-artifact agents preserve their stored permission rules. An empty managed-agent permission list resolves to these safe defaults:
 
-| Action | Default |
-| --- | --- |
-| `read`, `glob`, `grep` | allow |
-| `webfetch`, `websearch` | allow |
-| `edit`, `write`, `patch`, `shell` | ask |
-| `question` | allow |
-| `subagent` | deny |
-| all other actions | deny |
+| Action                            | Default |
+| --------------------------------- | ------- |
+| `read`, `glob`, `grep`            | allow   |
+| `webfetch`, `websearch`           | allow   |
+| `edit`, `write`, `patch`, `shell` | ask     |
+| `question`                        | allow   |
+| `subagent`                        | deny    |
+| all other actions                 | deny    |
 
 A child Session also inherits deny rules from its parent permission ceiling. Child configuration cannot widen a parent denial.
 
@@ -76,14 +76,15 @@ Permissions decide whether an agent may attempt an action. Guardrails apply inde
 
 Because a pending review blocks the family, the terminal surfaces the review prompt and transcript row in every Session view that the review can block, including a subagent chat and an autonomous Session. An autonomous Session cannot silently absorb its own review.
 
-Ordinary guardrail reviews are auto-approved at effective YOLO 1-3. YOLO 0, including an active goal, keeps
-reviews enforced. The TUI has no separate permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
+YOLO 2 auto-approves ordinary guardrail reviews only while awake. YOLO 0 and 1, and every sleeping Session, keep reviews enforced. `guardrails.decide_reviews` defaults to false and gates model verification and grading; `guardrails.decide_hard_reviews` defaults to true beneath that switch. When model review is disabled, hard reviews go directly to a human while awake or the review box asleep. The terminal shows a distinct **Session guardrail review** with:
 
 - `Allow once`
-- `Allow for this session`
+- `Always` (ordinary reviews only)
 - `Deny`
 
-**Hard reviews** offer only `Allow once` and `Deny` and require a fresh human decision. No YOLO level, active goal, agent automation, previous reusable approval, custom allow rule, or disabled optional guardrails can bypass a built-in hard review. An `always` reply to a hard review is rejected. `computer` and `browser` tool calls are the exception: they are never reviewed, including for hard review decisions (see Standard policy).
+**Hard reviews** offer only one-time approval and rejection. YOLO, goals, permission automation, prior approvals, custom allow rules, and disabled optional guardrails cannot bypass a built-in hard review. `computer` and `browser` tool calls pass `skipReview`; deny decisions still apply.
+
+When enabled, review grading makes one call for `approve_all`, `approve`, `reject`, and `escalate`. Approve-all requires confidence 0.9, one-time approval 0.8 (0.95 for hard reviews), and rejection 0.8. Conflicting qualifying choices, tied escalation grades, no qualifying choice, refusal, invalid output, error, and timeout go to a human while awake or the review box asleep. Standard-rule verification dismisses a matched rule only for explicit false at confidence 0.9 or higher. Verification never applies to catastrophic denies, explicit denies, or custom rules.
 
 The `always` reply, rendered as `Allow for this session`, approves the reviewed request's outside directories for the whole root Session family, including child Sessions: a directory target itself, otherwise its parent, including descendants. The approval is stored as a private durable `session.guardrail.approved` event on the root Session, so it survives restarts and applies in every process using the same database; it is not a tool-permission grant. Each action is freshly evaluated first; a later ordinary outside-repository review passes only when every outside target lies under an approved directory, and a deny or hard review is never settled by it. An `always` reply to a review with no outside directories, such as a custom ask rule, approves only that request. `once` is never reusable.
 
@@ -96,8 +97,8 @@ The `always` reply, rendered as `Allow for this session`, approves the reviewed 
     "max_concurrent_shells": 8,
     "shell_wait_seconds": 60,
     "max_concurrent_subagents": 8,
-    "max_pending_reviews": 16
-  }
+    "max_pending_reviews": 16,
+  },
 }
 ```
 
@@ -113,7 +114,7 @@ The code-owned standard profile:
 - excludes targets at or under `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR` before every standard deletion rule; mixed commands evaluate only non-temporary targets;
 - requires hard human review, unoverrideable by custom allow rules, for destructive actions: recognized recursive deletion of a complete current project, its ancestors, or a direct home child; destructive Git (`git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore --worktree`, `git branch -D`); force push; and destructive database statements;
 - never reviews `computer` and `browser` tool calls: their guardrail evaluations (desktop `computer`, iTerm text as `shell`, Finder moves as `file_mutation`, and Chrome `browser_owned_open`, `browser_mutation`, and `browser_profile_mutation`) admit ordinary and hard review decisions without a request, while catastrophic standard denies and custom `deny` rules still block them; their `computer` permission and Chrome site and control permissions still apply;
-- requires ordinary review, which effective YOLO 1-3 auto-approves, only for work outside the repository: edits, writes, and patches outside it, and shell commands whose working directory, `cd` target, operand, or redirection resolves outside it; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands and read tools are exempt. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, are also inside. A path whose effective `external_directory` permission is `allow` for the calling Session is inside too, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent; `ask` and `deny` do not exempt it. A shell command that also names a non-exempt outside path stays reviewed. Hard reviews and catastrophic denies are not exempted by these paths or by an `external_directory` allow;
+- requires ordinary review only for work outside the repository: edits, writes, and patches outside it, and shell commands whose working directory, `cd` target, operand, or redirection resolves outside it; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands and read tools are exempt. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, are also inside. A path whose effective `external_directory` permission is `allow` for the calling Session is inside too, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent; `ask` and `deny` do not exempt it. A shell command that also names a non-exempt outside path stays reviewed. Hard reviews and catastrophic denies are not exempted by these paths or by an `external_directory` allow;
 - has no standard rule for package publication, production deployment, security-policy changes, or MCP execution; tool permissions still govern them;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;
 - evaluates shell, direct Session shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at their side-effect boundary.
@@ -153,15 +154,15 @@ Confirm the target account, cluster, namespace, and proposed change before appro
 
 Fields:
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `id` | yes | Stable rule identifier. |
-| `enabled` | no | Defaults to `true`. A disabled file is ignored. |
-| `decision` | yes | `allow`, `ask`, or `deny`. |
-| `actions` | yes | Non-empty action pattern list. |
-| `resources` | yes | Non-empty resource pattern list. |
-| `reason` | yes | Operator-facing reason. |
-| `priority` | no | Integer, default `0`; higher values sort first within the same source layer. |
+| Field       | Required | Meaning                                                                      |
+| ----------- | -------- | ---------------------------------------------------------------------------- |
+| `id`        | yes      | Stable rule identifier.                                                      |
+| `enabled`   | no       | Defaults to `true`. A disabled file is ignored.                              |
+| `decision`  | yes      | `allow`, `ask`, or `deny`.                                                   |
+| `actions`   | yes      | Non-empty action pattern list.                                               |
+| `resources` | yes      | Non-empty resource pattern list.                                             |
+| `reason`    | yes      | Operator-facing reason.                                                      |
+| `priority`  | no       | Integer, default `0`; higher values sort first within the same source layer. |
 
 An enabled invalid file is reported in guardrail status. It fails mutation actions closed with a review while preserving the source layer's priority; read-only actions remain available, and a valid matching deny in that layer remains a deny. A valid custom deny cannot weaken a catastrophic standard deny, and neither `once` nor `always` can bypass a deny.
 
@@ -235,22 +236,22 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 
 ### Sources
 
-| Provider | Source | Stability |
-| --- | --- | --- |
-| OpenRouter | Current-key spend, optional account credits and balance with the configured key, capped-key limit | stable provider API |
-| OpenAI API | Organization usage and cost endpoints for an explicitly marked admin credential | stable provider API |
-| Meta Model API | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views | stable provider API |
-| Claude subscription | Unified response headers from normal Claude Code requests | observed live state |
-| Claude subscription | OAuth usage snapshot for cold start and model-specific buckets | best-effort provider-internal API |
-| Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |
-| Codex / Spark | ChatGPT OAuth backend usage fallback | best-effort provider-internal API |
-| GitHub Copilot | Stored GitHub OAuth login: personal AI credits, enabled extra usage, finite Chat/Completions | best-effort provider-internal API |
-| GitHub Copilot org billing | Org-owner/billing-manager summaries for separate org-wide credits and billed spend | stable provider API |
-| Grok Build | Stored xAI OAuth login: shared weekly pool and pay-as-you-go cap | best-effort provider-internal API |
-| OpenCode Go | Stored Go key: Session, Weekly, Monthly account quotas | stable provider API |
-| Z.ai Coding Plan | Stored Z.ai key: Session, Weekly, Web Searches | best-effort provider-internal API |
-| Cursor | Stored Cursor key or OAuth account: Included, Auto, and API percent of the billing period used, with its reset time; plan name in the label | best-effort provider-internal API |
-| YCoding local Today spend | Retained priced provider requests for available Claude, OpenAI/Codex, Grok, OpenCode Go, and OpenCode Zen providers; separate from account quotas and credential profiles | stable local Session records |
+| Provider                   | Source                                                                                                                                                                    | Stability                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| OpenRouter                 | Current-key spend, optional account credits and balance with the configured key, capped-key limit                                                                         | stable provider API               |
+| OpenAI API                 | Organization usage and cost endpoints for an explicitly marked admin credential                                                                                           | stable provider API               |
+| Meta Model API             | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views                                                                   | stable provider API               |
+| Claude subscription        | Unified response headers from normal Claude Code requests                                                                                                                 | observed live state               |
+| Claude subscription        | OAuth usage snapshot for cold start and model-specific buckets                                                                                                            | best-effort provider-internal API |
+| Codex / Spark              | Configured Codex app-server `account/rateLimits/read`                                                                                                                     | official local client contract    |
+| Codex / Spark              | ChatGPT OAuth backend usage fallback                                                                                                                                      | best-effort provider-internal API |
+| GitHub Copilot             | Stored GitHub OAuth login: personal AI credits, enabled extra usage, finite Chat/Completions                                                                              | best-effort provider-internal API |
+| GitHub Copilot org billing | Org-owner/billing-manager summaries for separate org-wide credits and billed spend                                                                                        | stable provider API               |
+| Grok Build                 | Stored xAI OAuth login: shared weekly pool and pay-as-you-go cap                                                                                                          | best-effort provider-internal API |
+| OpenCode Go                | Stored Go key: Session, Weekly, Monthly account quotas                                                                                                                    | stable provider API               |
+| Z.ai Coding Plan           | Stored Z.ai key: Session, Weekly, Web Searches                                                                                                                            | best-effort provider-internal API |
+| Cursor                     | Stored Cursor key or OAuth account: Included, Auto, and API percent of the billing period used, with its reset time; plan name in the label                               | best-effort provider-internal API |
+| YCoding local Today spend  | Retained priced provider requests for available Claude, OpenAI/Codex, Grok, OpenCode Go, and OpenCode Zen providers; separate from account quotas and credential profiles | stable local Session records      |
 
 Provider results are cached by provider and credential identity. Credentials, account email addresses, key fragments, OAuth tokens, and provider response bodies are not returned through Protocol or rendered in the Usage screen.
 
@@ -265,9 +266,9 @@ The local Codex app-server path is optional and takes precedence over the native
       "command": "/usr/local/bin/codex",
       "args": ["app-server", "--stdio"],
       "cwd": "/workspace",
-      "timeout_ms": 5000
-    }
-  }
+      "timeout_ms": 5000,
+    },
+  },
 }
 ```
 

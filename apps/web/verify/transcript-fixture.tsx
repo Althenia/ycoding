@@ -4,6 +4,7 @@ import { create, encodeStrict, ConnectorNoticePageSchema, ResultSchema, TypedPay
 import { render } from "solid-js/web"
 import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
 import { TodoPanel } from "../src/remote/ui/todo-panel"
+import { accountedTask } from "../test/usage-fixture"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"
@@ -17,6 +18,7 @@ import {
   type RemoteMessageView,
   type SessionView,
 } from "../src/remote/projection"
+import { accountedTask } from "../test/usage-fixture"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/remote.css"
@@ -94,6 +96,31 @@ const bulkText = "日本語 🌍 complete binary transcript\n".repeat(4_000)
 Object.assign(window, { bulkText })
 const compactionMode = new URLSearchParams(location.search).get("compaction")
 const fileChangesMode = new URLSearchParams(location.search).get("file-changes")
+const costsMode = new URLSearchParams(location.search).has("costs")
+const costUnit = (inputID: string, partial: boolean) => {
+  const task = accountedTask("ses_a", 0.25, 20)
+  const cost = partial
+    ? { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" as const }
+    : task.total.cost
+  return {
+    anchor: { sessionID: "ses_a", inputID },
+    status: partial ? ("so-far" as const) : ("settled" as const),
+    attribution: partial ? ("partial" as const) : ("complete" as const),
+    history: "retained" as const,
+    total: { ...task.total, cost },
+    main: task.main,
+    children: partial ? { ...task.total, cost: { pricedRequests: 0, unpricedRequests: 1 } } : task.children,
+    helpers: partial
+      ? [{ ...task.total, source: "decision" as const, cost: { pricedRequests: 0, unpricedRequests: 1 } }]
+      : [],
+  }
+}
+const costMessages: readonly RemoteMessageView[] = [
+  { kind: "user", id: "msg_cost_known", text: "Known cost", state: "consumed", created: 1 },
+  { kind: "user", id: "msg_cost_partial", text: "Partial cost", state: "consumed", created: 2 },
+  { kind: "user", id: "msg_cost_unreported", text: "Unreported cost", state: "promoted", created: 3 },
+  { kind: "user", id: "msg_cost_pending", text: "Queued prompt", state: "pending", delivery: "queue", created: 4 },
+]
 const [fileChangeStatus, setFileChangeStatus] = createSignal<SessionView["status"]>(
   new URLSearchParams(location.search).get("status") === "running" ? "running" : "idle",
 )
@@ -509,7 +536,9 @@ const [messages, setMessages] = createSignal(
       ? syntheticMessages(synthetic === "compacted")
       : fileChangesMode
         ? fileChangeMessages
-        : toolOutput
+        : costsMode
+          ? costMessages
+          : toolOutput
           ? outputMessages
           : historyMode
             ? navigationMessages.slice(12)
@@ -715,7 +744,14 @@ const fixtureState = { ...store.state(), activeSessionID: "ses_a", activeDeviceI
 const fixtureStateSnapshot = () => ({
   ...fixtureState,
   history: history(),
-  view: fileChangesMode
+  view: costsMode
+    ? {
+        ...createSessionView("ses_a"),
+        messages: messages(),
+        promptCosts: [costUnit("msg_cost_known", false), costUnit("msg_cost_partial", true)],
+        promptCostState: "ready" as const,
+      }
+    : fileChangesMode
     ? { ...createSessionView("ses_a"), status: fileChangeStatus(), messages: messages(), capturedChanges }
     : compactionMode
       ? { ...createSessionView("ses_a"), compactionHistory: compactionHistory() }

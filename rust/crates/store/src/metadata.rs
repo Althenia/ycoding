@@ -1,6 +1,6 @@
 use crate::catalog::definition;
 use crate::{Catalog, Error};
-use redb::{Database, Durability, ReadableDatabase, TableHandle};
+use redb::{Database, Durability, ReadTransaction, ReadableDatabase, TableHandle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
@@ -62,7 +62,10 @@ pub(crate) fn bootstrap(
         write.commit().map_err(commit_error)?;
         return Ok(metadata);
     }
-    let read = db.begin_read()?;
+    inspect(&db.begin_read()?, catalog)
+}
+
+pub(crate) fn inspect(read: &ReadTransaction, catalog: Catalog) -> Result<Metadata, Error> {
     let names = read
         .list_tables()?
         .map(|table| table.name().to_owned())

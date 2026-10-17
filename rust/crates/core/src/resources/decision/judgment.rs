@@ -6,6 +6,7 @@ pub const BYTE_LIMIT: usize = 1_048_576;
 pub enum Kind {
     Predicate,
     Choice(Vec<JsonValue>),
+    Grade(Vec<JsonValue>),
     Score(usize),
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -46,7 +47,15 @@ impl Request {
                         Kind::Predicate
                     }
                     JsonValue::String(kind) if kind.as_str() == Some("choice") => {
-                        declared(question, &["type", "name", "instructions", "choices"])?;
+                        declared(
+                            question,
+                            &["type", "name", "instructions", "grade", "choices"],
+                        )?;
+                        let graded = match question.get(&"grade".into()) {
+                            None | Some(JsonValue::Bool(false)) => false,
+                            Some(JsonValue::Bool(true)) => true,
+                            Some(_) => return Err(Error::InvalidRequest),
+                        };
                         let JsonValue::Array(choices) = field(question, "choices")? else {
                             return Err(Error::InvalidRequest);
                         };
@@ -74,7 +83,11 @@ impl Request {
                         {
                             return Err(Error::InvalidRequest);
                         }
-                        Kind::Choice(values)
+                        if graded {
+                            Kind::Grade(values)
+                        } else {
+                            Kind::Choice(values)
+                        }
                     }
                     JsonValue::String(kind) if kind.as_str() == Some("score") => {
                         declared(question, &["type", "name", "instructions", "levels"])?;
@@ -156,10 +169,22 @@ impl Request {
         for answer in answers {
             let object = object(
                 answer,
-                &["name", "type", "answer", "choice", "score", "confidence"],
+                &[
+                    "name",
+                    "type",
+                    "answer",
+                    "choice",
+                    "score",
+                    "confidence",
+                    "grades",
+                ],
             )
             .map_err(|_| Error::InvalidOutput)?;
-            if object.iter().count() != 6 {
+            if object.iter().count() != 6 + usize::from(object.get(&"grades".into()).is_some())
+                || ["name", "type", "answer", "choice", "score", "confidence"]
+                    .iter()
+                    .any(|key| object.get(&(*key).into()).is_none())
+            {
                 return Err(Error::InvalidOutput);
             }
             let name = text(field(object, "name").map_err(|_| Error::InvalidOutput)?, 64)
@@ -168,25 +193,126 @@ impl Request {
                 return Err(Error::InvalidOutput);
             }
         }
-        self.questions.iter().map(|question| {
-            let value = named.get(&question.name).ok_or(Error::InvalidOutput)?;
-            let JsonValue::Object(answer) = value else {return Err(Error::InvalidOutput);};
-            let Some(JsonValue::Number(confidence)) = answer.get(&"confidence".into()) else {return Err(Error::InvalidOutput);};
-            if !confidence.is_finite() || !(0.0..=1.0).contains(confidence) {return Err(Error::InvalidOutput);}
-            let get = |key: &str| answer.get(&key.into()).ok_or(Error::InvalidOutput);
-            let valid = match get("type")? {
-                JsonValue::String(kind) if kind.as_str() == Some("refusal") => get("answer")? == &JsonValue::Null && get("choice")? == &JsonValue::Null && get("score")? == &JsonValue::Null && *confidence == 0.0,
-                JsonValue::String(kind) => match &question.kind {
-                    Kind::Predicate => kind.as_str() == Some("predicate") && matches!(get("answer")?, JsonValue::Bool(_)) && get("choice")? == &JsonValue::Null && get("score")? == &JsonValue::Null,
-                    Kind::Choice(choices) => kind.as_str() == Some("choice") && get("answer")? == &JsonValue::Null && get("score")? == &JsonValue::Null && choices.contains(get("choice")?),
-                    Kind::Score(levels) => kind.as_str() == Some("score") && get("answer")? == &JsonValue::Null && get("choice")? == &JsonValue::Null && matches!(get("score")?, JsonValue::Number(score) if score.is_finite() && *score >= 0.0 && score.fract() == 0.0 && *score < *levels as f64),
-                },
-                _ => false,
-            };
-            if !valid {return Err(Error::InvalidOutput);}
-            Ok(ObjectEncoder::new().field("name", get("name")?).field("type", get("type")?).field("answer", get("answer")?).field("choice", get("choice")?).field("score", get("score")?).field("confidence", get("confidence")?).finish())
-        }).collect()
+        self.questions
+            .iter()
+            .map(|question| {
+                let value = named.get(&question.name).ok_or(Error::InvalidOutput)?;
+                question.answer(value)
+            })
+            .collect()
     }
+}
+impl Question {
+    fn answer(&self, value: &JsonValue) -> Result<JsonValue, Error> {
+        let JsonValue::Object(answer) = value else {
+            return Err(Error::InvalidOutput);
+        };
+        let Some(JsonValue::Number(confidence)) = answer.get(&"confidence".into()) else {
+            return Err(Error::InvalidOutput);
+        };
+        if !confidence.is_finite() || !(0.0..=1.0).contains(confidence) {
+            return Err(Error::InvalidOutput);
+        }
+        let get = |key: &str| answer.get(&key.into()).ok_or(Error::InvalidOutput);
+        let null = |key: &str| get(key).map(|value| value == &JsonValue::Null);
+        let grades = answer.get(&"grades".into());
+        let mut canonical = None;
+        let valid = match get("type")? {
+            JsonValue::String(kind) if kind.as_str() == Some("refusal") => {
+                null("answer")?
+                    && null("choice")?
+                    && null("score")?
+                    && *confidence == 0.0
+                    && grades.is_none()
+            }
+            JsonValue::String(kind) => match &self.kind {
+                Kind::Predicate => {
+                    kind.as_str() == Some("predicate")
+                        && matches!(get("answer")?, JsonValue::Bool(_))
+                        && null("choice")?
+                        && null("score")?
+                        && grades.is_none()
+                }
+                Kind::Choice(choices) => {
+                    kind.as_str() == Some("choice")
+                        && null("answer")?
+                        && null("score")?
+                        && choices.contains(get("choice")?)
+                        && grades.is_none()
+                }
+                Kind::Grade(choices) => {
+                    canonical = grades.and_then(|grades| graded(grades, choices));
+                    kind.as_str() == Some("choice")
+                        && null("answer")?
+                        && null("choice")?
+                        && null("score")?
+                        && *confidence == 0.0
+                        && canonical.is_some()
+                }
+                Kind::Score(levels) => {
+                    kind.as_str() == Some("score")
+                        && null("answer")?
+                        && null("choice")?
+                        && matches!(get("score")?, JsonValue::Number(score) if score.is_finite() && *score >= 0.0 && score.fract() == 0.0 && *score < *levels as f64)
+                        && grades.is_none()
+                }
+            },
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::InvalidOutput);
+        }
+        Ok(ObjectEncoder::new()
+            .field("name", get("name")?)
+            .field("type", get("type")?)
+            .field("answer", get("answer")?)
+            .field("choice", get("choice")?)
+            .field("score", get("score")?)
+            .field("confidence", get("confidence")?)
+            .optional("grades", &canonical.map(JsonValue::Array))
+            .finish())
+    }
+}
+fn graded(value: &JsonValue, choices: &[JsonValue]) -> Option<Vec<JsonValue>> {
+    let JsonValue::Array(grades) = value else {
+        return None;
+    };
+    if grades.len() != choices.len() {
+        return None;
+    }
+    let mut seen = Vec::new();
+    grades
+        .iter()
+        .map(|grade| {
+            let grade = object(grade, &["choice", "confidence", "evidence"]).ok()?;
+            let choice = grade.get(&"choice".into())?;
+            let Some(JsonValue::Number(confidence)) = grade.get(&"confidence".into()) else {
+                return None;
+            };
+            let Some(JsonValue::String(evidence)) = grade.get(&"evidence".into()) else {
+                return None;
+            };
+            if !choices.contains(choice)
+                || seen.contains(choice)
+                || !confidence.is_finite()
+                || !(0.0..=1.0).contains(confidence)
+                || evidence.code_units().count() > 500
+                || evidence
+                    .code_units()
+                    .all(crate::process::guardrails::is_whitespace)
+            {
+                return None;
+            }
+            seen.push(choice.clone());
+            Some(
+                ObjectEncoder::new()
+                    .field("choice", choice)
+                    .field("confidence", &JsonValue::Number(*confidence))
+                    .field("evidence", evidence)
+                    .finish(),
+            )
+        })
+        .collect()
 }
 fn object<'a>(value: &'a JsonValue, fields: &[&str]) -> Result<&'a JsonObject, Error> {
     let JsonValue::Object(value) = value else {

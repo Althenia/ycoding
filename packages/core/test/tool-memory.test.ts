@@ -33,6 +33,7 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     }),
   })
   const guardrails = Layer.mock(SessionGuardrail.Service, {
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     assert: () => Effect.gen(function* () {
       if (state.guardDenied) return yield* new SessionGuardrail.DeclinedError({ requestID: Guardrail.RequestID.make("grq_memory_test") })
       state.reservations++

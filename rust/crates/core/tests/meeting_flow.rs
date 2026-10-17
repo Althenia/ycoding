@@ -209,7 +209,7 @@ async fn open_runtime(
             "analysis": { "incremental": false },
         }))
         .unwrap(),
-        create_session: Arc::new(|_| Box::pin(async { Ok("analysis-session".to_owned()) })),
+        create_session: Arc::new(|_, _| Box::pin(async { Ok("analysis-session".to_owned()) })),
         provider_factory: None,
         heartbeat_timeout: HEARTBEAT_TIMEOUT,
         generate,

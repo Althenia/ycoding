@@ -11,6 +11,7 @@ import { LocationProvider } from "../src/context/location"
 import { RouteProvider, useRoute } from "../src/context/route"
 import { ThemeProvider } from "../src/context/theme"
 import { Composer } from "../src/routes/session/composer"
+import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { createApi, createFetch, directory, json } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -92,12 +93,12 @@ test("loads older direct BTW chats, reopens one, and creates only one model-defe
               <ClientProvider api={createApi(calls.fetch)}>
                 <DataProvider>
                   <LocationProvider>
-                    <ToastProvider>
+                    <ToastProvider><DialogProvider>
                       <RouteProvider initialRoute={{ type: "session", sessionID: "ses_main" }}>
                         <RouteProbe />
                         <Composer sessionID="ses_main" open defaultTab="side-chats" />
                       </RouteProvider>
-                    </ToastProvider>
+                    </DialogProvider></ToastProvider>
                   </LocationProvider>
                 </DataProvider>
               </ClientProvider>
@@ -142,11 +143,11 @@ test("renders a visible list error instead of an empty-side-chat message", async
               <ClientProvider api={createApi(calls.fetch)}>
                 <DataProvider>
                   <LocationProvider>
-                    <ToastProvider>
+                    <ToastProvider><DialogProvider>
                       <RouteProvider initialRoute={{ type: "session", sessionID: "ses_main" }}>
                         <Composer sessionID="ses_main" open defaultTab="side-chats" />
                       </RouteProvider>
-                    </ToastProvider>
+                    </DialogProvider></ToastProvider>
                   </LocationProvider>
                 </DataProvider>
               </ClientProvider>

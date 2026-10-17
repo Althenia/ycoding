@@ -14,11 +14,13 @@ import { LocationProvider, useLocation } from "../../src/context/location"
 import { RouteProvider } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { ToastProvider } from "../../src/ui/toast"
+import { DialogProvider } from "../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
+import { localAutonomyView } from "../../src/util/session-autonomy"
 
 const sessionID = "ses_0085fc701x"
 const directory = `${process.env.HOME}/Workspace/Personal/YCoding`
@@ -84,18 +86,28 @@ test("captures populated subagent picker states at reference terminal dimensions
       // Tabs retain the requested order, and each active task owns one row: the status column, the
       // agent, the description and the metadata share it, with the metadata flush against the
       // composer's right inset so no column can overlap or push another off the row.
-      const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 45
-      expectAt(lines, tabs, 3, "Subagents")
+      expect(lines.join("\n")).toContain("c inclusive task cost details")
+      const tabs = lines.findIndex((line) => line.indexOf("Subagents") === 3 && line.includes("Shell") && line.includes("Side chats"))
+      expect(tabs).toBeGreaterThan(-1)
       expectAt(lines, tabs, 14, "2")
       const tabLine = lines[tabs] ?? ""
       expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
       expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
       expect(tabLine).not.toContain("Idle")
-      const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13] : [50, 52]
+      // The picker body starts three lines below the tab strip plus its leading blank rows: one at 24
+      // terminal rows or fewer, two otherwise.
+      const leading = viewport.height <= 24 ? 1 : 2
+      const first = tabs + 3 + leading
+      const rows = [first, first + 2]
       expectAt(lines, rows[0], 3, "? awaiting")
       expectAt(lines, rows[0], 19, "test-triage  · Tria")
       expectAt(lines, rows[1], 3, "running")
       expectAt(lines, rows[1], 19, "docs-sync  · Sync ")
+      // The inclusive-cost hint sits below the scrollable body and above the picker's action hints.
+      const costHint = lines.findIndex((line) => line.includes("c inclusive task cost details"))
+      expect(costHint).toBeGreaterThan(rows[1]!)
+      const actionHints = lines.findIndex((line, index) => index > costHint && line.includes("Enter attach"))
+      if (actionHints >= 0) expect(actionHints).toBeGreaterThan(costHint)
       for (const row of rows) expect(lines[row]?.trimEnd().length).toBe(viewport.width - 5)
       expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5")
       expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5")
@@ -108,7 +120,7 @@ test("captures populated subagent picker states at reference terminal dimensions
         expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
         expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
         // Only the awaiting task adds a second row, and it carries the question, never metadata.
-        expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
+        expectAt(lines, rows[0] + 1, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
         expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length + 2)
         expectAt(lines, 64, 3, "Enter attach")
         expectAt(lines, 64, 18, "↑↓ move")
@@ -194,7 +206,7 @@ async function boot(viewport: { width: number; height: number }) {
                   <SyncLocation />
                   <RouteProvider initialRoute={{ type: "session", sessionID }}>
                     <Keymap.Provider>
-                      <ToastProvider>
+                      <ToastProvider><DialogProvider>
                         <box width={viewport.width} height={viewport.height} flexDirection="column">
                           <Header
                             path="~/Workspace/Personal/YCoding"
@@ -206,9 +218,9 @@ async function boot(viewport: { width: number; height: number }) {
                           />
                           <box flexGrow={1} />
                           <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
-                          <Footer branch="main" sessionID={sessionID} autonomy={{ mode: "normal", yolo: false }} />
+                          <Footer branch="main" sessionID={sessionID} autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
                         </box>
-                      </ToastProvider>
+                      </DialogProvider></ToastProvider>
                     </Keymap.Provider>
                   </RouteProvider>
                 </LocationProvider>

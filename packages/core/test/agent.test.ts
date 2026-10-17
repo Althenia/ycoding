@@ -270,7 +270,9 @@ describe("Agent", () => {
       )
 
       const shared = [
-        "Keep the todo list up to date.",
+        "Keep a todo list for work with three or more steps, and keep it true to the work: mark an item in_progress when you start it, completed as soon as its check passes, and cancelled when it is dropped or superseded, and add new work as it appears. Every update resends the whole list with content, status, and priority for each item; a rejected update changes nothing, so fix and resend it. Before any response without tool calls, update the list so every item matches its actual state.",
+        "Deliver the outcome the user asked for within the requested scope; do not perform unrequested work or add unrequested features. Treat stated causes, paths, and prescribed fixes as hypotheses: verify them by reproducing the reported symptom and confirming a fix removes it, and when evidence shows a different cause, fix that cause within scope and say so. Do not state details without concrete evidence.",
+        "In replies and in every text you write, including documentation, instruction files, code comments, and commit messages, do not take the user's words literally, copy them into the text, or mention the request or its style instructions; write the intended meaning from verified evidence in the reader's own terms and conventions. Write directives and facts; omit explanations, rationale, and background the reader did not ask for.",
         "Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.",
         "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.",
         "Never make atomic commits. Commit only when the task, one of its phases, or a complete piece of functionality is finished and its checks pass, as one commit that includes its tests, docs, and release-note entries. Never commit partial steps, follow-up fixes, or notes-only changes separately.",
@@ -278,6 +280,8 @@ describe("Agent", () => {
         "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.",
         "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
         "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
+        "Before overwriting or deleting existing data, check whether version control can restore it; treat untracked or ignored data as unrecoverable.",
+        "Every report of changed work names each changed file by its repository-relative path; describing a change does not replace naming its file.",
         "Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope; run full suites and every affected required check at the integration or merge checkpoint.",
       ]
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
@@ -312,20 +316,45 @@ describe("Agent", () => {
       expect(god.system).toContain("Explicit permission denies remain denied.")
       expect(god.system).toContain("1 auto-approves ask permissions and ordinary guardrail reviews")
       expect(god.system).toContain("Hard reviews always require a human decision.")
-      expect(god.system).toContain("Orchestrate; do not implement.")
+      expect(god.system).toContain("Implement or delegate as your role directs.")
       expect(god.system).toContain("launch every ready independent task in parallel")
       expect(god.system).toContain("score size, difficulty, complexity, and risk against a rubric")
-      expect(god.system).toContain("never leave the variant blank")
+      expect(god.system).toContain(
+        "never guess an identifier or variant, and without that knowledge omit the model so the child runs on this session's model",
+      )
+      for (const id of ["GSD", "architech", "god", "yangi"]) {
+        const primary = yield* agent.get(Agent.ID.make(id))
+        expect(primary?.system).toContain("Honor explicit user selections of subagent profile, provider, and model.")
+        expect(primary?.system).toContain("Otherwise choose among configured available models for the task")
+        expect(primary?.system).toContain("the child provider may differ from the parent's")
+        expect(primary?.system).toContain("Set a model only with an exact provider, model, and advertised variant known to be available")
+        expect(primary?.system).toContain("each changed file path")
+        expect(primary?.system).toContain(
+          "Keep working while subagents and background shells run. A response without tool calls stops you until a notification or the user arrives, so never send one only to wait or to report progress while any task is ready.",
+        )
+        expect(primary?.system).toContain("continue at once with every task that neither consumes a running task's output nor edits its files")
+        expect(primary?.system).toContain("Start a long command, such as a build, test suite, or eval, in the background whenever other work remains.")
+        expect(primary?.system).toContain("Stop only when every unfinished task waits on a running task or on the user, and name that dependency for each.")
+        expect(primary?.system).not.toContain("Orchestrate; do not implement.")
+        expect(primary?.system).toContain("Preserve permission ceilings")
+        expect(primary?.system).toContain("never silently substitute a different profile or provider")
+        expect(primary?.system).not.toContain("choose a model from the provider of this session's active model")
+      }
       expect(god.system).toContain("Use the decision tool")
-      expect(god.system).toContain("Default to parallel execution to maximize development speed.")
+      expect(god.system).toContain("Issue independent tool calls together in one step. Serialize only for a real dependency")
+      expect(god.system).toContain("A queued or running heavy check delays only other heavy checks, never code-writing or review work.")
       expect(god.system).toContain(
         "merge them through one dedicated integration lane that resolves conflicts and runs the full checks",
       )
       expect(gsd.system).not.toContain("prove RED")
       expect(zeus.system).toContain("Issue independent tool calls together in one step")
+      expect(zeus.system).toContain("A rule you choose to settle conflicting data is a decision for the parent, not evidence.")
       expect(god.system).toContain("After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`")
       expect(god.system).not.toContain("Use durable subagents only for isolated work.")
-      expect(zeus.system).not.toContain("Orchestrate; do not implement.")
+      expect(zeus.system).not.toContain("Implement or delegate as your role directs.")
+      expect(zeus.system).toContain("Never take a destructive or irreversible action")
+      expect(zeus.system).toContain("each changed file path")
+      expect(zeus.system).not.toContain("name that dependency for each task you hold back")
       expect(zeus.system).toContain("You are a durable child Session")
       expect(zeus.system).toContain("Do not spawn child agents")
       expect(title.system).toContain("Output exactly one natural thread title")
@@ -341,6 +370,9 @@ describe("Agent", () => {
       expect(goal.system).toContain("For a user-proxy steer, preserve the active goal exactly.")
       expect(goal.system).toContain("Never grant or imply human approval")
       expect(goal.system).toContain("Output exactly one concise imperative sentence")
+      expect(goal.system).toContain(
+        "Write plain text: no Markdown, including backticks around names, paths, or commands, and no preamble, explanation, or quotation marks.",
+      )
       expect(summary.system).toContain("two or three first-person sentences")
       expect(summary.system).toContain("preserve it verbatim")
       expect(btw.system).toContain("read-only advisor")

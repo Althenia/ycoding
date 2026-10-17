@@ -119,7 +119,23 @@ test("a replacement connection drops the old prediction and ignores late old-tra
               ? { status: "ok", value: { subscription_id: `sub-${deviceID}` } }
               : {
                   status: "ok",
-                  value: { data: operation === "session.autonomy.get" ? { mode: "normal", yolo: 0 } : [] },
+                  value: {
+                    data:
+                      operation === "session.autonomy.get"
+                        ? {
+                            mode: "normal",
+                            yolo: 0,
+                            effective: {
+                              yolo: 0,
+                              asleep: false,
+                              guardrailsEnabled: true,
+                              ordinaryReviewsAuto: false,
+                              modelReviews: false,
+                              hardModelReviews: false,
+                            },
+                          }
+                        : [],
+                  },
                 },
       }
     },
@@ -303,7 +319,23 @@ function predictionStore(
             },
           }
         if (operation === "session.autonomy.get")
-          return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
+          return {
+            status: "ok" as const,
+            value: {
+              data: {
+                mode: "normal",
+                yolo: 0,
+                effective: {
+                  yolo: 0,
+                  asleep: false,
+                  guardrailsEnabled: true,
+                  ordinaryReviewsAuto: false,
+                  modelReviews: false,
+                  hardModelReviews: false,
+                },
+              },
+            },
+          }
         return { status: "ok" as const, value: { data: [] } }
       },
     }),

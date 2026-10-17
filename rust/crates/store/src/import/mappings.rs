@@ -1,10 +1,12 @@
 use super::{DatabaseKind, Error, Progress, TableSummary, checkpoint, digest, read};
 use crate::{
-    IndexOrder, IndexQuery, Snapshot, Store, TableSpec, Write, artifacts, project, resources,
-    session,
+    IndexOrder, IndexQuery, Snapshot, Store, TableSpec, Write, artifacts, model_incident, project,
+    resources, session,
 };
 use rusqlite::Connection;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Bound, ControlFlow};
+use ycoding_schema::LosslessString;
 
 type ProgressFn<'a> = &'a mut dyn FnMut(Progress) -> ControlFlow<()>;
 pub(super) struct Mapping {
@@ -38,6 +40,82 @@ macro_rules! mapping {
     };
 }
 
+pub(super) const ANALYTICS_MIGRATION: &str = "20261015122915_usage-analytics";
+pub(super) const FACTS: &str = "usage_analytics_request";
+pub(super) const BACKFILL: &str = "usage_analytics_request_backfill";
+
+type FactTable = resources::UsageAnalyticsRequestTable;
+
+pub(super) const INCIDENT_MIGRATION: &str = "20261016080907_model-incident";
+pub(super) const INCIDENT_TABLES: [&str; 2] = ["model_incident", "model_guidance_clear"];
+
+macro_rules! incident_mapping {
+    ($table:ident, $record:ident, $name:literal, {$($field:ident),*}) => {
+        Mapping {
+            name: $name,
+            columns: &[$(stringify!($field)),*],
+            reset: reset::<model_incident::$table>,
+            load: |db, store, progress| {
+                if incidents_migrated(db)? {
+                    return load::<model_incident::$table>(db, store, progress, |row| Ok(model_incident::$record { $($field: row.field(stringify!($field))?),* }));
+                }
+                load_with::<model_incident::$table>(store, |_| Ok(absent($name)))
+            },
+            validate: |db, store, progress| {
+                if incidents_migrated(db)? {
+                    return validate::<model_incident::$table>(db, store, progress, |row| Ok(model_incident::$record { $($field: row.field(stringify!($field))?),* }), model_incident::$table::put);
+                }
+                Ok(())
+            },
+            verify: |db, snapshot, expected, progress| {
+                if incidents_migrated(db)? {
+                    return verify::<model_incident::$table>(db, snapshot, expected, progress, |row| Ok(model_incident::$record { $($field: row.field(stringify!($field))?),* }));
+                }
+                verify_with::<model_incident::$table>(snapshot, expected, |_| Ok(absent($name)))
+            },
+        }
+    };
+}
+
+fn absent(name: &str) -> TableSummary {
+    TableSummary {
+        name: name.to_owned(),
+        rows: 0,
+        digest: digest::Digest::new().finish(),
+    }
+}
+
+const FACTS_MAPPING: Mapping = Mapping {
+    name: FACTS,
+    columns: &[
+        "id",
+        "session_id",
+        "project_id",
+        "directory",
+        "workspace_id",
+        "session_updated",
+        "agent",
+        "source",
+        "model",
+        "usage_anchor",
+        "task_path",
+        "request",
+        "attempts",
+        "continuation",
+        "invalidation",
+        "prompt_cache_key",
+        "cache_read_reported",
+        "tokens",
+        "cost",
+        "timing",
+        "time_created",
+    ],
+    reset: reset::<FactTable>,
+    load: load_facts,
+    validate: validate_facts,
+    verify: verify_facts,
+};
+
 const BOOTSTRAP: &[Mapping] = &[
     mapping!(artifacts, MigrationTable, Migration, "migration", {id, time_completed}),
     mapping!(artifacts, DatabaseFormatTable, DatabaseFormat, "database_format", {id, time_created}),
@@ -47,7 +125,7 @@ const CORE: &[Mapping] = &[
     mapping!(project, WorkspaceTable, Workspace, "workspace", {id, type_, name, branch, directory, extra, project_id, time_used}),
     mapping!(project, DirectoryTable, Directory, "project_directory", {project_id, directory, type_, strategy, time_created}),
     mapping!(project, PermissionTable, Permission, "permission", {id, project_id, action, resource, time_created, time_updated}),
-    mapping!(session, SessionTable, Session, "session", {id, project_id, workspace_id, parent_id, fork_session_id, fork_message_id, fork_seq, directory, path, title, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, revert, permission, autonomy, autonomy_revision, orchestration_revision, agent, model, profile_binding, daybreak, time_created, time_updated, time_archived, time_active, time_pinned, time_suspended}),
+    mapping!(session, SessionTable, Session, "session", {id, project_id, workspace_id, parent_id, fork_session_id, fork_message_id, fork_seq, directory, path, title, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, revert, permission, autonomy, autonomy_revision, orchestration_revision, agent, model, profile_binding, daybreak, time_created, time_updated, time_archived, time_active, time_pinned, time_suspended, usage_pruned_through}),
     mapping!(session, SequenceTable, Sequence, "event_sequence", {aggregate_id, seq, owner_id}),
     mapping!(session, EventTable, Event, "event", {id, aggregate_id, seq, created, type_, data}),
     mapping!(session, MessageTable, Message, "session_message", {id, session_id, type_, seq, time_created, time_updated, data}),
@@ -55,13 +133,13 @@ const CORE: &[Mapping] = &[
     mapping!(session, TodoTable, Todo, "session_todo", {session_id, content, status, priority, position, time_created, time_updated}),
     mapping!(session, TodoStateTable, TodoState, "session_todo_state", {session_id, revision, digest, time_updated}),
     mapping!(session, FileChangeTable, FileChange, "session_file_change", {session_id, path, patch, additions, deletions, latest_seq}),
-    mapping!(session, TaskTable, Task, "session_task", {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, owner_pid, owner_started, revision, time_created, time_updated}),
+    mapping!(session, TaskTable, Task, "session_task", {session_id, parent_id, parent_assistant_message_id, tool_call_id, input_id, description, agent, model, prompt_digest, background, delivery, state, progress, progress_time, question_id, question, question_data, question_time, attempt_started, owner_pid, owner_started, revision, time_created, time_updated, usage_anchor}),
     mapping!(session, NotificationTable, Notification, "session_task_notification", {id, task_session_id, parent_id, type_, revision, excerpt, delivered, time_created, time_delivered}),
     mapping!(session, ManifestTable, Manifest, "compaction_manifest_blob", {digest, schema_version, content, input_tokens, retained_tokens, time_created}),
     mapping!(session, RevisionTable, Revision, "session_context_revision", {session_id, revision, parent_revision, manifest_digest, covered_through_message_id, covered_through_seq, activation_event_id, activation_sequence, time_created}),
     mapping!(session, ContextStateTable, ContextState, "session_context_state", {session_id, status, revision, manifest_digest, covered_through_message_id, covered_through_seq, activated_event_id, time_activated, error_code}),
     mapping!(session, ExclusionTable, Exclusion, "session_context_exclusion", {session_id, context_revision, target_key, target_kind, target_selector, dependency_group, reason, manifest_digest}),
-    mapping!(session, JobTable, Job, "session_compaction_job", {id, session_id, legacy_input_id, trigger, requested_through_message_id, requested_through_seq, base_context_revision, target_max_input_tokens, config_digest, status, lease_owner, lease_expires_at, attempts, manifest_digest, error_code, error_message, time_created, time_started, time_ended}),
+    mapping!(session, JobTable, Job, "session_compaction_job", {id, session_id, legacy_input_id, trigger, requested_through_message_id, requested_through_seq, base_context_revision, target_max_input_tokens, config_digest, status, lease_owner, lease_expires_at, attempts, manifest_digest, error_code, error_message, time_created, time_started, time_ended, usage_anchor}),
     mapping!(session, InstructionEntryTable, InstructionEntry, "instruction_entry", {session_id, key, value, removed, time_created, time_updated}),
     mapping!(session, InstructionBlobTable, InstructionBlob, "instruction_blob", {hash, value}),
     mapping!(session, InstructionStateTable, InstructionState, "instruction_state", {session_id, epoch_start, through_seq, initial_values, current_values}),
@@ -89,9 +167,12 @@ const CORE: &[Mapping] = &[
     mapping!(resources, ContinuationTable, Continuation, "session_provider_continuation", {session_id, response_id, represented_through_message_id, represented_message_count, context_revision, continuation_generation, provider, route_id, model_id, variant, connection_identity_digest, prompt_cache_key, instructions_digest, tools_digest, options_digest, volatile_context_digest, continuation_fingerprint, time_updated}),
     mapping!(resources, StateBlobTable, StateBlob, "session_provider_state_blob", {digest, provider, model_id, item_type, content, time_created}),
     mapping!(resources, StateLinkTable, StateLink, "session_provider_state_link", {session_id, message_id, part_ordinal, part_kind, provider, model_id, blob_digest, context_revision, time_created}),
-    mapping!(resources, RequestTable, Request, "session_provider_request", {id, session_id, input_id, assistant_message_id, connection_identity_digest, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest, request, attempts, invalidation, continuation, cache_read_reported, timing, cost, tokens, time_created}),
+    mapping!(resources, RequestTable, Request, "session_provider_request", {id, session_id, input_id, assistant_message_id, connection_identity_digest, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest, request, attempts, invalidation, continuation, cache_read_reported, timing, cost, tokens, time_created, usage_anchor}),
+    FACTS_MAPPING,
     mapping!(resources, UsageTable, Usage, "session_usage", {session_id, model_key, model, logical, physical, helpers, continued, fallback, cost, input, output, reasoning, cache_read, cache_write}),
     mapping!(resources, LatencyTable, Latency, "web_latency", {id, received_at, sample}),
+    incident_mapping!(IncidentTable, Incident, "model_incident", {id, time_created, kind, provider_id, model_id, variant, profile, agent, project_id, session_id, request_id, category, rule_ids, target, decided_by}),
+    incident_mapping!(GuidanceClearTable, GuidanceClear, "model_guidance_clear", {provider_id, model_id, cleared_at}),
 ];
 
 pub(super) fn tables(kind: DatabaseKind) -> &'static [Mapping] {
@@ -121,11 +202,42 @@ fn row_error(table: &'static str, row: u64, error: crate::Error) -> Error {
 }
 
 pub(super) fn task_owner_migrated(db: &Connection) -> Result<bool, Error> {
+    migrated(db, "20261014011041_task-owner")
+}
+
+pub(super) fn analytics_migrated(db: &Connection) -> Result<bool, Error> {
+    migrated(db, ANALYTICS_MIGRATION)
+}
+
+pub(super) fn incidents_migrated(db: &Connection) -> Result<bool, Error> {
+    migrated(db, INCIDENT_MIGRATION)
+}
+
+fn migrated(db: &Connection, id: &str) -> Result<bool, Error> {
     Ok(db.query_row(
         "SELECT EXISTS(SELECT 1 FROM migration WHERE id = ?1)",
-        ["20261014011041_task-owner"],
+        [id],
         |row| row.get(0),
     )?)
+}
+
+pub(super) fn missing_columns(
+    db: &Connection,
+    table: &str,
+) -> Result<&'static [&'static str], Error> {
+    Ok(match table {
+        "session_task" => match (task_owner_migrated(db)?, analytics_migrated(db)?) {
+            (true, true) => &[],
+            (true, false) => &["usage_anchor"],
+            (false, true) => &["owner_pid", "owner_started"],
+            (false, false) => &["owner_pid", "owner_started", "usage_anchor"],
+        },
+        "session_compaction_job" | "session_provider_request" if !analytics_migrated(db)? => {
+            &["usage_anchor"]
+        }
+        "session" if !analytics_migrated(db)? => &["usage_pruned_through"],
+        _ => &[],
+    })
 }
 
 fn walk<T: TableSpec>(
@@ -134,11 +246,15 @@ fn walk<T: TableSpec>(
     decode: fn(&read::Row<'_, '_>) -> Result<T::Record, Error>,
     mut consume: impl FnMut(T::Record, u64) -> Result<(), Error>,
 ) -> Result<TableSummary, Error> {
-    let columns = if T::NAME == "session_task" && !task_owner_migrated(db)? {
-        "*, NULL AS owner_pid, NULL AS owner_started"
-    } else {
-        "*"
-    };
+    let columns = ["*".to_owned()]
+        .into_iter()
+        .chain(
+            missing_columns(db, T::NAME)?
+                .iter()
+                .map(|column| format!("NULL AS {column}")),
+        )
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut query = db.prepare(&format!(
         "SELECT rowid AS _import_rowid,{columns} FROM {} ORDER BY rowid",
         T::NAME
@@ -196,11 +312,23 @@ where
     Ok(())
 }
 
+type Consume<'a, T> = &'a mut dyn FnMut(<T as TableSpec>::Record, u64) -> Result<(), Error>;
+
 pub(super) fn load<T: TableSpec>(
     db: &Connection,
     store: &Store,
     progress: ProgressFn<'_>,
     decode: fn(&read::Row<'_, '_>) -> Result<T::Record, Error>,
+) -> Result<TableSummary, Error>
+where
+    T::Record: Send + 'static,
+{
+    load_with::<T>(store, |consume| walk::<T>(db, progress, decode, consume))
+}
+
+fn load_with<T: TableSpec>(
+    store: &Store,
+    walker: impl FnOnce(Consume<'_, T>) -> Result<TableSummary, Error>,
 ) -> Result<TableSummary, Error>
 where
     T::Record: Send + 'static,
@@ -215,7 +343,7 @@ where
         }
         tx.put::<T>(record)
     };
-    let summary = walk::<T>(db, progress, decode, |record, row| {
+    let summary = walker(&mut |record, row| {
         batch.push((record, row));
         if batch.len() == 128 {
             write::<T>(store, std::mem::take(&mut batch), put)?;
@@ -255,8 +383,21 @@ pub(super) fn validate<T: TableSpec>(
 where
     T::Record: Send + 'static,
 {
+    validate_with::<T>(store, put, |consume| {
+        walk::<T>(db, progress, decode, consume).map(|_| ())
+    })
+}
+
+fn validate_with<T: TableSpec>(
+    store: &Store,
+    put: fn(&mut Write<'_>, &T::Record) -> Result<(), crate::Error>,
+    walker: impl FnOnce(Consume<'_, T>) -> Result<(), Error>,
+) -> Result<(), Error>
+where
+    T::Record: Send + 'static,
+{
     let mut batch = Vec::with_capacity(128);
-    walk::<T>(db, progress, decode, |record, row| {
+    walker(&mut |record, row| {
         batch.push((record, row));
         if batch.len() == 128 {
             write::<T>(store, std::mem::take(&mut batch), put)?;
@@ -276,9 +417,19 @@ pub(super) fn verify<T: TableSpec>(
     progress: ProgressFn<'_>,
     decode: fn(&read::Row<'_, '_>) -> Result<T::Record, Error>,
 ) -> Result<(), Error> {
+    verify_with::<T>(snapshot, expected, |consume| {
+        walk::<T>(db, progress, decode, consume)
+    })
+}
+
+fn verify_with<T: TableSpec>(
+    snapshot: &Snapshot,
+    expected: &TableSummary,
+    walker: impl FnOnce(Consume<'_, T>) -> Result<TableSummary, Error>,
+) -> Result<(), Error> {
     let mut candidate_digest = digest::Digest::new();
     let mut indexes = vec![0i64; T::INDEXES.len()];
-    let source = walk::<T>(db, progress, decode, |record, row| {
+    let source = walker(&mut |record, row| {
         let key = T::primary_key(&record);
         let candidate = snapshot.get::<T>(&key)?.ok_or(Error::Verification {
             table: T::NAME,
@@ -350,4 +501,170 @@ pub(super) fn verify<T: TableSpec>(
         }
     }
     Ok(())
+}
+
+fn decode_fact(row: &read::Row<'_, '_>) -> Result<resources::UsageAnalyticsRequest, Error> {
+    Ok(resources::UsageAnalyticsRequest {
+        id: row.field("id")?,
+        session_id: row.field("session_id")?,
+        project_id: row.field("project_id")?,
+        directory: row.field("directory")?,
+        workspace_id: row.field("workspace_id")?,
+        session_updated: row.field("session_updated")?,
+        agent: row.field("agent")?,
+        source: row.field("source")?,
+        model: row.field("model")?,
+        usage_anchor: row.field("usage_anchor")?,
+        task_path: row.field("task_path")?,
+        request: row.field("request")?,
+        attempts: row.field("attempts")?,
+        continuation: row.field("continuation")?,
+        invalidation: row.field("invalidation")?,
+        prompt_cache_key: row.field("prompt_cache_key")?,
+        cache_read_reported: row.field("cache_read_reported")?,
+        tokens: row.field("tokens")?,
+        cost: row.field("cost")?,
+        timing: row.field("timing")?,
+        time_created: row.field("time_created")?,
+    })
+}
+
+fn load_facts(
+    db: &Connection,
+    store: &Store,
+    progress: ProgressFn<'_>,
+) -> Result<TableSummary, Error> {
+    if analytics_migrated(db)? {
+        return load::<FactTable>(db, store, progress, decode_fact);
+    }
+    load_with::<FactTable>(store, |consume| backfill(db, progress, consume))
+}
+
+fn validate_facts(db: &Connection, store: &Store, progress: ProgressFn<'_>) -> Result<(), Error> {
+    if analytics_migrated(db)? {
+        return validate::<FactTable>(db, store, progress, decode_fact, FactTable::put);
+    }
+    validate_with::<FactTable>(store, FactTable::put, |consume| {
+        backfill(db, progress, consume).map(|_| ())
+    })
+}
+
+fn verify_facts(
+    db: &Connection,
+    snapshot: &Snapshot,
+    expected: &TableSummary,
+    progress: ProgressFn<'_>,
+) -> Result<(), Error> {
+    if analytics_migrated(db)? {
+        return verify::<FactTable>(db, snapshot, expected, progress, decode_fact);
+    }
+    verify_with::<FactTable>(snapshot, expected, |consume| {
+        backfill(db, progress, consume)
+    })
+}
+
+const BACKFILL_QUERY: &str = "SELECT r.id AS id, r.session_id AS session_id, s.project_id AS project_id,
+    s.directory AS directory, s.workspace_id AS workspace_id, s.time_updated AS session_updated,
+    r.agent AS agent, r.source AS source, r.model AS model, r.request AS request,
+    r.attempts AS attempts, r.continuation AS continuation, r.invalidation AS invalidation,
+    substr(r.prompt_cache_key, 1, 8) AS prompt_cache_key, r.cache_read_reported AS cache_read_reported,
+    r.tokens AS tokens, r.cost AS cost, r.timing AS timing, r.time_created AS time_created
+    FROM session_provider_request r JOIN session s ON s.id = r.session_id
+    ORDER BY r.session_id, r.request";
+
+fn backfill(
+    db: &Connection,
+    progress: ProgressFn<'_>,
+    consume: Consume<'_, FactTable>,
+) -> Result<TableSummary, Error> {
+    let parents = db
+        .prepare("SELECT id, parent_id FROM session")?
+        .query_map([], |row| {
+            Ok((
+                LosslessString::from(row.get::<_, String>(0)?),
+                row.get::<_, Option<String>>(1)?.map(LosslessString::from),
+            ))
+        })?
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let tasks = db
+        .prepare("SELECT session_id FROM session_task")?
+        .query_map([], |row| row.get::<_, String>(0).map(LosslessString::from))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut query = db.prepare(BACKFILL_QUERY)?;
+    let mut rows = query.query([])?;
+    let mut count = 0u64;
+    let mut digest = digest::Digest::new();
+    while let Some(row) = rows.next()? {
+        count += 1;
+        let row = read::Row {
+            value: row,
+            table: BACKFILL,
+            number: count,
+        };
+        let session_id: LosslessString = row.field("session_id")?;
+        let task_path = task_path(&session_id, &parents, &tasks)?;
+        let record = resources::UsageAnalyticsRequest {
+            id: row.field("id")?,
+            project_id: row.field("project_id")?,
+            directory: row.field("directory")?,
+            workspace_id: row.field("workspace_id")?,
+            session_updated: row.field("session_updated")?,
+            agent: row.field("agent")?,
+            source: row.field("source")?,
+            model: row.field("model")?,
+            usage_anchor: None,
+            task_path: session::Document::from_domain(&task_path)
+                .map_err(|error| row_error(BACKFILL, count, error))?,
+            request: row.field("request")?,
+            attempts: row.field("attempts")?,
+            continuation: row.field("continuation")?,
+            invalidation: row.field("invalidation")?,
+            prompt_cache_key: row.field("prompt_cache_key")?,
+            cache_read_reported: row.field("cache_read_reported")?,
+            tokens: row.field("tokens")?,
+            cost: row.field("cost")?,
+            timing: row.field("timing")?,
+            time_created: row.field("time_created")?,
+            session_id,
+        };
+        digest.record(
+            &FactTable::primary_key(&record),
+            &FactTable::encode(&record).map_err(|error| row_error(BACKFILL, count, error))?,
+        );
+        consume(record, count)?;
+        if count.is_multiple_of(128) {
+            checkpoint(
+                progress,
+                Progress::Rows {
+                    table: BACKFILL,
+                    rows: count,
+                },
+            )?;
+        }
+    }
+    Ok(TableSummary {
+        name: BACKFILL.to_owned(),
+        rows: i64::try_from(count).map_err(|_| Error::Source("row count overflow"))?,
+        digest: digest.finish(),
+    })
+}
+
+fn task_path(
+    session: &LosslessString,
+    parents: &BTreeMap<LosslessString, Option<LosslessString>>,
+    tasks: &BTreeSet<LosslessString>,
+) -> Result<Vec<LosslessString>, Error> {
+    let mut path = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut current = Some(session.clone());
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return Err(Error::Source("Session ancestry contains a cycle"));
+        }
+        if tasks.contains(&id) {
+            path.push(id.clone());
+        }
+        current = parents.get(&id).cloned().flatten();
+    }
+    Ok(path)
 }

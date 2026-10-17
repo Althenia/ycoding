@@ -34,6 +34,55 @@ afterAll(async () => {
 })
 
 describe("transcript rendering", () => {
+  test("shows one cost block per admitted prompt for known, partial and unreported costs and none before admission", async () => {
+    const page = await browser!.openPage()
+    try {
+      for (const theme of ["light", "dark"] as const)
+        for (const [width, height] of [
+          [390, 844],
+          [1440, 900],
+        ]) {
+          await page.setViewport(width!, height!)
+          await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?costs&theme=${theme}`)
+          for (
+            let i = 0;
+            i < 40 &&
+            !(await page.evaluate(`document.querySelector('[data-message-id="msg_cost_known"] .usage-unit-cost')`));
+            i++
+          )
+            await Bun.sleep(50)
+          const read = (id: string) =>
+            page.evaluate<{ readonly blocks: number; readonly text: string; readonly partial: boolean }>(
+              `(() => { const row = document.querySelector('[data-message-id="${id}"]'); const blocks = [...row.querySelectorAll('.usage-unit-cost:not(.usage-unit-cost__details)')]; return { blocks: blocks.length, text: blocks.map((block) => block.querySelector('strong')?.textContent ?? block.textContent).join('|'), partial: row.querySelector('.usage-unit-cost__partial') !== null } })()`,
+            )
+          expect(await read("msg_cost_known")).toEqual({ blocks: 1, text: "Prompt cost $0.25", partial: false })
+          expect(await read("msg_cost_partial")).toEqual({
+            blocks: 1,
+            text: "Prompt cost Known $0.25 + unreported · so far · incomplete",
+            partial: true,
+          })
+          expect(await read("msg_cost_unreported")).toEqual({
+            blocks: 1,
+            text: "Prompt cost unreported",
+            partial: false,
+          })
+          expect(await read("msg_cost_pending")).toEqual({ blocks: 0, text: "", partial: false })
+          await page.evaluate(
+            `document.querySelector('[data-message-id="msg_cost_partial"] .usage-unit-cost summary').click()`,
+          )
+          const breakdown = await page.evaluate<string>(
+            `document.querySelector('[data-message-id="msg_cost_partial"]').textContent`,
+          )
+          expect(breakdown).toContain("Main $0.25 · Children unreported")
+          expect(breakdown).toContain("Decision unreported")
+          expect(breakdown).toContain("Retained evidence only; this is not a complete historical bill.")
+          expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        }
+    } finally {
+      await page.close()
+    }
+  }, 20_000)
+
   test("keeps a compaction divider stationary and preserves neighbours across completion at phone and desktop sizes in both themes", async () => {
     const page = await browser!.openPage()
     try {

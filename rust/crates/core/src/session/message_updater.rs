@@ -86,6 +86,7 @@ pub(crate) fn fold(
                     diagnostics: None,
                     error: None,
                     retry: None,
+                    reroutes: None,
                 })),
             )
         }
@@ -97,6 +98,7 @@ pub(crate) fn fold(
             | "session.reasoning.started"
             | "session.reasoning.ended"
             | "session.retry.scheduled"
+            | "session.step.rerouted"
             | "session.tool.input.started"
             | "session.tool.input.ended"
             | "session.tool.called"
@@ -254,7 +256,62 @@ pub(crate) fn fold(
             };
             insert_message(tx, event, &message)
         }
-        Some("session.guardrail.approved") => Ok(()),
+        Some("session.guardrail.escalated") => {
+            let choice: Option<ycoding_schema::guardrail::DecisionChoice> =
+                object.optional("choice").map_err(record_error)?;
+            let confidence: Option<ycoding_schema::guardrail::Confidence> =
+                object.optional("confidence").map_err(record_error)?;
+            insert_message(
+                tx,
+                event,
+                &session_message::Info::System(session_message::System {
+                    id,
+                    metadata: None,
+                    text: format!(
+                        "Decision model escalated this guardrail review · choice {} · confidence {}",
+                        choice.map_or("unreported", |value| value.as_str()),
+                        confidence.map_or_else(|| "unreported".to_owned(), |value| value.get().to_string()),
+                    )
+                    .into(),
+                    time: session_message::BaseTime { created: time },
+                }),
+            )
+        }
+        Some("session.review.withdrawn") => {
+            let item: ycoding_schema::session_review::Id =
+                object.field("itemID").map_err(record_error)?;
+            let reason: ycoding_schema::LosslessString =
+                object.field("reason").map_err(record_error)?;
+            let reason = match reason.as_str() {
+                Some("reverted") => "its originating message was reverted",
+                Some("task_closed") => "its subagent task closed",
+                _ => return Err(Error::Rejected("invalid review withdrawal reason")),
+            };
+            insert_message(
+                tx,
+                event,
+                &session_message::Info::System(session_message::System {
+                    id,
+                    metadata: None,
+                    text: concat(
+                        &concat(&"Review item ".into(), item.as_lossless()),
+                        &format!(
+                            " withdrawn: {reason}. Any unused approval from this item is invalid."
+                        )
+                        .into(),
+                    ),
+                    time: session_message::BaseTime { created: time },
+                }),
+            )
+        }
+        Some(
+            "session.guardrail.approved"
+            | "session.guardrail.decided"
+            | "session.guardrail.dismissed"
+            | "session.review.deferred"
+            | "session.review.decided"
+            | "session.review.consumed",
+        ) => Ok(()),
         _ => Err(Error::Domain {
             kind: "unsupported_session_event",
             message: "Session projector does not own this event",
@@ -400,6 +457,13 @@ fn update_assistant(
             }
         }
         Some("session.retry.scheduled") => assistant.retry = Some(session_message::AssistantRetry { attempt: object.field("attempt").map_err(record_error)?, at: object.field("at").map_err(record_error)?, error: object.field("error").map_err(record_error)? }),
+        Some("session.step.rerouted") => {
+            let model: ycoding_schema::model::Ref = object.field("model").map_err(record_error)?;
+            let from = std::mem::replace(&mut assistant.model, model.clone());
+            assistant.reroutes.get_or_insert_with(Vec::new).push(session_message::AssistantReroute { from, model, error: object.field("error").map_err(record_error)? });
+            assistant.content = Vec::new();
+            assistant.retry = None;
+        }
         Some("session.tool.input.started") => assistant.content.push(AssistantContent::Tool(Box::new(session_message::AssistantTool { id: object.field("callID").map_err(record_error)?, name: object.field("name").map_err(record_error)?, executed: None, provider_state: None, provider_result_state: None, state: ToolState::Streaming(session_message::ToolStateStreaming { input: "".into() }), time: session_message::ToolTime { created: time, ran: None, completed: None } }))),
         Some("session.tool.input.ended" | "session.tool.called" | "session.tool.progress" | "session.tool.success" | "session.tool.failed") => {
             let call_id: ycoding_schema::LosslessString = object.field("callID").map_err(record_error)?;

@@ -2,7 +2,7 @@ use crate::dispatch::Failure;
 use ycoding_core::session::autonomy;
 use ycoding_core::ycoding_schema::{
     DecodeError, DecodeErrorKind, DomainDecode, DomainEncode, JsonObject, JsonPath, JsonValue,
-    LosslessString, ObjectDecoder, location, prompt, provider_request,
+    LosslessString, ObjectDecoder, guardrail, location, prompt, provider_request,
     schema::NonNegativeInt,
     session, session_cache_diagnostics,
     session_orchestration::{Progress, Question, State, Task},
@@ -45,12 +45,10 @@ pub fn yolo(level: autonomy::YoloLevel) -> v5::SessionAutonomyYolo {
 pub fn yolo_level(yolo: &v5::SessionAutonomyYolo) -> Result<autonomy::YoloLevel, Failure> {
     use v5::session_autonomy_yolo::Kind;
     let value = match yolo.kind {
-        Some(
-            Kind::Value1(value) | Kind::Value2(value) | Kind::Value3(value) | Kind::Value4(value),
-        ) => value,
+        Some(Kind::Value1(value) | Kind::Value2(value) | Kind::Value3(value)) => value,
         None => return Err(Failure::Invalid("missing yolo level".into())),
     };
-    (value.is_finite() && (0.0..=3.0).contains(&value) && value.fract() == 0.0)
+    (value.is_finite() && (0.0..=2.0).contains(&value) && value.fract() == 0.0)
         .then(|| autonomy::YoloLevel::new(value as u8))
         .flatten()
         .ok_or_else(|| Failure::Invalid("invalid yolo level".into()))
@@ -74,6 +72,23 @@ pub fn autonomy_state(state: &autonomy::State) -> v5::SessionAutonomyState {
             max_no_progress: goal.max_no_progress,
             last_progress_digest: goal.last_progress_digest.as_ref().map(wire),
         }),
+        sleep: state.sleep.then_some(v5::SessionAutonomySleep {}),
+        auto_answer: state.auto_answer,
+    }
+}
+
+pub fn autonomy_view(
+    state: &autonomy::State,
+    effective: v5::SessionAutonomyEffective,
+) -> v5::SessionAutonomyView {
+    let current = autonomy_state(state);
+    v5::SessionAutonomyView {
+        mode: current.mode,
+        yolo: current.yolo,
+        goal: current.goal,
+        sleep: current.sleep,
+        auto_answer: current.auto_answer,
+        effective,
     }
 }
 
@@ -109,11 +124,13 @@ pub fn task(task: &Task) -> Result<v5::SessionOrchestrationTask, DecodeError> {
                  text,
                  data,
                  time,
+                 deferred,
              }| v5::SessionOrchestrationQuestion {
                 id: wire(&id.0),
                 text: wire(text),
                 data: data.as_ref().map(|data| json_to_value(data.as_value())),
                 time: count(*time),
+                deferred: *deferred,
             },
         ),
         revision: count(task.revision),
@@ -122,7 +139,60 @@ pub fn task(task: &Task) -> Result<v5::SessionOrchestrationTask, DecodeError> {
             updated: count(task.time.updated),
         },
         pinned_at: task.pinned_at.map(count),
+        stopped_recovery: task.stopped_recovery.as_ref().map(|recovery| {
+            v5::SessionOrchestrationTaskStoppedRecovery {
+                item_id: wire(recovery.item_id.as_lossless()),
+            }
+        }),
     })
+}
+
+pub fn decision_choice(choice: guardrail::DecisionChoice) -> i32 {
+    match choice {
+        guardrail::DecisionChoice::ApproveAll => 1,
+        guardrail::DecisionChoice::Approve => 2,
+        guardrail::DecisionChoice::Reject => 3,
+        guardrail::DecisionChoice::Escalate => 4,
+    }
+}
+
+pub fn guardrail_reply(reply: guardrail::Reply) -> i32 {
+    match reply {
+        guardrail::Reply::Once => 1,
+        guardrail::Reply::Always => 2,
+        guardrail::Reply::Reject => 3,
+    }
+}
+
+pub fn guardrail_source(source: &guardrail::Source) -> v5::GuardrailSource {
+    v5::GuardrailSource {
+        message_id: wire(source.message_id.as_lossless()),
+        call_id: wire(&source.call_id),
+    }
+}
+
+pub fn grades(grades: &[guardrail::Grade]) -> Vec<v5::GuardrailGrade> {
+    grades
+        .iter()
+        .map(|grade| v5::GuardrailGrade {
+            choice: decision_choice(grade.choice),
+            confidence: grade.confidence.get(),
+            evidence: wire(&grade.evidence),
+        })
+        .collect()
+}
+
+pub fn escalation(escalation: &guardrail::Escalation) -> v5::GuardrailEscalation {
+    v5::GuardrailEscalation {
+        choice: escalation.choice.map(decision_choice),
+        confidence: escalation.confidence.map(guardrail::Confidence::get),
+        grades: escalation
+            .grades
+            .as_ref()
+            .map(|items| v5::GuardrailEscalationGrades {
+                items: grades(items),
+            }),
+    }
 }
 
 pub fn value_to_json(value: &v5::Value) -> Result<JsonValue, Failure> {
@@ -319,9 +389,16 @@ pub fn generation_speed(
         Ok(v5::SessionGenerationSpeed {
             model: model_ref(&speed.model.encode())?, tokens: speed.tokens.get() as u64,
             duration_ns: speed.duration_ns.get() as u64, tokens_per_second: speed.tokens_per_second,
+            estimated: speed.estimated,
         })
     };
     Ok(v5::SessionGenerationSpeedHistory {
+        model: history
+            .model
+            .as_ref()
+            .map(|model| model_ref(&model.encode()))
+            .transpose()?,
+        unreported_reason: history.unreported_reason.as_ref().map(wire),
         latest: history.latest.as_ref().map(sample).transpose()?,
         recent: v5::SessionGenerationSpeedHistoryRecent {
             items: history
@@ -407,6 +484,10 @@ pub fn provider_summary(
             .latest_timing
             .as_ref()
             .map(|timing| v5::ProviderRequestTiming {
+                estimated_tokens: timing.estimated_tokens.map(|value| value.get() as u64),
+                estimated_generation_duration_ns: timing
+                    .estimated_generation_duration_ns
+                    .map(|value| value.get() as u64),
                 first_output_ms: timing.first_output_ms.map(count),
                 total_ms: timing.total_ms.map(count),
                 retry_wait_ms: timing.retry_wait_ms.map(count),
@@ -637,12 +718,38 @@ pub fn object_domain<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_wire_preserves_estimated_timing_and_speed_presence() {
+        use ycoding_core::ycoding_schema::{
+            DomainDecode, parse_json, provider_request, session_cache_diagnostics,
+        };
+        let history = session_cache_diagnostics::GenerationSpeedHistory::decode(&parse_json(r#"{"model":{"providerID":"p","id":"m"},"unreportedReason":"synthetic reason","recent":[{"model":{"providerID":"p","id":"m"},"tokens":12,"durationNs":2000000000,"tokensPerSecond":6,"estimated":true}]}"#).unwrap()).unwrap();
+        let wire = super::generation_speed(&history).unwrap();
+        assert!(wire.model.is_some());
+        assert!(wire.unreported_reason.is_some());
+        assert_eq!(wire.recent.items[0].estimated, Some(true));
+        let empty = session_cache_diagnostics::GenerationSpeedHistory::decode(
+            &parse_json(r#"{"recent":[]}"#).unwrap(),
+        )
+        .unwrap();
+        let wire = super::generation_speed(&empty).unwrap();
+        assert!(wire.model.is_none());
+        assert!(wire.unreported_reason.is_none());
+        let summary = provider_request::Summary::decode(&parse_json(r#"{"logical":1,"physical":1,"helpers":0,"continued":0,"fallback":0,"tokens":{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"latestTiming":{"estimatedTokens":12,"estimatedGenerationDurationNs":2000000000}}"#).unwrap()).unwrap();
+        let timing = super::provider_summary(&summary)
+            .unwrap()
+            .latest_timing
+            .unwrap();
+        assert_eq!(timing.estimated_tokens, Some(12));
+        assert_eq!(timing.estimated_generation_duration_ns, Some(2_000_000_000));
+        assert!(timing.generated_tokens.is_none());
+    }
     use super::{yolo, yolo_level};
     use ycoding_protocol::v5::{SessionAutonomyYolo, session_autonomy_yolo::Kind};
 
     #[test]
     fn yolo_literals_follow_the_typescript_first_matching_branch_codec() {
-        for value in [0.0, 1.0, 2.0, 3.0] {
+        for value in [0.0, 1.0, 2.0] {
             let canonical = SessionAutonomyYolo {
                 kind: Some(Kind::Value1(value)),
             };
@@ -650,7 +757,6 @@ mod tests {
                 Kind::Value1(value),
                 Kind::Value2(value),
                 Kind::Value3(value),
-                Kind::Value4(value),
             ] {
                 let level = yolo_level(&SessionAutonomyYolo { kind: Some(kind) }).unwrap();
                 assert_eq!(f64::from(level.get()), value);
@@ -658,15 +764,92 @@ mod tests {
             }
         }
         assert!(yolo_level(&SessionAutonomyYolo { kind: None }).is_err());
-        for value in [-1.0, 0.5, 4.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for value in [
+            -1.0,
+            0.5,
+            3.0,
+            4.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
             for kind in [
                 Kind::Value1(value),
                 Kind::Value2(value),
                 Kind::Value3(value),
-                Kind::Value4(value),
             ] {
                 assert!(yolo_level(&SessionAutonomyYolo { kind: Some(kind) }).is_err());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    fn decoded(json: &str) -> Task {
+        Task::decode(&ycoding_core::ycoding_schema::parse_json(json).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn task_wire_carries_the_deferred_question_flag_and_the_stopped_recovery_item() {
+        let task = task(&decoded(
+            r#"{"sessionID":"ses_child","parentID":"ses_parent","description":"Explore","agent":"build","model":{"providerID":"openai","id":"fixture"},"background":true,"state":"waiting","question":{"id":"qst_fixture","text":"Which branch?","time":3,"deferred":true},"revision":4,"time":{"created":1,"updated":2},"stoppedRecovery":{"itemID":"rvw_fixture"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(task.question.unwrap().deferred, Some(true));
+        assert_eq!(
+            task.stopped_recovery.map(|recovery| recovery.item_id),
+            Some(text("rvw_fixture"))
+        );
+        let plain = super::task(&decoded(
+            r#"{"sessionID":"ses_child","parentID":"ses_parent","description":"Explore","agent":"build","model":{"providerID":"openai","id":"fixture"},"background":false,"state":"running","question":{"id":"qst_fixture","text":"Which branch?","time":3},"revision":0,"time":{"created":1,"updated":1}}"#,
+        ))
+        .unwrap();
+        assert_eq!(plain.question.unwrap().deferred, None);
+        assert!(plain.stopped_recovery.is_none());
+    }
+
+    #[test]
+    fn autonomy_state_reports_sleep_only_as_a_presence_marker() {
+        let awake = autonomy::State::default();
+        assert_eq!(autonomy_state(&awake).sleep, None);
+        let asleep = autonomy::State {
+            sleep: true,
+            ..autonomy::State::default()
+        };
+        let wire = autonomy_state(&asleep);
+        assert_eq!(wire.sleep, Some(v5::SessionAutonomySleep {}));
+        assert_eq!(wire.yolo, autonomy_state(&awake).yolo);
+    }
+
+    #[test]
+    fn guardrail_escalation_maps_choices_confidence_and_ordered_grades() {
+        let escalation = guardrail::Escalation::decode(
+            &ycoding_core::ycoding_schema::parse_json(
+                r#"{"choice":"escalate","confidence":0.25,"grades":[{"choice":"approve_all","confidence":0,"evidence":"broad"},{"choice":"reject","confidence":1,"evidence":"narrow"}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let wire = super::escalation(&escalation);
+        assert_eq!(wire.choice, Some(4));
+        assert_eq!(wire.confidence, Some(0.25));
+        let grades = wire.grades.unwrap().items;
+        assert_eq!(
+            grades
+                .iter()
+                .map(|grade| (grade.choice, grade.confidence, grade.evidence.clone()))
+                .collect::<Vec<_>>(),
+            vec![(1, 0.0, text("broad")), (3, 1.0, text("narrow"))]
+        );
+        let empty = super::escalation(
+            &guardrail::Escalation::decode(
+                &ycoding_core::ycoding_schema::parse_json("{}").unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(empty, v5::GuardrailEscalation::default());
     }
 }

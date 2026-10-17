@@ -281,7 +281,8 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
     value.need === "question" ||
     value.need === "review" ||
     value.need === "failed" ||
-    value.need === "blocked"
+    value.need === "blocked" ||
+    value.need === "lost"
       ? value.need
       : undefined
   const copy = alertCopy(value.category, {

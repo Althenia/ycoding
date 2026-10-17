@@ -57,22 +57,20 @@ service Fixture {{ {methods} }}"#
             ),
         )
         .unwrap();
-        let result = Command::new(
-            std::env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into()),
-        )
-        .arg(format!(
-            "--proto_path={}/../../../protocol",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .arg(format!("--proto_path={}", dir.display()))
-        .arg("--include_imports")
-        .arg(format!(
-            "--descriptor_set_out={}/contract.bin",
-            dir.display()
-        ))
-        .arg(dir.join("fixture.proto"))
-        .output()
-        .unwrap();
+        let result = Command::new(std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into()))
+            .arg(format!(
+                "--proto_path={}/../../../protocol",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .arg(format!("--proto_path={}", dir.display()))
+            .arg("--include_imports")
+            .arg(format!(
+                "--descriptor_set_out={}/contract.bin",
+                dir.display()
+            ))
+            .arg(dir.join("fixture.proto"))
+            .output()
+            .unwrap();
         assert!(
             result.status.success(),
             "{}",
@@ -114,18 +112,17 @@ message Checked { required int64 value = 1 [(ycoding.v5.constraints) = { integer
 service Fixture { rpc Read(Checked) returns (Empty) { option (ycoding.v5.operation) = {
 operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL_CLIENT scope: MACHINE mutation: READ settlement: COMPLETED paging: UNPAGED streaming: INLINE sensitivity: PRIVATE
 }; } }"#).unwrap();
-    let result =
-        Command::new(std::env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into()))
-            .arg(format!("--proto_path={}/protocol", root.display()))
-            .arg(format!("--proto_path={}", dir.display()))
-            .arg("--include_imports")
-            .arg(format!(
-                "--descriptor_set_out={}/contract.bin",
-                dir.display()
-            ))
-            .arg(dir.join("fixture.proto"))
-            .output()
-            .unwrap();
+    let result = Command::new(std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into()))
+        .arg(format!("--proto_path={}/protocol", root.display()))
+        .arg(format!("--proto_path={}", dir.display()))
+        .arg("--include_imports")
+        .arg(format!(
+            "--descriptor_set_out={}/contract.bin",
+            dir.display()
+        ))
+        .arg(dir.join("fixture.proto"))
+        .output()
+        .unwrap();
     assert!(
         result.status.success(),
         "{}",
@@ -170,7 +167,7 @@ operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL
 fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     use std::collections::BTreeMap;
     let operations = &*ycoding_protocol::OPERATIONS;
-    assert_eq!(operations.len(), 222);
+    assert_eq!(operations.len(), 227);
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
     let mut patterns: BTreeMap<Vec<i32>, usize> = BTreeMap::new();
@@ -228,8 +225,8 @@ fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     assert_eq!(
         patterns,
         BTreeMap::from([
-            (vec![1], 152),
-            (vec![1, 2, 3], 52),
+            (vec![1], 151),
+            (vec![1, 2, 3], 58),
             (vec![2, 3], 14),
             (vec![2], 4),
         ]),
@@ -253,7 +250,7 @@ fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
 #[test]
 fn test_030_rust_generation_twice_in_scratch_is_byte_identical() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let protoc = std::env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into());
+    let protoc = std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into());
     let types: HashSet<String> = ycoding_protocol::OPERATIONS
         .iter()
         .flat_map(|operation| {
@@ -347,17 +344,15 @@ fn codec_name_gate_rejects_rust_and_nested_typescript_collisions() {
             format!("syntax = \"proto2\"; package ycoding.v5; {definitions}"),
         )
         .unwrap();
-        let result = Command::new(
-            std::env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into()),
-        )
-        .arg(format!("--proto_path={}", dir.display()))
-        .arg(format!(
-            "--descriptor_set_out={}/contract.bin",
-            dir.display()
-        ))
-        .arg(file)
-        .output()
-        .unwrap();
+        let result = Command::new(std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into()))
+            .arg(format!("--proto_path={}", dir.display()))
+            .arg(format!(
+                "--descriptor_set_out={}/contract.bin",
+                dir.display()
+            ))
+            .arg(file)
+            .output()
+            .unwrap();
         assert!(
             result.status.success(),
             "{}",

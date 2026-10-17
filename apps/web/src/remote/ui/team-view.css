@@ -286,7 +286,7 @@
 
 .team-view__usage {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1.3fr)) repeat(2, minmax(0, 1fr));
   gap: var(--yc-space-2);
   margin: var(--yc-space-1) 0 0;
   padding-block-start: var(--yc-space-2);
@@ -299,9 +299,12 @@
   min-inline-size: 0;
 }
 .team-view__usage dt {
+  overflow: hidden;
   color: var(--yc-text-muted);
   font-size: var(--yc-size-2xs);
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .team-view__usage dd {
   display: grid;
@@ -355,6 +358,30 @@
 .team-view__output h3 {
   margin: 0;
   font-size: var(--yc-size-sm);
+}
+.team-view__command {
+  display: grid;
+  gap: var(--yc-space-1);
+  margin: 0;
+  min-inline-size: 0;
+}
+.team-view__command span {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+}
+.team-view__command code {
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  line-height: var(--yc-leading-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .team-view__output pre {
   overflow: auto;

@@ -1,24 +1,29 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { ProviderRequestReport, ProviderRequestSummary, ProviderUsageListOutput } from "@ycoding-ai/client"
+import type { UsageReportOutput, ProviderRequestSummary, ProviderUsageListOutput, ProviderUsageForecastOutput } from "@ycoding-ai/client"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { ProviderUsageScreenContent } from "../src/routes/session/provider-usage"
+import type { ProviderUsageView } from "../src/routes/session/provider-usage-reports"
 import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 type ReportInput = {
-  group: ProviderRequestReport["group"]
+  group: UsageReportOutput["group"]
   from?: number
   to?: number
   offset?: number
   limit?: number
   sort?: "key" | "tokens" | "cost" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite"
   order?: "asc" | "desc"
+  providerID?: string
+  profile?: string
+  modelID?: string
+  selectedEffort?: string
 }
 
 const usage: ProviderRequestSummary = {
@@ -50,6 +55,7 @@ function metrics(input: {
   cost?: number
   provenance?: "recorded" | "current_catalog"
   cacheReadReported?: boolean
+  unpriced?: number
 }) {
   return {
     logical: input.logical,
@@ -57,6 +63,7 @@ function metrics(input: {
     helpers: 0,
     continued: 0,
     fallback: 0,
+    costCoverage: { pricedRequests: input.cost === undefined ? 0 : input.logical + 1 - (input.unpriced ?? 0), unpricedRequests: input.cost === undefined ? input.logical + 1 : input.unpriced ?? 0 },
     tokens: {
       input: input.tokens,
       output: Math.floor(input.tokens / 10),
@@ -70,11 +77,11 @@ function metrics(input: {
 }
 
 function page(
-  group: ProviderRequestReport["group"],
+  group: UsageReportOutput["group"],
   rows: Array<{ key: string; label: string } & ReturnType<typeof metrics>>,
   rowCount = rows.length,
   nextOffset?: number,
-): ProviderRequestReport {
+): UsageReportOutput {
   return {
     group,
     rows,
@@ -94,8 +101,10 @@ async function renderUsage(input: {
   width?: number
   height?: number
   summary?: ProviderRequestSummary
-  load: (query: ReportInput) => Promise<ProviderRequestReport>
+  load: (query: ReportInput) => Promise<UsageReportOutput>
   onBack?: () => void
+  initialTab?: ProviderUsageView
+  forecast?: ProviderUsageForecastOutput["data"]
 }) {
   const config = createTuiResolvedConfig()
   const app = await testRender(
@@ -112,6 +121,8 @@ async function renderUsage(input: {
                     now={() => Date.UTC(2026, 8, 22, 12)}
                     loadReport={input.load}
                     onBack={input.onBack}
+                    initialTab={input.initialTab}
+                    forecast={() => input.forecast}
                   />
                 </DialogProvider>
               </ToastProvider>
@@ -136,6 +147,58 @@ async function waitFor(app: Awaited<ReturnType<typeof renderUsage>>, predicate: 
   throw new Error(`Timed out waiting for ${label}\n${app.captureCharFrame()}`)
 }
 
+test.each([{ local: false, quota: false }, { local: true, quota: true }, { local: true, quota: false }, { local: false, quota: true }])("forecast populations distinguish unavailable from successful empty reads: %j", async (available) => {
+  const app = await renderUsage({ initialTab: "usage", forecast: { asOf: Date.UTC(2026, 8, 22, 12), localScope: "backend", ...(available.local ? { localRates: [] } : {}), ...(available.quota ? { quotas: [] } : {}) }, load: async (input) => page(input.group, []) })
+  try {
+    await waitFor(app, (frame) => frame.includes(available.local ? "No recorded consumption" : "Recorded consumption unavailable"), "forecast population state")
+    const frame = app.captureCharFrame()
+    expect(frame.includes("Quota forecasts unavailable")).toBe(!available.quota)
+    expect(frame.includes("Recorded consumption unavailable")).toBe(!available.local)
+    expect(frame.includes("No recorded consumption")).toBe(available.local)
+  } finally { app.renderer.destroy() }
+})
+
+test("usage grouping, selected effort, measured populations and missing Session titles render from frozen report fields", async () => {
+  const calls: ReportInput[] = []
+  const app = await renderUsage({ width: 100, height: 32, initialTab: "models", load: async (query) => {
+    calls.push(query)
+    const result = page(query.group, [{ key: query.group === "session" ? "ses_deleted" : "typed-group", label: query.group === "session" ? "" : "Measured model", ...metrics({ logical: 2, tokens: 100, cost: 10, provenance: "recorded", unpriced: 1 }) }])
+    return { ...result, rows: result.rows.map((row) => ({ ...row, ...(query.group === "provider-profile-model" ? { dimensions: { group: "provider-profile-model" as const, providerID: "openai", modelID: "shared", profileState: "provider-default" as const } } : {}),
+      speed: { generationSamples: 4, generationP50TokensPerSecond: 30, generationP90TokensPerSecond: 60, providerTimedSamples: 1, observedSamples: 3, samples: 2 } })) }
+  } })
+  try {
+    await waitFor(app, (frame) => frame.includes("Measured model"), "model row")
+    app.mockInput.pressEnter()
+    await waitFor(app, (frame) => frame.includes("Usage details"), "measured details")
+    expect(app.captureCharFrame()).toContain("median 30.0 tok/s")
+    expect(app.captureCharFrame()).toContain("4 measured requests")
+    expect(app.captureCharFrame()).toContain("Known $10.00 + unreported")
+    app.mockInput.pressEscape()
+    await waitFor(app, (frame) => !frame.includes("Usage details"), "first details dismissal")
+    app.mockInput.pressKey("e")
+    await waitFor(app, (frame) => frame.includes("Leave empty for all"), "effort filter")
+    await app.mockInput.typeText("high")
+    app.mockInput.pressEnter()
+    await waitFor(app, () => calls.at(-1)?.selectedEffort === "high", "filtered request")
+    app.mockInput.pressKey("b")
+    await waitFor(app, (frame) => frame.includes("Usage group"), "group picker")
+    await app.mockInput.typeText("Provider / profile / model")
+    app.mockInput.pressEnter()
+    await waitFor(app, (frame) => calls.at(-1)?.group === "provider-profile-model" && frame.includes("Measured model") && !frame.includes("Usage group"), "typed grouping")
+    app.mockInput.pressEnter()
+    await waitFor(app, (frame) => frame.includes("Provider default at request time"), "historical profile identity")
+    app.mockInput.pressEscape()
+    await waitFor(app, (frame) => !frame.includes("Usage details"), "profile details dismissal")
+    app.mockInput.pressKey("b")
+    await waitFor(app, (frame) => frame.includes("Usage group"), "second group picker")
+    await app.mockInput.typeText("Sessions")
+    await waitFor(app, (frame) => frame.includes("Sessions") && !frame.includes("Provider / profile / model"), "filtered Session group")
+    app.mockInput.pressEnter()
+    await waitFor(app, (frame) => frame.includes("Session ses_deleted · title unreported"), "retained deleted Session")
+    expect(calls.at(-1)?.group).toBe("session")
+  } finally { app.renderer.destroy() }
+})
+
 test("overview distinguishes recorded profile selections without changing total spend", async () => {
   const tokens = { input: 6_000, output: 1_000, reasoning: 200, cache: { read: 4_000, write: 250 } }
   const app = await renderUsage({
@@ -151,10 +214,40 @@ test("overview distinguishes recorded profile selections without changing total 
   try {
     await app.waitForFrame((frame) => frame.includes("openai/shared"))
     const frame = app.captureCharFrame()
-    expect(frame).toContain("openai/shared#high · profile Work")
-    expect(frame).toContain("openai/shared#high · profile Personal")
+    expect(frame).toContain("openai/shared · selected effort high · profile Work")
+    expect(frame).toContain("openai/shared · selected effort high · profile Personal")
     expect(frame).toContain("Total")
     expect(frame).toContain("$3.25")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("overview keeps the sign and sub-cent precision of every visible USD amount", async () => {
+  const tokens = { input: 6_000, output: 1_000, reasoning: 200, cache: { read: 4_000, write: 250 } }
+  const app = await renderUsage({
+    summary: {
+      ...usage,
+      cost: -0.004,
+      models: [
+        { model: { providerID: "openai", id: "credit", variant: "high" }, requests: 3, tokens, cost: -0.004, cacheReadReported: true },
+        { model: { providerID: "openai", id: "tiny", variant: "high" }, requests: 3, tokens, cost: 0.004, cacheReadReported: true },
+        { model: { providerID: "openai", id: "debit", variant: "high" }, requests: 3, tokens, cost: -12.5, cacheReadReported: true },
+      ],
+    },
+    load: async (query) => page(query.group, []),
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("openai/credit"))
+    const lines = app.captureCharFrame().split("\n")
+    const row = (name: string) => lines.find((line) => line.includes(name)) ?? ""
+    expect(row("openai/credit")).toContain("Known -$0.004")
+    expect(row("openai/tiny")).toContain("Known $0.004")
+    expect(row("openai/debit")).toContain("Known -$12.50")
+    expect(lines.find((line) => line.trimStart().startsWith("Total"))).toContain("Known -$0.004")
+    const frame = lines.join("\n")
+    expect(frame).not.toContain("$-")
+    expect(frame).not.toMatch(/Known -?\$0\.00(?!\d)/)
   } finally {
     app.renderer.destroy()
   }

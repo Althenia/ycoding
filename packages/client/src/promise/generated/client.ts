@@ -85,6 +85,10 @@ import type {
   SessionUsageOutput,
   SessionUsageReportInput,
   SessionUsageReportOutput,
+  SessionPromptCostsInput,
+  SessionPromptCostsOutput,
+  SessionTaskCostsInput,
+  SessionTaskCostsOutput,
   SessionSkillsInput,
   SessionSkillsOutput,
   SessionResolveSkillConflictInput,
@@ -155,6 +159,8 @@ import type {
   ProviderRefreshOutput,
   ProviderGetInput,
   ProviderGetOutput,
+  ProviderUsageForecastInput,
+  ProviderUsageForecastOutput,
   ProviderUsageListInput,
   ProviderUsageListOutput,
   ProviderUsageGetInput,
@@ -373,6 +379,14 @@ import type {
   UsageGetOutput,
   UsageReportInput,
   UsageReportOutput,
+  IncidentReportInput,
+  IncidentReportOutput,
+  IncidentRecentInput,
+  IncidentRecentOutput,
+  IncidentGuidanceGetInput,
+  IncidentGuidanceGetOutput,
+  IncidentGuidanceClearInput,
+  IncidentGuidanceClearOutput,
   RemoteGetOutput,
   RemoteSetInput,
   RemoteSetOutput,
@@ -381,6 +395,10 @@ import type {
   KeepAwakeSetOutput,
   ConfigDiagnosticsInput,
   ConfigDiagnosticsOutput,
+  ReviewListInput,
+  ReviewListOutput,
+  ReviewDecideInput,
+  ReviewDecideOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1093,6 +1111,10 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/report`,
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
@@ -1103,6 +1125,30 @@ export function make(options: ClientOptions) {
             },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      promptCosts: (input: SessionPromptCostsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionPromptCostsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/prompts`,
+            query: { inputIDs: input["inputIDs"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      taskCosts: (input: SessionTaskCostsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionTaskCostsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/tasks`,
+            query: { sessionIDs: input["sessionIDs"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
             empty: false,
           },
           requestOptions,
@@ -1545,6 +1591,18 @@ export function make(options: ClientOptions) {
         ),
     },
     providerUsage: {
+      forecast: (input: ProviderUsageForecastInput, requestOptions?: RequestOptions) =>
+        request<ProviderUsageForecastOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/usage/forecast`,
+            query: { location: input["location"], localScope: input["localScope"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input?: ProviderUsageListInput, requestOptions?: RequestOptions) =>
         request<ProviderUsageListOutput>(
           {
@@ -3029,6 +3087,10 @@ export function make(options: ClientOptions) {
             path: `/api/usage/report`,
             query: {
               group: input["group"],
+              providerID: input["providerID"],
+              profile: input["profile"],
+              modelID: input["modelID"],
+              selectedEffort: input["selectedEffort"],
               timeZone: input["timeZone"],
               from: input["from"],
               to: input["to"],
@@ -3043,6 +3105,64 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+    },
+    incident: {
+      report: (input: IncidentReportInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IncidentReportOutput }>(
+          {
+            method: "GET",
+            path: `/api/incident/report`,
+            query: {
+              group: input["group"],
+              from: input["from"],
+              to: input["to"],
+              offset: input["offset"],
+              limit: input["limit"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      recent: (input: IncidentRecentInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IncidentRecentOutput }>(
+          {
+            method: "GET",
+            path: `/api/incident/recent`,
+            query: { provider: input["provider"], model: input["model"], agent: input["agent"], limit: input["limit"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      guidance: {
+        get: (input: IncidentGuidanceGetInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: IncidentGuidanceGetOutput }>(
+            {
+              method: "GET",
+              path: `/api/incident/guidance`,
+              query: { provider: input["provider"], model: input["model"], location: input["location"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        clear: (input: IncidentGuidanceClearInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: IncidentGuidanceClearOutput }>(
+            {
+              method: "DELETE",
+              path: `/api/incident/guidance`,
+              query: { provider: input["provider"], model: input["model"], location: input["location"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
     },
     remote: {
       get: (requestOptions?: RequestOptions) =>
@@ -3092,6 +3212,31 @@ export function make(options: ClientOptions) {
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    review: {
+      list: (input: ReviewListInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: ReviewListOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/review`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      decide: (input: ReviewDecideInput, requestOptions?: RequestOptions) =>
+        request<ReviewDecideOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/review/${encodeURIComponent(input.itemID)}/decide`,
+            body: { decision: input["decision"] },
+            successStatus: 204,
+            declaredStatuses: [400, 404, 409, 500, 401],
+            empty: true,
           },
           requestOptions,
         ),

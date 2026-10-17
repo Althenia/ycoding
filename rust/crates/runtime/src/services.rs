@@ -50,6 +50,8 @@ pub struct Core {
     pub execution: &'static Execution,
     pub autonomy: autonomy::Service,
     pub orchestration: orchestration::Service,
+    pub reviews: ycoding_core::session::review::Service,
+    pub incidents: ycoding_core::model_incident::Service,
     pub events: Feed,
     pub publisher: policy::Publisher,
     pub locations: Locations,
@@ -62,8 +64,11 @@ pub struct Core {
     pub keep_awake: ycoding_core::platform::keep_awake::Service,
     pub provider_usage: Option<ProviderUsageResolver>,
     pub usage_pricer: Option<UsagePricer>,
+    pub retention: Retention,
     pub(crate) maintenance: Option<Arc<crate::production::Maintenance>>,
 }
+
+pub type Retention = Arc<dyn Fn() -> ycoding_core::session::retention::Settings + Send + Sync>;
 
 pub type UsagePricer = Arc<
     dyn Fn(
@@ -141,6 +146,16 @@ impl Core {
         });
         let autonomy = autonomy::Service::new(client.clone());
         let credentials = credential::Service::new(client.clone());
+        let (reviews, delivery) = crate::session_review::service(sessions.clone());
+        let orchestration =
+            orchestration::Service::new(sessions.clone(), Arc::new(LocalExecution(execution)))
+                .with_reviews(policy::Reviews {
+                    service: reviews.clone(),
+                    limit: configuration.guardrails.limits.reviews as usize,
+                });
+        delivery.bind(orchestration.clone(), execution);
+        let incidents = ycoding_core::model_incident::Service::new(client.clone());
+        let retention: Retention = Arc::new(ycoding_core::session::retention::Settings::default);
         Self {
             captured: crate::remote_derived::captured::Cache::attach(&client),
             publisher,
@@ -151,11 +166,12 @@ impl Core {
             isolated_browser: None,
             platform: None,
             platform_default_location: None,
-            telemetry: ycoding_core::telemetry::Service::new(client.clone()),
+            telemetry: ycoding_core::telemetry::Service::new(client.clone(), retention.clone()),
             keep_awake: ycoding_core::platform::keep_awake::Service::new(),
             artifacts: None,
             provider_usage: None,
             usage_pricer: None,
+            retention,
             remote: None,
             locations: Locations::new(
                 client,
@@ -163,13 +179,13 @@ impl Core {
                 configuration,
                 events.clone(),
                 autonomy.clone(),
+                reviews.clone(),
             ),
             events,
             autonomy,
-            orchestration: orchestration::Service::new(
-                sessions.clone(),
-                Arc::new(LocalExecution(execution)),
-            ),
+            orchestration,
+            reviews,
+            incidents,
             sessions,
             execution,
             credentials,
@@ -270,6 +286,12 @@ pub(crate) struct LocalExecution(pub(crate) &'static Execution);
 impl orchestration::Execution for LocalExecution {
     fn wake(&self, id: &session::Id) -> Outcome {
         self.0.wake(id)
+    }
+
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        let execution = self.0;
+        let id = id.clone();
+        Box::pin(async move { execution.request_resume(&id).await })
     }
 
     fn interrupt(&self, id: &session::Id) -> RunFuture {

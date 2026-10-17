@@ -125,7 +125,7 @@ export type RemoteNotice = {
 }
 export type RemoteAlertDetail = {
   readonly title?: string
-  readonly need?: "permission" | "question" | "review" | "failed" | "blocked"
+  readonly need?: "permission" | "question" | "review" | "failed" | "blocked" | "lost"
   readonly repeat?: true
 }
 export type RemoteWorkCompletion = {

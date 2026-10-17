@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { canCancelSubagent, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, type TeamSubagent } from "./team-model"
+import { accountedTask } from "../../../test/usage-fixture"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, shellStatusLabel, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -101,12 +102,72 @@ test("usage always yields the same four slots and never turns an unreported valu
   expect(keys(usageSlots(base, {}))).toEqual(["tokens", "cost", "context", "cache"])
   expect(usageSlots(base, {}).map((slot) => [slot.state, slot.value])).toEqual([["unreported", "—"], ["unreported", "—"], ["unreported", "—"], ["unreported", "—"]])
   expect(usageSlots(base, { loading: true }).map((slot) => slot.state)).toEqual(["loading", "loading", "loading", "loading"])
-  const reported = { ...base, tokens: 20, cost: 0.25, contextTotal: 800, contextLimit: 2_000, cacheHitRatio: 0.75 }
+  const reported = { ...base, accounting: accountedTask(base.sessionID), contextTotal: 800, contextLimit: 2_000, cacheHitRatio: 0.75 }
   expect(usageSlots(reported, { loading: true }).map((slot) => [slot.state, slot.value])).toEqual([["value", "20"], ["value", "$0.25"], ["value", "800 / 2,000"], ["value", "75% hit"]])
   expect(usageSlots(reported, {})[2]?.meter).toBeCloseTo(0.4)
   const noLimit = usageSlots({ ...reported, contextLimit: undefined }, {})[2]
   expect(noLimit?.value).toBe("800 / unreported")
   expect(noLimit?.meter).toBeUndefined()
-  expect(usageSlots({ ...reported, cost: 0, tokens: 0 }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
+  expect(usageSlots({ ...reported, accounting: accountedTask(base.sessionID, 0, 0) }, {}).slice(0, 2).map((slot) => slot.value)).toEqual(["0", "$0.00"])
+  const partial = accountedTask(base.sessionID)
+  expect(usageSlots({ ...reported, accounting: { ...partial, status: "so-far", attribution: "partial", total: { ...partial.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" } } } }, {})[1]?.value).toBe("Known $0.25 + unreported · so far · incomplete")
   expect(usageSlots({ ...reported, contextTotal: 5_000, contextLimit: 2_000 }, {})[2]?.meter).toBe(1)
+})
+
+test("shell owners are labelled from family evidence, including a completed child missing from the loaded task page", () => {
+  const shells = [
+    { id: "sh_root", ownerID: "ses_root", command: "bun test", status: "running" as const, startedAt: 1 },
+    { id: "sh_done", ownerID: "ses_done", ownerAgent: "reviewer", ownerTitle: "Finished review", command: "bun run typecheck", status: "running" as const, startedAt: 2 },
+    { id: "sh_task", ownerID: "ses_a", ownerAgent: "stale", ownerTitle: "Stale title", command: "git status", status: "running" as const, startedAt: 3 },
+    { id: "sh_chat", ownerID: "ses_btw", command: "ls", status: "running" as const, startedAt: 4 },
+  ]
+  const labels = shells.map((shell) => shellOwnerLabel(shell, {
+    rootID: "ses_root",
+    tasks: [task("ses_a", "completed", 3_000)],
+    sideChats: [{ id: "ses_btw", title: "Quick question", updatedAt: 5 }],
+  }))
+  expect(labels).toEqual(["Main session", "reviewer · Finished review", "omoikane · Review ses_a", "Side chat · Quick question"])
+  expect(labels).not.toContain("Unknown session")
+})
+
+test("team shell output appends pages and keeps only the bounded tail", () => {
+  expect(appendTeamShellOutput("", "line 1\nline 2\n")).toBe("line 1\nline 2\n")
+  expect(appendTeamShellOutput("line 1\n", "line 2\n")).toBe("line 1\nline 2\n")
+  const huge = appendTeamShellOutput("line 1\n", "y".repeat(TEAM_SHELL_OUTPUT_TAIL_LIMIT + 5_000))
+  expect(huge.length).toBeLessThanOrEqual(TEAM_SHELL_OUTPUT_TAIL_LIMIT)
+  expect(huge.endsWith("y".repeat(100))).toBe(true)
+  expect(huge).not.toContain("line 1")
+  expect(appendTeamShellOutput("", `${"a".repeat(25)}\nkept line kept line\n`, 30)).toBe("kept line kept line\n")
+})
+
+test("a shell keeps its list preview while the opened view uses the complete command", () => {
+  const command = `cat <<'EOF'\n${"long command line\n".repeat(500)}EOF`
+  const shell = { command: `${command.slice(0, 255)}…` }
+  expect(teamShellCommand(shell)).toBe(shell.command)
+  expect(teamShellCommand(shell, { command })).toBe(command)
+  expect(teamShellCommand(shell, { command: "" })).toBe("")
+  expect(shell.command).toHaveLength(256)
+  expect(shell.command.endsWith("…")).toBe(true)
+})
+
+test("queued shells show their queue position and other statuses show their own word", () => {
+  expect(shellStatusLabel({ status: "queued", queuePosition: 2 })).toBe("queued #2")
+  expect(shellStatusLabel({ status: "queued" })).toBe("queued")
+  expect(shellStatusLabel({ status: "running" })).toBe("running")
+  expect(shellStatusLabel({ status: "killed", queuePosition: 2 })).toBe("killed")
+})
+
+test("a stopped recovery reads as stopped and can be continued by a human, while a deferred question waits in Review instead of the Team form", () => {
+  const stopped = { ...task("ses_a", "cancelled", 2_000), stoppedRecovery: { itemID: "rvw_stopped" } }
+  expect(taskStateLabel(stopped)).toBe("stopped")
+  expect(taskStateLabel(task("ses_a", "cancelled", 2_000))).toBe("cancelled")
+  expect(canContinueRecovery(stopped)).toBe(true)
+  expect(canContinueRecovery(task("ses_a", "cancelled", 2_000))).toBe(false)
+  const waiting = { ...task("ses_b", "waiting", 3_000), question: { id: "qst_1", text: "Which?" } }
+  expect(canAnswerSubagent(waiting)).toBe(true)
+  expect(canAnswerSubagent({ ...waiting, question: { ...waiting.question, deferred: true } })).toBe(false)
+  expect(canAnswerSubagent({ ...waiting, state: "running" })).toBe(false)
+  expect(canAnswerSubagent(task("ses_c", "waiting", 4_000))).toBe(false)
+  expect(isDeferredQuestion({ ...waiting, question: { ...waiting.question, deferred: true } })).toBe(true)
+  expect(isDeferredQuestion(waiting)).toBe(false)
 })

@@ -3,11 +3,13 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createContext, createEffect, createMemo, createSignal, Show, useContext, type ParentProps } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
+import { stringWidth } from "../../util/string-width"
 import {
   collapseSection,
   defaultExpanded,
   expandSection,
   railMetrics,
+  railWidth,
   RAIL_SECTION_BAND_HEIGHT,
   type RailSectionKey,
 } from "./rail"
@@ -101,8 +103,10 @@ export function RailSection(
   })
   const titleText = createMemo(() => Locale.truncate(String(props.title ?? "").trim() || "—", 80))
   const summaryText = createMemo(() => {
-    const raw = String(props.summary ?? "").trim()
-    return raw ? Locale.truncate(raw, 80) : ""
+    const available = (rail ? railWidth(dimensions().width) - (rail.leftRule ? 1 : 0) : dimensions().width)
+      - (rail ? metrics().paddingLeft + metrics().paddingRight : 0)
+      - metrics().sectionLabelPadding - stringWidth(titleText()) - 3
+    return fitSummary(String(props.summary ?? "").trim(), available)
   })
   const toggle = () => rail?.toggle(props.section)
 
@@ -125,7 +129,7 @@ export function RailSection(
         <text fg={headerColor()} wrapMode="none" flexShrink={0}>
           {expanded() ? "\u2212" : "\u002b"}
         </text>
-        <box flexGrow={1} paddingLeft={metrics().sectionLabelPadding}>
+        <box flexGrow={1} flexShrink={0} paddingLeft={metrics().sectionLabelPadding}>
           <text fg={headerColor()} wrapMode="none" attributes={TextAttributes.BOLD}>
             {titleText()}
           </text>
@@ -157,6 +161,18 @@ export function RailSection(
   )
 }
 
+function fitSummary(value: string, width: number) {
+  if (!value) return ""
+  const parts = value.split(" · ")
+  for (let count = parts.length; count >= 1; count--) {
+    const summary = [...parts.slice(0, count), ...(count < parts.length ? [`+${parts.length - count}`] : [])].join(" · ")
+    if (stringWidth(summary) <= width) return summary
+  }
+  if (parts[0] && stringWidth(parts[0]) <= width) return parts[0]
+  const omitted = `+${parts.length}`
+  return stringWidth(omitted) <= width ? omitted : ""
+}
+
 export function RailSubheading(props: ParentProps) {
   const { theme } = useTheme()
   const text = () => Locale.truncate(String(props.children ?? "").trim() || "—", 80)
@@ -166,15 +182,19 @@ export function RailSubheading(props: ParentProps) {
 
 export function RailRow(props: { label: string; value: string; valueColor?: RGBA }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const rail = useRail()
+  const width = () => rail ? railWidth(dimensions().width) - railMetrics(dimensions().width).paddingLeft - railMetrics(dimensions().width).paddingRight : dimensions().width
   const label = () => Locale.truncate(String(props.label ?? "").trim() || "—", 120)
-  const value = () => Locale.truncate(String(props.value ?? "").trim() || "—", 80)
+  const value = () => String(props.value ?? "").trim() || "—"
+  const stacked = () => stringWidth(value()) > stringWidth(label()) && stringWidth(label()) + stringWidth(value()) + 1 > width()
 
   return (
-    <box width="100%" flexDirection="row" justifyContent="space-between" gap={1}>
+    <box width="100%" flexDirection={stacked() ? "column" : "row"} justifyContent="space-between" gap={stacked() ? 0 : 1}>
       <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
         {label()}
       </text>
-      <text fg={props.valueColor ?? theme.text.default} wrapMode="none" flexShrink={0}>
+      <text fg={props.valueColor ?? theme.text.default} wrapMode="word" flexShrink={0}>
         {value()}
       </text>
     </box>

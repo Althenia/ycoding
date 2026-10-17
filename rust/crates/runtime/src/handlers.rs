@@ -3,8 +3,8 @@ use crate::{
     dispatch::{Dispatcher, Failure, Invocation, RegistrationError},
     event_subscribe, form, guardrail, health, ids, isolated_browser, message, permission, project,
     provider_usage, question, session_autonomy, session_create, session_helpers, session_list,
-    session_outstanding, session_read_models, session_revert, session_services, session_state,
-    session_subagent, usage,
+    session_outstanding, session_read_models, session_revert, session_review, session_services,
+    session_state, session_subagent, usage, usage_accounting,
 };
 use crate::{integration, mcp};
 use ycoding_core::session::{pending, run_coordinator};
@@ -59,6 +59,11 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("usage.report", usage::report)?;
     dispatcher.handle("providerUsage.get", provider_usage::get)?;
     dispatcher.handle("providerUsage.list", provider_usage::list)?;
+    dispatcher.handle("providerUsage.forecast", provider_usage::forecast)?;
+    dispatcher.handle("incident.report", crate::incident::report)?;
+    dispatcher.handle("incident.recent", crate::incident::recent)?;
+    dispatcher.handle("incident.guidance.get", crate::incident::guidance_get)?;
+    dispatcher.handle("incident.guidance.clear", crate::incident::guidance_clear)?;
     dispatcher.handle("credential.update", credential::update)?;
     dispatcher.handle("credential.activate", credential::activate)?;
     dispatcher.handle("credential.remove", credential::remove)?;
@@ -97,9 +102,13 @@ pub fn standard() -> Result<Dispatcher, RegistrationError> {
     dispatcher.handle("session.todo.list", session_state::todo_list)?;
     dispatcher.handle("session.todo.update", session_state::todo_update)?;
     dispatcher.handle("session.outstanding", session_outstanding::read)?;
+    dispatcher.handle("session.review.list", session_review::list)?;
+    dispatcher.handle("session.review.decide", session_review::decide)?;
     dispatcher.handle("session.diagnostics", session_state::diagnostics)?;
     dispatcher.handle("session.usage", session_read_models::usage)?;
     dispatcher.handle("session.usageReport", session_read_models::usage_report)?;
+    dispatcher.handle("session.promptCosts", usage_accounting::prompt_costs)?;
+    dispatcher.handle("session.taskCosts", usage_accounting::task_costs)?;
     dispatcher.handle("session.completions", session_services::completions)?;
     dispatcher.handle("session.context", session_services::context)?;
     dispatcher.handle("session.fork", session_services::fork)?;
@@ -485,7 +494,9 @@ async fn session_interrupt(
 ) -> Result<v5::SessionInterruptResult, Failure> {
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
-    let _ = core.execution.interrupt(&id).await;
+    let _ = core.execution.request_interrupt(&id);
+    core.locations.cancel_queued_shells(&id).await?;
+    core.execution.await_idle(&id).await;
     Ok(v5::SessionInterruptResult { data: v5::Empty {} })
 }
 
@@ -495,7 +506,10 @@ async fn session_remove(
 ) -> Result<v5::SessionRemoveResult, Failure> {
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
-    let _ = core.execution.interrupt(&id).await;
+    crate::session_autonomy::wake_root(core, &id).await?;
+    let _ = core.execution.request_interrupt(&id);
+    core.locations.cancel_queued_shells(&id).await?;
+    core.execution.await_idle(&id).await;
     core.locations.cancel_session(&id).await?;
     let removed = core
         .sessions

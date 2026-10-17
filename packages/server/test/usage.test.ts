@@ -25,7 +25,11 @@ function fixture(service: Pick<Session.Interface, "usageAll" | "usageReportAll">
             Layer.mergeAll(
               Layer.mock(Session.Service, {
                 ...service,
-                autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
+                autonomy: {
+                  get: () => Effect.die("unused"),
+                  set: () => Effect.die("unused"),
+                  effective: () => Effect.die("unused"),
+                },
                 daybreak: { set: () => Effect.die("unused") },
                 revert: {
                   stage: () => Effect.die("unused"),
@@ -33,8 +37,8 @@ function fixture(service: Pick<Session.Interface, "usageAll" | "usageReportAll">
                   commit: () => Effect.die("unused"),
                 },
               }),
-              Layer.succeed(Authorization, effect => effect),
-              Layer.succeed(SchemaErrorMiddleware, effect => effect),
+              Layer.succeed(Authorization, (effect) => effect),
+              Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
             ),
           ),
         ),
@@ -76,10 +80,11 @@ test("rejects an invalid global report query before the Core read", async () => 
   const calls = { value: 0 }
   await using f = fixture({
     usageAll: () => Effect.die("unused"),
-    usageReportAll: () => Effect.sync(() => {
-      calls.value++
-      return { group: "project", rows: [], total: metrics, rowCount: 0 }
-    }),
+    usageReportAll: () =>
+      Effect.sync(() => {
+        calls.value++
+        return { group: "project", rows: [], total: metrics, rowCount: 0 }
+      }),
   })
 
   expect((await f.request("/api/usage/report?group=project&sort=requests")).status).toBe(400)

@@ -302,6 +302,120 @@ async fn reconciliation_escalates_and_terminates_leaderless_groups() {
     assert!(row(&fixture, &shell).is_none());
 }
 
+fn task(fixture: &Fixture, child: &str, parent: &str, state: &str) {
+    let (child, parent, state) = (child.to_owned(), parent.to_owned(), state.to_owned());
+    fixture
+        .store
+        .submit(move |tx| {
+            ycoding_store::session::TaskTable::put(
+                tx,
+                &ycoding_store::session::Task {
+                    session_id: child.as_str().into(),
+                    parent_id: parent.as_str().into(),
+                    parent_assistant_message_id: "msg_parent".into(),
+                    tool_call_id: format!("call_{child}").as_str().into(),
+                    input_id: format!("msg_input_{child}").as_str().into(),
+                    description: "Work".into(),
+                    agent: "build".into(),
+                    model: ycoding_store::session::Document::<ycoding_schema::model::Ref>::new(
+                        ycoding_schema::parse_json(r#"{"providerID":"local","id":"test"}"#)
+                            .unwrap(),
+                    )?,
+                    prompt_digest: "0".repeat(64).as_str().into(),
+                    background: 1,
+                    delivery: "steer".into(),
+                    state: state.as_str().into(),
+                    progress: None,
+                    progress_time: None,
+                    question_id: None,
+                    question: None,
+                    question_data: None,
+                    question_time: None,
+                    usage_anchor: None,
+                    attempt_started: 0,
+                    owner_pid: None,
+                    owner_started: None,
+                    revision: 0,
+                    time_created: 1,
+                    time_updated: 1,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+async fn owed(ledger: &Ledger, shell: &Id, session: &str, pid: u32) {
+    ledger.record(shell, pid, None, &owner()).await.unwrap();
+    ledger
+        .notice_owed(
+            shell,
+            ycoding_schema::session_id::SessionId::new(session).unwrap(),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn lost_notices_of_terminal_subagents_are_acknowledged_and_discarded_at_startup() {
+    let fixture = Fixture::default();
+    fixture.session("ses_lost_root", None, 0, false, None);
+    fixture.session("ses_lost_done", Some("ses_lost_root"), 0, false, None);
+    fixture.session("ses_lost_open", Some("ses_lost_root"), 0, false, None);
+    task(&fixture, "ses_lost_done", "ses_lost_root", "completed");
+    task(&fixture, "ses_lost_open", "ses_lost_root", "running");
+    let ledger = Ledger::new(fixture.store.client());
+    let (root, done, open) = (id("sh_lost_root"), id("sh_lost_done"), id("sh_lost_open"));
+    owed(&ledger, &root, "ses_lost_root", 2_000_000_011).await;
+    owed(&ledger, &done, "ses_lost_done", 2_000_000_012).await;
+    owed(&ledger, &open, "ses_lost_open", 2_000_000_013).await;
+
+    ledger.reconcile(Duration::ZERO).await.unwrap();
+    assert!(
+        row(&fixture, &done).is_none(),
+        "a newly orphaned notice of a terminal subagent was kept"
+    );
+    assert!(row(&fixture, &root).unwrap().time_lost.is_some());
+    assert!(row(&fixture, &open).unwrap().time_lost.is_some());
+    assert_eq!(
+        ledger.lost_sessions().unwrap(),
+        vec![
+            LosslessString::from("ses_lost_open"),
+            LosslessString::from("ses_lost_root")
+        ]
+    );
+
+    task(&fixture, "ses_lost_open", "ses_lost_root", "failed");
+    assert_eq!(
+        ledger.lost_sessions().unwrap(),
+        vec![LosslessString::from("ses_lost_root")]
+    );
+    ledger.reconcile(Duration::ZERO).await.unwrap();
+    assert!(row(&fixture, &open).is_none());
+    assert!(row(&fixture, &root).is_some());
+
+    for state in ["cancelled", "lost"] {
+        let child = format!("ses_lost_{state}");
+        fixture.session(&child, Some("ses_lost_root"), 0, false, None);
+        task(&fixture, &child, "ses_lost_root", "running");
+        let shell = id(&format!("sh_lost_{state}"));
+        owed(&ledger, &shell, &child, 2_000_000_014).await;
+        ledger.reconcile(Duration::ZERO).await.unwrap();
+        assert!(row(&fixture, &shell).unwrap().time_lost.is_some());
+        task(&fixture, &child, "ses_lost_root", state);
+        assert!(
+            !ledger
+                .lost_sessions()
+                .unwrap()
+                .contains(&LosslessString::from(child.as_str())),
+            "{state} subagent stayed lost"
+        );
+        ledger.reconcile(Duration::ZERO).await.unwrap();
+        assert!(row(&fixture, &shell).is_none(), "{state} row was kept");
+    }
+}
+
 #[tokio::test]
 async fn lost_notice_is_acknowledged_only_by_a_newer_execution_start_and_pruned_for_deleted_sessions()
  {

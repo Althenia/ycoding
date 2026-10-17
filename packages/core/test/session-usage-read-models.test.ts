@@ -117,6 +117,11 @@ test("global usage pages high-cardinality Session groups in SQL with exact total
       expect(report.rows.map((row) => row.key)).toEqual(["ses_usage_300", "ses_usage_301", "ses_usage_302"])
       expect(report.rows[0]?.speed).toEqual({
         samples: 1,
+        generationSamples: 1,
+        providerTimedSamples: 1,
+        observedSamples: 0,
+        generationP50TokensPerSecond: 1,
+        generationP90TokensPerSecond: 1,
         firstOutputP50Ms: 300,
         firstOutputP95Ms: 300,
         totalP50Ms: 600,
@@ -171,6 +176,29 @@ test("global usage pages high-cardinality Session groups in SQL with exact total
             true,
           )
         expect(plan.some((row) => /encoded/.test(row.detail))).toBe(false)
+      }
+      for (const group of ["model-id", "task", "prompt"] as const) {
+        queries.length = 0
+        const report = yield* session.usageReport({
+          sessionID: SessionSchema.ID.make("ses_usage_root"),
+          group,
+          offset: group === "model-id" ? 300 : 0,
+          limit: 3,
+        })
+        expect(report.total.logical).toBe(405)
+        expect(report.rowCount).toBe(group === "model-id" ? 405 : 1)
+        expect(report.rows.map((row) => row.key)).toEqual(
+          group === "model-id"
+            ? ["model_300", "model_301", "model_302"].map((model) => JSON.stringify(["model-id", model]))
+            : [JSON.stringify(group === "task" ? ["task", null] : ["prompt", null, null])],
+        )
+        const reads = queries.filter((query) => /^\s*select/i.test(query.sql))
+        expect(reads.length).toBeGreaterThan(0)
+        for (const query of reads) {
+          const rows = yield* db.$client.unsafe(query.sql, query.params)
+          expect(rows.length).toBeLessThanOrEqual(200)
+          expect(JSON.stringify(rows).length).toBeLessThan(32_768)
+        }
       }
     }).pipe(
       Effect.provide(

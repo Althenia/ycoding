@@ -34,6 +34,10 @@ mod guardrails;
 struct Quiet;
 
 impl Execution for Quiet {
+    fn resume(&self, _: &session::Id) -> RunFuture {
+        panic!("unexpected explicit resumption")
+    }
+
     fn wake(&self, _: &session::Id) -> Outcome {
         Ok(())
     }

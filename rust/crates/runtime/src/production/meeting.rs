@@ -3,25 +3,26 @@ use crate::dispatch::Failure;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use ycoding_core::{
     meeting::{
-        config::{AnalysisModel, MeetingConfig},
+        config::MeetingConfig,
         discovery,
         intelligence::ServiceMcp,
+        owner::{Catalog, CatalogModel},
         runtime::SessionFactory,
         service::{MeetingService, ServiceOptions, saved_config},
         store::MeetingDatabase,
     },
     platform::{git, project_identity},
-    resources::{config::Roots, mcp},
+    resources::{config::Roots, credential, mcp, model},
     session::{
         analysis::{Analysis, Generator},
         execution::Execution,
         store::Service,
     },
-    ycoding_schema::{DomainDecode, LosslessString, ObjectEncoder, location, model, project},
+    ycoding_schema::{LosslessString, location, project},
     ycoding_store::Client,
 };
 
@@ -36,6 +37,7 @@ struct Meeting {
     service: MeetingService,
     analysis: Arc<Analysis>,
     mcp: Arc<ServiceMcp>,
+    models: Arc<Mutex<Arc<model::Resolver>>>,
 }
 
 pub(super) struct Attached {
@@ -50,6 +52,7 @@ pub(super) struct Target<'a> {
     pub git: &'a git::Service,
     pub directory: &'a Path,
     pub mcp: Arc<mcp::Service>,
+    pub models: Arc<model::Resolver>,
 }
 
 impl Meetings {
@@ -87,6 +90,10 @@ impl Meetings {
         );
         if let Some(meeting) = entries.get(&key) {
             meeting.mcp.replace(target.mcp);
+            *meeting
+                .models
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = target.models;
             return Some(meeting.attached());
         }
         match start(client, roots, data_home, beta, target).await {
@@ -166,25 +173,6 @@ async fn start(
     )
     .map_err(|error| error.to_string())?;
     let analysis = Analysis::new(config.analysis.max_characters as usize);
-    let model = match &config.analysis.model {
-        AnalysisModel::Inherit => None,
-        AnalysisModel::Explicit {
-            id,
-            provider_id,
-            variant,
-            profile,
-        } => Some(
-            model::Ref::decode(
-                &ObjectEncoder::new()
-                    .field("id", id.as_str())
-                    .field("providerID", provider_id.as_str())
-                    .optional("variant", &variant.as_deref().map(LosslessString::from))
-                    .optional("profile", &profile.as_deref().map(LosslessString::from))
-                    .finish(),
-            )
-            .map_err(|error| error.to_string())?,
-        ),
-    };
     let resolved = project_identity::resolve(target.git, target.directory)
         .map_err(|error| error.to_string())?;
     let now = crate::ids::now_millis();
@@ -210,20 +198,32 @@ async fn start(
         commands: None,
     };
     let store = Service::new(client.clone());
+    let coordinator = execution.coordinator().clone();
     let generator = Arc::new(Generator::new(
         store.clone(),
-        execution.coordinator().clone(),
+        coordinator.clone(),
         analysis.clone(),
-        target.reference,
-        target.project,
-        model,
+        target.reference.clone(),
+        target.project.clone(),
+        None,
     ));
-    let sessions = generator.clone();
-    let create_session: SessionFactory = Arc::new(move |parent| {
-        let generator = sessions.clone();
+    let sessions = analysis.clone();
+    let (reference, project_id) = (target.reference, target.project);
+    let create_session: SessionFactory = Arc::new(move |parent, selection| {
         let store = store.clone();
         let project = project.clone();
+        let generator = selection.reference().map(|model| {
+            Generator::new(
+                store.clone(),
+                coordinator.clone(),
+                sessions.clone(),
+                reference.clone(),
+                project_id.clone(),
+                model,
+            )
+        });
         Box::pin(async move {
+            let generator = generator.map_err(|error| error.to_string())?;
             store
                 .record_project(project, None)
                 .await
@@ -232,10 +232,25 @@ async fn start(
         })
     });
     let mcp = Arc::new(ServiceMcp::shared(target.mcp));
+    let models = Arc::new(Mutex::new(target.models));
+    let credentials = credential::Service::new(client.clone());
+    let source = models.clone();
+    let catalog: Catalog = Arc::new(move || {
+        let resolver = source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let listed = credentials
+            .all()
+            .map(|saved| catalog_models(&resolver.catalog().available(&saved)))
+            .map_err(|error| error.to_string());
+        Box::pin(async move { listed })
+    });
     let mut options = ServiceOptions::new(directory, config, create_session);
     options.generator = Some(generator);
     options.analysis = Some(analysis.clone());
     options.mcp = Some(mcp.clone());
+    options.catalog = Some(catalog);
     let service = MeetingService::start(options)
         .await
         .map_err(|error| error.to_string())?;
@@ -243,5 +258,36 @@ async fn start(
         service,
         analysis,
         mcp,
+        models,
     })
+}
+
+fn catalog_models(models: &[ycoding_core::ycoding_schema::model::Info]) -> Vec<CatalogModel> {
+    models
+        .iter()
+        .filter_map(|info| {
+            let text = |value: &LosslessString| value.to_utf8().ok();
+            let id = text(&info.id)?;
+            Some(CatalogModel {
+                provider_id: text(&info.provider_id.0)?,
+                name: text(&info.name)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| id.clone()),
+                id,
+                enabled: Some(info.enabled),
+                status: text(&info.status),
+                variants: info
+                    .variants
+                    .iter()
+                    .filter_map(|variant| text(&variant.id))
+                    .collect(),
+                profiles: info
+                    .profiles
+                    .iter()
+                    .flatten()
+                    .filter_map(|profile| text(&profile.name.0))
+                    .collect(),
+            })
+        })
+        .collect()
 }

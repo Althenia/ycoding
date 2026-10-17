@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { enumNumbers, messageTags } from "./wire-allocation.js"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { messages } from "../src/generated/v5/contract.js"
@@ -10,8 +11,8 @@ test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, no
   expect(publicEvents.map((event) => [event.name, event.durable]).sort()).toEqual(
     EventManifest.ServerDefinitions.map((event) => [event.type, event.durability === "durable"]).sort(),
   )
-  expect(publicEvents).toHaveLength(101)
-  expect(publicEvents.filter((event) => event.durable)).toHaveLength(51)
+  expect(publicEvents).toHaveLength(116)
+  expect(publicEvents.filter((event) => event.durable)).toHaveLength(58)
   for (const name of [
     "server.connected",
     "log.synced",
@@ -39,7 +40,7 @@ test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, no
 
 test("REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions", () => {
   const log = messages["ycoding.v5.SessionLogItem"].fields
-  expect(log).toHaveLength(52)
+  expect(log).toHaveLength(59)
   for (const event of publicEvents) {
     const envelope = messages[event.type as keyof typeof messages]
     expect(envelope, event.name).toBeDefined()
@@ -56,7 +57,7 @@ test("REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ep
   expect(publicEventContract().messages.get("PublicEvent")!.fields).toHaveLength(EventManifest.ServerDefinitions.length)
   expect(
     publicEvents.filter((event) => SessionEvent.Definitions.some((definition) => definition.type === event.name)),
-  ).toHaveLength(58)
+  ).toHaveLength(66)
 })
 
 test("REQ-WIRE-005 every public event field retains its source type, tag and presence", () => {
@@ -94,7 +95,7 @@ test("REQ-WIRE-005 every public event field retains its source type, tag and pre
       name,
     ).toEqual(
       message.fields.map((field, index) => [
-        index + 1,
+        messageTags(name, message.fields)[index],
         field.name,
         primitives[field.type] ?? (contract.enums.has(field.type) ? 14 : 11),
         field.presence === "required",

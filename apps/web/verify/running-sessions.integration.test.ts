@@ -34,6 +34,70 @@ afterAll(async () => {
 })
 
 describe("running Sessions across workspaces", () => {
+  test("Sessions filters and cards put waiting before running and update live at phone and desktop widths", async () => {
+    for (const width of [390, 1440])
+      for (const theme of ["light", "dark"] as const) {
+        const page = await browser!.openPage()
+        try {
+          await page.setViewport(width, width === 390 ? 844 : 900)
+          await page.navigate(
+            `http://127.0.0.1:${port}/verify/remote.html?scenario=session-list-waiting-${width}&theme=${theme}&view=sessions`,
+          )
+          const ready = `document.querySelectorAll('.sessions-table__select').length === 3 && document.querySelectorAll('.running-sessions__item').length === 3`
+          for (let attempt = 0; attempt < 80 && !(await page.evaluate<boolean>(ready)); attempt++) await Bun.sleep(50)
+          expect(await page.evaluate<boolean>(ready)).toBe(true)
+          expect(
+            await page.evaluate<string[]>(
+              `[...document.querySelectorAll('.session-filters button')].map(item => item.textContent.trim())`,
+            ),
+          ).toEqual(["All", "Waiting", "Running", "Idle"])
+          const titles = `[...document.querySelectorAll('.sessions-table__select')].map(item => item.textContent.trim())`
+          const cards = `[...document.querySelectorAll('.running-sessions__title')].map(item => item.textContent.trim())`
+          expect(await page.evaluate<string[]>(titles)).toEqual(["Waiting review", "Running build", "Recent result"])
+          expect(await page.evaluate<string[]>(cards)).toEqual(["Waiting review", "Running build", "Recent result"])
+          expect(
+            await page.evaluate<string>(`document.querySelector('.running-sessions__status').textContent.trim()`),
+          ).toBe("Waiting for you")
+          expect(
+            await page.evaluate<(string | null)[]>(
+              `[...document.querySelectorAll('.running-sessions__item')].slice(0, 2).map(card => card.getAttribute('aria-description'))`,
+            ),
+          ).toEqual(["Waiting for you", "Running"])
+          expect(
+            await page.evaluate<boolean>(
+              `(() => { const status = document.querySelector('.running-sessions__status'); const chip = [...document.querySelectorAll('.sessions-table .chip')].find(item => item.textContent === 'Waiting for you'); return getComputedStyle(status).color === getComputedStyle(chip).color && getComputedStyle(status.querySelector('.running-sessions__dot')).backgroundColor === getComputedStyle(chip).color })()`,
+            ),
+          ).toBe(true)
+          await page.evaluate(`document.querySelectorAll('.session-filters button')[1].click()`)
+          for (
+            let attempt = 0;
+            attempt < 80 &&
+            (await page.evaluate<number>(`document.querySelectorAll('.sessions-table__select').length`)) !== 1;
+            attempt++
+          )
+            await Bun.sleep(25)
+          expect(await page.evaluate<string[]>(titles)).toEqual(["Waiting review"])
+          await page.evaluate(
+            `window.remoteStatus(['ses_running'], ['ses_recent']); document.querySelectorAll('.session-filters button')[0].click()`,
+          )
+          for (
+            let attempt = 0;
+            attempt < 80 &&
+            !(await page.evaluate<boolean>(
+              `document.querySelectorAll('.sessions-table__select').length === 3 && document.querySelector('.running-sessions__title')?.textContent === 'Recent result'`,
+            ));
+            attempt++
+          )
+            await Bun.sleep(25)
+          expect(await page.evaluate<string[]>(titles)).toEqual(["Recent result", "Running build", "Waiting review"])
+          expect(await page.evaluate<string[]>(cards)).toEqual(["Recent result", "Running build", "Waiting review"])
+          expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        } finally {
+          await page.close()
+        }
+      }
+  }, 30_000)
+
   test("renders only populated roots with workspace labels and usable focus and selection", async () => {
     if (!browser) throw new Error("Browser not started")
     for (const width of [320, 390, 1440])
@@ -71,7 +135,7 @@ describe("running Sessions across workspaces", () => {
               `document.activeElement === document.querySelector('.running-sessions__item') && getComputedStyle(document.activeElement).outlineStyle !== 'none'`,
             ),
           ).toBe(true)
-          await page.pressKey(" ", "Space", 32)
+          await page.pressKey(" ", "Space", 32, " ")
           expect(await page.evaluate<string[]>(`window.runningSelected()`)).toEqual(["ses_alpha"])
         } finally {
           await page.close()

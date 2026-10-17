@@ -726,6 +726,7 @@ fn binding(write: bool) -> KnowledgeBinding {
         search: "search".into(),
         read: "read".into(),
         write: write.then(|| "write".into()),
+        enabled: true,
     }
 }
 
@@ -868,6 +869,7 @@ async fn retrieval_rejects_a_wrong_document_and_an_unavailable_capability() {
                 search: "absent".into(),
                 read: "read".into(),
                 write: None,
+                enabled: true,
             }]),
         );
         assert_eq!(

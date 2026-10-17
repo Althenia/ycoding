@@ -223,7 +223,7 @@ async fn test019_permission_rules_reply_ownership_and_child_ceiling_gate_real_sh
     .await;
     let autonomy = AutonomyService::new(fixture.client());
     autonomy
-        .set_yolo(&child, YoloLevel::new(3).unwrap())
+        .set_yolo(&child, YoloLevel::GUARDRAILS)
         .await
         .unwrap();
     autonomy
@@ -663,6 +663,7 @@ async fn test019_runner_permission_reply_gates_real_shell_effect() {
 #[derive(Default)]
 struct Recorder {
     woken: Mutex<Vec<String>>,
+    resumed: Mutex<Vec<String>>,
 }
 impl OrchestrationExecution for Recorder {
     fn wake(&self, id: &session::Id) -> Outcome {
@@ -671,6 +672,13 @@ impl OrchestrationExecution for Recorder {
             .unwrap()
             .push(id.as_lossless().as_str().unwrap().into());
         Ok(())
+    }
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        self.resumed
+            .lock()
+            .unwrap()
+            .push(id.as_lossless().as_str().unwrap().into());
+        Box::pin(async { Ok(()) })
     }
     fn interrupt(&self, id: &session::Id) -> RunFuture {
         let id = id.clone();
@@ -722,6 +730,8 @@ fn guardrail_input(session_id: &session::Id, resource: String) -> GuardrailInput
         metadata: None,
         skip_review: false,
         holder: None,
+        defer_shell: false,
+        source: None,
     }
 }
 
@@ -815,84 +825,86 @@ async fn safe_effect(
 
 #[tokio::test]
 async fn test020_yolo_goal_matrix_settles_every_authority_kind() {
-    for level in 0..=3u8 {
+    for level in 0..=2u8 {
         for goal in [false, true] {
-            let mut fixture = Fixture::new();
-            let repo = fixture.temp.repo_a.clone();
-            let root = fixture.session("ses_root_a", None, "prj_a", &repo, 0, None);
-            let autonomy = AutonomyService::new(fixture.client());
-            autonomy
-                .set_yolo(&root, YoloLevel::new(level).unwrap())
-                .await
-                .unwrap();
-            if goal {
+            for toggle in [false, true] {
+                let mut fixture = Fixture::new();
+                let repo = fixture.temp.repo_a.clone();
+                let root = fixture.session("ses_root_a", None, "prj_a", &repo, 0, None);
+                let autonomy = AutonomyService::new(fixture.client());
                 autonomy
-                    .set_goal(&root, Goal::new("Finish safely", None, None))
+                    .set_yolo(&root, YoloLevel::new(level).unwrap())
                     .await
                     .unwrap();
-            }
-            let auto_permission = level >= 1 || goal;
-            let auto_guardrail = level >= 1;
-            let auto_answer = level >= 2 || goal;
-            let label = format!("yolo={level} goal={goal}");
+                if goal {
+                    autonomy
+                        .set_goal(&root, Goal::new("Finish safely", None, None))
+                        .await
+                        .unwrap();
+                }
+                autonomy.set_auto_answer(&root, toggle).await.unwrap();
+                let auto_permission = level >= 1;
+                let auto_guardrail = level >= 2;
+                let auto_answer = toggle;
+                let label = format!("yolo={level} goal={goal} auto_answer={toggle}");
 
-            // Permission ask.
-            fixture.set_rules(vec![rule("shell", "*", "ask")]);
-            let permissions = fixture.permissions("prj_a");
-            let admission = permissions
-                .ask(
-                    perm_request(&root, &format!("per_m{level}_{goal}"), "shell", "touch x"),
-                    None,
-                )
-                .unwrap();
-            if auto_permission {
-                assert_eq!(admission.effect, Effect::Allow, "permission {label}");
-                assert!(permissions.list().is_empty(), "permission {label}");
-            } else {
-                assert_eq!(admission.effect, Effect::Ask, "permission {label}");
-                assert_eq!(
-                    permissions.list().len(),
-                    1,
-                    "permission {label}: human wait"
-                );
-                permissions
-                    .reply(&admission.id, permission::Reply("once".into()), None)
+                // Permission ask.
+                fixture.set_rules(vec![rule("shell", "*", "ask")]);
+                let permissions = fixture.permissions("prj_a");
+                let admission = permissions
+                    .ask(
+                        perm_request(&root, &format!("per_m{level}_{goal}"), "shell", "touch x"),
+                        None,
+                    )
                     .unwrap();
-                admission.wait.unwrap().await.unwrap().unwrap();
-                assert!(
-                    fixture.events_json().contains("permission.replied"),
-                    "permission settlement {label}"
-                );
-            }
+                if auto_permission {
+                    assert_eq!(admission.effect, Effect::Allow, "permission {label}");
+                    assert!(permissions.list().is_empty(), "permission {label}");
+                } else {
+                    assert_eq!(admission.effect, Effect::Ask, "permission {label}");
+                    assert_eq!(
+                        permissions.list().len(),
+                        1,
+                        "permission {label}: human wait"
+                    );
+                    permissions
+                        .reply(&admission.id, permission::Reply("once".into()), None)
+                        .unwrap();
+                    admission.wait.unwrap().await.unwrap().unwrap();
+                    assert!(
+                        fixture.events_json().contains("permission.replied"),
+                        "permission settlement {label}"
+                    );
+                }
 
-            // Ordinary guardrail review (outside-repository write).
-            let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
-            let outside = format!("touch '{}/file'", fixture.temp.outside.display());
-            let admission = guardrails.assert(guardrail_input(&root, outside)).unwrap();
-            if auto_guardrail {
-                assert_eq!(admission.effect, Effect::Allow, "guardrail {label}");
-                admission.reservation.unwrap().release();
-            } else {
-                assert_eq!(admission.effect, Effect::Ask, "guardrail {label}");
-                let request = admission.request.clone().unwrap();
-                assert_eq!(request.hard_review, None, "guardrail {label}");
-                assert_eq!(
-                    guardrails.for_session(&root).unwrap(),
-                    vec![request.clone()]
-                );
-                guardrails
-                    .reply(&root, &request.id, guardrail::Reply::Once)
-                    .unwrap();
-                admission.wait.unwrap().await.unwrap().unwrap().release();
-                assert!(
-                    fixture.events_json().contains("guardrail.replied"),
-                    "review settlement {label}"
-                );
-            }
+                // Ordinary guardrail review (outside-repository write).
+                let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
+                let outside = format!("touch '{}/file'", fixture.temp.outside.display());
+                let admission = guardrails.assert(guardrail_input(&root, outside)).unwrap();
+                if auto_guardrail {
+                    assert_eq!(admission.effect, Effect::Allow, "guardrail {label}");
+                    admission.reservation.unwrap().release();
+                } else {
+                    assert_eq!(admission.effect, Effect::Ask, "guardrail {label}");
+                    let request = admission.request.clone().unwrap();
+                    assert_eq!(request.hard_review, None, "guardrail {label}");
+                    assert_eq!(
+                        guardrails.for_session(&root).unwrap(),
+                        vec![request.clone()]
+                    );
+                    guardrails
+                        .reply(&root, &request.id, guardrail::Reply::Once)
+                        .unwrap();
+                    admission.wait.unwrap().await.unwrap().unwrap().release();
+                    assert!(
+                        fixture.events_json().contains("guardrail.replied"),
+                        "review settlement {label}"
+                    );
+                }
 
-            // Form.
-            let forms = Forms::new(fixture.authority(), fixture.publisher());
-            let form_info = form::Info::decode(
+                // Form.
+                let forms = Forms::new(fixture.authority(), fixture.publisher());
+                let form_info = form::Info::decode(
                 &parse_json(&format!(
                     r#"{{"id":"frm_m{level}_{goal}","sessionID":"{}","title":"Choose","fields":[{{"key":"flag","type":"boolean"}}]}}"#,
                     root.as_lossless().as_str().unwrap()
@@ -900,76 +912,78 @@ async fn test020_yolo_goal_matrix_settles_every_authority_kind() {
                 .unwrap(),
             )
             .unwrap();
-            let wait = forms.ask(form_info.clone()).unwrap();
-            if auto_answer {
-                let state = within(wait).await.unwrap();
-                assert!(matches!(state, form::State::Answered(_)), "form {label}");
-            } else {
-                assert_eq!(
-                    forms.state(&form_info.id).unwrap(),
-                    form::State::Pending,
-                    "form {label}"
-                );
-                forms
-                    .reply(
-                        &form_info.id,
-                        form::Answer::decode(&parse_json(r#"{"flag":true}"#).unwrap()).unwrap(),
-                    )
-                    .unwrap();
-                let state = within(wait).await.unwrap();
-                assert!(matches!(state, form::State::Answered(_)), "form {label}");
-            }
+                let wait = forms.ask(form_info.clone()).unwrap();
+                if auto_answer {
+                    let state = within(wait).await.unwrap();
+                    assert!(matches!(state, form::State::Answered(_)), "form {label}");
+                } else {
+                    assert_eq!(
+                        forms.state(&form_info.id).unwrap(),
+                        form::State::Pending,
+                        "form {label}"
+                    );
+                    forms
+                        .reply(
+                            &form_info.id,
+                            form::Answer::decode(&parse_json(r#"{"flag":true}"#).unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                    let state = within(wait).await.unwrap();
+                    assert!(matches!(state, form::State::Answered(_)), "form {label}");
+                }
 
-            let question = Arc::new(Question {
-                forms: forms.clone(),
-                policy: fixture.leaf("prj_a", &repo),
-            });
-            fixture.push_rule("question", "*", "allow");
-            let context = Context::new(
-                root.as_lossless().as_str().unwrap(),
-                "build",
-                "msg_question",
-                "call_question",
-            )
-            .unwrap();
-            let task = tokio::spawn(async move {
-                question.settle(parse_json(r#"{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"safe","description":"Safe choice"}]}]}"#).unwrap(), context).await
-            });
-            if !auto_answer {
-                let pending = until(|| forms.list(None).into_iter().next()).await;
-                assert!(
-                    !task.is_finished(),
-                    "question {label} must wait for a human"
-                );
-                forms
-                    .reply(
-                        &pending.id,
-                        form::Answer::decode(&parse_json(r#"{"q0":"safe"}"#).unwrap()).unwrap(),
-                    )
-                    .unwrap();
-            }
-            let answer = within(task).await.unwrap().unwrap();
-            assert!(
-                stringify_json(&answer.structured).contains("safe"),
-                "question consumer {label}"
-            );
-
-            // Child question.
-            let child = launch_child(&fixture, &root, "call_child", vec![]).await;
-            let sessions = SessionStoreService::new(fixture.client());
-            let orchestration = OrchestrationService::new(sessions, Arc::new(Recorder::default()));
-            let asked = orchestration
-                .question(&child, "Which option?", None)
-                .await
+                let question = Arc::new(Question {
+                    forms: forms.clone(),
+                    policy: fixture.leaf("prj_a", &repo),
+                });
+                fixture.push_rule("question", "*", "allow");
+                let context = Context::new(
+                    root.as_lossless().as_str().unwrap(),
+                    "build",
+                    "msg_question",
+                    "call_question",
+                )
                 .unwrap();
-            assert_eq!(asked.auto_answered, auto_answer, "child question {label}");
-            if auto_answer {
-                assert_eq!(
-                    orchestration.get(&root, &child).unwrap().state,
-                    ycoding_schema::session_orchestration::State::Running,
-                    "child question {label}"
+                let task = tokio::spawn(async move {
+                    question.settle(parse_json(r#"{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"safe","description":"Safe choice"}]}]}"#).unwrap(), context).await
+                });
+                if !auto_answer {
+                    let pending = until(|| forms.list(None).into_iter().next()).await;
+                    assert!(
+                        !task.is_finished(),
+                        "question {label} must wait for a human"
+                    );
+                    forms
+                        .reply(
+                            &pending.id,
+                            form::Answer::decode(&parse_json(r#"{"q0":"safe"}"#).unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                }
+                let answer = within(task).await.unwrap().unwrap();
+                assert!(
+                    stringify_json(&answer.structured).contains("safe"),
+                    "question consumer {label}"
                 );
-            } else {
+
+                // Child question.
+                let child = launch_child(&fixture, &root, "call_child", vec![]).await;
+                let sessions = SessionStoreService::new(fixture.client());
+                let orchestration =
+                    OrchestrationService::new(sessions, Arc::new(Recorder::default()));
+                let asked = orchestration
+                    .question_attributed(
+                        &child,
+                        "Which option?",
+                        None,
+                        &ycoding_core::session::usage_attribution::Attribution::Unset,
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    !asked.auto_answered,
+                    "child question {label}: the root toggle is not inherited"
+                );
                 assert_eq!(
                     orchestration.get(&root, &child).unwrap().state,
                     ycoding_schema::session_orchestration::State::Waiting,
@@ -989,40 +1003,40 @@ async fn test020_yolo_goal_matrix_settles_every_authority_kind() {
                     answered.state,
                     ycoding_schema::session_orchestration::State::Running
                 );
-            }
 
-            // Deny rules remain enforced at every level.
-            fixture.push_rule("shell", "*", "deny");
-            let denied = permissions
-                .ask(
-                    perm_request(&root, &format!("per_d{level}_{goal}"), "shell", "touch x"),
-                    None,
+                // Deny rules remain enforced at every level.
+                fixture.push_rule("shell", "*", "deny");
+                let denied = permissions
+                    .ask(
+                        perm_request(&root, &format!("per_d{level}_{goal}"), "shell", "touch x"),
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(denied.effect, Effect::Deny, "deny {label}");
+                let child_deny = launch_child(
+                    &fixture,
+                    &root,
+                    "call_ceiling",
+                    vec![rule("decision", "*", "deny")],
                 )
-                .unwrap();
-            assert_eq!(denied.effect, Effect::Deny, "deny {label}");
-            let child_deny = launch_child(
-                &fixture,
-                &root,
-                "call_ceiling",
-                vec![rule("decision", "*", "deny")],
-            )
-            .await;
-            let denied = permissions
-                .ask(
-                    perm_request(
-                        &child_deny,
-                        &format!("per_c{level}_{goal}"),
-                        "decision",
-                        "agent",
-                    ),
-                    None,
-                )
-                .unwrap();
-            assert_eq!(denied.effect, Effect::Deny, "inherited ceiling {label}");
-            drop(permissions);
-            drop(guardrails);
-            drop(forms);
-            fixture.shutdown();
+                .await;
+                let denied = permissions
+                    .ask(
+                        perm_request(
+                            &child_deny,
+                            &format!("per_c{level}_{goal}"),
+                            "decision",
+                            "agent",
+                        ),
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(denied.effect, Effect::Deny, "inherited ceiling {label}");
+                drop(permissions);
+                drop(guardrails);
+                drop(forms);
+                fixture.shutdown();
+            }
         }
     }
 }
@@ -1033,7 +1047,7 @@ async fn test020_file_backed_restart_preserves_numeric_level_and_durable_child_w
     let repo = fixture.temp.repo_a.clone();
     let root = fixture.session("ses_root_a", None, "prj_a", &repo, 0, None);
     fixture.set_rules(vec![rule("shell", "*", "ask")]);
-    let levels = (0..=3)
+    let levels = (0..=2)
         .map(|level| {
             fixture.session(
                 &format!("ses_level_{level}"),
@@ -1082,7 +1096,7 @@ async fn test020_file_backed_restart_preserves_numeric_level_and_durable_child_w
 
         let autonomy = AutonomyService::new(fixture.client());
         autonomy
-            .set_yolo(&root, YoloLevel::new(3).unwrap())
+            .set_yolo(&root, YoloLevel::GUARDRAILS)
             .await
             .unwrap();
         assert_eq!(permissions.list().len(), 1);
@@ -1106,8 +1120,8 @@ async fn test020_file_backed_restart_preserves_numeric_level_and_durable_child_w
     let effective = autonomy.effective(&root).unwrap();
     assert_eq!(
         effective.yolo.get(),
-        3,
-        "stored numeric YOLO level must survive restart as 3"
+        2,
+        "stored numeric YOLO level must survive restart as 2"
     );
 
     let sessions = SessionStoreService::new(fixture.client());
@@ -1181,18 +1195,16 @@ async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class
         ("rm -rf ~/notes", "standard.review.home-child"),
     ];
     // (yolo, goal, custom allow, external-directory exemption, reviews enabled)
-    let contexts: [(u8, bool, bool, bool, bool); 11] = [
+    let contexts: [(u8, bool, bool, bool, bool); 9] = [
         (0, false, false, false, true),
         (1, false, false, false, true),
         (2, false, false, false, true),
-        (3, false, false, false, true),
         (0, true, false, false, true),
         (1, true, false, false, true),
         (2, true, false, false, true),
-        (3, true, false, false, true),
         (0, false, true, false, true),
-        (3, true, false, true, true),
-        (3, true, true, true, false),
+        (2, true, false, true, true),
+        (2, true, true, true, false),
     ];
     for (command, rule_id) in classes {
         let mut fixture = Fixture::new();
@@ -1546,6 +1558,8 @@ impl ComputerPolicy for NativePolicy {
                 ),
                 skip_review: false,
                 holder: None,
+                defer_shell: false,
+                source: None,
             };
             let evaluated = self.leaf.guardrails.evaluate(&input).unwrap();
             self.calls.lock().unwrap().push(format!(
@@ -1798,7 +1812,7 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
             None,
             "prj_a",
             &fixture.temp.repo_a,
-            3,
+            2,
             (case == "ceiling").then(|| vec![rule("decision", "*", "deny")]),
         );
         AutonomyService::new(fixture.client())
@@ -1990,6 +2004,7 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
                     decision::Invocation {
                         session_id: &root,
                         input_id: None,
+                        attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
                         cancellation: &Cancellation::default()
                     }
                 )

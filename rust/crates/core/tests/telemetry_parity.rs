@@ -4,20 +4,24 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicUsize, Ordering},
         mpsc,
     },
     task::{Context, Waker},
     time::Duration,
 };
 use ycoding_core::{
-    telemetry::{Error, MAX_ROWS, RETENTION_MS, Service},
+    session::retention::Settings,
+    telemetry::{Error, MAX_ROWS, Service},
     ycoding_schema::{DomainDecode, DomainEncode, parse_json, telemetry},
     ycoding_store::{
         Catalog, Metadata, Options, Receipt, Store, TableDeclaration, analytics, resources,
         session::Document,
     },
 };
+
+const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const DAY: i64 = 24 * 60 * 60 * 1000;
 
 const CATALOG: Catalog = Catalog::new(
     1,
@@ -27,8 +31,10 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<resources::SequenceTable>(),
         TableDeclaration::of::<resources::RequestTable>(),
         TableDeclaration::of::<resources::UsageTable>(),
+        TableDeclaration::of::<resources::UsageAnalyticsRequestTable>(),
         TableDeclaration::of::<ycoding_store::project::ProjectTable>(),
         TableDeclaration::of::<ycoding_store::session::SessionTable>(),
+        TableDeclaration::of::<ycoding_store::session::TaskTable>(),
         TableDeclaration::of::<analytics::DeliveryTable>(),
         TableDeclaration::of::<analytics::IntentTable>(),
     ],
@@ -60,6 +66,7 @@ fn world() -> (ReportStore, Service, Arc<AtomicI64>) {
     let service = Service::with_clock(
         store.client(),
         Arc::new(move || clock.load(Ordering::SeqCst)),
+        Arc::new(Settings::default),
     );
     let reports = report_support::start(store.client());
     (
@@ -458,31 +465,24 @@ async fn retention_boundary_read_write_housekeeping_and_ten_thousand_cap() {
     assert_eq!(service.list(None, None).await.unwrap().data.len(), 1);
     time.store(3 * RETENTION_MS + 3, Ordering::SeqCst);
     let (stop, shutdown) = tokio::sync::watch::channel(false);
-    let task_service = service.clone();
-    let task = tokio::spawn(async move {
-        task_service
-            .housekeeping(shutdown, |_| panic!("unexpected housekeeping failure"))
-            .await
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if store
-                .client()
-                .snapshot()
-                .unwrap()
-                .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 1)
-                .unwrap()
-                .is_empty()
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    let task = service
+        .housekeeping(shutdown, |_| panic!("unexpected housekeeping failure"))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .is_empty()
+    );
     stop.send(true).unwrap();
-    task.await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
     store.shutdown().unwrap();
 }
 
@@ -494,7 +494,7 @@ async fn consent_samples_and_sequence_survive_reopen() {
     ));
     let store =
         Store::initialize(&path, Options::core(), CATALOG, Metadata::new([2; 16], 1)).unwrap();
-    let service = Service::with_clock(store.client(), Arc::new(|| 42));
+    let service = Service::with_clock(store.client(), Arc::new(|| 42), Arc::new(Settings::default));
     let reports = report_support::start(store.client());
     consent(&service, true).await;
     service.append(vec![sample()]).await.unwrap();
@@ -502,7 +502,7 @@ async fn consent_samples_and_sequence_survive_reopen() {
     drop(reports);
     let store = Store::open(&path, Options::core(), CATALOG).unwrap();
     let reports = report_support::start(store.client());
-    let service = Service::with_clock(store.client(), Arc::new(|| 50));
+    let service = Service::with_clock(store.client(), Arc::new(|| 50), Arc::new(Settings::default));
     assert_eq!(
         service.consent().unwrap().consent.unwrap().decided_at.get(),
         42
@@ -545,5 +545,155 @@ async fn concurrent_revocation_never_leaves_old_or_post_opt_out_rows() {
     revoked.unwrap();
     assert_eq!(service.append(vec![sample()]).await, Err(Error::Disabled));
     assert!(service.list(None, None).await.unwrap().data.is_empty());
+    store.shutdown().unwrap();
+}
+
+fn world_with_days(days: Arc<AtomicI64>) -> (ReportStore, Service, Arc<AtomicI64>) {
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let time = Arc::new(AtomicI64::new(0));
+    let clock = time.clone();
+    let service = Service::with_clock(
+        store.client(),
+        Arc::new(move || clock.load(Ordering::SeqCst)),
+        Arc::new(move || Settings {
+            latency_days: days.load(Ordering::SeqCst),
+            ..Settings::default()
+        }),
+    );
+    let reports = report_support::start(store.client());
+    (
+        ReportStore {
+            _reports: reports,
+            store: Some(store),
+        },
+        service,
+        time,
+    )
+}
+
+#[tokio::test]
+async fn latency_days_is_read_at_every_operation_with_a_strict_receipt_boundary() {
+    let days = Arc::new(AtomicI64::new(2));
+    let (store, service, time) = world_with_days(days.clone());
+    consent(&service, true).await;
+    service.append(vec![sample()]).await.unwrap();
+
+    time.store(DAY + 1, Ordering::SeqCst);
+    assert_eq!(service.list(None, None).await.unwrap().data.len(), 1);
+    assert_eq!(count_rows(&store), 1);
+    days.store(1, Ordering::SeqCst);
+    assert!(service.list(None, None).await.unwrap().data.is_empty());
+    assert_eq!(count_rows(&store), 0);
+
+    time.store(0, Ordering::SeqCst);
+    service.append(vec![sample()]).await.unwrap();
+    time.store(DAY, Ordering::SeqCst);
+    service.prune().await.unwrap();
+    assert_eq!(count_rows(&store), 1);
+    assert_eq!(service.list(None, None).await.unwrap().data.len(), 1);
+    time.store(DAY + 1, Ordering::SeqCst);
+    service.prune().await.unwrap();
+    assert_eq!(count_rows(&store), 0);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn an_append_prunes_rows_older_than_the_current_latency_days() {
+    let days = Arc::new(AtomicI64::new(5));
+    let (store, service, time) = world_with_days(days.clone());
+    consent(&service, true).await;
+    service.append(vec![sample()]).await.unwrap();
+    days.store(1, Ordering::SeqCst);
+    time.store(DAY + 1, Ordering::SeqCst);
+    service.append(vec![sample()]).await.unwrap();
+    assert_eq!(count_rows(&store), 1);
+    assert_eq!(service.list(None, None).await.unwrap().data.len(), 1);
+    store.shutdown().unwrap();
+}
+
+fn count_rows(store: &Store) -> usize {
+    store
+        .client()
+        .snapshot()
+        .unwrap()
+        .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, MAX_ROWS + 1)
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn housekeeping_prunes_exactly_once_before_returning_a_task_that_joins_on_shutdown() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let time = Arc::new(AtomicI64::new(0));
+    let clock = time.clone();
+    let service = Service::with_clock(
+        store.client(),
+        Arc::new(move || clock.load(Ordering::SeqCst)),
+        Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Settings::default()
+        }),
+    );
+    let reports = report_support::start(store.client());
+    consent(&service, true).await;
+    service.append(vec![sample()]).await.unwrap();
+    calls.store(0, Ordering::SeqCst);
+    time.store(RETENTION_MS + 1, Ordering::SeqCst);
+
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = service
+        .housekeeping(shutdown, |_| panic!("unexpected housekeeping failure"))
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        store
+            .client()
+            .snapshot()
+            .unwrap()
+            .scan::<resources::LatencyTable>(Bound::Unbounded, Bound::Unbounded, 1)
+            .unwrap()
+            .is_empty()
+    );
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!task.is_finished());
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    drop(reports);
+    store.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn housekeeping_that_is_already_stopped_returns_a_finished_task_without_pruning() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let store = Store::disposable(Options::core(), CATALOG, Metadata::new([1; 16], 1)).unwrap();
+    let service = Service::with_clock(
+        store.client(),
+        Arc::new(|| 0),
+        Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Settings::default()
+        }),
+    );
+    let (_stop, shutdown) = tokio::sync::watch::channel(true);
+    let task = service
+        .housekeeping(shutdown, |_| panic!("unexpected housekeeping failure"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     store.shutdown().unwrap();
 }

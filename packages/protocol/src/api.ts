@@ -11,6 +11,7 @@ import { makePermissionGroup } from "./groups/permission.js"
 import { FileSystemGroup } from "./groups/fs.js"
 import { makeFormGroup } from "./groups/form.js"
 import { makeGuardrailGroup } from "./groups/guardrail.js"
+import { makeReviewGroup } from "./groups/review.js"
 import { CommandGroup } from "./groups/command.js"
 import { SkillGroup } from "./groups/skill.js"
 import { EventGroup, makeEventGroup } from "./groups/event.js"
@@ -20,6 +21,7 @@ import { PluginGroup } from "./groups/plugin.js"
 import { HealthGroup } from "./groups/health.js"
 import { ServerGroup } from "./groups/server.js"
 import { UsageGroup } from "./groups/usage.js"
+import { makeIncidentGroup } from "./groups/incident.js"
 import { KeepAwakeGroup } from "./groups/keep-awake.js"
 import { RemoteGroup } from "./groups/remote.js"
 import { DebugGroup } from "./groups/debug.js"
@@ -66,6 +68,7 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
 type SessionGroups<SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService> =
   | ReturnType<typeof makeSessionGroup<SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeGuardrailGroup<SessionLocationId, SessionLocationService>>
+  | ReturnType<typeof makeReviewGroup<SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeBrowserGroup<SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeIsolatedBrowserGroup<SessionLocationId, SessionLocationService>>
   | HttpApiGroup.AddMiddleware<typeof MessageGroup, SessionLocationId>
@@ -98,6 +101,7 @@ type ApiGroups<
   | typeof HealthGroup
   | typeof ServerGroup
   | typeof UsageGroup
+  | ReturnType<typeof makeIncidentGroup<LocationId, LocationService>>
   | typeof RemoteGroup
   | typeof KeepAwakeGroup
   | typeof DebugGroup
@@ -193,9 +197,11 @@ const makeApiFromGroup = <
     .add(makeBrowserGroup(sessionLocationMiddleware))
     .add(makeIsolatedBrowserGroup(sessionLocationMiddleware))
     .add(UsageGroup)
+    .add(makeIncidentGroup(locationMiddleware))
     .add(RemoteGroup)
     .add(KeepAwakeGroup)
     .add(ConfigGroup.middleware(locationMiddleware))
+    .add(makeReviewGroup(sessionLocationMiddleware))
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

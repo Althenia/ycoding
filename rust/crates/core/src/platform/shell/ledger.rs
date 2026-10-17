@@ -4,7 +4,7 @@ use ycoding_schema::{DomainEncode, JsonValue, LosslessString, shell::Id};
 use ycoding_store::{
     Client, Error, IndexOrder, IndexQuery, KeyPart, Snapshot, TableSpec, Write,
     resources::{Shell, ShellTable},
-    session::{EventTable, SessionTable},
+    session::{EventTable, SessionTable, Task, TaskTable},
     tuple_key,
 };
 
@@ -132,6 +132,20 @@ impl Ledger {
         self.0.submit(move |tx| ShellTable::insert(tx, &row))?.await
     }
 
+    pub async fn started(&self, id: &Id, pid: u32, started: Option<String>) -> Result<(), Error> {
+        let key = key(&shell_id(id));
+        self.0
+            .submit(move |tx| {
+                if let Some(mut row) = tx.get::<ShellTable>(&key)? {
+                    row.pid = i64::from(pid);
+                    row.process_started = started.map(Into::into);
+                    ShellTable::put(tx, &row)?;
+                }
+                Ok(())
+            })?
+            .await
+    }
+
     pub async fn release(&self, id: &Id) -> Result<(), Error> {
         let key = key(&shell_id(id));
         self.0
@@ -175,6 +189,19 @@ impl Ledger {
             .await
     }
 
+    pub async fn notice_cleared(&self, id: &Id) -> Result<(), Error> {
+        let key = key(&shell_id(id));
+        self.0
+            .submit(move |tx| {
+                if let Some(mut row) = tx.get::<ShellTable>(&key)? {
+                    row.notice_pending = 0;
+                    ShellTable::put(tx, &row)?;
+                }
+                Ok(())
+            })?
+            .await
+    }
+
     pub fn lost_sessions(&self) -> Result<Vec<LosslessString>, Error> {
         let snapshot = self.0.snapshot()?;
         let mut sessions = BTreeSet::new();
@@ -184,6 +211,7 @@ impl Ledger {
             }
             if let Some(id) = row.session_id
                 && snapshot.get::<SessionTable>(&key(&id))?.is_some()
+                && !terminal(snapshot.get::<TaskTable>(&key(&id))?)
             {
                 let prefix = started_prefix(&id);
                 let latest = snapshot
@@ -222,6 +250,7 @@ impl Ledger {
                         let unacknowledged = match &row.session_id {
                             Some(id) => {
                                 tx.get::<SessionTable>(&key(id))?.is_some()
+                                    && !terminal(tx.get::<TaskTable>(&key(id))?)
                                     && latest_start(tx, id)? <= row.start_seq
                             }
                             None => false,
@@ -279,13 +308,18 @@ impl Ledger {
                 }
                 store
                     .submit(move |tx| {
-                        if row.notice_pending == 0 || row.session_id.is_none() {
+                        let Some(owner) =
+                            row.session_id.clone().filter(|_| row.notice_pending != 0)
+                        else {
+                            tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
+                            return Ok(());
+                        };
+                        if terminal(tx.get::<TaskTable>(&key(&owner))?) {
                             tx.delete::<ShellTable>(&ShellTable::primary_key(&row))?;
                             return Ok(());
                         }
                         row.time_lost = Some(super::super::now() as i64);
-                        row.start_seq =
-                            latest_start(tx, row.session_id.as_ref().expect("owed session"))?;
+                        row.start_seq = latest_start(tx, &owner)?;
                         ShellTable::put(tx, &row)
                     })
                     .map_err(io::Error::other)?
@@ -303,6 +337,14 @@ impl Ledger {
     }
 }
 
+fn terminal(task: Option<Task>) -> bool {
+    task.is_some_and(|task| {
+        matches!(
+            task.state.as_str(),
+            Some("completed" | "failed" | "cancelled" | "lost")
+        )
+    })
+}
 fn latest_start(tx: &mut Write<'_>, session: &LosslessString) -> Result<i64, Error> {
     let prefix = started_prefix(session);
     Ok(tx

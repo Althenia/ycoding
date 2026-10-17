@@ -18,6 +18,20 @@ export function cacheHitPercent(value: number | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? Math.round(value * 100) : undefined
 }
 
+export function generationSpeedLabel(
+  speed: SessionCacheDiagnostics["generationSpeed"] | undefined,
+  selected?: Pick<SessionCacheDiagnostics["model"], "providerID" | "id">,
+) {
+  const latest = speed?.latest
+  if (!latest) return
+  if (selected && (selected.providerID !== latest.model.providerID || selected.id !== latest.model.id)) return
+  const rate =
+    latest.tokensPerSecond >= 1
+      ? Math.round(latest.tokensPerSecond).toLocaleString("en-US")
+      : latest.tokensPerSecond.toPrecision(2)
+  return `${latest.estimated ? "≈ " : ""}${rate} tok/s`
+}
+
 const cacheToken = (value: number, reported: boolean, suffix: string) =>
   reported ? `${Locale.number(value)} ${suffix}` : `not reported ${suffix}`
 

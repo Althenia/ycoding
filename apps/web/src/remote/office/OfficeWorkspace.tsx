@@ -154,6 +154,7 @@ function cueAnnouncement(snapshot: OfficeSnapshot): string {
   if (!cue) return ""
   const child = snapshot.actors.find((actor) => actor.id === (cue.kind === "delegate" ? cue.toActorID : cue.fromActorID))
   if (!child) return ""
+  if (cue.kind === "report" && cue.outcome === "resumed") return `Subagent ${child.title} resumed.`
   if (cue.kind === "report" && cue.outcome) return `Subagent ${child.title} reported ${cue.outcome}.`
   return `Delegated to subagent ${child.title}.`
 }

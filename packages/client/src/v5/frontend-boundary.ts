@@ -3,6 +3,8 @@ import type {
   LocationGetOutput,
   McpAddInput,
   RemoteGetOutput,
+  SessionListInput,
+  SessionsResponse,
   SkillInfo,
   SkillListInput,
 } from "../promise/generated/types.js"
@@ -65,6 +67,17 @@ export type RemoteDevice = {
 export type RemoteEnrollOutput = RemoteDevice
 export type RemoteStatusOutput = RemoteGetOutput & { device?: RemoteDevice }
 export type BackendPaths = { home: string; state: string; worktree: string; config: string }
+export type BackendSessionsQuery = Omit<SessionListInput, "order"> & {
+  order?: "asc" | "desc" | "pinned" | "active"
+  status?: "running" | "idle" | "waiting"
+  searchFields?: "summary"
+  around?: string
+  before?: number
+}
+export type BackendSessionsResponse = SessionsResponse & {
+  status?: { running: string[]; attention: string[]; lost?: string[] }
+  stale?: boolean
+}
 export type BackendLocationOutput = LocationGetOutput & { backendPaths?: BackendPaths }
 export type BackendSkillListOutput = {
   location: BackendLocationOutput

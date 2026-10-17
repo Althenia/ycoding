@@ -85,7 +85,7 @@ fn options(directory: &Directory, generate: Option<Generate>) -> (ServiceOptions
     let mut options = ServiceOptions::new(
         directory.0.clone(),
         MeetingConfig::parse(&json!({})).unwrap(),
-        Arc::new(move |_| {
+        Arc::new(move |_, _| {
             let number = counter.fetch_add(1, Ordering::SeqCst) + 1;
             Box::pin(async move { Ok(format!("session-{number}")) })
         }),

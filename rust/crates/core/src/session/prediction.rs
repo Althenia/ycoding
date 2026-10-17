@@ -11,6 +11,7 @@ use crate::{
     resources::{agent, memory::Scope},
     tools::policy::helper::Role,
 };
+use icu_segmenter::WordSegmenter;
 use ycoding_schema::{
     DomainDecode, JsonValue, ObjectEncoder, parse_json, permission, session, session_message,
     stringify_json,
@@ -51,9 +52,12 @@ pub fn agent() -> ycoding_schema::agent::Info {
 
 pub fn accept(output: &str, previous: &str) -> Option<String> {
     let text = trim(output);
-    let words = words(&text);
-    if words.len() < 2
-        || words.len() > 40
+    let words = WordSegmenter::new_auto(Default::default())
+        .segment_str(&text)
+        .iter_with_word_type()
+        .filter(|(_, kind)| kind.is_word_like())
+        .count();
+    if !(2..=40).contains(&words)
         || units(&text).len() > OUTPUT_UNITS
         || matches(r"[\p{Cc}\p{Bidi_Control}\u2028\u2029]", "u", &text)
         || matches(LABEL, "iu", &text)
@@ -115,11 +119,26 @@ impl Service {
         let ticket = self
             .active
             .begin(&self.dependencies.feed, id, CANCELLING_EVENTS);
-        self.generate(id, input, &ticket).await
+        let attribution =
+            super::usage_attribution::entry(&self.dependencies.store.client, id.as_lossless())
+                .await
+                .ok()?;
+        self.generate(id, input, &ticket, attribution).await
     }
 
-    async fn generate(&self, id: &session::Id, input: Input, ticket: &Ticket) -> Option<String> {
+    async fn generate(
+        &self,
+        id: &session::Id,
+        input: Input,
+        ticket: &Ticket,
+        attribution: super::usage_attribution::Attribution,
+    ) -> Option<String> {
         let dependencies = &self.dependencies;
+        let _activity = super::usage_activity::contribute(
+            &dependencies.store.client,
+            id.clone(),
+            attribution.anchor().cloned(),
+        );
         let cancelled = || ticket.cancellation.is_cancelled();
         let context = self.eligible(id)?;
         if cancelled() {
@@ -176,6 +195,7 @@ impl Service {
                 user: stringify_json(&message),
                 character_limit: OUTPUT_UNITS,
                 cancellation: &ticket.cancellation,
+                attribution,
             })
             .await?;
         let suggestion = accept(&output, &text(&context.user.text))?;

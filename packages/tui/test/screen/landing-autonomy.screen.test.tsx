@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -25,12 +25,27 @@ function fixture(input: {
   agentModel?: { providerID: string; id: string; profile?: string; variant?: string }
 } = {}) {
   let sessionID: string | undefined
-  let autonomy: SessionAutonomyState = { mode: "normal", yolo: 0 }
+  let autonomyState: Omit<SessionAutonomyView, "effective"> = { mode: "normal", yolo: 0 }
+  const autonomyView = (): SessionAutonomyView => {
+    const level = autonomyState.yolo === true ? 2 : autonomyState.yolo === 1 || autonomyState.yolo === 2 ? autonomyState.yolo : 0
+    const asleep = autonomyState.sleep !== undefined && autonomyState.sleep !== null
+    return {
+      ...autonomyState,
+      effective: {
+        yolo: level as 0 | 1 | 2,
+        asleep,
+        ordinaryReviewsAuto: level === 2 && !asleep,
+        guardrailsEnabled: true,
+        modelReviews: false,
+        hardModelReviews: false,
+      },
+    }
+  }
   let failAutonomy = false
   let failGoal = false
   const mutations: string[] = []
   const creates: Record<string, unknown>[] = []
-  const admissionStates: SessionAutonomyState[] = []
+  const admissionStates: SessionAutonomyView[] = []
   const selection = input.selection ?? { providerID: model.providerID, id: model.id }
   const modelInfo = {
     ...modelInfoBase,
@@ -66,7 +81,7 @@ function fixture(input: {
       if (typeof body === "object" && body !== null) creates.push(structuredClone(body) as Record<string, unknown>)
       const id = typeof body === "object" && body !== null ? Reflect.get(body, "id") : undefined
       sessionID = typeof id === "string" ? id : "ses_landing_goal_new"
-      autonomy = { mode: "normal", yolo: 0 }
+      autonomyState = { mode: "normal", yolo: 0 }
       mutations.push("create")
       return json({ data: info() })
     }
@@ -79,6 +94,8 @@ function fixture(input: {
         if (typeof payload !== "object" || payload === null) throw new Error("Invalid autonomy payload")
         const yolo = Reflect.get(payload, "yolo")
         const goal = Reflect.get(payload, "goal")
+        const autoAnswer = Reflect.get(payload, "autoAnswer")
+        const sleep = Reflect.get(payload, "sleep")
         mutations.push("autonomy")
         if (failAutonomy) {
           failAutonomy = false
@@ -88,12 +105,14 @@ function fixture(input: {
           failGoal = false
           return new Response("goal rejected", { status: 500 })
         }
-        autonomy = {
-          mode: "normal", yolo: yolo === 0 || yolo === 1 || yolo === 2 || yolo === 3 ? yolo : autonomy.yolo,
-          ...(typeof goal === "string" ? { goal: { text: goal, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } } : autonomy.goal ? { goal: autonomy.goal } : {}),
+        autonomyState = {
+          mode: "normal", yolo: yolo === 0 || yolo === 1 || yolo === 2 ? yolo : autonomyState.yolo,
+          ...(typeof autoAnswer === "boolean" ? { autoAnswer } : autonomyState.autoAnswer === undefined ? {} : { autoAnswer: autonomyState.autoAnswer }),
+          ...(typeof sleep === "boolean" ? (sleep ? { sleep: {} } : {}) : autonomyState.sleep ? { sleep: autonomyState.sleep } : {}),
+          ...(typeof goal === "string" ? { goal: { text: goal, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } } : goal === null ? {} : autonomyState.goal ? { goal: autonomyState.goal } : {}),
         }
       }
-      return json({ data: autonomy })
+      return json({ data: autonomyView() })
     }
     if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
       const body: unknown = await request.json()
@@ -103,13 +122,14 @@ function fixture(input: {
       const resume = Reflect.get(body, "resume")
       if (typeof id !== "string" || typeof text !== "string") throw new Error("Invalid prompt identity")
       mutations.push(resume === false ? "admit" : "wake")
-      if (resume === false) admissionStates.push(structuredClone(autonomy))
+      if (resume === false) admissionStates.push(structuredClone(autonomyView()))
       return json({ data: {
         id, sessionID, admittedSeq: 1, timeCreated: Date.now(), type: "user",
         data: { text }, delivery: "steer",
       } })
     }
     if (url.pathname === `/api/session/${sessionID}/snapshot`) return sessionSnapshot(sessionID, [], { session: info() })
+    if (url.pathname === `/api/session/${sessionID}/review`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
       return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
@@ -123,7 +143,7 @@ function fixture(input: {
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     return undefined
   }
-  return { route, mutations, creates, admissionStates, current: () => autonomy, failNextAutonomy: () => { failAutonomy = true }, failNextGoal: () => { failGoal = true } }
+  return { route, mutations, creates, admissionStates, current: () => autonomyView(), failNextAutonomy: () => { failAutonomy = true }, failNextGoal: () => { failGoal = true } }
 }
 
 async function waitFor(check: () => boolean, label: string) {
@@ -213,7 +233,7 @@ test("an unavailable configured agent profile remains visible and blocks submiss
   }
 }, 30_000)
 
-test.each([1, 2, 3] as const)("landing YOLO %d is durable before its first prompt and shown in chat", async (level) => {
+test.each([1, 2] as const)("landing approval level %d is durable before its first prompt and shown in chat", async (level) => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
   const backend = fixture()
   const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Message YCoding…" })
@@ -222,18 +242,18 @@ test.each([1, 2, 3] as const)("landing YOLO %d is durable before its first promp
     await screen.mouse.click(3, row)
     await screen.input.typeText(`/yolo ${level} `)
     screen.input.pressEnter()
-    await waitFor(() => screen.frame().includes(`YOLO ${level}`), "landing YOLO chip")
+    await waitFor(() => screen.frame().includes(level === 1 ? "Allow tools" : "Tools + reviews"), "landing level chip")
     expect(backend.mutations).toEqual([])
     await screen.input.typeText(`Ship with level ${level}`)
     screen.input.pressEnter()
     await waitFor(() => backend.admissionStates.length > 0, "first prompt admission")
     expect(backend.mutations.slice(0, 3)).toEqual(["create", "autonomy", "admit"])
     expect(backend.admissionStates[0]).toMatchObject({ mode: "normal", yolo: level })
-    await waitFor(() => screen.frame().includes(`YOLO ${level}`) && screen.frame().includes("shells 0"), "chat autonomy chip")
-    if (level === 3) {
+    await waitFor(() => screen.frame().includes(level === 1 ? "Allow tools" : "Tools + reviews") && screen.frame().includes("shells 0"), "chat autonomy chip")
+    if (level === 2) {
       screen.input.pressKey("x", { ctrl: true })
       screen.input.pressKey("n")
-      await waitFor(() => screen.frame().includes("YOLO off") && screen.frame().includes("subagents 0") && !screen.frame().includes("shells 0"), "fresh landing state")
+      await waitFor(() => screen.frame().includes("Ask first") && screen.frame().includes("subagents 0") && !screen.frame().includes("shells 0"), "fresh landing state")
       const nextRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
       await screen.mouse.click(3, nextRow)
       await screen.input.typeText("Unrelated work")
@@ -249,31 +269,31 @@ test.each([1, 2, 3] as const)("landing YOLO %d is durable before its first promp
   }
 }, 30_000)
 
-test("explicit landing goal creates a Session with the displayed YOLO level before its first prompt", async () => {
+test("explicit landing goal creates a Session with the displayed approval level before its first prompt", async () => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
   const backend = fixture()
   const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Message YCoding…" })
   try {
     const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
     await screen.mouse.click(3, row)
-    await screen.input.typeText("/yolo 3 ")
+    await screen.input.typeText("/yolo 2 ")
     screen.input.pressEnter()
-    await waitFor(() => screen.frame().includes("YOLO 3"), "landing YOLO chip")
+    await waitFor(() => screen.frame().includes("Tools + reviews"), "landing level chip")
     await screen.input.typeText("/goal Validate every branch ")
     screen.input.pressEnter()
     await waitFor(() => backend.current().goal?.status === "active", "durable goal")
     expect(backend.mutations.slice(0, 2)).toEqual(["create", "autonomy"])
-    expect(backend.current()).toMatchObject({ yolo: 3, goal: { text: "Validate every branch", status: "active" } })
+    expect(backend.current()).toMatchObject({ yolo: 2, goal: { text: "Validate every branch", status: "active" } })
     await waitFor(() => screen.frame().includes(" goal ") && !screen.frame().includes("shells 0"), "landing goal chip after durable set")
-    await waitFor(() => screen.frame().includes("shells 0") && screen.frame().includes("YOLO 3") && screen.frame().includes(" goal "), "chat autonomy state")
+    await waitFor(() => screen.frame().includes("shells 0") && screen.frame().includes("Tools + reviews") && screen.frame().includes(" goal "), "chat autonomy state")
     await waitFor(() => screen.lines()[1]?.includes("ready") ?? false, "chat history ready")
     await screen.input.typeText("Start the work")
     screen.input.pressEnter()
     await waitFor(() => backend.admissionStates.length > 0, "first goal prompt admission")
-    expect(backend.admissionStates[0]).toMatchObject({ yolo: 3, goal: { text: "Validate every branch", status: "active" } })
+    expect(backend.admissionStates[0]).toMatchObject({ yolo: 2, goal: { text: "Validate every branch", status: "active" } })
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("n")
-    await waitFor(() => screen.frame().includes("goal off") && screen.frame().includes("YOLO off") && !screen.frame().includes("shells 0"), "fresh landing goal state")
+    await waitFor(() => screen.frame().includes("goal off") && screen.frame().includes("Ask first") && !screen.frame().includes("shells 0"), "fresh landing goal state")
   } finally {
     await screen.dispose()
     await rm(state, { recursive: true, force: true })
@@ -290,7 +310,7 @@ test("an autonomy-set failure retains the submitted input for receipt retry and 
     await screen.mouse.click(3, row)
     await screen.input.typeText("/yolo 2 ")
     screen.input.pressEnter()
-    await waitFor(() => screen.frame().includes("YOLO 2"), "landing YOLO chip")
+    await waitFor(() => screen.frame().includes("Tools + reviews"), "landing level chip")
     await screen.input.typeText("Needs durable autonomy")
     screen.input.pressEnter()
     await waitFor(() => backend.mutations.includes("autonomy"), "rejected autonomy set")
@@ -309,17 +329,17 @@ test("an autonomy-set failure retains the submitted input for receipt retry and 
   }
 }, 30_000)
 
-test("the landing palette cycles visible YOLO levels without creating a Session", async () => {
+test("the landing palette cycles visible approval levels without creating a Session", async () => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
   const backend = fixture()
   const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Message YCoding…" })
   try {
-    for (const level of [1, 2, 3]) {
+    for (const label of ["Allow tools", "Tools + reviews", "Ask first", "Allow tools"]) {
       screen.input.pressKey("p", { ctrl: true })
       await waitFor(() => screen.frame().includes("Commands"), "command palette")
-      await screen.input.typeText("Toggle YOLO")
+      await screen.input.typeText("Approval level")
       screen.input.pressEnter()
-      await waitFor(() => screen.frame().includes(`YOLO ${level}`), `landing YOLO ${level}`)
+      await waitFor(() => screen.frame().includes(label), `landing ${label}`)
       expect(backend.mutations).toEqual([])
     }
     const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
@@ -327,7 +347,7 @@ test("the landing palette cycles visible YOLO levels without creating a Session"
     await screen.input.typeText("Palette-selected autonomy")
     screen.input.pressEnter()
     await waitFor(() => backend.admissionStates.length === 1, "palette-selected prompt admission")
-    expect(backend.admissionStates[0]).toMatchObject({ yolo: 3 })
+    expect(backend.admissionStates[0]).toMatchObject({ yolo: 1 })
     expect(backend.mutations.slice(0, 3)).toEqual(["create", "autonomy", "admit"])
   } finally {
     await screen.dispose()
@@ -335,7 +355,7 @@ test("the landing palette cycles visible YOLO levels without creating a Session"
   }
 }, 30_000)
 
-test("a failed landing goal still carries its displayed YOLO level to the created Session", async () => {
+test("a failed landing goal still carries its displayed approval level to the created Session", async () => {
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
   const backend = fixture()
   backend.failNextGoal()
@@ -343,18 +363,41 @@ test("a failed landing goal still carries its displayed YOLO level to the create
   try {
     const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
     await screen.mouse.click(3, row)
-    await screen.input.typeText("/yolo 3 ")
+    await screen.input.typeText("/yolo 2 ")
     screen.input.pressEnter()
-    await waitFor(() => screen.frame().includes("YOLO 3"), "landing YOLO chip")
+    await waitFor(() => screen.frame().includes("Tools + reviews"), "landing level chip")
     await screen.input.typeText("/goal Keep this draft ")
     screen.input.pressEnter()
     await waitFor(() => backend.mutations.includes("autonomy"), "goal rejection")
     expect(backend.mutations.slice(0, 3)).toEqual(["create", "autonomy", "autonomy"])
-    expect(backend.current()).toMatchObject({ yolo: 3 })
+    expect(backend.current()).toMatchObject({ yolo: 2 })
     expect(backend.current().goal).toBeUndefined()
     expect(backend.admissionStates).toEqual([])
-    expect(screen.frame()).toContain("YOLO 3")
+    expect(screen.frame()).toContain("Tools + reviews")
     expect(screen.frame()).toContain("goal off")
+  } finally {
+    await screen.dispose()
+    await rm(state, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test("landing /auto-answer draft is durable before the first prompt and shown in chat", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-landing-autonomy-"))
+  const backend = fixture()
+  const screen = await renderScreen({ width: 100, height: 40, state, route: backend.route, settle: "Message YCoding…" })
+  try {
+    const row = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, row)
+    await screen.input.typeText("/auto-answer ")
+    screen.input.pressEnter()
+    await waitFor(() => screen.frame().includes("answers auto"), "landing answers-auto chip")
+    expect(backend.mutations).toEqual([])
+    await screen.input.typeText("Ship with answers")
+    screen.input.pressEnter()
+    await waitFor(() => backend.admissionStates.length > 0, "first prompt admission")
+    expect(backend.mutations.slice(0, 3)).toEqual(["create", "autonomy", "admit"])
+    expect(backend.admissionStates[0]).toMatchObject({ autoAnswer: true })
+    await waitFor(() => screen.frame().includes("Ask first · answers auto · ready"), "chat autonomy header")
   } finally {
     await screen.dispose()
     await rm(state, { recursive: true, force: true })

@@ -130,12 +130,22 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
     .toSorted((a, b) => a - b)
   const generation = records.flatMap((record) => {
     const sample = SessionCacheDiagnostics.generationSample(record.timing)
-    return sample === undefined ? [] : [sample]
+    return sample === undefined ? [] : [{ ...sample, providerTimed: record.timing?.generationDurationNs !== undefined }]
   })
   const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
+  const rates = generation.map((sample) => sample.tokensPerSecond).toSorted((a, b) => a - b)
   if (first.length === 0 && total.length === 0 && duration === 0) return undefined
   return {
     samples: first.length,
+    generationSamples: generation.length,
+    providerTimedSamples: generation.filter((sample) => sample.providerTimed).length,
+    observedSamples: generation.filter((sample) => !sample.providerTimed).length,
+    ...(rates.length === 0
+      ? {}
+      : {
+          generationP50TokensPerSecond: rates[Math.ceil(rates.length * 0.5) - 1]!,
+          generationP90TokensPerSecond: rates[Math.ceil(rates.length * 0.9) - 1]!,
+        }),
     ...(first.length === 0
       ? {}
       : {

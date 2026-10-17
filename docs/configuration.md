@@ -56,11 +56,52 @@ The importer validates the exact supported SQLite schema and resumes a recogniza
 
 Subsequent starts reuse the selected beta store and never merge later stable changes. Cancellation, panic and process death retain recognizable unactivated staging; incomplete copies start a fresh generation. After database publication, marker-loss recovery requires the same identity and retained sealed selection evidence; it never reimports or overwrites acknowledged beta database/resource writes. POSIX publication syncs candidates and directories before the selection record. Invalid or v1 markers, missing selected stores, incompatible storage and unbound existing stores refuse startup without rebind, reset, SQLite fallback or replacement. Original SQLite and resources remain unchanged. Private abandoned files are not discovery state. Core and lazy Meeting imports activate separately; this is not a cross-store coordinated cutover.
 
+## Store selection and SQLite import
+
+The Rust runtime reads `YCODING_DB`, `YCODING_DISABLE_CHANNEL_DB`, and `YCODING_SQLITE_IMPORT_SOURCE` when it starts a server. `--paths` ignores them: its output fields are unchanged, and it neither validates these variables nor creates anything. An unset or empty `YCODING_CHANNEL` is `local`; the channel is normalized before a store slot is chosen.
+
+| Variable                       | Values                                                                         | Effect                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `YCODING_DB`                   | `:memory:`, an absolute path, or a relative path; empty is unset               | Names the physical store file. A relative path joins the channel's data directory.                                  |
+| `YCODING_DISABLE_CHANNEL_DB`   | exactly `1` or `true` (case-sensitive)                                         | Selects the stable slot for a channel other than `beta`, `latest`, and `prod`. Other values leave the channel slot. |
+| `YCODING_SQLITE_IMPORT_SOURCE` | absolute path to an existing regular SQLite file; requires a file `YCODING_DB` | Replaces the import source for the selected file store.                                                             |
+
+Store slots, with the data directory of each namespace:
+
+| Slot                                                       | Store                       | Lease                       | Analytics                 | Import marker (state directory) | Automatic import         |
+| ---------------------------------------------------------- | --------------------------- | --------------------------- | ------------------------- | ------------------------------- | ------------------------ |
+| `beta`                                                     | `ycoding-beta/ycoding.redb` | `ycoding-beta/runtime.lock` | `ycoding-beta/analytics/` | `stable-import-v1.json`         | `ycoding/ycoding.db`     |
+| Stable (`latest`, `prod`, or `YCODING_DISABLE_CHANNEL_DB`) | `ycoding/ycoding.redb`      | `ycoding/runtime.lock`      | `ycoding/analytics/`      | `stable-import-v1.json`         | none                     |
+| Other channel `<s>`, including `local`                     | `ycoding/ycoding-<s>.redb`  | `ycoding/runtime-<s>.lock`  | `ycoding/analytics-<s>/`  | `stable-import-<s>-v1.json`     | `ycoding/ycoding-<s>.db` |
+
+`<s>` is the channel name with every character outside `[a-zA-Z0-9._-]` replaced by `-`; channels that sanitize alike share a slot. Attachments, project artifacts, and other shared data and state resources are common to all slots. The stable slot opens or creates its store without importing and leaves `ycoding/ycoding.db` unchanged. Data an earlier runtime wrote for a non-standard channel remains in the stable slot; nothing is moved or deleted.
+
+`YCODING_DB` resolves as follows:
+
+- Unset: the channel's slot with its companions and, where the slot has one, its automatic import.
+- `:memory:`: a disposable store with no store file, lease file, import marker, backup, or import. Analytics use a private temporary directory removed after shutdown. Combining it with `YCODING_SQLITE_IMPORT_SOURCE` is a usage error.
+- A path equal to the slot's store file: behaves exactly like unset for that slot.
+- Any other path: an explicit target. Its lease (`<target>.runtime.lock`), analytics (`<target>.analytics/`), backup (`<target>.pre-prune-backup` and `.complete`), and import marker (`<target>.stable-import-v1.json`) sit beside it. Without `YCODING_SQLITE_IMPORT_SOURCE` it opens an existing native store or creates an empty one, and never imports. Runtimes with different targets run concurrently; runtimes with the same target contend on one lease.
+
+Explicit `YCODING_DB` wins over `YCODING_DISABLE_CHANNEL_DB`.
+
+An explicit import copies the SQLite source into private scratch, imports the copy, publishes the store atomically after verification, and then seals the import marker. The importer never opens the source file or its `-wal`, `-journal`, and `-shm` companions writable, checkpoints them, or deletes them. It compares fingerprints before and after copying and retries at most three times; it cannot prevent another process from writing the source. Source preservation describes the importer and applies to the SQLite source only. Activation and marker-loss recovery preserve existing target records and acknowledged writes; redb file bytes are not guaranteed identical. Managed attachments and project artifacts import from the stable data directory and publish into the runtime's data directory.
+
+Importing into the stable slot requires `YCODING_DB` to name `ycoding/ycoding.redb` and `YCODING_SQLITE_IMPORT_SOURCE` to name the source; the stable slot never imports automatically.
+
+Validation precedes every filesystem write:
+
+- Exit 2: `YCODING_SQLITE_IMPORT_SOURCE` is relative, or is set while `YCODING_DB` is unset or `:memory:`. This check depends only on the values, so it applies when the marker is already sealed.
+- Refused with the store and source unchanged: an explicit target whose parent is absent, is not a directory, or is a symlink; a target that exists but is not a regular, non-symlink file; a target that begins with the SQLite header; a target that exists with no import marker and no import journal while `YCODING_SQLITE_IMPORT_SOURCE` is set. The one allowed absent parent is the runtime's own data directory, which startup then creates; `sub/x.redb` with `sub` absent is refused and creates no directory.
+- Refused while an explicit import would run (the variable is set, the marker is absent, and an existing target has no sealed journal): a source that is absent, not a regular non-symlink file, or aliases the target or any of its companion files, or whose device and inode match an existing target on Unix. A missing source for an explicit import is never recorded as an absent-source decision. An automatic slot import keeps its absent-source behavior when its default source is missing.
+
+After the marker is sealed, later starts do not reimport and do not read the source path. A syntactically valid absolute `YCODING_SQLITE_IMPORT_SOURCE` is ignored whatever it names, including a missing, changed, or different file; a relative value still exits 2. If the marker is lost after publication, the next start verifies the sealed journal and republishes the marker without reading the source and without reimporting, whether or not the variable is set. An interrupted explicit import resumes only with an unchanged source and resource fingerprints; a changed source starts a new generation. A restart of an explicit target without `YCODING_SQLITE_IMPORT_SOURCE` after an interrupted import is refused, naming the interrupted import, and creates no empty store.
+
 ## Private evaluation runs
 
 `ycoding run --config <file>` starts a private Rust server and applies the original JSON/JSONC document as `YCODING_CONFIG_CONTENT`, the highest-priority runtime layer. Comments and trailing commas are accepted. The file path resolves from `PWD` (or the process working directory); `{file:...}` references in that inline document resolve from the run directory, not the document's containing directory. Global and project configuration still participate below it.
 
-`ycoding run --isolated` starts a private server with fresh temporary data, cache, state and runtime scratch directories. Its canonical store is `<temporary data>/<namespace>/ycoding.redb`. Stored credentials and Sessions are unavailable; provider environment variables and explicit configuration still work. Existing stable data and beta import markers are outside the private roots and are neither imported nor activated. The temporary tree is removed after the child stops, including startup and run errors. User configuration remains a read source; unrelated user data, configuration, cache and state are unchanged. This isolates runtime storage, not tool or filesystem authority.
+`ycoding run --isolated` starts a private server with fresh temporary data, cache, state and runtime scratch directories. Its canonical store is `<temporary data>/<namespace>/ycoding.redb`. Stored credentials and Sessions are unavailable; provider environment variables and explicit configuration still work. Existing stable data and beta import markers are outside the private roots and are neither imported nor activated; a user-set `YCODING_SQLITE_IMPORT_SOURCE` never imports into the isolated store. The temporary tree is removed after the child stops, including startup and run errors. User configuration remains a read source; unrelated user data, configuration, cache and state are unchanged. This isolates runtime storage, not tool or filesystem authority.
 
 ```sh
 ycoding run --isolated --config ./eval.jsonc --model openai/gpt-5.6-sol "Inspect the fixture"
@@ -337,40 +378,41 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 
 ## Complete top-level runtime fields
 
-| Field                   | Type                                  | Purpose                                                                                            |
-| ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `$schema`               | string                                | Optional editor metadata only.                                                                     |
-| `shell`                 | string                                | Preferred shell for terminal and shell execution.                                                  |
-| `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                            |
-| `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.                 |
-| `model`                 | model selector                        | Default model.                                                                                     |
-| `default_agent`         | string                                | Default selectable primary agent.                                                                  |
-| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.                 |
-| `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                         |
-| `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                                    |
-| `username`              | string                                | Display and telemetry identity.                                                                    |
-| `permissions`           | permission rules                      | Global ordered tool permission rules.                                                              |
-| `agents`                | record                                | Built-in overrides and custom agents.                                                              |
-| `snapshots`             | boolean                               | Undo/revert snapshot behavior.                                                                     |
-| `watcher.ignore`        | string array                          | Watcher ignore patterns.                                                                           |
-| `formatter`             | boolean or formatter record           | Built-in formatter enablement and overrides.                                                       |
-| `lsp`                   | boolean or LSP record                 | Built-in language-server enablement and overrides.                                                 |
-| `attachments`           | object                                | Attachment processing, currently image limits and resizing.                                        |
-| `tool_output`           | object                                | Tool-output truncation limits.                                                                     |
-| `mcp`                   | object                                | MCP defaults and named servers.                                                                    |
-| `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                             |
-| `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).             |
-| `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                                   |
-| `commands`              | record                                | Named slash commands.                                                                              |
-| `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.           |
-| `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576.        |
-| `references`            | record                                | Named local or Git context sources.                                                                |
-| `extensions`            | array                                 | Explicit trusted process definitions and host grants; see [plugins and hooks](#plugins-and-hooks). |
-| `providers`             | record                                | Provider and model overrides.                                                                      |
-| `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.                    |
-| `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                                      |
-| `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                                      |
-| `experimental`          | object                                | Subagent depth and resource policies.                                                              |
+| Field                   | Type                                  | Purpose                                                                                                  |
+| ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `$schema`               | string                                | Optional editor metadata only.                                                                           |
+| `shell`                 | string                                | Preferred shell for terminal and shell execution.                                                        |
+| `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                                  |
+| `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.                       |
+| `model`                 | model selector                        | Default model.                                                                                           |
+| `default_agent`         | string                                | Default selectable primary agent.                                                                        |
+| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.                       |
+| `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                               |
+| `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                                          |
+| `username`              | string                                | Display and telemetry identity.                                                                          |
+| `permissions`           | permission rules                      | Global ordered tool permission rules.                                                                    |
+| `agents`                | record                                | Built-in overrides and custom agents.                                                                    |
+| `snapshots`             | boolean                               | Undo/revert snapshot behavior.                                                                           |
+| `watcher.ignore`        | string array                          | Watcher ignore patterns.                                                                                 |
+| `formatter`             | boolean or formatter record           | Built-in formatter enablement and overrides.                                                             |
+| `lsp`                   | boolean or LSP record                 | Built-in language-server enablement and overrides.                                                       |
+| `attachments`           | object                                | Attachment processing, currently image limits and resizing.                                              |
+| `tool_output`           | object                                | Tool-output truncation limits.                                                                           |
+| `mcp`                   | object                                | MCP defaults and named servers.                                                                          |
+| `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                                   |
+| `session_retention`     | object                                | Global-only idle Session family and usage-record retention; see [Session retention](#session-retention). |
+| `analytics_retention`   | object                                | Global-only usage-fact and latency retention; see [Session retention](#session-retention).               |
+| `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                                         |
+| `commands`              | record                                | Named slash commands.                                                                                    |
+| `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.                 |
+| `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576.              |
+| `references`            | record                                | Named local or Git context sources.                                                                      |
+| `extensions`            | array                                 | Explicit trusted process definitions and host grants; see [plugins and hooks](#plugins-and-hooks).       |
+| `providers`             | record                                | Provider and model overrides.                                                                            |
+| `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.                          |
+| `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                                            |
+| `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                                            |
+| `experimental`          | object                                | Subagent depth and resource policies.                                                                    |
 
 ### Shell memory limits
 
@@ -395,6 +437,12 @@ The field reference below expands the overview. `unset` means the field is optio
 | `shell_sandbox`                                   | `disabled` \| `optional` \| `required`                                         | unset           | Shell isolation policy.                                                                          |
 | `shell_memory_limit_mb`                           | non-negative integer `<= 1048576`                                              | unset           | Default sampled resident-memory limit in MiB; zero means unlimited.                              |
 | `model`                                           | model selector                                                                 | unset           | Session/agent model fallback.                                                                    |
+| `model_fallbacks`                                 | record from `provider/model` to 0–3 distinct model selectors                   | unset           | The nearest document supplies the complete map; an empty list disables that model's chain.       |
+| `shell_queue.max_running`                         | integer 1–64                                                                   | 10              | Machine-wide running queue slots.                                                                |
+| `shell_queue.max_running_per_session`             | integer 1–64                                                                   | 1               | Running queue slots per Session.                                                                 |
+| `shell_queue.max_queued_per_session`              | integer 1–1000                                                                 | 16              | Waiting commands per Session.                                                                    |
+| `shell_queue.memory_reserve_mb`                   | integer 0–1048576                                                              | 2048            | Cold admission reserve when no finite command limit or learned peak exists.                      |
+| `shell_queue.max_load`                            | finite number above 0 and at most 64                                           | 1               | Admission load threshold normalized by available parallelism.                                    |
 | `default_agent`, `username`                       | string                                                                         | unset           | Primary agent ID and display identity.                                                           |
 | `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Notice-only checks; `false` disables them.                                                       |
 | `share`                                           | `manual` \| `auto` \| `disabled`                                               | unset           | Sharing policy.                                                                                  |
@@ -725,13 +773,11 @@ Permissions are evaluated in order. Each rule has:
 
 `effect` is `allow`, `deny`, or `ask`.
 
-The TUI has no separate auto-approve permission toggle. Automatic handling is controlled by durable Session autonomy:
-YOLO 0 is manual; YOLO 1 auto-approves `ask` permissions and ordinary guardrail reviews, YOLO 2 also answers questions/forms, and YOLO 3 currently behaves like YOLO 2.
-An active goal also handles questions/forms and `ask` permissions at YOLO 0, but does not auto-approve guardrail reviews
-below effective YOLO 1. Stored numeric levels retain their values without migration or mapping. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
-including approval for the current Session, remain available.
+Automatic handling is controlled by durable Session autonomy. YOLO 0 is **Ask first**, YOLO 1 is **Allow tools** and auto-approves ask permissions, and YOLO 2 is **Tools + reviews** and also auto-approves ordinary guardrail reviews while awake. Goals grant neither permission approvals nor answers; YOLO does not control question answers. The Session-local `autoAnswer` toggle defaults off, is independent of YOLO, goals, and sleep, and does not inherit across the family. While asleep, only eligible option questions and Forms may be answered, and only when that Session's toggle is on; free-text and uncertainty defer. Explicit denies and inherited permission ceilings remain enforced. Manual decisions remain available.
 
-For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` explicitly selects manual handling. A failed autonomy update prevents prompt admission.
+Startup normalizes stored YOLO level 3 to level 2 before rehydrating Session autonomy. New requests accept only levels 0–2.
+
+For noninteractive runs, `ycoding run --yolo <0-2>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` selects Ask first. A failed autonomy update prevents prompt admission.
 
 The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
 
@@ -1066,7 +1112,7 @@ Judgments run only when an agent calls the `decision` tool with `provider: "agen
 
 The hidden decision agent uses the selected model's regular authentication, privacy, quota, and billing route. Credentials are managed through the selected model integration and never passed as decision-tool inputs or results. Shared agent guidance directs bounded classification, option choice, grading, ranking, unverifiable predicates, and recommendations before `question`, using only authorized evidence.
 
-Requests supply JSON state and 1–32 uniquely named `predicate`, `choice`, or `score` questions. Choices use `{ value, description }`; scores use `{ label, description }` levels with distinguishable adjacent criteria. Batch independent questions and separate dependent ones. Verify factual claims with tests, grep, typechecks, or inventory rather than judging them. Reuse unchanged judgments and preserve explicit owner choices. See [explicit runtime judgments](./runtime.md#explicit-decision-judgments) and the [decision contract](../specs/decisions.md).
+Requests supply JSON state and 1–32 uniquely named `predicate`, `choice`, or `score` questions. Choices use `{ value, description }`; a choice question accepts `grade: true` (default `false`) to receive one `{ choice, confidence, evidence }` grade per listed choice without a pick, with finite confidence in `[0, 1]` and nonempty evidence of at most 500 UTF-16 code units, and missing, duplicate, extra, or invalid grades fail validation; scores use `{ label, description }` levels with distinguishable adjacent criteria. Batch independent questions and separate dependent ones. Verify factual claims with tests, grep, typechecks, or inventory rather than judging them. Reuse unchanged judgments and preserve explicit owner choices. See [explicit runtime judgments](./runtime.md#explicit-decision-judgments) and the [decision contract](../specs/decisions.md).
 
 ### Decision agent
 
@@ -1278,15 +1324,21 @@ Soft thresholds are runtime-owned. A Session starts background compaction once w
 }
 ```
 
-| Field                                 | Exact type       | Default | Operational remark                                                                                        |
-| ------------------------------------- | ---------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `guardrails.enabled`                  | boolean          | `true`  | Enables the guardrail service; no configuration or approval reply overrides a standard catastrophic deny. |
-| `guardrails.max_concurrent_shells`    | positive integer | `8`     | Running-shell cap per root Session family, including background shells.                                   |
-| `guardrails.shell_wait_seconds`       | positive integer | `60`    | How long a shell over the cap waits, first come first served, for a slot before failing with the limit.   |
-| `guardrails.max_concurrent_subagents` | positive integer | `8`     | Running-subagent cap per root Session family.                                                             |
-| `guardrails.max_pending_reviews`      | positive integer | `16`    | Pending-review cap per root Session family.                                                               |
+| Field                                 | Exact type       | Default | Operational remark                                                                                         |
+| ------------------------------------- | ---------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `guardrails.enabled`                  | boolean          | `true`  | Enables the guardrail service; no configuration or approval reply overrides a standard catastrophic deny.  |
+| `guardrails.decide_reviews`           | boolean          | `false` | Enables model verification of standard review matches and graded review decisions.                         |
+| `guardrails.decide_hard_reviews`      | boolean          | `true`  | Allows hard-review grading when `decide_reviews` is enabled; false leaves hard-review decisions to humans. |
+| `guardrails.max_concurrent_shells`    | positive integer | `8`     | Running-shell cap per root Session family, including background shells.                                    |
+| `guardrails.shell_wait_seconds`       | positive integer | `60`    | How long a shell over the cap waits, first come first served, for a slot before failing with the limit.    |
+| `guardrails.max_concurrent_subagents` | positive integer | `8`     | Running-subagent cap per root Session family.                                                              |
+| `guardrails.max_pending_reviews`      | positive integer | `16`    | Pending-review cap per root Session family.                                                                |
 
-Standard recursive-deletion rules exclude `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR`, including descendants. Filesystem root, configured or other exact user homes, and system-directory deletion are denied. Project-root, ancestor, and direct home-child deletion, destructive Git, force push, and destructive database statements require hard human review. Edits, writes, patches, and shell commands that reach outside the repository require ordinary review through the normal review/YOLO path, without helper classification; every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands (including `cd`, `exit`, `ps`, `pgrep`, and `lsof`) are exempt, as are read-only segments of compound commands that do not redirect outside. An interpreter's script argument (`sh`, `bash`, `zsh`, `node`, `bun`, `deno`, `python`, `python3`, `ruby`, `perl`) and a heredoc body consumed by a non-shell interpreter are executed code, not outside operands; a command whose working directory is outside still requires review. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, do not require that review. A path is also exempt when the calling Session's effective `external_directory` permission is `allow`, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent. `ask` and `deny` do not exempt a path. A shell command that also reaches a non-exempt outside path still requires review. These exemptions do not apply to hard reviews or catastrophic denies. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
+Standard recursive-deletion rules exclude `/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`, and the process `TMPDIR`, including descendants. Filesystem root, configured or other exact user homes, and system-directory deletion are denied. Project-root, ancestor, and direct home-child deletion, destructive Git, force push, and destructive database statements require hard review.
+
+Model grading requires `guardrails.decide_reviews` and, for hard reviews, `guardrails.decide_hard_reviews`. Hard-review decisions require a human when either switch is off. Ordinary reviews retain the awake YOLO policy; model verification of standard matches requires `guardrails.decide_reviews`. See [runtime guardrails](./runtime.md#session-guardrails) for confidence thresholds, uncertainty, and sleep deferral.
+
+Edits, writes, patches, and shell commands that reach outside the repository require ordinary review through the review/YOLO path. Every checkout of this repository (the main checkout and every linked worktree sharing its Git common directory) and temporary roots count as inside, and recognized read-only shell commands (including `cd`, `exit`, `ps`, `pgrep`, and `lsof`) are exempt, as are read-only segments of compound commands that do not redirect outside. An interpreter's script argument (`sh`, `bash`, `zsh`, `node`, `bun`, `deno`, `python`, `python3`, `ruby`, `perl`) and a heredoc body consumed by a non-shell interpreter are executed code, not outside operands; a command whose working directory is outside still requires review. Paths under YCoding's global config, data, cache, state, temporary, bin, log, and repos directories, including descendants, do not require that review. A path is also exempt when the calling Session's effective `external_directory` permission is `allow`, using the same directory-glob resource and `~` expansion as other path permissions from global and project `permissions` and from the agent. `ask` and `deny` do not exempt a path. A shell command that also reaches a non-exempt outside path still requires review. These exemptions do not apply to hard reviews or catastrophic denies. Publication, production deployment, security-policy changes, and MCP execution have no standard guardrail rule.
 
 Custom rule files are direct `guardrails/*.md` children of the global config directory and each discovered repository `Config.Directory`; nested directories are not scanned. Source layers evaluate nearest repository first, then broader repositories, then the global directory. Within a layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID. See [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md#custom-guardrails) for the complete file contract and the unoverrideable catastrophic-deny, reply, and transient-approval rules.
 
@@ -1432,7 +1484,7 @@ Managed-service startup checks readiness more frequently during its initial wait
 
 ### Rust runtime executable
 
-The native CLI embeds the `ycoding-runtime` executable and extracts it into a version-and-SHA-256-addressed private path before launch; a cached payload must match the embedded digest. Source execution requires a built `rust/target/debug/ycoding-runtime` or `YCODING_RUNTIME_EXECUTABLE`. Native payload builds require a matching host. No runtime file is added to the release archive.
+The native CLI embeds the `ycoding-runtime` executable and extracts it into a version-and-SHA-256-addressed private path before launch; a cached payload must match the embedded digest. Source execution requires a built `rust/target/debug/ycoding-runtime` or `YCODING_RUNTIME_EXECUTABLE`. Native payload builds require a matching host and read the executable from Cargo's resolved target directory, including Cargo configuration and relative `CARGO_TARGET_DIR` settings. No runtime file is added to the release archive.
 
 The extracted path is `<bin>/runtime/<frontend version>/<SHA-256>/ycoding-runtime` (`.exe` on Windows), preserving an existing service executable during update. Source-only `YCODING_RUNTIME_EXECUTABLE` does not override an installed embedded payload. Backend observability starts in Rust, not the CLI process. `--frontend-executable` binds installed native assets to the frontend directory, so the computer-use app stays beside `ycoding`; without it, helper-dependent operations report `helper_unavailable` rather than guessing another asset owner.
 
@@ -1481,16 +1533,26 @@ selection; transport authentication, limits and credential redaction are unchang
 ```json
 {
   "session_retention": {
-    "days": 7
+    "days": 7,
+    "records_days": 7
+  },
+  "analytics_retention": {
+    "usage_days": 30,
+    "latency_days": 30
   }
 }
 ```
 
-| Key                      | Type             | Default | Effect                                                                                       |
-| ------------------------ | ---------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `session_retention.days` | positive integer | `7`     | Delete a root Session family once every member has been idle for longer than this many days. |
+| Key                                | Type             | Default | Effect                                                                                                                                                                                                       |
+| ---------------------------------- | ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `session_retention.days`           | positive integer | `7`     | Delete a root Session family once every member has been idle for longer than this many days.                                                                                                                 |
+| `session_retention.records_days`   | positive integer | `7`     | Delete a Session's provider-request, usage, file-change, and context-exclusion records once the Session has been idle (by `time_updated`) longer than this many days. The Session and its transcript remain. |
+| `analytics_retention.usage_days`   | positive integer | `30`    | Delete backend usage facts whose request date (`time_created`) is older than this many days.                                                                                                                 |
+| `analytics_retention.latency_days` | positive integer | `30`    | Delete provider-request latency rows whose server-receipt date is older than this many days. The existing 10,000-row cap is unchanged.                                                                       |
 
-`session_retention` is global-only: the backend reads global configuration, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, ignoring project settings because one canonical Store serves every project. Each sweep reads retention configuration. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, and scheduling.
+`session_retention` and `analytics_retention` are global-only: the backend reads global configuration, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`, ignoring project settings because one canonical Store serves every project. Each sweep reads all four keys again, so a change applies from the next sweep; `latency_days` also applies at each latency read and write. An initial global configuration load failure stops startup before pruning. A later load failure retains the last successfully loaded record, usage-fact, and latency retention settings; it never substitutes shorter defaults. Missing or invalid individual keys use their per-key defaults. Each value must be a positive integer. A row exactly the configured number of days old is kept. `session_retention.days` deletes whole idle Session families; `session_retention.records_days` deletes only the Session-owned usage records listed above and is independent of `days`. See [automatic Session retention](./runtime.md#automatic-session-retention) for family scope, exemptions, and scheduling, and [usage facts and records](./runtime.md#usage-facts-and-records) for what each setting removes.
+
+A stable SQLite import that includes usage analytics copies those facts unchanged, including facts whose Session no longer exists, and does not regenerate facts that retention already expired. A SQLite source that predates usage analytics yields facts rebuilt once from its imported provider-request ledger; the rebuilt cache-key prefix is the first 8 Unicode characters. The import never writes to the SQLite source.
 
 ### Rust backend validation
 
@@ -1499,6 +1561,9 @@ The Rust configuration validator in `ycoding-core` accepts the same keys with th
 | Key                                            | Rust-validated shape          | Consumer behavior                                                                                                                                                                    |
 | ---------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `session_retention.days`                       | positive integer              | `ycoding-core` reads the latest defining document; an absent or rejected value uses 7 days. Load the configuration from the global directory so project documents are not consulted. |
+| `session_retention.records_days`               | positive integer              | Read at every sweep from the latest defining document; an absent or rejected value uses 7 days.                                                                                      |
+| `analytics_retention.usage_days`               | positive integer              | Read at every sweep from the latest defining document; an absent or rejected value uses 30 days.                                                                                     |
+| `analytics_retention.latency_days`             | positive integer              | Read at each latency append, page read, and startup or hourly prune from the latest defining document; an absent or rejected value uses 30 days.                                     |
 | `guardrails.shell_wait_seconds`                | positive integer              | Seconds a shell admitted at the running-shell cap waits, first come first served, for a released slot; the default is 60.                                                            |
 | `guardrails.max_concurrent_subagents`          | positive integer              | Running-subagent cap per root Session family; the default is 8, and reaching the cap fails immediately.                                                                              |
 | `efficiency.helper_models.prompt`              | `session` or a model selector | Selects the model for `/prompt` drafts. An explicit agent model takes precedence; a missing value or `session` retains agent-model, then owner-Session-model, precedence.            |

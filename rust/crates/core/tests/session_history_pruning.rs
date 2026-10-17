@@ -302,6 +302,7 @@ async fn pruning_preserves_required_rows_events_usage_and_request_ledger() {
                         .unwrap(),
                     )?,
                     time_created: 1_000,
+                    usage_anchor: None,
                 },
             )
         })

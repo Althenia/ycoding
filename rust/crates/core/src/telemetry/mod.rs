@@ -1,3 +1,4 @@
+use crate::session::retention::Settings;
 use chrono::{DateTime, SecondsFormat};
 use std::ops::Bound;
 use std::sync::Arc;
@@ -6,12 +7,13 @@ use ycoding_schema::{DomainDecode, DomainEncode, schema::Int, telemetry};
 use ycoding_store::analytics::{Query, Value, reports};
 use ycoding_store::{Client, KeyPart, TableSpec, Write, resources, session::Document, tuple_key};
 
-pub const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 pub const MAX_ROWS: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Storage,
+    Derived,
     Disabled,
     InvalidSample,
     InvalidConsent,
@@ -28,9 +30,10 @@ impl From<ycoding_store::Error> for Error {
 pub struct Service {
     store: Client,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    settings: Arc<dyn Fn() -> Settings + Send + Sync>,
 }
 impl Service {
-    pub fn new(store: Client) -> Self {
+    pub fn new(store: Client, settings: Arc<dyn Fn() -> Settings + Send + Sync>) -> Self {
         Self::with_clock(
             store,
             Arc::new(|| {
@@ -39,10 +42,22 @@ impl Service {
                     .unwrap_or_default()
                     .as_millis() as i64
             }),
+            settings,
         )
     }
-    pub fn with_clock(store: Client, clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Self {
-        Self { store, clock }
+    pub fn with_clock(
+        store: Client,
+        clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+        settings: Arc<dyn Fn() -> Settings + Send + Sync>,
+    ) -> Self {
+        Self {
+            store,
+            clock,
+            settings,
+        }
+    }
+    fn cutoff(&self, now: i64) -> i64 {
+        now.saturating_sub((self.settings)().latency_days.saturating_mul(DAY_MS))
     }
 
     pub fn consent(&self) -> Result<telemetry::ConsentState, Error> {
@@ -113,6 +128,7 @@ impl Service {
             return Err(Error::InvalidSample);
         }
         let received_at = (self.clock)();
+        let cutoff = self.cutoff(received_at);
         if received_at < 0 {
             return Err(Error::Storage);
         }
@@ -128,7 +144,7 @@ impl Service {
                 if !allowed(tx)? {
                     return Ok(Err(Error::Disabled));
                 }
-                prune(tx, received_at)?;
+                prune(tx, cutoff)?;
                 for sample in &samples {
                     resources::append_latency(tx, received_at, sample)?;
                 }
@@ -180,7 +196,8 @@ impl Service {
             return Err(Error::InvalidLimit);
         }
         let before = before.map(parse_cursor).transpose()?;
-        self.prune().await?;
+        let cutoff = self.cutoff((self.clock)());
+        self.prune_before(cutoff).await?;
         let snapshot = self.store.snapshot()?;
         if !resources::telemetry_allowed(&snapshot, &[])? {
             return Ok(telemetry::Page {
@@ -190,10 +207,9 @@ impl Service {
         }
         drop(snapshot);
         let handle = self.store.analytics().map_err(|_| Error::Storage)?;
-        let now = (self.clock)();
         let mut selected = tokio::task::spawn_blocking(move || handle.report(vec![Query {
             sql: "SELECT id, received_at, kind, sampled_at, operation, outcome, reason, queue_ms, settlement_ms, total_ms, surface, metric, duration_ms FROM web_latency WHERE received_at >= $1 AND ($2 IS NULL OR id < $2) ORDER BY id DESC LIMIT $3",
-            parameters: vec![Value::BigInt(now.saturating_sub(RETENTION_MS)), before.map(Value::BigInt).unwrap_or(Value::Null), Value::BigInt(limit as i64 + 1)],
+            parameters: vec![Value::BigInt(cutoff), before.map(Value::BigInt).unwrap_or(Value::Null), Value::BigInt(limit as i64 + 1)],
             max_rows: limit + 1,
         }])).await.map_err(|_| Error::Storage)?.map_err(|_| Error::Storage)?.remove(0);
         let next = if selected.len() > limit {
@@ -222,9 +238,11 @@ impl Service {
         })
     }
     pub async fn prune(&self) -> Result<(), Error> {
-        let now = (self.clock)();
+        self.prune_before(self.cutoff((self.clock)())).await
+    }
+    async fn prune_before(&self, cutoff: i64) -> Result<(), Error> {
         self.store
-            .submit(move |tx| prune(tx, now))?
+            .submit(move |tx| prune(tx, cutoff))?
             .await
             .map_err(Error::from)?;
         purge_pending(&self.store).await
@@ -232,26 +250,33 @@ impl Service {
     pub async fn housekeeping(
         &self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-        on_error: impl Fn(Error),
-    ) -> Result<(), Error> {
+        on_error: impl Fn(Error) + Send + 'static,
+    ) -> Result<tokio::task::JoinHandle<()>, Error> {
         if *shutdown.borrow() {
-            return Ok(());
+            return Ok(tokio::spawn(async {}));
         }
-        self.prune().await?;
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + Duration::from_secs(3600),
-            Duration::from_secs(3600),
-        );
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            if *shutdown.borrow() {
-                return Ok(());
-            }
-            tokio::select! {
-                _ = interval.tick() => if let Err(error) = self.prune().await { on_error(error); },
-                changed = shutdown.changed() => if changed.is_err() || *shutdown.borrow() { return Ok(()); },
-            }
+        match self.prune().await {
+            Ok(()) => {}
+            Err(Error::Derived) => on_error(Error::Derived),
+            Err(error) => return Err(error),
         }
+        let service = self.clone();
+        Ok(tokio::spawn(async move {
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_secs(3600),
+                Duration::from_secs(3600),
+            );
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                if *shutdown.borrow() {
+                    return;
+                }
+                tokio::select! {
+                    _ = interval.tick() => if let Err(error) = service.prune().await { on_error(error); },
+                    changed = shutdown.changed() => if changed.is_err() || *shutdown.borrow() { return; },
+                }
+            }
+        }))
     }
 }
 
@@ -265,16 +290,14 @@ fn allowed(tx: &mut Write<'_>) -> Result<bool, ycoding_store::Error> {
                 && Int::new(row.decided_at).is_ok()
         }))
 }
-fn prune(tx: &mut Write<'_>, now: i64) -> Result<(), ycoding_store::Error> {
+fn prune(tx: &mut Write<'_>, cutoff: i64) -> Result<(), ycoding_store::Error> {
     let mut deleted = false;
     loop {
         let page = tx.index_range::<resources::LatencyTable>(
             "web_latency_received_at_idx",
             ycoding_store::IndexQuery {
                 lower: Bound::Unbounded,
-                upper: Bound::Excluded(&tuple_key(&[KeyPart::I64(
-                    now.saturating_sub(RETENTION_MS),
-                )])),
+                upper: Bound::Excluded(&tuple_key(&[KeyPart::I64(cutoff)])),
                 prefix: None,
                 order: ycoding_store::IndexOrder::Ascending,
                 after: None,
@@ -306,11 +329,30 @@ async fn purge_pending(store: &Client) -> Result<(), Error> {
     if !pending {
         return Ok(());
     }
-    let handle = store.analytics().map_err(|_| Error::Storage)?;
+    let handle = store.analytics().map_err(derived)?;
     tokio::task::spawn_blocking(move || handle.purge())
         .await
         .map_err(|_| Error::Storage)?
-        .map_err(|_| Error::Storage)
+        .map_err(derived)
+}
+pub fn derived_engine_unavailable(error: &ycoding_store::analytics::Error) -> bool {
+    use ycoding_store::analytics::Error;
+    matches!(
+        error,
+        Error::Unavailable
+            | Error::Closed
+            | Error::Busy
+            | Error::Configuration
+            | Error::Io(_)
+            | Error::Duck(_)
+    )
+}
+fn derived(error: ycoding_store::analytics::Error) -> Error {
+    if derived_engine_unavailable(&error) {
+        Error::Derived
+    } else {
+        Error::Storage
+    }
 }
 fn valid_sample(sample: &telemetry::Sample) -> bool {
     let at = match sample {

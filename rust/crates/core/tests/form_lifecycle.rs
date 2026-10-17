@@ -177,10 +177,18 @@ fn conditional_fields_validate_earlier_types_options_and_cascading_inactivity() 
         .unwrap();
 }
 
+async fn enable_auto_answer(fixture: &Fixture, session: &str) {
+    ycoding_core::session::autonomy::Service::new(fixture.store.client())
+        .set_auto_answer(&ycoding_schema::session::Id::new(session).unwrap(), true)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn autonomous_forms_use_valid_defaults_and_leave_impossible_fields_pending() {
     let fixture = Fixture::default();
     let root = fixture.session("ses_root", None, 2, false, None);
+    enable_auto_answer(&fixture, "ses_root").await;
     let service = Forms::new(fixture.authority(), fixture.publisher());
     let input = form(
         "frm_auto",
@@ -235,8 +243,13 @@ async fn question_answers_are_owned_by_location_and_interruption_cleans_pending(
     drop(wait);
     assert!(service.list().is_empty());
     fixture.session("ses_root", None, 0, true, None);
+    let questions::Admission::Pending(wait) = service.ask(request.clone()).unwrap() else {
+        panic!("an active goal grants no automatic answer");
+    };
+    drop(wait);
+    enable_auto_answer(&fixture, "ses_root").await;
     let questions::Admission::Answered(answers) = service.ask(request).unwrap() else {
-        panic!("expected automatic goal answer");
+        panic!("expected an automatic answer from the Session toggle");
     };
     assert_eq!(
         answers,

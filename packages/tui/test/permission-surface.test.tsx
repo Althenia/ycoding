@@ -163,7 +163,7 @@ test("surfaces a subagent's own pending permission in the subagent view", async 
     height: 40,
     args: { sessionID: childID },
     route,
-    settle: "SUBAGENT ECONOMICS",
+    settle: "↑ Blocked surface",
   })
   try {
     await waitForFrameText(screen, "Permission required")
@@ -183,7 +183,7 @@ test("surfaces a live subagent permission in the subagent view", async () => {
     height: 40,
     args: { sessionID: childID },
     route,
-    settle: "SUBAGENT ECONOMICS",
+    settle: "↑ Blocked surface",
   })
   try {
     await screen.waitForEventStream()
@@ -214,7 +214,7 @@ test("shows the download side-effect warning on selected Chrome site approval", 
     height: 40,
     args: { sessionID: childID },
     route,
-    settle: "SUBAGENT ECONOMICS",
+    settle: "↑ Blocked surface",
   })
   try {
     await waitForFrameText(screen, "Permission required")

@@ -38,6 +38,40 @@ afterAll(async () => {
 })
 
 describe("remote Office presentation", () => {
+  test("reactivating an inert transcript renders the shared scroller's current window without a resize", async () => {
+    const page = await openRemote("view=chat&transcriptProbe=1")
+    try {
+      expect(await until(page, `document.querySelector('[data-message-id="probe_tail"]') !== null`)).toBe(true)
+      await page.evaluate(`(() => {
+        const root = document.querySelector('.workspace__scroll')
+        root.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 }))
+        root.scrollTop = 0
+        root.dispatchEvent(new Event('scroll'))
+      })()`)
+      expect(await until(page, `document.querySelector('[data-message-id="probe_tail"]') === null`)).toBe(true)
+      const before = await page.evaluate<string[]>(
+        `[...document.querySelectorAll('[data-message-id]')].map(row => row.dataset.messageId)`,
+      )
+      await page.evaluate(`(() => {
+        const panel = document.querySelector('.remote-conversation-view')
+        const root = document.querySelector('.workspace__scroll')
+        panel.inert = true
+        root.scrollTop = root.scrollHeight - root.clientHeight
+        root.dispatchEvent(new Event('scroll'))
+      })()`)
+      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      expect(
+        await page.evaluate<string[]>(
+          `[...document.querySelectorAll('[data-message-id]')].map(row => row.dataset.messageId)`,
+        ),
+      ).toEqual(before)
+      await page.evaluate(`document.querySelector('.remote-conversation-view').inert = false`)
+      expect(await until(page, `document.querySelector('[data-message-id="probe_tail"]') !== null`)).toBe(true)
+    } finally {
+      await page.close()
+    }
+  }, 60_000)
+
   test("Fit keeps the whole floor inside the real shell with notices, short heights and resize", async () => {
     const page = await openRemote("view=chat&promptOutcome=unknown&inspectOffice=1")
     try {

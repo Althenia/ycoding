@@ -43,6 +43,8 @@ pub const AUTO_BACKGROUND: Duration = Duration::from_secs(5 * 60);
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 const BACKGROUND_STARTED: &str = "The command was moved to the background.";
+const QUEUED_STARTED: &str = "The command was added to the machine-wide shell queue";
+const QUEUED_INSTRUCTION: &str = "It starts when the queue admits it, and its timeout counts from that start. You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress.";
 const BACKGROUND_INSTRUCTION: &str = "You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress.";
 const AUTO_BACKGROUND_STEER: &str = "The foreground shell exceeded 300 seconds and was moved to the background. Continue without waiting; completion will be delivered automatically.";
 
@@ -64,6 +66,7 @@ pub enum Notice {
         shell_id: String,
         state: &'static str,
         text: String,
+        resume: bool,
     },
 }
 
@@ -81,6 +84,7 @@ pub type Deliver = Arc<dyn Fn(SessionId, session_pending::Message) -> NoticeFutu
 pub struct JobShells {
     jobs: job::Jobs,
     deliver: Deliver,
+    quiet: Option<Deliver>,
     holds: Mutex<HashMap<String, Weak<Hold>>>,
 }
 
@@ -93,8 +97,14 @@ impl JobShells {
         Self {
             jobs,
             deliver,
+            quiet: None,
             holds: Mutex::default(),
         }
+    }
+
+    pub fn with_quiet_delivery(mut self, deliver: Deliver) -> Self {
+        self.quiet = Some(deliver);
+        self
     }
 
     fn hold(&self, job: &Job) -> Arc<Hold> {
@@ -163,27 +173,41 @@ impl Jobs for JobShells {
     }
 
     fn deliver(&self, notice: Notice) -> NoticeFuture {
-        let (session_id, text, description, metadata, admitted) = match notice {
-            Notice::Steer { session_id, text } => (session_id, text, None, None, None),
+        let (session_id, text, description, metadata, admitted, resume) = match notice {
+            Notice::Steer { session_id, text } => (session_id, text, None, None, None, true),
             Notice::Completed {
-                job, state, text, ..
-            } => (
-                job.session_id,
-                format!(
-                    "<shell id=\"{}\" state=\"{state}\" command=\"{}\">\n{text}\n</shell>",
-                    job.call_id, job.command
-                ),
-                Some(job.command),
-                Some(
-                    ObjectEncoder::new()
-                        .field("source", "shell")
-                        .field("state", state)
-                        .finish(),
-                ),
-                Some(job.call_id),
-            ),
+                job,
+                state,
+                text,
+                resume,
+                ..
+            } => {
+                if state == "cancelled" {
+                    self.jobs.mark_cancelled(&job.call_id);
+                }
+                (
+                    job.session_id,
+                    format!(
+                        "<shell id=\"{}\" state=\"{state}\" command=\"{}\">\n{text}\n</shell>",
+                        job.call_id, job.command
+                    ),
+                    Some(job.command),
+                    Some(
+                        ObjectEncoder::new()
+                            .field("source", "shell")
+                            .field("state", state)
+                            .finish(),
+                    ),
+                    Some(job.call_id),
+                    resume,
+                )
+            }
         };
-        let delivered = (self.deliver)(
+        let deliver = match (&self.quiet, resume) {
+            (Some(quiet), false) => quiet,
+            _ => &self.deliver,
+        };
+        let delivered = deliver(
             session_id,
             session_pending::Message::Synthetic(session_pending::SyntheticMessage {
                 data: session_pending::SyntheticData {
@@ -199,11 +223,16 @@ impl Jobs for JobShells {
         );
         let jobs = self.jobs.clone();
         Box::pin(async move {
-            delivered.await?;
-            if let Some(id) = admitted {
+            let delivered = delivered.await;
+            if delivered
+                .as_ref()
+                .err()
+                .is_none_or(|error| error.kind() == io::ErrorKind::NotFound)
+                && let Some(id) = admitted
+            {
                 jobs.notice_admitted(&id);
             }
-            Ok(())
+            delivered
         })
     }
 }
@@ -239,6 +268,23 @@ impl ShellTool {
     pub fn tool_definition(name: &str) -> ToolDefinition {
         definition(name, include_str!("shell.tool.json"))
     }
+
+    pub async fn cancel_queued(&self, session_id: &SessionId) -> io::Result<usize> {
+        let session = session_id.encode();
+        let mut cancelled = 0;
+        for info in self.shell.list() {
+            if info.status != Status::Queued
+                || info.tool_call_id.is_none()
+                || info.metadata.get(&"sessionID".into()) != Some(&session)
+            {
+                continue;
+            }
+            if self.shell.cancel_queued_quiet(&info.id).await? {
+                cancelled += 1;
+            }
+        }
+        Ok(cancelled)
+    }
 }
 
 struct Input {
@@ -247,6 +293,7 @@ struct Input {
     timeout: Option<u64>,
     memory_limit_mb: Option<u64>,
     background: bool,
+    queue: bool,
 }
 
 struct Outcome {
@@ -257,6 +304,8 @@ struct Outcome {
     timeout: bool,
     memory_limit: bool,
     running: bool,
+    queued: bool,
+    killed: bool,
     warnings: Vec<String>,
 }
 
@@ -325,32 +374,61 @@ impl ShellTool {
         if !std::fs::metadata(&cwd).is_ok_and(|metadata| metadata.is_dir()) {
             return Err(generic());
         }
-        let reservation = self
-            .policy
-            .admit(
-                &context,
-                "shell",
-                vec![command.clone().into()],
-                match ObjectEncoder::new()
-                    .field("workdir", path_text(&cwd).as_str())
-                    .finish()
-                {
-                    JsonValue::Object(metadata) => Some(metadata),
-                    _ => unreachable!(),
-                },
-                false,
-            )
-            .await?
-            .map_err(|error| {
+        let metadata = match ObjectEncoder::new()
+            .field("workdir", path_text(&cwd).as_str())
+            .finish()
+        {
+            JsonValue::Object(metadata) => Some(metadata),
+            _ => unreachable!(),
+        };
+        let admitted = if input.queue {
+            self.policy
+                .admit_deferred_shell(&context, vec![command.clone().into()], metadata)
+                .await?
+        } else {
+            self.policy
+                .admit(
+                    &context,
+                    "shell",
+                    vec![command.clone().into()],
+                    metadata,
+                    false,
+                )
+                .await?
+        };
+        let reservation =
+            admitted.map_err(|error| {
                 Failure::message(error.capacity_message().unwrap_or_else(|| {
                     format!("Session guardrail rejected shell command: {command}")
                 }))
             })?;
-        let info = self
-            .shell
-            .create(&mut prepared)
-            .await
-            .map_err(|_| generic())?;
+        let info = if input.queue {
+            let session = context
+                .session_id
+                .as_lossless()
+                .to_utf8()
+                .unwrap_or_default();
+            match self
+                .shell
+                .enqueue(&mut prepared, &session, reservation.shell_admission())
+                .await
+            {
+                Ok(info) => info,
+                Err(platform::shell::EnqueueError::Full(full)) => {
+                    reservation.release();
+                    return Err(Failure::message(full.to_string()));
+                }
+                Err(_) => {
+                    reservation.release();
+                    return Err(generic());
+                }
+            }
+        } else {
+            self.shell
+                .create(&mut prepared)
+                .await
+                .map_err(|_| generic())?
+        };
         let id = info.id.clone();
         let Ok(file) = info.file.to_utf8() else {
             let _ = self.shell.remove(&id).await;
@@ -363,9 +441,21 @@ impl ShellTool {
             timeout,
             memory_limit_mb,
         };
+        if input.queue {
+            return self
+                .detach(
+                    job,
+                    watch,
+                    reservation,
+                    warnings,
+                    Some(info.queue_position.map(|position| position.get())),
+                )
+                .await
+                .map_err(|_| generic());
+        }
         if input.background {
             return self
-                .detach(job, watch, reservation, warnings)
+                .detach(job, watch, reservation, warnings, None)
                 .await
                 .map_err(|_| generic());
         }
@@ -411,7 +501,9 @@ impl ShellTool {
             }
             Exit::Signal | Exit::Deadline => {
                 let steer = matches!(exit, Exit::Deadline);
-                let detached = self.detach(job.clone(), watch, reservation, warnings).await;
+                let detached = self
+                    .detach(job.clone(), watch, reservation, warnings, None)
+                    .await;
                 if steer {
                     self.jobs
                         .deliver(Notice::Steer {
@@ -432,15 +524,22 @@ impl ShellTool {
         watch: Watch,
         reservation: Reservation,
         warnings: Vec<String>,
+        queued: Option<Option<i64>>,
     ) -> io::Result<ToolOutput> {
         let started = Outcome {
-            output: BACKGROUND_STARTED.into(),
+            output: match queued {
+                None => BACKGROUND_STARTED.into(),
+                Some(None) => format!("{QUEUED_STARTED}."),
+                Some(Some(position)) => format!("{QUEUED_STARTED} at position {position}."),
+            },
             exit: None,
             shell_id: Some(id_text(&watch.id).into()),
             truncated: false,
             timeout: false,
             memory_limit: false,
-            running: true,
+            running: queued.is_none(),
+            queued: queued.is_some(),
+            killed: false,
             warnings,
         };
         if let Err(error) = self
@@ -458,21 +557,28 @@ impl ShellTool {
             let settled = settle_shell(&shell, &watch).await;
             reservation.release();
             let (state, text) = match settled {
+                Ok(outcome) if outcome.killed => ("cancelled", "Command cancelled".into()),
                 Ok(outcome) => ("completed", outcome.output),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     ("cancelled", "Command cancelled".into())
                 }
                 Err(error) => ("error", error.to_string()),
             };
+            let resume = !shell.take_quiet(&watch.id);
             let delivered = jobs
                 .deliver(Notice::Completed {
                     job,
                     shell_id: id_text(&watch.id),
                     state,
                     text,
+                    resume,
                 })
                 .await;
-            if delivered.is_ok() {
+            if delivered
+                .as_ref()
+                .err()
+                .is_none_or(|error| error.kind() == io::ErrorKind::NotFound)
+            {
                 let _ = shell.notice_admitted(&watch.id).await;
             }
             drop(lease);
@@ -527,6 +633,8 @@ impl Outcome {
         };
         let model = if self.running {
             BACKGROUND_INSTRUCTION.to_owned()
+        } else if self.queued {
+            QUEUED_INSTRUCTION.to_owned()
         } else if self.timeout {
             "Command timed out before completion.".to_owned()
         } else if self.memory_limit {
@@ -582,6 +690,12 @@ fn parse(input: &JsonValue) -> Result<Input, Failure> {
             None => false,
             Some(JsonValue::Bool(value)) => *value,
             Some(_) => return Err(Failure::message("Invalid tool input: Invalid background")),
+        },
+        queue: match object.get(&"channel".into()) {
+            None => false,
+            Some(JsonValue::String(value)) if value.as_str() == Some("normal") => false,
+            Some(JsonValue::String(value)) if value.as_str() == Some("queue") => true,
+            Some(_) => return Err(Failure::message("Invalid tool input: Invalid channel")),
         },
     })
 }
@@ -670,6 +784,8 @@ async fn settle_shell(shell: &platform::shell::Shell, watch: &Watch) -> io::Resu
         timeout: false,
         memory_limit: false,
         running: false,
+        queued: false,
+        killed: settled.status == Status::Killed,
         warnings: Vec::new(),
     };
     match settled.status {

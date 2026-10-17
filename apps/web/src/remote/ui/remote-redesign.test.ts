@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { AssistantPart, PendingRequestView, SessionView } from "../projection"
+import { readReviewItems, type AssistantPart, type PendingRequestView, type SessionView } from "../projection"
 import { parseSessionStatus, readSessionInfo, type SessionInfoView } from "../store"
 import { sessionStateChips } from "../view-model"
 import { partKey, toolPartExpanded } from "./conversation"
@@ -180,10 +180,26 @@ describe("resident session filter", () => {
     expect(filterSessions(classified, "", "idle").map((entry) => entry.id)).toEqual(["ses_idle"])
     expect(filterSessions(classified, "", "all")).toHaveLength(3)
   })
+
+  test("waiting, running and idle filters are exclusive and retain activity order over pins", () => {
+    const rows = [
+      session({ id: "ses_wait", running: true, attention: true }),
+      session({ id: "ses_running", running: true }),
+      session({ id: "ses_lost", attention: true }),
+      session({ id: "ses_failed", attention: true, failed: true }),
+      session({ id: "ses_loss", attention: true, lost: true }),
+      session({ id: "ses_idle", pinnedAt: 1 }),
+      session({ id: "ses_archived", archived: true }),
+    ]
+    expect(filterSessions(rows, "", "waiting").map((row) => row.id)).toEqual(["ses_wait", "ses_lost"])
+    expect(filterSessions(rows, "", "running").map((row) => row.id)).toEqual(["ses_running"])
+    expect(filterSessions(rows, "", "idle").map((row) => row.id)).toEqual(["ses_failed", "ses_loss", "ses_idle"])
+    expect(filterSessions(rows, "").map((row) => row.id)).toEqual(rows.map((row) => row.id))
+  })
 })
 
 describe("pinned sessions", () => {
-  test("lists pinned sessions first in pin order and keeps the rest in their order", () => {
+  test("keeps pinned sessions in the reported activity order", () => {
     const listed = [
       session({ id: "ses_recent" }),
       session({ id: "ses_pinned_late", pinnedAt: 2_000 }),
@@ -191,10 +207,10 @@ describe("pinned sessions", () => {
       session({ id: "ses_pinned_early", pinnedAt: 1_000 }),
     ]
     expect(filterSessions(listed, "").map((entry) => entry.id)).toEqual([
-      "ses_pinned_early",
-      "ses_pinned_late",
       "ses_recent",
+      "ses_pinned_late",
       "ses_older",
+      "ses_pinned_early",
     ])
   })
 
@@ -229,10 +245,18 @@ describe("session summary", () => {
     )
     expect(summary.status).toBe("idle")
     expect(summary.autonomy).toBe("goal")
-    expect(summary.guardrailsEnforced).toBe(true)
+    expect(summary.autoAnswer).toBeUndefined()
+    expect("guardrailsEnforced" in summary).toBe(false)
     expect(summary.agent).toBe("god")
     expect(summary.model).toBe("openai/gpt-6")
     expect(summary.updatedAt).toBe("2023-11-14T22:13:20.000Z")
+  })
+
+  test("summary level and sleep come from effective values while auto-answer stays the Session's own", () => {
+    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", yolo: 0, autoAnswer: true, effective: { yolo: 2, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } }))
+    expect(summary.yoloLevel).toBe(2)
+    expect(summary.asleep).toBe(true)
+    expect(summary.autoAnswer).toBe(true)
   })
 
   test("does not take another session's live view", () => {
@@ -265,6 +289,16 @@ describe("waiting for a decision", () => {
     expect(awaitsApproval(view({ requests: [form] }), "ses_a")).toBe(false)
   })
 
+  test("badges the open family's root and the item's member Session with its review count", () => {
+    const items = readReviewItems({ data: ["ses_a", "ses_child"].map((sessionID, index) => ({ itemID: `rvw_${index}`, sessionID, rootSessionID: "ses_a", sessionTitle: "T", created: 1, reason: "free_text",
+      kind: "subagent_question", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "?" } })) })!
+    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", yolo: 0 } })
+    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "Ask first"])
+    expect(sessionChips(session({ id: "ses_child" }), loaded)[0]).toEqual({ label: "review 1", tone: "attention" })
+    expect(sessionChips(session({ id: "ses_b" }), loaded).map((chip) => chip.label)).not.toContain("review 2")
+    expect(sessionChips(session({}), { ...loaded, requests: [permission] })[0]?.label).toBe("Waiting for approval")
+  })
+
   test("reports nothing for a session this client has not loaded", () => {
     expect(awaitsApproval(undefined, "ses_a")).toBe(false)
     expect(awaitsApproval(view({ id: "ses_other", requests: [permission] }), "ses_a")).toBe(false)
@@ -275,7 +309,7 @@ describe("waiting for a decision", () => {
       session({ running: true }),
       view({ requests: [permission], autonomy: { mode: "normal", yolo: 2 } }),
     )
-    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Standard", "Guardrails enforced"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Tools + reviews"])
     expect(chips[0]?.tone).toBe("attention")
   })
 
@@ -297,6 +331,27 @@ describe("waiting for a decision", () => {
     expect(chips.map((chip) => chip.label)).toEqual(["Failed"])
     expect(chips[0]?.tone).toBe("neutral")
     expect(sessionChips(session({ attention: false, failed: false, running: true }), undefined).map((chip) => chip.label)).toEqual(["Running"])
+  })
+
+  test("shows a lost background result as a loss chip without a waiting dot, ahead of Running and behind a real wait", () => {
+    const lost = session({ attention: false, lost: true })
+    expect(sessionNeedsAttention(lost, undefined)).toBe(false)
+    expect(sessionNeedsAttention(session({ attention: true, lost: true }), undefined)).toBe(false)
+    const chips = sessionChips(lost, undefined)
+    expect(chips.map((chip) => chip.label)).toEqual(["Background result lost"])
+    expect(chips[0]?.tone).toBe("attention")
+    expect(sessionChips(session({ lost: true, running: true }), undefined).map((chip) => chip.label)).toEqual(["Background result lost", "Running"])
+    expect(sessionChips(lost, view({ requests: [form] })).map((chip) => chip.label)).toEqual(["Waiting for you", "Background result lost"])
+    expect(sessionChips(session({ failed: true }), undefined).map((chip) => chip.label)).toEqual(["Failed"])
+  })
+
+  test("reads the lost subset of a session.status body and treats it as absent when omitted", () => {
+    const body = { running: [], attention: ["ses_a", "ses_b"], lost: ["ses_b"] }
+    expect(parseSessionStatus(body)?.lost).toEqual(new Set(["ses_b"]))
+    expect(parseSessionStatus({ data: body })?.lost).toEqual(new Set(["ses_b"]))
+    expect(parseSessionStatus({ running: [], attention: [] })?.lost).toEqual(new Set())
+    expect(parseSessionStatus({ ...body, lost: ["nope"] })).toBeUndefined()
+    expect(parseSessionStatus({ ...body, lost: "ses_b" })).toBeUndefined()
   })
 
   test("keeps the waiting dot and chip for a Session that also has a pending request", () => {

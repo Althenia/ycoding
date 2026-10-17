@@ -73,6 +73,7 @@ fn assistant(message: &str, completed: Option<i64>) -> session_message::Info {
         diagnostics: None,
         error: None,
         retry: None,
+        reroutes: None,
     }))
 }
 

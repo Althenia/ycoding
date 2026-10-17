@@ -122,8 +122,8 @@ async fn authenticated_global_consent_append_page_opt_out_and_keep_awake_wire() 
         );
         assert_eq!(second.data.data.items[0].sample, sample());
         assert!(second.data.cursor.next.is_none());
-        for start in (1..=66).step_by(20) {
-            let rows = (start..=(start + 19).min(66))
+        for start in (1..=77).step_by(20) {
+            let rows = (start..=(start + 19).min(77))
                 .map(|operation| {
                     let mut sample = sample();
                     if let Some(v5::telemetry_sample::Kind::Value1(row)) = &mut sample.kind {
@@ -143,11 +143,11 @@ async fn authenticated_global_consent_append_page_opt_out_and_keep_awake_wire() 
                 .call("telemetry.list", machine(), query(Some(200), None))
                 .await,
         );
-        for (index, entry) in all.data.data.items.iter().take(66).enumerate() {
+        for (index, entry) in all.data.data.items.iter().take(77).enumerate() {
             let Some(v5::telemetry_sample::Kind::Value1(row)) = &entry.sample.kind else {
                 panic!("request sample expected");
             };
-            assert_eq!(row.operation, 66 - index as i32);
+            assert_eq!(row.operation, 77 - index as i32);
         }
         for malformed in ["not-a-cursor", "Mw=="] {
             let invalid = rejected(

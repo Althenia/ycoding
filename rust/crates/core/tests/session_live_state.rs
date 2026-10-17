@@ -478,6 +478,8 @@ fn goal_autonomy_shares_one_revision_and_the_reminder_follows_the_state() {
     let active = State {
         yolo: YoloLevel::new(1).unwrap(),
         goal: Some(Goal::new("ship it", None, Some(3))),
+        sleep: false,
+        auto_answer: None,
     };
     let encoded = active.encode();
     edit_session(&store, "ses_one", move |row| {
@@ -545,6 +547,7 @@ fn orchestration_source_tracks_child_task_revisions_and_exposes_the_team_view() 
         revision,
         time_created: 1,
         time_updated: 1,
+        usage_anchor: None,
     };
     let first = task(2);
     run(&store, move |tx| TaskTable::insert(tx, &first));

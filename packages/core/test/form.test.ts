@@ -24,7 +24,7 @@ const input = {
   fields: [{ key: "name", type: "string", required: true }],
 } satisfies Form.CreateInput
 
-const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo" | "goal") {
+const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo" | "goal" | "autoAnswer") {
   const autonomy = yield* SessionAutonomy.Service
   const { db } = yield* Database.Service
   const directory = AbsolutePath.make("/tmp/ycoding-form-autonomy")
@@ -48,39 +48,50 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo
     .pipe(Effect.orDie)
   yield* mode === "goal"
     ? autonomy.setGoal({ sessionID: input.sessionID, text: "Finish safely" })
-    : autonomy.setMode({ sessionID: input.sessionID, mode })
+    : mode === "autoAnswer"
+      ? autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      : autonomy.setMode({ sessionID: input.sessionID, mode })
+})
+
+const manual = Effect.fn("FormTest.manual")(function* (settings: Form.CreateInput, answer: Form.Answer) {
+  const service = yield* Form.Service
+  const events = yield* EventRuntime.Service
+  const created = yield* Deferred.make<Form.Info>()
+  const unsubscribe = yield* events.listen((event) =>
+    event.type === Form.Event.Created.type
+      ? Deferred.succeed(created, (event.data as { readonly form: Form.Info }).form).pipe(Effect.asVoid)
+      : Effect.void,
+  )
+  yield* Effect.addFinalizer(() => unsubscribe)
+  const fiber = yield* service.ask(settings).pipe(Effect.forkScoped)
+  const form = yield* Deferred.await(created)
+  expect(yield* service.list({ sessionID: input.sessionID })).toEqual([form])
+  yield* service.reply({ id: form.id, answer })
+  expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer })
 })
 
 describe("Form", () => {
-  for (const yolo of [0, 1, 2, 3] as const) {
-    it.effect(`forms are automatic only at YOLO 2-3: level ${yolo}`, () => Effect.gen(function* () {
+  for (const yolo of [0, 1, 2] as const) {
+    it.effect(`forms follow only the Session autoAnswer toggle at YOLO ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo })
       const service = yield* Form.Service
       const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
-      if (yolo >= 2) {
-        expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true } })
-        expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
-        return
-      }
-      const events = yield* EventRuntime.Service
-      const created = yield* Deferred.make<Form.Info>()
-      const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
-        ? Deferred.succeed(created, (event.data as { readonly form: Form.Info }).form).pipe(Effect.asVoid)
-        : Effect.void)
-      yield* Effect.addFinalizer(() => unsubscribe)
-      const fiber = yield* service.ask(settings).pipe(Effect.forkScoped)
-      const form = yield* Deferred.await(created)
-      expect(yield* service.list({ sessionID: input.sessionID })).toEqual([form])
-      yield* service.reply({ id: form.id, answer: { confirm: false } })
-      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { confirm: false } })
+      yield* manual(settings, { confirm: false })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      expect(yield* service.ask({ ...settings, id: Form.ID.create(`frm_toggle_${yolo}`) })).toEqual({
+        status: "answered",
+        answer: { confirm: true },
+      })
+      expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
+      expect((yield* autonomy.get(input.sessionID)).yolo).toBe(yolo)
     }))
   }
-  it.effect("auto answers deterministic forms in yolo mode", () =>
+  it.effect("auto answers deterministic forms when the Session autoAnswer toggle is on", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("autoAnswer")
 
       const result = yield* service.ask({
         sessionID: input.sessionID,
@@ -116,14 +127,12 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("auto answers deterministic forms in goal mode", () =>
+  it.effect("an active goal does not answer forms without the Session autoAnswer toggle", () =>
     Effect.gen(function* () {
-      const service = yield* Form.Service
       yield* setupAutonomy("goal")
-
-      expect(
-        yield* service.ask({
-          id: Form.ID.create("frm_goal_auto"),
+      yield* manual(
+        {
+          id: Form.ID.create("frm_goal_manual"),
           sessionID: input.sessionID,
           title: "Goal settings",
           fields: [
@@ -135,16 +144,16 @@ describe("Form", () => {
             },
             { key: "confirm", type: "boolean", required: true, default: true },
           ],
-        }),
-      ).toEqual({ status: "answered", answer: { branch: "main", confirm: true } })
-      expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
+        },
+        { branch: "main", confirm: false },
+      )
     }),
   )
 
-  it.effect("auto answers required free-text forms with a safe default in goal mode", () =>
+  it.effect("auto answers required free-text forms with a safe default when autoAnswer is on", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
-      yield* setupAutonomy("goal")
+      yield* setupAutonomy("autoAnswer")
 
       expect(
         yield* service.ask({

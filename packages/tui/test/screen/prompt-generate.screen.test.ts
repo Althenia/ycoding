@@ -85,7 +85,16 @@ async function sessionFixture() {
       if (url.pathname === "/api/agent")
         return json({
           location,
-          data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+          data: [
+            {
+              id: "build",
+              name: "Build",
+              request: { headers: {}, body: {} },
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+            },
+          ],
         })
       if (url.pathname === "/api/model") return json({ location, data: [modelInfo] })
       if (url.pathname === "/api/model/default") return json({ location, data: { ...modelInfo, selection: model } })
@@ -104,7 +113,10 @@ async function sessionFixture() {
   const release = () => {
     for (const resolve of pending.splice(0)) resolve()
   }
-  await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
+  await screen.mouse.click(
+    3,
+    screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+  )
   screen.renderer.clearSelection()
   const editor = screen.renderer.currentFocusedEditor
   if (!(editor instanceof TextareaRenderable)) throw new Error("Prompt composer is not focused")
@@ -128,6 +140,19 @@ async function landingFixture() {
   const autonomy: unknown[] = []
   const pending: Array<() => void> = []
   let createdID: string | undefined
+  let approvalLevel: 0 | 1 | 2 = 0
+  const autonomyView = () => ({
+    mode: "normal" as const,
+    yolo: approvalLevel,
+    effective: {
+      yolo: approvalLevel,
+      asleep: false,
+      ordinaryReviewsAuto: approvalLevel === 2,
+      guardrailsEnabled: true,
+      modelReviews: false,
+      hardModelReviews: false,
+    },
+  })
   const info = () => ({
     id: createdID,
     title: "Landing prompt",
@@ -152,12 +177,30 @@ async function landingFixture() {
       if (url.pathname === "/api/agent")
         return json({
           location,
-          data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }],
+          data: [
+            {
+              id: "build",
+              name: "Build",
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+              request: { headers: {}, body: {} },
+            },
+          ],
         })
       if (url.pathname === "/api/model") return json({ location, data: [modelInfo] })
       if (url.pathname === "/api/model/default") return json({ location, data: { ...modelInfo, selection: model } })
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
-      if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/permission/request", "/api/form/request"].includes(url.pathname))
+      if (
+        [
+          "/api/integration",
+          "/api/command",
+          "/api/skill",
+          "/api/reference",
+          "/api/permission/request",
+          "/api/form/request",
+        ].includes(url.pathname)
+      )
         return json({ location, data: [] })
       if (url.pathname === "/api/session/active") return json({ data: {} })
       if (url.pathname === "/api/session" && request.method === "POST") {
@@ -176,16 +219,29 @@ async function landingFixture() {
       if (createdID && url.pathname === `/api/session/${createdID}/autonomy` && request.method === "PUT") {
         const body: unknown = await request.json()
         autonomy.push(body)
-        const yolo = typeof body === "object" && body !== null ? Reflect.get(body, "yolo") : 0
-        return json({ data: { mode: "normal", yolo: yolo === 1 || yolo === 2 || yolo === 3 ? yolo : 0 } })
+        const yolo = typeof body === "object" && body !== null ? Reflect.get(body, "yolo") : undefined
+        if (yolo !== 0 && yolo !== 1 && yolo !== 2) throw new Error("Invalid approval-level fixture payload")
+        approvalLevel = yolo
+        return json({ data: autonomyView() })
       }
       if (createdID && url.pathname === `/api/session/${createdID}`) return json({ data: info() })
-      if (createdID && url.pathname === `/api/session/${createdID}/snapshot`) return sessionSnapshot(createdID, [], { session: info() })
+      if (createdID && url.pathname === `/api/session/${createdID}/snapshot`)
+        return sessionSnapshot(createdID, [], { session: info() })
       if (createdID && url.pathname === `/api/session/${createdID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) return json({ data: { mode: "normal", yolo: autonomy.length ? 1 : 0 } })
+      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) return json({ data: autonomyView() })
       if (createdID && url.pathname === `/api/session/${createdID}/guardrail`)
-        return json({ data: { rootSessionID: createdID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+        return json({
+          data: {
+            rootSessionID: createdID,
+            profile: "standard",
+            customRules: 0,
+            approvals: 0,
+            blocked: 0,
+            counters: [],
+            invalidFiles: [],
+          },
+        })
       if (createdID && url.pathname === `/api/session/${createdID}/diagnostics`)
         return json({
           data: {
@@ -199,7 +255,12 @@ async function landingFixture() {
       if (createdID && url.pathname === `/api/session/${createdID}/usage`)
         return json({ data: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, cost: 0, tokens } })
       if (createdID && url.pathname === `/api/session/${createdID}/form`) return json({ data: [] })
-      if (createdID && ["pending", "permission", "todo", "skills", "guardrail/request"].some((resource) => url.pathname.endsWith(`/${resource}`)))
+      if (
+        createdID &&
+        ["pending", "permission", "todo", "skills", "guardrail/request"].some((resource) =>
+          url.pathname.endsWith(`/${resource}`),
+        )
+      )
         return json({ data: [] })
       if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
       if (url.pathname === "/api/fs/list") return json({ location, data: [] })
@@ -221,7 +282,10 @@ async function landingFixture() {
     for (const resolve of pending.splice(0)) resolve()
   }
   await wait(() => screen.frame().includes("Message YCoding…"))
-  await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
+  await screen.mouse.click(
+    3,
+    screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+  )
   screen.renderer.clearSelection()
   const editor = () => {
     const current = screen.renderer.currentFocusedEditor
@@ -352,10 +416,12 @@ test("queue mode shows a composer hint and submits delivery queue", async () => 
     view.release()
     await view.wait(() => view.editor.plainText === generated && view.screen.frame().includes("will queue"))
     view.screen.input.pressEnter()
-    await view.wait(() => view.prompts.some((item) => {
-      if (typeof item !== "object" || item === null) return false
-      return Reflect.get(item, "text") === generated && Reflect.get(item, "delivery") === "queue"
-    }))
+    await view.wait(() =>
+      view.prompts.some((item) => {
+        if (typeof item !== "object" || item === null) return false
+        return Reflect.get(item, "text") === generated && Reflect.get(item, "delivery") === "queue"
+      }),
+    )
     expect(view.editor.plainText).toBe("")
     expect(view.screen.frame()).not.toContain("will queue")
   } finally {
@@ -397,12 +463,12 @@ test("a nonempty draft keeps its text and discards the generated prompt", async 
   }
 }, 30000)
 
-test("the landing screen creates a Session, keeps the YOLO draft, and fills the new composer", async () => {
+test("the landing screen creates a Session, keeps the approval-level draft, and fills the new composer", async () => {
   const view = await landingFixture()
   try {
     await view.screen.input.typeText("/yolo 1 ")
     view.screen.input.pressEnter()
-    await view.wait(() => view.screen.frame().includes("YOLO 1 enabled (landing)"))
+    await view.wait(() => view.screen.frame().includes("Approval level 1 · Allow tools (landing)"))
     await view.screen.input.typeText("/prompt Draft the landing task ")
     view.screen.input.pressEnter()
     await view.wait(() => view.screen.frame().includes("Generate prompt") && !view.screen.frame().includes("Steer"))
@@ -415,6 +481,8 @@ test("the landing screen creates a Session, keeps the YOLO draft, and fills the 
     expect(view.generates[0]?.path).toBe(`/api/session/${Reflect.get(view.creates[0] ?? {}, "id")}/prompt-generate`)
     view.release()
     await view.wait(() => view.editor().plainText === generated)
+    await view.wait(() => view.screen.frame().includes("Allow tools"))
+    expect(view.screen.frame()).toContain("Allow tools")
   } finally {
     view.release()
     await view.screen.dispose()
@@ -427,7 +495,10 @@ test("Generate prompt in the palette drafts /prompt into the composer", async ()
   try {
     view.screen.input.pressKey("p", { ctrl: true })
     await view.wait(() => view.screen.frame().includes("Commands") && view.screen.frame().includes("Search"))
-    await view.screen.mouse.click(12, view.screen.lines().findIndex((line) => line.includes("Search")))
+    await view.screen.mouse.click(
+      12,
+      view.screen.lines().findIndex((line) => line.includes("Search")),
+    )
     await view.screen.input.typeText("Generate prompt")
     await view.wait(() => {
       const frame = view.screen.frame()

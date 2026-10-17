@@ -292,7 +292,7 @@ describe("remote notification delivery", () => {
           .notifications.filter((entry) => entry.sessionID === "ses_far")
           .map((entry) => [entry.sessionTitle, entry.body]),
       ).toEqual([
-        [undefined, "A session is waiting for you."],
+        [undefined, "A session needs attention. Open it to review."],
         [undefined, "A session finished all its work."],
       ])
       expect(
@@ -926,6 +926,37 @@ describe("remote notification delivery", () => {
           tag: "ycoding-dev_1-ntc_41",
           sessionID: "ses_a",
           notice: { deviceID: "dev_1", noticeID: "ntc_41" },
+        },
+      ])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("a loss-only Status turns its notice into the lost-result alert although the wire need enum has no such value", async () => {
+    const test = await harness()
+    try {
+      await test.openSession()
+      test.relay.pushStatus([], ["ses_a"], [], [], ["ses_a"])
+      await test.runUntil(() => test.store.state().sessionStatus?.lost.has("ses_a") === true)
+      const before = test.alerts.length
+      test.transports.at(-1)?.onNotices?.({
+        type: "notice.present",
+        items: [
+          {
+            kind: "notice",
+            notice: { id: "ntc_42", category: "approval-requested", sessionID: "ses_a", createdAt: 1 },
+            detail: { title: "Fix login" },
+          },
+        ],
+      })
+      expect(test.alerts.slice(before)).toEqual([
+        {
+          title: "YCoding — background result lost",
+          body: "“Fix login” has a lost background-work result. Open it to review.",
+          tag: "ycoding-dev_1-ntc_42",
+          sessionID: "ses_a",
+          notice: { deviceID: "dev_1", noticeID: "ntc_42" },
         },
       ])
     } finally {

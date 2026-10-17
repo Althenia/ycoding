@@ -1132,3 +1132,384 @@ async fn skill_tool_loads_a_managed_artifact_skill_and_records_its_skill_tool_ac
     governor.close().await.unwrap();
     fixture.cleanup();
 }
+
+enum GoalStep {
+    Activate,
+    Complete,
+    Stop,
+}
+
+async fn managed_goal_source(
+    location: &str,
+) -> (
+    ToolFixture,
+    ycoding_store::Client,
+    ycoding_core::resources::project_artifact::source::Service,
+    Info,
+) {
+    use ycoding_core::{
+        resources::{
+            agent, command,
+            project_artifact::{accounting, source, source_registry, store},
+            skill::Service,
+        },
+        session,
+    };
+    use ycoding_schema::{DomainDecode, JsonValue, project, project_artifact};
+    use ycoding_store::session::NewEvent;
+    let fixture = ToolFixture::new();
+    let client = fixture.authority.store.client();
+    let registry = Arc::new(std::sync::Mutex::new(source_registry::Registry::default()));
+    let accounting = accounting::Service::new(client.clone(), "secret".into());
+    let artifacts_store = store::Service::new(
+        client.clone(),
+        store::Paths {
+            data: fixture.root.join("data"),
+            home: fixture.root.join("home"),
+            config: fixture.root.join("config"),
+        },
+        registry.clone(),
+    )
+    .with_accounting(accounting.clone());
+    artifacts_store.write_manual(store::ManualWriteInput { scope: project_artifact::ScopeSelector::Project, project_id: Some(project::Id::decode(&JsonValue::String("project".into())).unwrap()), id: "review", definition: &project_artifact::Definition::decode(&ycoding_schema::parse_json(r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review safely."}"#).unwrap()).unwrap(), expected: None, now: 100 }).unwrap();
+    let source = source::Service::new(
+        source::Options {
+            client: client.clone(),
+            store: artifacts_store,
+            accounting,
+            registry,
+            location: ycoding_schema::location::Ref::decode(
+                &ycoding_schema::parse_json(&format!(r#"{{"directory":"{location}"}}"#)).unwrap(),
+            )
+            .unwrap(),
+            project_id: project::Id::decode(&JsonValue::String("project".into())).unwrap(),
+            project_directory: "/workspace/project".into(),
+            data_root: fixture.root.join("data"),
+        },
+        source::Catalogs {
+            agents: agent::Service::new(vec![]),
+            commands: command::Service::default(),
+            skills: Service::new(&fixture.root.join("cache")),
+        },
+    );
+    source.refresh().await;
+    let mut catalogs = source.catalogs().await;
+    let info = catalogs.skills.list().await.unwrap().remove(0);
+    let sessions = session::store::Service::new(client.clone());
+    for (id, kind, fields) in [
+        (
+            "evt_goal_step",
+            "session.step.started.1",
+            r#"{"sessionID":"ses_tool","assistantMessageID":"msg_tool","agent":"test","model":{"providerID":"test","id":"model"}}"#,
+        ),
+        (
+            "evt_goal_call",
+            "session.tool.called.1",
+            r#"{"sessionID":"ses_tool","assistantMessageID":"msg_tool","callID":"call_tool","input":{},"executed":false}"#,
+        ),
+    ] {
+        sessions
+            .publish(NewEvent {
+                id: id.into(),
+                aggregate_id: "ses_tool".into(),
+                created: 200,
+                type_: kind.into(),
+                data: ycoding_schema::parse_json(fields).unwrap(),
+            })
+            .await
+            .unwrap();
+    }
+    (fixture, client, source, info)
+}
+
+async fn terminal_rows_after_burst(
+    location: &str,
+    active_at_start: bool,
+    during: Vec<GoalStep>,
+) -> (Vec<(i64, String)>, Vec<&'static str>) {
+    use ycoding_core::{
+        event_feed::Feed,
+        session::{self, autonomy},
+    };
+    use ycoding_schema::ObjectEncoder;
+    use ycoding_store::{artifacts, session::NewEvent};
+    let (fixture, client, source, info) = managed_goal_source(location).await;
+    let id = ycoding_schema::session::Id::new("ses_tool").unwrap();
+    if active_at_start {
+        autonomy::Service::new(client.clone())
+            .set_goal(&id, autonomy::Goal::new("Ship the change", None, None))
+            .await
+            .unwrap();
+    }
+    let feed = Feed::attach(&client);
+    let governor = source.start(&feed).unwrap();
+    skill::load_local(&info, &fixture.policy, fixture.context(), Some(&source))
+        .await
+        .unwrap();
+    let burst = {
+        let client = client.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let sessions = session::store::Service::new(client.clone());
+                    let goals = autonomy::Service::new(client);
+                    sessions
+                        .publish(NewEvent {
+                            id: "evt_goal_started".into(),
+                            aggregate_id: "ses_tool".into(),
+                            created: 300,
+                            type_: "session.execution.started.1".into(),
+                            data: ObjectEncoder::new().field("sessionID", "ses_tool").finish(),
+                        })
+                        .await
+                        .unwrap();
+                    for step in during {
+                        match step {
+                            GoalStep::Activate => goals
+                                .set_goal(&id, autonomy::Goal::new("Ship the change", None, None))
+                                .await
+                                .unwrap(),
+                            GoalStep::Complete => goals.complete(&id).await.unwrap(),
+                            GoalStep::Stop => goals.stop(&id).await.unwrap(),
+                        };
+                    }
+                    sessions
+                        .publish(NewEvent {
+                            id: "evt_goal_succeeded".into(),
+                            aggregate_id: "ses_tool".into(),
+                            created: 400,
+                            type_: "session.execution.succeeded.1".into(),
+                            data: ObjectEncoder::new().field("sessionID", "ses_tool").finish(),
+                        })
+                        .await
+                        .unwrap();
+                });
+        })
+    };
+    burst.join().unwrap();
+    governor.close().await.unwrap();
+    let terminals = client
+        .snapshot()
+        .unwrap()
+        .scan::<artifacts::TerminalTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            10,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.goal_mode, row.goal_status.as_str().unwrap().to_string()))
+        .collect();
+    let diagnostics = source.diagnostics();
+    fixture.cleanup();
+    (terminals, diagnostics)
+}
+
+#[tokio::test]
+async fn w49_r1_a_goal_active_at_execution_start_stays_captured_after_it_completes_before_the_drain()
+ {
+    let (terminals, diagnostics) =
+        terminal_rows_after_burst("/workspace/project", true, vec![GoalStep::Complete]).await;
+    assert_eq!(terminals, vec![(1, "completed".to_string())]);
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}
+
+#[tokio::test]
+async fn w49_r1_a_goal_active_at_execution_start_stays_captured_after_it_stops_before_the_drain() {
+    let (terminals, diagnostics) =
+        terminal_rows_after_burst("/workspace/project", true, vec![GoalStep::Stop]).await;
+    assert_eq!(terminals, vec![(1, "stopped".to_string())]);
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}
+
+#[tokio::test]
+async fn w49_r2_executions_in_another_location_record_nothing() {
+    let (own, _) = terminal_rows_after_burst("/workspace/project", true, vec![]).await;
+    assert_eq!(own, vec![(1, "none".to_string())]);
+    let (other, diagnostics) = terminal_rows_after_burst("/workspace/other", true, vec![]).await;
+    assert!(other.is_empty(), "{other:?}");
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}
+
+#[tokio::test]
+async fn w49_r3_a_goal_inactive_at_execution_start_stays_outside_goal_mode_after_one_activates() {
+    let (terminals, diagnostics) =
+        terminal_rows_after_burst("/workspace/project", false, vec![GoalStep::Activate]).await;
+    assert_eq!(terminals, vec![(0, "none".to_string())]);
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}
+
+fn execution_event(id: &str, kind: &str, created: i64) -> ycoding_store::session::NewEvent {
+    ycoding_store::session::NewEvent {
+        id: id.into(),
+        aggregate_id: "ses_tool".into(),
+        created,
+        type_: kind.into(),
+        data: ycoding_schema::ObjectEncoder::new()
+            .field("sessionID", "ses_tool")
+            .finish(),
+    }
+}
+
+fn keyed_terminal_rows(client: &ycoding_store::Client) -> Vec<(String, i64, String)> {
+    let mut rows = client
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::artifacts::TerminalTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            10,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.terminal_message_id
+                    .as_ref()
+                    .and_then(|message| message.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                row.goal_mode,
+                row.goal_status.as_str().unwrap().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows
+}
+
+#[tokio::test]
+async fn w49_r4_a_lagging_governor_keeps_each_execution_start_with_its_own_terminal() {
+    use ycoding_core::{
+        event_feed::Feed,
+        session::{self, autonomy},
+    };
+    use ycoding_store::session::NewEvent;
+    let (fixture, client, source, info) = managed_goal_source("/workspace/project").await;
+    let id = ycoding_schema::session::Id::new("ses_tool").unwrap();
+    let feed = Feed::attach(&client);
+    let governor = source.start(&feed).unwrap();
+    skill::load_local(&info, &fixture.policy, fixture.context(), Some(&source))
+        .await
+        .unwrap();
+    let burst = {
+        let client = client.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let sessions = session::store::Service::new(client.clone());
+                    let goals = autonomy::Service::new(client);
+                    sessions
+                        .publish(execution_event(
+                            "evt_two_a_started",
+                            "session.execution.started.1",
+                            300,
+                        ))
+                        .await
+                        .unwrap();
+                    sessions
+                        .publish(execution_event(
+                            "evt_two_a_succeeded",
+                            "session.execution.succeeded.1",
+                            400,
+                        ))
+                        .await
+                        .unwrap();
+                    goals
+                        .set_goal(&id, autonomy::Goal::new("Ship the change", None, None))
+                        .await
+                        .unwrap();
+                    sessions
+                        .publish(execution_event(
+                            "evt_two_b_started",
+                            "session.execution.started.1",
+                            500,
+                        ))
+                        .await
+                        .unwrap();
+                });
+        })
+    };
+    burst.join().unwrap();
+    governor.flush().await.unwrap();
+    let sessions = session::store::Service::new(client.clone());
+    sessions
+        .publish(NewEvent {
+            id: "evt_two_b_step".into(),
+            aggregate_id: "ses_tool".into(),
+            created: 600,
+            type_: "session.step.started.1".into(),
+            data: ycoding_schema::parse_json(
+                r#"{"sessionID":"ses_tool","assistantMessageID":"msg_b","agent":"test","model":{"providerID":"test","id":"model"}}"#,
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+    sessions
+        .publish(execution_event(
+            "evt_two_b_succeeded",
+            "session.execution.succeeded.1",
+            700,
+        ))
+        .await
+        .unwrap();
+    governor.close().await.unwrap();
+    let rows = keyed_terminal_rows(&client);
+    let diagnostics = source.diagnostics();
+    fixture.cleanup();
+    assert_eq!(
+        rows,
+        vec![
+            ("msg_b".to_string(), 1, "none".to_string()),
+            ("msg_tool".to_string(), 0, "none".to_string())
+        ]
+    );
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}
+
+#[tokio::test]
+async fn w49_r5_an_execution_started_before_the_governor_runs_is_not_goal_mode() {
+    use ycoding_core::{
+        event_feed::Feed,
+        session::{self, autonomy},
+    };
+    let (fixture, client, source, info) = managed_goal_source("/workspace/project").await;
+    let id = ycoding_schema::session::Id::new("ses_tool").unwrap();
+    autonomy::Service::new(client.clone())
+        .set_goal(&id, autonomy::Goal::new("Ship the change", None, None))
+        .await
+        .unwrap();
+    let sessions = session::store::Service::new(client.clone());
+    sessions
+        .publish(execution_event(
+            "evt_early_started",
+            "session.execution.started.1",
+            300,
+        ))
+        .await
+        .unwrap();
+    let feed = Feed::attach(&client);
+    let governor = source.start(&feed).unwrap();
+    skill::load_local(&info, &fixture.policy, fixture.context(), Some(&source))
+        .await
+        .unwrap();
+    sessions
+        .publish(execution_event(
+            "evt_early_succeeded",
+            "session.execution.succeeded.1",
+            400,
+        ))
+        .await
+        .unwrap();
+    governor.close().await.unwrap();
+    let rows = keyed_terminal_rows(&client);
+    let diagnostics = source.diagnostics();
+    fixture.cleanup();
+    assert_eq!(rows, vec![("msg_tool".to_string(), 0, "none".to_string())]);
+    assert!(!diagnostics.contains(&"terminal-observation-failed"));
+}

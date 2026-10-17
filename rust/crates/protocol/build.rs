@@ -42,9 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = prost_build::Config::new();
     config.enable_type_names();
     config.file_descriptor_set_path(out.join("contract.bin"));
-    config.protoc_executable(
-        env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into()),
-    );
     println!("cargo:rerun-if-env-changed=PROTOC");
     let set = config.load_fds(&files, &[source])?;
     operation_generation::validate_codec_names(&fs::read(out.join("contract.bin"))?)?;

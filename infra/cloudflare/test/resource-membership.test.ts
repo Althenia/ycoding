@@ -203,6 +203,15 @@ const storeCoverage = {
     store + "tests/session_tables.rs",
     "cleanup_keyset_is_bounded_and_uses_sqlite_binary_tiebreaks",
   ),
+  BYTE_BUDGET: boundary(store + "src/backup.rs", "byte_budget_admits_a_row_that_reaches_exactly_the_limit"),
+  CLEANUP_ROWS: boundary(
+    store + "tests/session_tables.rs",
+    "cleanup_rolls_back_and_resumes_from_committed_pages_without_touching_history",
+  ),
+  HEADROOM_BYTES: boundary(
+    store + "tests/history_backup.rs",
+    "space_gate_exact_threshold_retry_marker_restore_and_reopen",
+  ),
   INTENT_LIMIT: boundary(
     store + "tests/analytics.rs",
     "outage_does_not_block_canonical_and_overflow_recovers_retained_state",
@@ -427,6 +436,10 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
   const inlineOwners = {
     "rust/crates/store/src/analytics/mod.rs": {
       "queries.len() > 16": report,
+      "sources.len() > 64": boundary(
+        store + "tests/analytics.rs",
+        "report_snapshot_accepts_64_sources_and_rejects_65_as_configuration",
+      ),
       "query.parameters.len() > 64": report,
       "value.len() <= 128": sourceConfiguration,
     },

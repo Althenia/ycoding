@@ -98,7 +98,7 @@ impl Tool for SubagentControl {
                     (
                         "send",
                         self.orchestration
-                            .send(
+                            .send_attributed(
                                 &context.session_id,
                                 &session_id,
                                 &message,
@@ -107,6 +107,7 @@ impl Tool for SubagentControl {
                                     Delivery::Steer => "steer",
                                     Delivery::Queue => "queue",
                                 },
+                                &context.attribution,
                             )
                             .await,
                     )
@@ -119,12 +120,13 @@ impl Tool for SubagentControl {
                 } => (
                     "answer",
                     self.orchestration
-                        .answer(
+                        .answer_attributed(
                             &context.session_id,
                             &session_id,
                             &question_id,
                             text.as_ref().and_then(|text| text.as_str()),
                             data,
+                            &context.attribution,
                         )
                         .await,
                 ),

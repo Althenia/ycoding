@@ -5,7 +5,7 @@ import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/rem
 import { createRemoteTransport } from "../src/remote/transport"
 import { createSessionView, readSnapshot, type SessionView } from "../src/remote/projection"
 import { applySessionEvent } from "../src/remote/projection"
-import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerResult } from "./relay-double"
+import { startRelayDouble, type RelayDouble, type RelayHandlerResult } from "./relay-double"
 import { fixtureSnapshot } from "./wire-peer"
 import { writeWireMessage } from "../src/remote/wire"
 
@@ -44,6 +44,7 @@ async function harness(
     }) => RelayHandlerResult
     messages?: Record<string, readonly unknown[]>
     activeSessions?: Record<string, { type: "running" }>
+    createSocket?: (url: string) => WebSocket
   } = {},
 ): Promise<Harness> {
   const relay = await startRelayDouble({
@@ -82,6 +83,7 @@ async function harness(
         resetDelayMs: 10,
         maxDelayMs: 20,
         schedule,
+        ...(options.createSocket ? { createSocket: options.createSocket } : {}),
       }),
     schedule,
     batchMs: 20,
@@ -235,7 +237,7 @@ describe("windowed history", () => {
       await test.store.load()
       await test.runUntil(() => test.store.state().sessions.length > 0)
       const selecting = test.store.selectSession("ses_a")
-      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.pending.list"))
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.pending.list"))
       test.relay.pushEvent("ses_a", {
         type: "session.input.promoted",
         data: { sessionID: "ses_a", inputID: pending.id },
@@ -409,7 +411,7 @@ describe("windowed history", () => {
       await test.store.selectSession("ses_a")
       advanced = true
       test.relay.pushSessions(["ses_a"])
-      await waitFor(() => snapshots === 2)
+      await test.runUntil(() => snapshots === 2)
       test.relay.pushEvent("ses_a", {
         type: "session.execution.started",
         data: { sessionID: "ses_a" },
@@ -830,7 +832,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       test.relay.pushEvent("ses_a", {
         type: "session.compaction.failed",
@@ -891,7 +893,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_1"])
       fail = true
@@ -923,7 +925,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       expect(test.store.state().view?.watermark).toBe(10)
 
@@ -964,7 +966,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
 
       // Another session's aggregate must not advance or pollute this projection.
@@ -1085,7 +1087,7 @@ describe("snapshot synchronization", () => {
       })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       delta("Hel")
       delta("lo")
@@ -1160,7 +1162,7 @@ describe("snapshot synchronization", () => {
     }
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       thought("Consider")
       input('{"command":')
@@ -1252,7 +1254,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       expect(test.store.state().view?.messages.map((message) => message.id)).toEqual(["msg_compact", "msg_new"])
 
@@ -1325,7 +1327,7 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       const selection = test.store.selectSession("ses_a")
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
       test.relay.pushEvent("ses_a", {
@@ -1362,9 +1364,9 @@ describe("snapshot synchronization", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       const selection = test.store.selectSession("ses_a")
-      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
       test.relay.pushEvent("ses_a", {
         type: "session.text.delta",
         data: { assistantMessageID: "msg_a", ordinal: 0, delta: "STREAMED" },
@@ -1404,8 +1406,27 @@ describe("session state reads", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
-      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessionStatus !== undefined)
+      expect(test.relay.requests.some((request) => request.operation === "session.status")).toBe(true)
+      expect(test.store.state().sessions[0]?.running).toBe(true)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("reports family-running roots after the first connection attempt is refused", async () => {
+    let attempts = 0
+    const test = await harness({
+      handler: (request) =>
+        request.operation === "session.status" ? { ok: true, value: { running: ["ses_a"], attention: [] } } : "default",
+      createSocket: (url) => new WebSocket(++attempts === 1 ? url.replace(/:\d+\//, ":1/") : url),
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessionStatus !== undefined)
+      expect(attempts).toBeGreaterThan(1)
       expect(test.relay.requests.some((request) => request.operation === "session.status")).toBe(true)
       expect(test.store.state().sessions[0]?.running).toBe(true)
     } finally {
@@ -1422,8 +1443,8 @@ describe("session state reads", () => {
     })
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
-      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.status"))
+      await test.runUntil(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.status"))
       expect(test.store.state().sessions[0]?.running).toBeUndefined()
     } finally {
       await test.stop()
@@ -1434,7 +1455,7 @@ describe("session state reads", () => {
     const test = await harness()
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
 
       test.relay.pushEvent("ses_a", { type: "session.status", data: { sessionID: "ses_a", status: { type: "busy" } } })

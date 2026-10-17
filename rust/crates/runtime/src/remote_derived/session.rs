@@ -155,7 +155,18 @@ pub async fn status(
     })
 }
 
-fn selected(ids: &[v5::LosslessString]) -> Result<Vec<session::Id>, Failure> {
+const REMOTE_MEMBER_LIMIT: usize = 15;
+
+fn selected(
+    invocation: &Invocation,
+    ids: &[v5::LosslessString],
+) -> Result<Vec<session::Id>, Failure> {
+    if invocation.remote && ids.len() > REMOTE_MEMBER_LIMIT {
+        return Err(target::error(
+            1,
+            "Remote family selections admit at most 15 members",
+        ));
+    }
     let ids = ids
         .iter()
         .map(convert::identifier::<session::Id>)
@@ -172,7 +183,7 @@ pub async fn economics(
 ) -> Result<v5::SessionTeamEconomicsResult, Failure> {
     let root = target::root(&invocation)?;
     let core = invocation.core()?;
-    let members = selected(&request.payload.session_i_ds.items)?
+    let members = selected(&invocation, &request.payload.session_i_ds.items)?
         .iter()
         .map(|id| target::member(core, &root, id, true))
         .collect::<Result<Vec<_>, _>>()?;
@@ -588,7 +599,7 @@ pub async fn activity(
         return Err(target::error(5, "Family activity requires a root Session"));
     }
     let core = invocation.core()?;
-    let ids = selected(&request.payload.session_i_ds.items)?;
+    let ids = selected(&invocation, &request.payload.session_i_ds.items)?;
     if ids.contains(&root.id) {
         return Err(target::error(
             5,

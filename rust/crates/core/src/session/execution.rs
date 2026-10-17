@@ -5,6 +5,7 @@ use super::{
     completion::Completion,
     orchestration,
     pending::Request,
+    review_fold,
     run_coordinator::{
         Coordinator, Drain, DrainRequest, Error, InterruptReason, Outcome, RunFuture,
     },
@@ -18,6 +19,7 @@ use std::{
 };
 use ycoding_schema::{
     ObjectEncoder, location, session, session_error, session_message, session_pending,
+    session_review::Kind,
 };
 use ycoding_store::session::{NewEvent, Pending, TaskTable};
 
@@ -105,27 +107,32 @@ impl Execution {
     }
 
     pub fn job_shells(&'static self) -> JobShells {
-        JobShells::new(
-            self.jobs.clone(),
-            Arc::new(move |session_id, input| {
-                Box::pin(async move {
-                    let event_id = super::projector::random_event_id().map_err(io_error)?;
-                    self.prompt(
-                        Request {
-                            id: session_message::Id::from_event(&event_id),
-                            session_id,
-                            input,
-                            event_id,
-                            created: chrono::Utc::now().timestamp_millis(),
-                        },
-                        None,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_err(io_error)
-                })
-            }),
-        )
+        JobShells::new(self.jobs.clone(), self.notice_delivery(None))
+            .with_quiet_delivery(self.notice_delivery(Some(false)))
+    }
+    fn notice_delivery(
+        &'static self,
+        resume: Option<bool>,
+    ) -> crate::tools::builtin::shell::Deliver {
+        Arc::new(move |session_id, input| {
+            Box::pin(async move {
+                let event_id = super::projector::random_event_id().map_err(io_error)?;
+                self.prompt_with_origin(
+                    Request {
+                        id: session_message::Id::from_event(&event_id),
+                        session_id,
+                        input,
+                        event_id,
+                        created: chrono::Utc::now().timestamp_millis(),
+                    },
+                    resume,
+                    autonomy::Origin::Runtime,
+                )
+                .await
+                .map(|_| ())
+                .map_err(notice_error)
+            })
+        })
     }
     pub fn active(&self) -> Vec<session::Id> {
         self.coordinator.active()
@@ -133,11 +140,23 @@ impl Execution {
 
     pub fn wake(&self, id: &session::Id) -> Outcome {
         self.require(id)?;
+        match recovery_gate(&self.store, id) {
+            Err(Error::Runner(error)) if error.r#type.as_str() == Some("recovery_required") => {
+                return Ok(());
+            }
+            result => result?,
+        }
         self.coordinator.wake(id)
     }
     pub async fn resume(&self, id: &session::Id) -> Outcome {
         self.require(id)?;
+        recovery_gate(&self.store, id)?;
         self.coordinator.run(id).await
+    }
+    pub async fn request_resume(&self, id: &session::Id) -> Outcome {
+        self.require(id)?;
+        recovery_gate(&self.store, id)?;
+        self.coordinator.request_resume(id).await
     }
     pub async fn interrupt(&self, id: &session::Id) -> Outcome {
         self.require(id)?;
@@ -164,10 +183,16 @@ impl Execution {
         self.coordinator.with_transition(id, effect).await
     }
 
-    pub async fn prompt(
+    pub async fn prompt(&self, request: Request, resume: Option<bool>) -> Result<Pending, Error> {
+        self.prompt_with_origin(request, resume, autonomy::Origin::User)
+            .await
+    }
+
+    pub async fn prompt_with_origin(
         &self,
         mut request: Request,
         resume: Option<bool>,
+        origin: autonomy::Origin,
     ) -> Result<Pending, Error> {
         let prior = self.store.pending(&request.id)?.is_some()
             || self.store.message(&request.id)?.is_some();
@@ -186,7 +211,16 @@ impl Execution {
                 .await?;
         }
         let id = request.session_id.clone();
-        let admitted = self.store.admit_input(request).await?;
+        let admitted = autonomy::Service::new(self.store.client.clone())
+            .admit(&self.store, request, None, origin)
+            .await
+            .map_err(|error| match error {
+                autonomy::Error::Store(error) => Error::from(error),
+                autonomy::Error::NotFound(_) => Error::from(ycoding_store::Error::Domain {
+                    kind: "not_found",
+                    message: "Session not found",
+                }),
+            })?;
         if resume != Some(false) && admitted.wake {
             self.wake(&id)?;
         }
@@ -260,6 +294,7 @@ impl Drain for RuntimeDrain {
         let store = self.store.clone();
         let orchestration = self.orchestration.clone();
         Box::pin(async move {
+            recovery_gate(&store, &id)?;
             lifecycle(&store, &id, None).await?;
             orchestration
                 .dispatch_restart_losses(&id)
@@ -276,6 +311,10 @@ impl Drain for RuntimeDrain {
         let steer = self.steer.clone();
         let orchestration = self.orchestration.clone();
         Box::pin(async move {
+            if matches!(&outcome, Err(Error::Runner(error)) if error.r#type.as_str() == Some("recovery_required"))
+            {
+                return Ok(());
+            }
             let runner = active
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -347,11 +386,45 @@ impl Drain for RuntimeDrain {
     }
 }
 
+fn recovery_gate(store: &Service, id: &session::Id) -> Outcome {
+    let snapshot = store.client.snapshot()?;
+    if snapshot
+        .get::<TaskTable>(&super::key(id.as_lossless()))?
+        .is_none()
+    {
+        return Ok(());
+    }
+    if review_fold::fold(&snapshot, &[id.as_lossless().clone()])?
+        .iter()
+        .any(|item| {
+            item.deferral.kind == Kind::Recovery && (item.is_open() || item.is_stopped_recovery())
+        })
+    {
+        return Err(Error::Runner(session_error::Error {
+            r#type: "recovery_required".into(),
+            message:
+                "Only the user can continue this subagent through its restart recovery review."
+                    .into(),
+        }));
+    }
+    Ok(())
+}
+
 struct ProcessExecution;
 
 impl orchestration::Execution for ProcessExecution {
     fn wake(&self, id: &session::Id) -> Outcome {
         Execution::global().ok_or(Error::Closed)?.wake(id)
+    }
+
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        let id = id.clone();
+        Box::pin(async move {
+            Execution::global()
+                .ok_or(Error::Closed)?
+                .request_resume(&id)
+                .await
+        })
     }
 
     fn interrupt(&self, id: &session::Id) -> RunFuture {
@@ -453,6 +526,28 @@ fn orchestration_error(error: orchestration::Error) -> Error {
             message: error.to_string().into(),
         }),
     }
+}
+
+fn notice_error(error: Error) -> std::io::Error {
+    let missing = match &error {
+        Error::Store(store) => matches!(
+            store.as_ref(),
+            ycoding_store::Error::Domain {
+                kind: "not_found",
+                ..
+            }
+        ),
+        Error::Runner(runner) => runner.r#type.as_str() == Some("not_found"),
+        _ => false,
+    };
+    std::io::Error::new(
+        if missing {
+            std::io::ErrorKind::NotFound
+        } else {
+            std::io::ErrorKind::Other
+        },
+        error.to_string(),
+    )
 }
 
 fn io_error(error: impl std::fmt::Display) -> std::io::Error {

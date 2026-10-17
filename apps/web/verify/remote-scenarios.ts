@@ -4,6 +4,7 @@ type RemoteScenarioName =
   | "conversation-workspace"
   | "conversation-landing"
   | "session-list"
+  | "session-list-waiting"
   | "conversation-tool-terminal-output"
   | "permission-guardrail-hard-review-form-requests"
   | "empty-backend"
@@ -55,6 +56,7 @@ export type RemoteScenario = {
   readonly emptyBackend: boolean
   readonly devices: readonly RemoteDeviceInfo[]
   readonly sessions: readonly WireSession[]
+  readonly attention?: readonly string[]
   readonly messages: readonly WireMessage[]
   readonly permissions: readonly WirePermission[]
   readonly guardrails: readonly WireGuardrail[]
@@ -473,6 +475,22 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
       sessions: sessionListSessions,
       expectedText: ["Async Auth Token Revocation Migration", "auth-gate"],
     }
+  if (name === "session-list-waiting")
+    return {
+      ...common,
+      view: "sessions",
+      noSelection: true,
+      permissions: [],
+      guardrails: [],
+      forms: [],
+      sessions: [
+        baseSession({ id: "ses_recent", title: "Recent result", time: time(1) }),
+        baseSession({ id: "ses_running", title: "Running build", running: true, time: time(10) }),
+        baseSession({ id: "ses_waiting", title: "Waiting review", running: true, time: time(100) }),
+      ],
+      attention: ["ses_waiting"],
+      expectedText: ["Waiting review", "Running build", "Recent result"],
+    }
   if (name === "conversation-landing")
     return {
       ...common,
@@ -522,7 +540,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
               guardrail(
                 "grq_hard",
                 "Destructive Database Alteration & Git Force Push",
-                "A human decision is required, even at YOLO 3.",
+                "A human decision is required at every YOLO level.",
                 true,
                 ["ALTER TABLE sessions DROP COLUMN status", "git push -f"],
               ),
@@ -531,7 +549,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
               guardrail(
                 "grq_hard",
                 viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*",
-                "A human decision is required, even at YOLO 3.",
+                "A human decision is required at every YOLO level.",
                 true,
                 [viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*"],
               ),
@@ -539,7 +557,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
       forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
       expectedText:
         viewport === 390
-          ? ["Network Socket Access", "Guardrail review (human decision required)", "Select Target Cluster"]
+          ? ["Network Socket Access", "Guardrail review (hard review)", "Select Target Cluster"]
           : viewport === 768
             ? [
                 "human decision is required",
@@ -654,6 +672,8 @@ const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
 export const REMOTE_SCENARIOS = [
   ...scenarioNames.flatMap((name) => viewports.map((viewport) => scenario(name, viewport))),
+  scenario("session-list-waiting", 390),
+  scenario("session-list-waiting", 1440),
   scenario("conversation-landing", 390),
   scenario("empty-backend", 1440),
   scenario("selected-machine-offline", 768),

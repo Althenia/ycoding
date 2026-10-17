@@ -1,0 +1,13 @@
+$ bun run src/v5/generate.ts
+packages/protocol/src/generated/v5/contract.ts 323ms
+packages/protocol/src/generated/v5/index.ts 23ms
+packages/protocol/src/generated/v5/operations.ts 33ms
+packages/protocol/src/generated/v5/events.ts 3ms
+packages/protocol/src/generated/v5/ycoding/v5/connector_pb.ts 32ms
+packages/protocol/src/generated/v5/ycoding/v5/events_pb.ts 49ms
+packages/protocol/src/generated/v5/ycoding/v5/foundation_pb.ts 16ms
+packages/protocol/src/generated/v5/ycoding/v5/operations_pb.ts 2ms
+packages/protocol/src/generated/v5/ycoding/v5/platform_pb.ts 47ms
+packages/protocol/src/generated/v5/ycoding/v5/resources_pb.ts 81ms
+packages/protocol/src/generated/v5/ycoding/v5/session_pb.ts 211ms
+packages/protocol/src/generated/v5/ycoding/v5/shared_pb.ts 18ms

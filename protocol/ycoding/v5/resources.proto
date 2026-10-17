@@ -4,7 +4,7 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 2000 last: 2062 };
+option (ycoding.v5.operation_range) = { first: 2000 last: 2067 };
 
 enum Agent_Info_mode {
   AGENT_INFO_MODE_SUBAGENT = 1;
@@ -192,6 +192,22 @@ enum Config_DiagnosticReason {
   CONFIG_DIAGNOSTICREASON_REMOVED_KEYS = 3;
 }
 
+enum ModelIncident_Kind {
+  MODELINCIDENT_KIND_FALLBACK = 1;
+  MODELINCIDENT_KIND_GUARDRAIL_ESCALATED = 2;
+  MODELINCIDENT_KIND_GUARDRAIL_REJECTED = 3;
+}
+
+enum ModelIncident_DecidedBy {
+  MODELINCIDENT_DECIDEDBY_DECISION_MODEL = 1;
+  MODELINCIDENT_DECIDEDBY_HUMAN = 2;
+}
+
+enum ModelIncident_Group {
+  MODELINCIDENT_GROUP_MODEL = 1;
+  MODELINCIDENT_GROUP_AGENT = 2;
+}
+
 enum Integration_CommandAttemptStatusValue1_status {
   INTEGRATION_COMMANDATTEMPTSTATUSVALUE1_STATUS_PENDING = 1;
 }
@@ -334,12 +350,22 @@ enum ProviderNotFoundError__tag {
   PROVIDERNOTFOUNDERROR__TAG_PROVIDERNOTFOUNDERROR = 1;
 }
 
-enum ProviderUsage_Status {
-  PROVIDERUSAGE_STATUS_AVAILABLE = 1;
-  PROVIDERUSAGE_STATUS_STALE = 2;
-  PROVIDERUSAGE_STATUS_UNSUPPORTED = 3;
-  PROVIDERUSAGE_STATUS_UNAUTHORIZED = 4;
-  PROVIDERUSAGE_STATUS_ERROR = 5;
+enum providerUsage_forecast_Request_query_localScope {
+  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_BACKEND = 1;
+  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_LOCATION = 2;
+}
+
+enum UsageForecast_Info_localScope {
+  USAGEFORECAST_INFO_LOCALSCOPE_BACKEND = 1;
+  USAGEFORECAST_INFO_LOCALSCOPE_LOCATION = 2;
+}
+
+enum ProviderUsage_Unit {
+  PROVIDERUSAGE_UNIT_PERCENT = 1;
+  PROVIDERUSAGE_UNIT_USD = 2;
+  PROVIDERUSAGE_UNIT_REQUESTS = 3;
+  PROVIDERUSAGE_UNIT_TOKENS = 4;
+  PROVIDERUSAGE_UNIT_COUNT = 5;
 }
 
 enum ProviderUsage_Source {
@@ -358,12 +384,30 @@ enum ProviderUsage_Stability {
   PROVIDERUSAGE_STABILITY_BEST_EFFORT = 4;
 }
 
-enum ProviderUsage_Unit {
-  PROVIDERUSAGE_UNIT_PERCENT = 1;
-  PROVIDERUSAGE_UNIT_USD = 2;
-  PROVIDERUSAGE_UNIT_REQUESTS = 3;
-  PROVIDERUSAGE_UNIT_TOKENS = 4;
-  PROVIDERUSAGE_UNIT_COUNT = 5;
+enum UsageForecast_Quota_state {
+  USAGEFORECAST_QUOTA_STATE_ESTIMATED = 1;
+  USAGEFORECAST_QUOTA_STATE_INSUFFICIENT = 2;
+  USAGEFORECAST_QUOTA_STATE_EXHAUSTED = 3;
+  USAGEFORECAST_QUOTA_STATE_UNLIMITED = 4;
+}
+
+enum UsageForecast_Quota_method {
+  USAGEFORECAST_QUOTA_METHOD_QUOTA_DELTA_EMA = 1;
+  USAGEFORECAST_QUOTA_METHOD_WINDOW_MEAN = 2;
+}
+
+enum UsageForecast_Quota_evidence {
+  USAGEFORECAST_QUOTA_EVIDENCE_LOW = 1;
+  USAGEFORECAST_QUOTA_EVIDENCE_MEDIUM = 2;
+  USAGEFORECAST_QUOTA_EVIDENCE_INSUFFICIENT = 3;
+}
+
+enum ProviderUsage_Status {
+  PROVIDERUSAGE_STATUS_AVAILABLE = 1;
+  PROVIDERUSAGE_STATUS_STALE = 2;
+  PROVIDERUSAGE_STATUS_UNSUPPORTED = 3;
+  PROVIDERUSAGE_STATUS_UNAUTHORIZED = 4;
+  PROVIDERUSAGE_STATUS_ERROR = 5;
 }
 
 enum Reference_LocalSource_type {
@@ -382,6 +426,13 @@ enum usage_report_Request_query_group {
   USAGE_REPORT_REQUEST_QUERY_GROUP_SESSION = 5;
   USAGE_REPORT_REQUEST_QUERY_GROUP_PROJECT = 6;
   USAGE_REPORT_REQUEST_QUERY_GROUP_AGENT = 7;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER = 8;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_PROFILE_MODEL = 9;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_MODEL = 10;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL_ID = 11;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROFILE = 12;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROMPT = 13;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_TASK = 14;
 }
 
 enum usage_report_Request_query_sort {
@@ -1141,6 +1192,114 @@ message credential_update_Request {
 
 message credential_update_Result {
   required Empty data = 1;
+}
+
+message ModelIncidentGuidanceQuery {
+  required LosslessString provider = 1;
+  required LosslessString model = 2;
+  optional ModelIncidentGuidanceQuery_location location = 3;
+}
+
+message ModelIncidentGuidanceQuery_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message incident_guidance_clear_Request {
+  required ModelIncidentGuidanceQuery query = 1;
+}
+
+message incident_guidance_clear_Result {
+  required ModelIncident_Guidance data = 1;
+}
+
+message ModelIncident_Guidance {
+  optional LosslessString text = 1;
+  optional uint64 clearedAt = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.Guidance" integer_min: "0" integer_max: "9007199254740991" }];
+  required bool enabled = 3;
+}
+
+message incident_guidance_get_Request {
+  required ModelIncidentGuidanceQuery query = 1;
+}
+
+message incident_guidance_get_Result {
+  required ModelIncident_Guidance data = 1;
+}
+
+message ModelIncidentRecentQuery {
+  required LosslessString provider = 1;
+  required LosslessString model = 2;
+  optional LosslessString agent = 3;
+  optional uint64 limit = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/incident.ts#IncidentRecentQuery" integer_min: "1" integer_max: "50" }];
+}
+
+message incident_recent_Request {
+  required ModelIncidentRecentQuery query = 1;
+}
+
+message incident_recent_Result {
+  required ModelIncident_Recent data = 1;
+}
+
+message ModelIncident_Recent {
+  required ModelIncident_Recent_items items = 1;
+}
+
+message ModelIncident_Recent_items {
+  repeated ModelIncident_Item items = 1;
+}
+
+message ModelIncident_Item {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.ID" }];
+  required uint64 time = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  required ModelIncident_Kind kind = 3;
+  required LosslessString category = 4;
+  required ModelIncident_Item_ruleIDs ruleIDs = 5;
+  required LosslessString agent = 6;
+  optional LosslessString variant = 7;
+  optional LosslessString profile = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.Item" utf16_min: 1 }];
+  optional Model_Ref target = 9;
+  optional ModelIncident_DecidedBy decidedBy = 10;
+}
+
+message ModelIncident_Item_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message ModelIncidentReportQuery {
+  required ModelIncident_Group group = 1;
+  optional uint64 from = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/incident.ts#IncidentReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 to = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/incident.ts#IncidentReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 offset = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/incident.ts#IncidentReportQuery" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 limit = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/incident.ts#IncidentReportQuery" integer_min: "1" integer_max: "200" }];
+}
+
+message incident_report_Request {
+  required ModelIncidentReportQuery query = 1;
+}
+
+message incident_report_Result {
+  required ModelIncident_Report data = 1;
+}
+
+message ModelIncident_Report {
+  required ModelIncident_Report_rows rows = 1;
+  required uint64 groups = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.Report" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message ModelIncident_Report_rows {
+  repeated ModelIncident_ReportRow items = 1;
+}
+
+message ModelIncident_ReportRow {
+  required LosslessString providerID = 1;
+  required LosslessString modelID = 2;
+  optional LosslessString agent = 3;
+  required uint64 fallbacks = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 escalated = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 rejected = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 last = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/model-incident.ts#ModelIncident.ReportRow" integer_min: "0" integer_max: "9007199254740991" }];
 }
 
 message integration_command_cancel_Request_params {
@@ -2318,6 +2477,72 @@ message provider_refresh_Result {
   required Empty data = 1;
 }
 
+message providerUsage_forecast_Request_query {
+  optional providerUsage_forecast_Request_query_location location = 1;
+  required providerUsage_forecast_Request_query_localScope localScope = 2;
+}
+
+message providerUsage_forecast_Request_query_location {
+  optional LosslessString directory = 1;
+  optional LosslessString workspace = 2;
+}
+
+message providerUsage_forecast_Request {
+  required providerUsage_forecast_Request_query query = 1;
+}
+
+message providerUsage_forecast_Result {
+  required Location_Info location = 1;
+  required UsageForecast_Info data = 2;
+}
+
+message UsageForecast_Info {
+  required uint64 asOf = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Info" integer_min: "0" integer_max: "9007199254740991" }];
+  required UsageForecast_Info_localScope localScope = 2;
+  optional UsageForecast_Info_localRates localRates = 3;
+  optional UsageForecast_Info_quotas quotas = 4;
+}
+
+message UsageForecast_Info_localRates {
+  repeated UsageForecast_LocalRate items = 1;
+}
+
+message UsageForecast_LocalRate {
+  required LosslessString providerID = 1;
+  optional LosslessString profile = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" utf16_min: 1 }];
+  optional LosslessString modelID = 3;
+  required uint64 observedFrom = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 observedTo = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" integer_min: "0" integer_max: "9007199254740991" }];
+  required double tokensPerMinute = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" }];
+  optional double tokensPerMinute5 = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" }];
+  optional double tokensPerMinute60 = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" }];
+  optional double estimatedUSDPerHour = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.LocalRate" }];
+  required ProviderRequest_CostCoverage coverage = 10;
+}
+
+message UsageForecast_Info_quotas {
+  repeated UsageForecast_Quota items = 1;
+}
+
+message UsageForecast_Quota {
+  required LosslessString providerID = 1;
+  optional LosslessString profile = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" utf16_min: 1 }];
+  required LosslessString windowID = 3;
+  required ProviderUsage_Unit unit = 4;
+  required ProviderUsage_Source source = 5;
+  required ProviderUsage_Stability stability = 6;
+  required uint64 updatedAt = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" integer_min: "0" integer_max: "9007199254740991" }];
+  required UsageForecast_Quota_state state = 8;
+  optional UsageForecast_Quota_method method = 9;
+  required UsageForecast_Quota_evidence evidence = 10;
+  optional LosslessString reason = 11;
+  optional uint64 observedFrom = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" integer_min: "0" integer_max: "9007199254740991" }];
+  optional uint64 observedTo = 13 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double ratePerHour = 14 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" }];
+  optional uint64 exhaustionAt = 15 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double projectedUsedAtReset = 16 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" }];
+}
+
 message providerUsage_get_Request_params {
   required LosslessString providerID = 1;
 }
@@ -2461,6 +2686,10 @@ message usage_get_Result {
 
 message usage_report_Request_query {
   required usage_report_Request_query_group group = 1;
+  optional LosslessString providerID = 9;
+  optional LosslessString profile = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" utf16_min: 1 }];
+  optional LosslessString modelID = 11;
+  optional LosslessString selectedEffort = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" utf16_min: 1 }];
   optional LosslessString timeZone = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" utf16_min: 1 utf16_max: 128 }];
   optional uint64 from = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 to = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/usage.ts#UsageGroup" integer_min: "0" integer_max: "9007199254740991" }];
@@ -2475,7 +2704,7 @@ message usage_report_Request {
 }
 
 message usage_report_Result {
-  required ProviderRequest_Report data = 1;
+  required ProviderRequest_Report data = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" }];
 }
 
 service server_agent {
@@ -2979,6 +3208,77 @@ service server_credential {
   }
 }
 
+service server_incident {
+  rpc incident_guidance_clear(incident_guidance_clear_Request) returns (incident_guidance_clear_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2067
+      diagnostic_name: "incident.guidance.clear"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      scope: LOCATION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc incident_guidance_get(incident_guidance_get_Request) returns (incident_guidance_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2066
+      diagnostic_name: "incident.guidance.get"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: SESSION }
+      role_scopes: { role: RELAY scopes: SESSION }
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc incident_recent(incident_recent_Request) returns (incident_recent_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2065
+      diagnostic_name: "incident.recent"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc incident_report(incident_report_Request) returns (incident_report_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2064
+      diagnostic_name: "incident.report"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: OFFSET
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
 service server_integration {
   rpc integration_command_cancel(integration_command_cancel_Request) returns (integration_command_cancel_Result) {
     option (ycoding.v5.operation) = {
@@ -3462,6 +3762,26 @@ service server_provider {
 }
 
 service server_providerUsage {
+  rpc providerUsage_forecast(providerUsage_forecast_Request) returns (providerUsage_forecast_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 2063
+      diagnostic_name: "providerUsage.forecast"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      role_scopes: { role: REMOTE_CLIENT scopes: MACHINE scopes: SESSION }
+      role_scopes: { role: RELAY scopes: MACHINE scopes: SESSION }
+      scope: LOCATION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
   rpc providerUsage_get(providerUsage_get_Request) returns (providerUsage_get_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 2054

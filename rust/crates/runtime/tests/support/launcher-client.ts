@@ -10,6 +10,9 @@ export async function fixture(binary: string) {
   const configDir = join(root, "watched-config")
   await mkdir(configDir, { mode: 0o700 })
   const excluded = [
+    "YCODING_DB",
+    "YCODING_SQLITE_IMPORT_SOURCE",
+    "YCODING_DISABLE_CHANNEL_DB",
     "YCODING_CONFIG",
     "YCODING_CONFIG_CONTENT",
     "YCODING_PASSWORD",

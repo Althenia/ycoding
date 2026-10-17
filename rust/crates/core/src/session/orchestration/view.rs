@@ -201,6 +201,7 @@ fn observed(task: &Task) -> Observed {
                 .field("id", &question.id)
                 .field("text", &question.text)
                 .optional("data", &question.data)
+                .optional("deferred", &question.deferred.filter(|deferred| *deferred))
                 .finish(),
         );
     }

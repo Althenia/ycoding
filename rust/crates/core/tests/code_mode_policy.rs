@@ -91,6 +91,8 @@ impl ToolHost for Host {
                         metadata: None,
                         skip_review: false,
                         holder: None,
+                        defer_shell: false,
+                        source: None,
                     })
                     .map_err(|_| ToolFailure::Safe("Guardrail denied".into()))?;
                 let _reservation = match admission.wait {
@@ -138,6 +140,8 @@ fn host(fixture: &Fixture, session: SessionId, publisher: Publisher) -> Arc<Host
                 custom: Arc::new(Vec::new),
                 enabled: true,
                 limits: Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             publisher,
         ),
@@ -242,7 +246,7 @@ async fn hard_guardrail_review_is_not_bypassed_by_goal_or_yolo_code_mode_executi
         resource: "*".into(),
         effect: permission::Effect("allow".into()),
     });
-    let session = fixture.session("ses_hard", None, 3, true, None);
+    let session = fixture.session("ses_hard", None, 2, true, None);
     let (publisher, mut events) = publisher();
     let host = host(&fixture, session.clone(), publisher);
     let execution_host = host.clone();

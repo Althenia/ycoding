@@ -141,7 +141,7 @@ const catalog = named(
     resources: Schema.Array(Schema.Struct({ name: text(), uri: text(), description: optional(text()) })),
   }),
 )
-const memberIDs = Schema.Array(text(1, 128)).check(Schema.isMaxLength(15))
+const memberIDs = Schema.Array(text(1, 128)).check(Schema.isMaxLength(128))
 const body = <S extends Schema.Top>(data: S) => Schema.Struct({ data })
 const empty = Schema.Void
 const schemas = {

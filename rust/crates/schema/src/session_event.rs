@@ -68,6 +68,13 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.model.selected", 1),
         durable("session.daybreak.set", 1),
         durable("session.project-artifacts-ended", 1),
+        durable("session.guardrail.dismissed", 1),
+        durable("session.guardrail.escalated", 1),
+        durable("session.guardrail.decided", 1),
+        durable("session.review.deferred", 1),
+        durable("session.review.decided", 1),
+        durable("session.review.withdrawn", 1),
+        durable("session.review.consumed", 1),
         durable("session.moved", 1),
         durable("session.renamed", 1),
         ephemeral("session.usage.updated"),
@@ -98,6 +105,7 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         durable("session.step.started", 1),
         durable("session.step.ended", 1),
         durable("session.step.failed", 1),
+        durable("session.step.rerouted", 1),
         durable("session.text.started", 1),
         ephemeral("session.text.delta"),
         durable("session.text.ended", 1),
@@ -108,7 +116,7 @@ pub fn definitions() -> Vec<crate::event::Definition> {
         ephemeral("session.tool.input.delta"),
         durable("session.tool.input.ended", 1),
         durable("session.tool.called", 1),
-        durable("session.tool.progress", 1),
+        ephemeral("session.tool.progress"),
         durable("session.tool.success", 1),
         durable("session.tool.failed", 1),
         durable("session.file-change.recorded", 1),
@@ -129,6 +137,7 @@ pub fn durable_definitions() -> Vec<crate::event::Definition> {
         .filter(|d| matches!(d.durability, crate::event::Durability::Durable { .. }))
         .collect();
     result.extend([
+        durable("session.tool.progress", 1),
         durable("session.compaction.admitted", 1),
         durable("session.compaction.started", 1),
         durable("session.compaction.ended", 1),
@@ -348,26 +357,99 @@ fn decode_event_data(
                         .key(*key)
                         .error(DecodeErrorKind::Expected("non-null optional field")));
                 }
-                validate_event_field(
-                    event_type.as_str().unwrap_or(""),
-                    key,
-                    &value,
-                    &path.key(*key),
-                )?;
-                data.insert((*key).into(), value);
+                data.insert(
+                    (*key).into(),
+                    checked_field(event_type.as_str().unwrap_or(""), key, value, path)?,
+                );
             }
         } else {
             let value = object.field(key)?;
-            validate_event_field(
-                event_type.as_str().unwrap_or(""),
-                key,
-                &value,
-                &path.key(*key),
-            )?;
-            data.insert((*key).into(), value);
+            data.insert(
+                (*key).into(),
+                checked_field(event_type.as_str().unwrap_or(""), key, value, path)?,
+            );
         }
     }
     Ok(Data(data))
+}
+
+fn checked_field(
+    event_type: &str,
+    key: &str,
+    value: JsonValue,
+    path: &JsonPath,
+) -> Result<JsonValue, DecodeError> {
+    let path = path.key(key);
+    match canonical_field(event_type, key, &value, &path)? {
+        Some(canonical) => Ok(canonical),
+        None => validate_event_field(event_type, key, &value, &path).map(|_| value),
+    }
+}
+
+fn canonical<T: DomainDecode + DomainEncode>(
+    value: &JsonValue,
+    path: &JsonPath,
+) -> Result<Option<JsonValue>, DecodeError> {
+    T::decode_at(value, path).map(|decoded| Some(decoded.encode()))
+}
+
+fn canonical_field(
+    event_type: &str,
+    key: &str,
+    value: &JsonValue,
+    path: &JsonPath,
+) -> Result<Option<JsonValue>, DecodeError> {
+    use crate::{guardrail, session_review};
+    match (event_type, key) {
+        (
+            "session.review.deferred"
+            | "session.review.decided"
+            | "session.review.withdrawn"
+            | "session.review.consumed",
+            "itemID",
+        ) => canonical::<session_review::Id>(value, path),
+        ("session.review.deferred", "kind") => canonical::<session_review::Kind>(value, path),
+        ("session.review.deferred", "reason") => canonical::<session_review::Reason>(value, path),
+        ("session.review.deferred", "choice") => canonical::<LosslessString>(value, path),
+        ("session.review.deferred", "origin") => canonical::<session_review::Origin>(value, path),
+        ("session.review.deferred", "payload") => canonical::<session_review::Payload>(value, path),
+        ("session.review.decided", "decision") => {
+            canonical::<session_review::Decision>(value, path)
+        }
+        (
+            "session.review.deferred" | "session.guardrail.escalated" | "session.guardrail.decided",
+            "confidence",
+        ) => canonical::<guardrail::Confidence>(value, path),
+        (
+            "session.review.deferred" | "session.guardrail.escalated" | "session.guardrail.decided",
+            "grades",
+        ) => canonical::<Vec<guardrail::Grade>>(value, path),
+        ("session.guardrail.escalated" | "session.guardrail.decided", "choice") => {
+            canonical::<guardrail::DecisionChoice>(value, path)
+        }
+        ("session.guardrail.decided", "reply") => canonical::<guardrail::Reply>(value, path),
+        (
+            "session.guardrail.dismissed"
+            | "session.guardrail.escalated"
+            | "session.guardrail.decided",
+            "source",
+        ) => canonical::<guardrail::Source>(value, path),
+        ("session.guardrail.escalated" | "session.guardrail.decided", "ruleIDs") => {
+            canonical::<Vec<LosslessString>>(value, path)
+        }
+        ("session.guardrail.escalated" | "session.guardrail.decided", "requestID") => {
+            canonical::<LosslessString>(value, path)
+        }
+        ("session.guardrail.dismissed", "ruleID") => {
+            crate::domain::branded_string(value, "standard.review.", path)
+                .map(|id| Some(id.encode()))
+        }
+        ("session.guardrail.dismissed", "confidence") => {
+            crate::domain::number_range(value, 0.9, 1.0, path)
+                .map(|number| Some(JsonValue::Number(number)))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'static str, bool)]> {
@@ -429,6 +511,7 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("cost", true),
             ("tokens", false),
             ("time", false),
+            ("usageAnchor", true),
         ],
         "session.usage.updated" => &[("sessionID", false), ("cost", false), ("tokens", false)],
         "session.prediction.updated" => &[
@@ -451,7 +534,12 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
             ("from", true),
         ],
         "session.input.promoted" => &[("sessionID", false), ("inputID", false)],
-        "session.input.admitted" => &[("sessionID", false), ("inputID", false), ("input", false)],
+        "session.input.admitted" => &[
+            ("sessionID", false),
+            ("inputID", false),
+            ("input", false),
+            ("causedBy", true),
+        ],
         "session.input.consumed" => &[("sessionID", false), ("inputIDs", false)],
         "session.execution.failed" => &[("sessionID", false), ("error", false)],
         "session.execution.interrupted" => &[("sessionID", false), ("reason", false)],
@@ -617,9 +705,12 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
         "session.compaction.admitted" if version == Some(1) => {
             &[("sessionID", false), ("inputID", false)]
         }
-        "session.compaction.admitted" => {
-            &[("sessionID", false), ("jobID", false), ("pressure", true)]
-        }
+        "session.compaction.admitted" => &[
+            ("sessionID", false),
+            ("jobID", false),
+            ("pressure", true),
+            ("usageAnchor", true),
+        ],
         "session.compaction.started" if version == Some(1) => &[
             ("sessionID", false),
             ("reason", false),
@@ -666,6 +757,53 @@ fn fields_for(event_type: &str, version: Option<i64>) -> Option<&'static [(&'sta
         "session.revert.staged" => &[("sessionID", false), ("revert", false)],
         "session.revert.cleared" => &[("sessionID", false)],
         "session.revert.committed" => &[("sessionID", false), ("to", false)],
+        "session.review.deferred" => &[
+            ("sessionID", false),
+            ("itemID", false),
+            ("kind", false),
+            ("reason", false),
+            ("choice", true),
+            ("confidence", true),
+            ("grades", true),
+            ("origin", false),
+            ("payload", false),
+        ],
+        "session.review.decided" => &[("sessionID", false), ("itemID", false), ("decision", false)],
+        "session.review.withdrawn" => &[("sessionID", false), ("itemID", false), ("reason", false)],
+        "session.review.consumed" => &[("sessionID", false), ("itemID", false)],
+        "session.step.rerouted" => &[
+            ("sessionID", false),
+            ("assistantMessageID", false),
+            ("model", false),
+            ("error", false),
+        ],
+        "session.guardrail.dismissed" => &[
+            ("sessionID", false),
+            ("reviewSessionID", false),
+            ("ruleID", false),
+            ("confidence", false),
+            ("source", true),
+        ],
+        "session.guardrail.escalated" => &[
+            ("sessionID", false),
+            ("requestID", false),
+            ("choice", true),
+            ("confidence", true),
+            ("grades", true),
+            ("ruleIDs", true),
+            ("source", true),
+        ],
+        "session.guardrail.decided" => &[
+            ("sessionID", false),
+            ("reviewSessionID", false),
+            ("requestID", false),
+            ("reply", false),
+            ("choice", true),
+            ("grades", true),
+            ("confidence", true),
+            ("ruleIDs", true),
+            ("source", true),
+        ],
         _ => return None,
     };
     Some(fields)
@@ -691,6 +829,7 @@ fn validate_event_field(
         }
         ("session.execution.interrupted", "reason") => Some(&["user", "shutdown", "superseded"]),
         ("session.skill.deactivated", "reason") => Some(&["conflict_resolved"]),
+        ("session.review.withdrawn", "reason") => Some(&["reverted", "task_closed"]),
         ("session.text.started" | "session.text.ended", "phase") => {
             Some(&["commentary", "final_answer"])
         }
@@ -752,6 +891,12 @@ fn validate_event_field(
         ("session.guardrail.approved", "directories") => {
             validate_as::<Vec<LosslessString>>(value, path)
         }
+        (
+            "session.input.admitted"
+            | "session.compaction.admitted"
+            | "session.provider.request.recorded",
+            "causedBy" | "usageAnchor",
+        ) => validate_as::<crate::usage_anchor::Ref>(value, path),
         ("session.task.updated", "change") => {
             validate_as::<crate::session_orchestration::Change>(value, path)
         }
@@ -767,7 +912,9 @@ fn validate_event_field(
         ("session.provider.request.recorded", "cacheReadReported") => {
             validate_as::<bool>(value, path)
         }
-        (_, "sessionID" | "parentID") => validate_as::<crate::session_id::SessionId>(value, path),
+        (_, "sessionID" | "parentID" | "reviewSessionID") => {
+            validate_as::<crate::session_id::SessionId>(value, path)
+        }
         (_, "projectID" | "oldProjectID" | "newProjectID") => {
             validate_as::<crate::project::Id>(value, path)
         }
@@ -829,6 +976,7 @@ fn validate_event_field(
             | "session.step.failed"
             | "session.tool.failed"
             | "session.retry.scheduled"
+            | "session.step.rerouted"
             | "session.compaction.failed",
             "error",
         ) => validate_as::<crate::session_error::Error>(value, path),
@@ -1053,3 +1201,11 @@ event_data_type!(CompactionFailed, "session.compaction.failed", Some(2));
 event_data_type!(RevertStaged, "session.revert.staged", Some(1));
 event_data_type!(RevertCleared, "session.revert.cleared", Some(1));
 event_data_type!(RevertCommitted, "session.revert.committed", Some(1));
+event_data_type!(ReviewDeferred, "session.review.deferred", Some(1));
+event_data_type!(ReviewDecided, "session.review.decided", Some(1));
+event_data_type!(ReviewWithdrawn, "session.review.withdrawn", Some(1));
+event_data_type!(ReviewConsumed, "session.review.consumed", Some(1));
+event_data_type!(StepRerouted, "session.step.rerouted", Some(1));
+event_data_type!(GuardrailDismissed, "session.guardrail.dismissed", Some(1));
+event_data_type!(GuardrailEscalated, "session.guardrail.escalated", Some(1));
+event_data_type!(GuardrailDecided, "session.guardrail.decided", Some(1));

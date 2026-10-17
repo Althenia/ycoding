@@ -1,0 +1,1 @@
+bun test --cwd packages/protocol test/wire-allocation.test.ts test/session-coverage.test.ts test/resources-coverage.test.ts test/platform-coverage.test.ts test/public-event-coverage.test.ts test/session-projection.test.ts test/connector-coverage.test.ts test/phase-b-contract.test.ts

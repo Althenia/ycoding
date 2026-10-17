@@ -28,7 +28,7 @@ impl Checkpoint {
             report: Report {
                 source_fingerprint: fingerprint.0,
                 source_bytes: fingerprint.1,
-                importer_version: 1,
+                importer_version: super::provenance::IMPORTER_VERSION,
                 tables: Vec::new(),
                 latency_high_water: None,
             },
@@ -86,7 +86,11 @@ impl Checkpoint {
             || (validated > 0 && report.tables.len() != mappings.len())
             || (sealed && validated != mappings.len())
             || report.tables.iter().zip(mappings).any(|(table, mapping)| {
-                table.name != mapping.name || table.rows < 0 || !digest(&table.digest)
+                !(table.name == mapping.name
+                    || (mapping.name == super::mappings::FACTS
+                        && table.name == super::mappings::BACKFILL))
+                    || table.rows < 0
+                    || !digest(&table.digest)
             })
             || !digest(&report.source_fingerprint)
         {
@@ -164,3 +168,6 @@ fn digest(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
+
+#[cfg(test)]
+mod tests;

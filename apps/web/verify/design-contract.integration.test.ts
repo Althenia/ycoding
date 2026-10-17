@@ -313,7 +313,7 @@ describe("web design contract inventory", () => {
     await page.close()
   }, 30_000)
 
-  test("widens the Sessions, Usage and Settings column from 1600 while Session detail keeps its measure", async () => {
+  test("widens the Sessions, Usage and Settings column from 1600 while Session detail fills its container up to the 120ch measure", async () => {
     const page = await requireBrowser().openPage()
     const widths = { 1599: 1200, 1600: 1600, 1920: 1600, 2000: 1600, 2560: 1600 } as const
     for (const [width, expected] of Object.entries(widths).map(([key, value]) => [Number(key), value] as const)) {

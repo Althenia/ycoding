@@ -53,6 +53,8 @@ const child = Bun.spawn([path.resolve(binary), "serve", "--stdio", "--port", "0"
     XDG_CACHE_HOME: cache,
     XDG_STATE_HOME: state,
     YCODING_PASSWORD: PASSWORD,
+    YCODING_DB: undefined,
+    YCODING_SQLITE_IMPORT_SOURCE: undefined,
     YCODING_DISABLE_CHANNEL_DB: "1",
   },
 })

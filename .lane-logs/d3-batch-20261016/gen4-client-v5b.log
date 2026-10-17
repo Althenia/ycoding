@@ -1,0 +1,10 @@
+$ bun run script/generate-v5.ts
+{
+  "methods": 201,
+  "mapped": 201,
+  "unsupported": [],
+  "unmappedEnums": [
+    "ycoding.v5.SessionsQuery_order:SESSIONSQUERY_ORDER_PINNED",
+    "ycoding.v5.SessionsQuery_searchFields:SESSIONSQUERY_SEARCHFIELDS_SUMMARY"
+  ]
+}

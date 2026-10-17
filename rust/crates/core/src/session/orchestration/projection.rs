@@ -3,7 +3,7 @@ use crate::session::{key, projector::record_error};
 use std::ops::Bound;
 use ycoding_schema::{
     DomainEncode, JsonPath, LosslessString, ObjectDecoder, domain, model, session_event,
-    session_orchestration::{Change, NotificationType},
+    session_orchestration::{Answer, Change, NotificationType},
 };
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
@@ -13,6 +13,8 @@ use ycoding_store::{
 
 const ACTIVE: [&str; 4] = ["starting", "running", "waiting", "cancelling"];
 const TERMINAL: [&str; 4] = ["cancelled", "completed", "failed", "lost"];
+const RESUMED_EXCERPT: &str =
+    "The service restarted while this subagent was working; it resumed with one recovery step.";
 
 pub fn apply(
     tx: &mut Write<'_>,
@@ -35,6 +37,7 @@ pub fn apply(
         prompt_digest,
         background,
         delivery,
+        usage_anchor,
     } = &change
     {
         TaskTable::insert(
@@ -64,6 +67,10 @@ pub fn apply(
                 revision: 0,
                 time_created: event.created,
                 time_updated: event.created,
+                usage_anchor: usage_anchor
+                    .as_ref()
+                    .map(Document::from_domain)
+                    .transpose()?,
             },
         )?;
         return bump_parent(tx, parent_id.as_lossless());
@@ -119,14 +126,26 @@ pub fn apply(
             row.question_time = Some(question.time.get());
             notify = Some((NotificationType::Question, None));
         }
-        Change::QuestionAnswered { answer } => {
-            if state != "waiting" || row.question_id.as_ref() != Some(&answer.question_id.0) {
+        Change::QuestionAnswered {
+            answer: Answer { question_id, .. },
+        }
+        | Change::QuestionTimedOut { question_id } => {
+            if state != "waiting" || row.question_id.as_ref() != Some(&question_id.0) {
                 return Err(invalid);
             }
             row.state = "running".into();
             clear_question(&mut row);
             row.owner_pid = owner.map(|owner| i64::from(owner.pid));
             row.owner_started = owner.map(|owner| owner.started.clone().into());
+        }
+        Change::Resumed => {
+            if state != "running" {
+                return Err(invalid);
+            }
+            row.attempt_started = 0;
+            row.owner_pid = owner.map(|owner| i64::from(owner.pid));
+            row.owner_started = owner.map(|owner| owner.started.clone().into());
+            notify = Some((NotificationType::Resumed, Some(RESUMED_EXCERPT.into())));
         }
         Change::CancelRequested => {
             if !["starting", "running", "waiting"].contains(&state.as_str()) {

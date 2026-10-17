@@ -112,22 +112,28 @@ fn remembered_allows_cannot_override_configured_denies_or_child_ceilings() {
 }
 
 #[test]
-fn autonomy_grants_permissions_and_answers_but_goals_do_not_grant_reviews() {
-    for yolo in 0..=3 {
-        let current = Effective {
-            yolo: YoloLevel::new(yolo).unwrap(),
-            goal_active: false,
-        };
-        assert_eq!(current.can_auto_permission(), yolo >= 1);
-        assert_eq!(current.can_auto_answer(), yolo >= 2);
-        assert_eq!(current.can_auto_guardrail(), yolo >= 1);
+fn levels_grant_permissions_and_reviews_while_goals_grant_nothing() {
+    for yolo in 0..=2 {
+        for auto_answer in [false, true] {
+            let current = Effective {
+                yolo: YoloLevel::new(yolo).unwrap(),
+                goal_active: false,
+                asleep: false,
+                auto_answer,
+            };
+            assert_eq!(current.can_auto_permission(), yolo >= 1);
+            assert_eq!(current.can_auto_guardrail(), yolo >= 2);
+            assert_eq!(current.can_auto_answer(), auto_answer);
+        }
     }
     let goal = Effective {
         yolo: YoloLevel::OFF,
         goal_active: true,
+        asleep: false,
+        auto_answer: false,
     };
-    assert!(goal.can_auto_permission());
-    assert!(goal.can_auto_answer());
+    assert!(!goal.can_auto_permission());
+    assert!(!goal.can_auto_answer());
     assert!(!goal.can_auto_guardrail());
 }
 

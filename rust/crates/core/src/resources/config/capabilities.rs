@@ -14,6 +14,7 @@ pub const BUILTIN_INSTRUCTIONS: &[&str] = &[
     "decision-use",
     "task-completion",
     "memory",
+    "model-guidance",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

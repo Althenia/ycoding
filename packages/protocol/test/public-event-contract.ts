@@ -3,11 +3,12 @@ import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { wireContract } from "./wire-contract.js"
 import { sessionContract } from "./session-contract.js"
+import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { resourceFieldConstraints } from "./resources-contract.js"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-export function publicEventContract() {
+export function publicEventContract(allocation: WireAllocation = wireAllocation) {
   const contract = wireContract(
     [],
     {},
@@ -17,8 +18,9 @@ export function publicEventContract() {
     EventManifest.ServerDefinitions.filter((definition) => definition.durability === "ephemeral").map((definition) =>
       definition.annotate({ identifier: `PublicEvent_${definition.type.replace(/[^a-zA-Z0-9]/g, "_")}` }),
     ),
+    allocation,
   )
-  const log = sessionContract().messages.get("SessionLogItem")!
+  const log = sessionContract(undefined, allocation).messages.get("SessionLogItem")!
   contract.messages.set("PublicEvent", {
     oneof: true,
     fields: EventManifest.ServerDefinitions.map((definition) => ({
@@ -38,8 +40,8 @@ function eventSourceIdentity(_ast: SchemaAST.AST, _hint: string): string {
   return "packages/schema/src/event-manifest.ts#ServerDefinitions"
 }
 
-export function publicEventProto() {
-  const contract = publicEventContract()
+export function publicEventProto(allocation: WireAllocation = wireAllocation) {
+  const contract = publicEventContract(allocation)
   const imports = ["foundation", "operations", "shared", "resources", "platform", "session"]
   const existing = new Set(
     imports.flatMap((file) =>
@@ -59,9 +61,9 @@ export function publicEventProto() {
             (value, index) =>
               `  ${name.toUpperCase()}_${String(value)
                 .replace(/[^a-zA-Z0-9]/g, "_")
-                .toUpperCase()} = ${index + 1};`,
+                .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
           )
-          .join("\n")}\n}`,
+          .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
     )
   declarations.push(
     ...[...contract.messages]
@@ -74,9 +76,9 @@ export function publicEventProto() {
                 name === "PublicEvent"
                   ? ` [(ycoding.v5.public_event) = { diagnostic_name: ${JSON.stringify(EventManifest.ServerDefinitions[index].type)} durable: ${EventManifest.ServerDefinitions[index].durability === "durable"} }]`
                   : fieldOptions(field)
-              return `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${metadata};`
+              return `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${metadata};`
             })
-            .join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
+            .join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
       ),
   )
   return `syntax = "proto2";\npackage ycoding.v5;\n${imports

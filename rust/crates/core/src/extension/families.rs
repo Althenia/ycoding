@@ -209,7 +209,7 @@ async fn operation_value(
                 .ok_or(v5::FailureCode::Rejected)?;
             let admitted = Execution::global()
                 .ok_or(v5::FailureCode::Rejected)?
-                .prompt(
+                .prompt_with_origin(
                     crate::session::pending::Request {
                         id: session_message::Id::new(prompt.message)
                             .map_err(|_| v5::FailureCode::Rejected)?,
@@ -220,6 +220,7 @@ async fn operation_value(
                         created: chrono::Utc::now().timestamp_millis(),
                     },
                     prompt.resume,
+                    crate::session::autonomy::Origin::Plugin,
                 )
                 .await
                 .map_err(|error| match error {

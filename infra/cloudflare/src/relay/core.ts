@@ -802,7 +802,11 @@ export function createRelay(deps: RelayDeps) {
                   category: "approval-requested",
                   sessionID,
                   createdAt: deps.now(),
-                  need: status.failed?.items.includes(sessionID) ? "failed" : attentionNeed(detail?.need),
+                  need: status.lost?.items.includes(sessionID)
+                    ? "lost"
+                    : status.failed?.items.includes(sessionID)
+                      ? "failed"
+                      : attentionNeed(detail?.need),
                 }
               }),
             (sessionID) => {
@@ -1624,7 +1628,7 @@ function wireDetail(detail: RemoteAlertDetail) {
   return {
     title: detail.title === undefined ? undefined : encodeLossless(detail.title),
     need:
-      detail.need === undefined
+      detail.need === undefined || detail.need === "lost"
         ? undefined
         : {
             permission: AttentionNeed.PERMISSION,

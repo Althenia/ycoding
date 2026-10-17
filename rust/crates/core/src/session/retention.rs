@@ -40,6 +40,52 @@ pub fn days(configuration: &Configuration) -> i64 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settings {
+    pub records_days: i64,
+    pub usage_days: i64,
+    pub latency_days: i64,
+    pub incident_days: i64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            records_days: DEFAULT_DAYS,
+            usage_days: 30,
+            latency_days: 30,
+            incident_days: 30,
+        }
+    }
+}
+
+pub fn settings(configuration: &Configuration) -> Settings {
+    let defaults = Settings::default();
+    Settings {
+        records_days: configured(configuration, "session_retention", "records_days")
+            .unwrap_or(defaults.records_days),
+        usage_days: configured(configuration, "analytics_retention", "usage_days")
+            .unwrap_or(defaults.usage_days),
+        latency_days: configured(configuration, "analytics_retention", "latency_days")
+            .unwrap_or(defaults.latency_days),
+        incident_days: configured(configuration, "analytics_retention", "incident_days")
+            .unwrap_or(defaults.incident_days),
+    }
+}
+
+fn configured(configuration: &Configuration, section: &str, key: &str) -> Option<i64> {
+    configuration
+        .values(section)
+        .rev()
+        .find_map(|value| match value {
+            JsonValue::Object(fields) => match fields.get(&key.into()) {
+                Some(JsonValue::Number(days)) => Some(*days as i64),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
 impl Service {
     pub async fn retain<F>(&self, now: i64, days: i64, active: F) -> Result<Sweep, Error>
     where

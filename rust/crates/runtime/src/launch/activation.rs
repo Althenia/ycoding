@@ -1,5 +1,5 @@
 use super::{LaunchError, metadata, source_epoch, write_private};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use ycoding_core::ycoding_schema::{
     DomainDecode, JsonObject, JsonValue, LosslessString, parse_json, stringify_json,
 };
@@ -15,17 +15,21 @@ pub enum ImportError {
     JournalMode,
     MeetingBusy,
     Resources,
+    SourceMissing,
+    InterruptedImport,
 }
 
 impl std::fmt::Display for ImportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::LegacyMarker => "This beta root has an unsupported v1 import marker. It was left unchanged; use a separate empty beta root or obtain an explicit recovery disposition.",
-            Self::InvalidState => "Invalid beta import selection, checkpoint, or selected store. All existing data was left unchanged.",
+            Self::LegacyMarker => "This root has an unsupported v1 import marker. It was left unchanged; use a separate empty root or obtain an explicit recovery disposition.",
+            Self::InvalidState => "Invalid import selection, checkpoint, or selected store. All existing data was left unchanged.",
             Self::SourceBusy => "stable YCoding is writing; close it and retry",
             Self::JournalMode => "Stable SQLite lacks recoverable on-disk journal evidence. Use a WAL snapshot or a valid file rollback journal; MEMORY/OFF and ambiguous rollback snapshots are refused.",
             Self::MeetingBusy => "Stable Meeting ownership is live or unverifiable; close its owner and retry.",
-            Self::Resources => "Beta import resources are missing, changed, or unsafe; no store was activated.",
+            Self::Resources => "Import resources are missing, changed, or unsafe; no store was activated.",
+            Self::SourceMissing => "The explicit import source is missing. Nothing was changed; restore it to resume the interrupted import.",
+            Self::InterruptedImport => "An earlier import was interrupted and no import source was given. Nothing was changed; set the import source again to resume it.",
         })
     }
 }
@@ -59,17 +63,54 @@ struct Selection {
     resources: Vec<Resource>,
 }
 
-pub(super) fn activate(
-    source: &Path,
+#[derive(Clone, Debug)]
+pub enum ImportSource {
+    Default(PathBuf),
+    Explicit(PathBuf),
+    None,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Paths<'a> {
+    pub file: &'a Path,
+    pub marker: &'a Path,
+    pub scratch_root: &'a Path,
+    pub source_resources: &'a Path,
+    pub target_resources: &'a Path,
+    pub create_parents: bool,
+}
+
+pub(super) fn import_would_run(
     file: &Path,
     marker: &Path,
-    scratch_root: &Path,
+    kind: import::DatabaseKind,
+) -> Result<bool, LaunchError> {
+    if marker.try_exists()? {
+        if read_selection(marker, kind)?.sealed {
+            return Ok(false);
+        }
+        return Err(invalid());
+    }
+    let journal = marker.with_extension("stage-v2");
+    if !journal.try_exists()? || !file.try_exists()? {
+        return Ok(true);
+    }
+    Ok(!read_selection(&journal, kind)?.sealed)
+}
+
+pub(super) fn activate(
+    source: &ImportSource,
+    paths: Paths<'_>,
     kind: import::DatabaseKind,
     mut progress: impl FnMut(Phase) -> Result<(), LaunchError>,
 ) -> Result<(), LaunchError> {
-    private_directory(file.parent().ok_or_else(invalid)?)?;
-    private_directory(marker.parent().ok_or_else(invalid)?)?;
+    let (file, marker) = (paths.file, paths.marker);
     let journal = marker.with_extension("stage-v2");
+    if matches!(source, ImportSource::None) && !marker.try_exists()? && !journal.try_exists()? {
+        return Ok(());
+    }
+    prepare_directory(file.parent().ok_or_else(invalid)?, paths.create_parents)?;
+    prepare_directory(marker.parent().ok_or_else(invalid)?, paths.create_parents)?;
     let lease_path = marker.with_extension("import-lock");
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(false);
@@ -85,7 +126,8 @@ pub(super) fn activate(
         if !selection.sealed {
             return Err(invalid());
         }
-        return verify_selected(file, &selection);
+        verify_selected(file, &selection)?;
+        return remove_staging(file, &selection.id);
     }
     let saved = if journal.try_exists()? {
         Some(read_selection(&journal, kind)?)
@@ -96,15 +138,24 @@ pub(super) fn activate(
         let selection = saved.filter(|state| state.sealed).ok_or_else(invalid)?;
         verify_selected(file, &selection)?;
         write_selection(marker, &selection)?;
+        remove_staging(file, &selection.id)?;
         progress(Phase::MarkerPublished)?;
         return Ok(());
     }
-    let needs_source = saved.as_ref().is_none_or(|state| state.imported);
+    let (source, explicit) = match source {
+        ImportSource::Default(path) => (path.as_path(), false),
+        ImportSource::Explicit(path) => (path.as_path(), true),
+        ImportSource::None => return Err(LaunchError::Import(ImportError::InterruptedImport)),
+    };
+    if explicit && !source.try_exists()? {
+        return Err(LaunchError::Import(ImportError::SourceMissing));
+    }
+    let needs_source = explicit || saved.as_ref().is_none_or(|state| state.imported);
     if needs_source && kind == import::DatabaseKind::Meeting {
         require_idle_meeting(source)?;
     }
     let resources = if needs_source {
-        resource_inventory(source, kind)?
+        resource_inventory(paths.source_resources, source, kind)?
     } else {
         Vec::new()
     };
@@ -115,8 +166,9 @@ pub(super) fn activate(
     };
     let mut selection = match saved {
         Some(state)
-            if !state.imported
-                || (state.source == fingerprint
+            if (!state.imported && !explicit)
+                || (state.imported
+                    && state.source == fingerprint
                     && state.resources == resources
                     && !state.copied.is_empty()) =>
         {
@@ -133,7 +185,9 @@ pub(super) fn activate(
             resources,
         },
     };
-    let scratch = scratch_root.join(format!("stable-import-{}", selection.id));
+    let scratch = paths
+        .scratch_root
+        .join(format!("stable-import-{}", selection.id));
     let candidate = file.with_file_name(format!(".stable-import-{}.redb", selection.id));
     let copied = scratch.join("source.sqlite");
     private_directory(&scratch)?;
@@ -144,12 +198,12 @@ pub(super) fn activate(
         }
         import::copy_source(source, &copied).map_err(import_error)?;
         copy_resources(
-            source.parent().ok_or_else(invalid)?,
+            paths.source_resources,
             &scratch.join("resources"),
             &selection.resources,
         )?;
         if original_fingerprint(source)? != selection.source
-            || resource_inventory(source, kind)? != selection.resources
+            || resource_inventory(paths.source_resources, source, kind)? != selection.resources
         {
             return Err(LaunchError::Import(ImportError::SourceBusy));
         }
@@ -220,7 +274,7 @@ pub(super) fn activate(
     }
     if selection.imported
         && (original_fingerprint(source)? != selection.source
-            || resource_inventory(source, kind)? != selection.resources)
+            || resource_inventory(paths.source_resources, source, kind)? != selection.resources)
     {
         return Err(LaunchError::Import(ImportError::SourceBusy));
     }
@@ -229,7 +283,7 @@ pub(super) fn activate(
     progress(Phase::Sealed)?;
     copy_resources(
         &scratch.join("resources"),
-        file.parent().ok_or_else(invalid)?,
+        paths.target_resources,
         &selection.resources,
     )?;
     progress(Phase::ResourcesPublished)?;
@@ -239,7 +293,25 @@ pub(super) fn activate(
     progress(Phase::StorePublished)?;
     verify_selected(file, &selection)?;
     write_selection(marker, &selection)?;
+    remove_staging(file, &selection.id)?;
     progress(Phase::MarkerPublished)?;
+    Ok(())
+}
+
+fn remove_staging(file: &Path, id: &str) -> Result<(), LaunchError> {
+    let candidate = file.with_file_name(format!(".stable-import-{id}.redb"));
+    if candidate.try_exists()? {
+        return Ok(());
+    }
+    for suffix in [".import-lock", ".import-v1"] {
+        let mut name = candidate.as_os_str().to_owned();
+        name.push(suffix);
+        match std::fs::remove_file(name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(())
 }
 
@@ -282,13 +354,13 @@ fn original_fingerprint(source: &Path) -> Result<String, LaunchError> {
 }
 
 fn resource_inventory(
+    root: &Path,
     source: &Path,
     kind: import::DatabaseKind,
 ) -> Result<Vec<Resource>, LaunchError> {
     if kind != import::DatabaseKind::Core || !source.try_exists()? {
         return Ok(Vec::new());
     }
-    let root = source.parent().ok_or_else(invalid)?;
     let mut files = Vec::new();
     for directory in ["attachments", "project-artifacts"] {
         let path = root.join(directory);
@@ -719,6 +791,16 @@ fn boolean(object: &JsonObject, key: &str) -> Result<bool, LaunchError> {
         _ => Err(invalid()),
     }
 }
+fn prepare_directory(path: &Path, create: bool) -> Result<(), LaunchError> {
+    if create {
+        return private_directory(path);
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(info) if info.is_dir() => Ok(()),
+        _ => Err(invalid()),
+    }
+}
+
 fn private_directory(path: &Path) -> Result<(), LaunchError> {
     match std::fs::symlink_metadata(path) {
         Ok(info) if info.is_dir() && !info.is_symlink() => (),

@@ -1,43 +1,124 @@
 import { expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { goalReminder } from "@ycoding-ai/core/session/live-state"
-import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { GoalTool } from "@ycoding-ai/core/tool/goal"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Database.layer({ path: ":memory:" }))
 const sessionID = Session.ID.make("ses_autonomy")
 
-for (const yolo of [0, 1, 2, 3] as const) {
-  it.effect(`YOLO ${yolo} grants the new ladder without changing stored levels`, () => Effect.gen(function* () {
+for (const yolo of [0, 1, 2] as const) {
+  it.effect(`YOLO ${yolo} grants permissions from level 1 and ordinary guardrails only at level 2`, () => Effect.gen(function* () {
     const service = yield* setup
     const state = yield* service.setYolo({ sessionID, yolo })
     expect(state.yolo).toBe(yolo)
-    expect(SessionAutonomy.canAutoAnswer(state)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoAnswer(state)).toBe(false)
     expect(SessionAutonomy.canAutoPermission(state)).toBe(yolo >= 1)
-    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 1)
-    expect(yield* service.canAutoAnswer(sessionID)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 2)
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
     expect(yield* service.canAutoPermission(sessionID)).toBe(yolo >= 1)
-    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 1)
+    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 2)
   }))
 }
 
-it.effect("active goal retains answers and permissions but not ordinary guardrail approval at YOLO 0", () => Effect.gen(function* () {
+it.effect("rejected YOLO levels are not accepted or stored", () => Effect.gen(function* () {
+  const service = yield* setup
+  yield* service.setYolo({ sessionID, yolo: 1 })
+  const exit = yield* service.setYolo({ sessionID, yolo: 3 }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  expect((yield* service.get(sessionID)).yolo).toBe(1)
+  const setExit = yield* service.set({ sessionID, yolo: 3 }).pipe(Effect.exit)
+  expect(setExit._tag).toBe("Failure")
+  expect((yield* service.get(sessionID)).yolo).toBe(1)
+  const snapshot = yield* service.snapshot(sessionID)
+  const goalExit = yield* service
+    .setGoalIfCurrent({ sessionID, expectedSequence: snapshot.sequence, text: "Finish safely", yolo: 3 })
+    .pipe(Effect.exit)
+  expect(goalExit._tag).toBe("Failure")
+  expect(yield* service.get(sessionID)).toMatchObject({ yolo: 1 })
+  expect((yield* service.get(sessionID)).goal).toBeUndefined()
+}))
+
+it.effect("active goal grants no answers, permissions, or guardrail approvals at YOLO 0", () => Effect.gen(function* () {
   const service = yield* setup
   const state = yield* service.setGoal({ sessionID, text: "Finish safely" })
-  expect(SessionAutonomy.canAutoAnswer(state)).toBe(true)
-  expect(SessionAutonomy.canAutoPermission(state)).toBe(true)
+  expect(SessionAutonomy.canAutoAnswer(state)).toBe(false)
+  expect(SessionAutonomy.canAutoPermission(state)).toBe(false)
   expect(SessionAutonomy.canAutoGuardrail(state)).toBe(false)
-  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
-  expect(yield* service.canAutoPermission(sessionID)).toBe(true)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+  expect(yield* service.canAutoPermission(sessionID)).toBe(false)
   expect(yield* service.canAutoGuardrail(sessionID)).toBe(false)
 }))
+
+it.effect("Session autoAnswer toggle defaults off and persists across YOLO and goal changes", () => Effect.gen(function* () {
+  const service = yield* setup
+  expect((yield* service.get(sessionID)).autoAnswer).toBeUndefined()
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+  const enabled = yield* service.set({ sessionID, autoAnswer: true })
+  expect(enabled.autoAnswer).toBe(true)
+  expect(SessionAutonomy.canAutoAnswer(enabled)).toBe(true)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  yield* service.setYolo({ sessionID, yolo: 2 })
+  yield* service.setGoal({ sessionID, text: "Finish safely" })
+  yield* service.stop(sessionID)
+  expect((yield* service.get(sessionID)).autoAnswer).toBe(true)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  expect(SessionAutonomy.read({ mode: "normal", yolo: 0, autoAnswer: true }).autoAnswer).toBe(true)
+  const disabled = yield* service.set({ sessionID, autoAnswer: false })
+  expect(disabled.autoAnswer).toBe(false)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+  expect((yield* service.get(sessionID)).yolo).toBe(2)
+}))
+
+it.effect("autoAnswer belongs to one Session and is not inherited by task children while YOLO still is", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const { db } = yield* Database.Service
+    const childID = Session.ID.make("ses_autonomy_child")
+    yield* db
+      .insert(SessionTable)
+      .values({ id: childID, project_id: Project.ID.global, directory: "/project", title: "child", parent_id: sessionID })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTaskTable)
+      .values({
+        session_id: childID,
+        parent_id: sessionID,
+        parent_assistant_message_id: SessionMessage.ID.make("msg_autonomy_parent"),
+        tool_call_id: "call_autonomy_child",
+        input_id: SessionMessage.ID.make("msg_autonomy_child"),
+        description: "child",
+        agent: "build",
+        model: { providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") },
+        prompt_digest: "digest",
+        background: true,
+        delivery: "steer",
+        state: "running",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* service.setYolo({ sessionID, yolo: 1 })
+    yield* service.set({ sessionID, autoAnswer: true })
+    expect(yield* service.canAutoPermission(childID)).toBe(true)
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+    expect(yield* service.canAutoAnswer(childID)).toBe(false)
+    yield* service.set({ sessionID: childID, autoAnswer: true })
+    yield* service.set({ sessionID, autoAnswer: false })
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+    expect(yield* service.canAutoAnswer(childID)).toBe(true)
+  }),
+)
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -101,16 +182,17 @@ it.effect("renders terminal goals as visible Session-state reminders", () =>
   }),
 )
 
-it.effect("reminds an active goal's agent to decide on the user's behalf until the goal is satisfied", () =>
+it.effect("reminds an active goal's agent that answers stay manual unless the Session auto-answer toggle is on", () =>
   Effect.sync(() => {
     const reminder = goalReminder({
       mode: "normal",
       yolo: 0,
       goal: { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
     })
-    expect(reminder?.split("\n")).toContain(
-      "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.",
-    )
+    expect(reminder).toContain("Required answers remain manual unless the answering Session's auto-answer toggle is on.")
+    expect(reminder).toContain("a child Session's questions go to its parent Session.")
+    expect(reminder).toContain("Goals do not override these gates.")
+    expect(reminder).not.toContain("do not ask the user or wait for their confirmation until the goal is satisfied")
   }),
 )
 
@@ -274,7 +356,7 @@ it.effect("applies a guarded goal calculation only at the expected autonomy revi
       expectedSequence: current.sequence,
       text: "Late calculation",
       rawText: "late request",
-      yolo: 3,
+      yolo: 2,
     })
     expect(stale.applied).toBe(false)
     expect(stale.state.yolo).toBe(1)

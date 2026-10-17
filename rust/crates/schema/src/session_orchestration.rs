@@ -18,6 +18,7 @@ pub struct Question {
     pub text: LosslessString,
     pub data: Option<domain::Json>,
     pub time: NonNegativeInt,
+    pub deferred: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Answer {
@@ -39,6 +40,11 @@ pub struct Task {
     pub revision: NonNegativeInt,
     pub time: TaskTime,
     pub pinned_at: Option<NonNegativeInt>,
+    pub stopped_recovery: Option<StoppedRecovery>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoppedRecovery {
+    pub item_id: crate::session_review::Id,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskTime {
@@ -149,6 +155,7 @@ pub enum NotificationType {
     Failed,
     Cancelled,
     Lost,
+    Resumed,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
@@ -163,6 +170,7 @@ pub enum Change {
         prompt_digest: LosslessString,
         background: bool,
         delivery: Delivery,
+        usage_anchor: Option<crate::usage_anchor::Ref>,
     },
     Started,
     Backgrounded,
@@ -174,6 +182,9 @@ pub enum Change {
     },
     QuestionAnswered {
         answer: Answer,
+    },
+    QuestionTimedOut {
+        question_id: QuestionId,
     },
     CancelRequested,
     Cancelled,
@@ -187,9 +198,14 @@ pub enum Change {
     Lost {
         excerpt: Option<LosslessString>,
     },
+    Resumed,
 }
 
-fn bounded(value: &JsonValue, path: &JsonPath, max: usize) -> Result<LosslessString, DecodeError> {
+pub(crate) fn bounded(
+    value: &JsonValue,
+    path: &JsonPath,
+    max: usize,
+) -> Result<LosslessString, DecodeError> {
     let text = LosslessString::decode_at(value, path)?;
     let bytes = text
         .code_units()
@@ -223,7 +239,7 @@ fn bounded(value: &JsonValue, path: &JsonPath, max: usize) -> Result<LosslessStr
         }))
     }
 }
-fn answer_data(value: &JsonValue, path: &JsonPath) -> Result<domain::Json, DecodeError> {
+pub(crate) fn answer_data(value: &JsonValue, path: &JsonPath) -> Result<domain::Json, DecodeError> {
     let data = domain::Json::decode_at(value, path)?;
     if stringify_json(value).len() <= 8192 {
         Ok(data)
@@ -365,6 +381,7 @@ impl DomainDecode for Question {
             text: str_field(&o, p, "text", 8192)?,
             data,
             time: o.field("time")?,
+            deferred: o.optional("deferred")?,
         })
     }
 }
@@ -375,6 +392,7 @@ impl DomainEncode for Question {
             .field("text", &self.text)
             .optional("data", &self.data)
             .field("time", &self.time)
+            .optional("deferred", &self.deferred)
             .finish()
     }
 }
@@ -434,7 +452,20 @@ impl DomainDecode for Task {
             revision: o.field("revision")?,
             time: o.field("time")?,
             pinned_at: o.optional("pinnedAt")?,
+            stopped_recovery: o.optional("stoppedRecovery")?,
         })
+    }
+}
+impl DomainDecode for StoppedRecovery {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        Ok(Self {
+            item_id: ObjectDecoder::new(v, p)?.field("itemID")?,
+        })
+    }
+}
+impl DomainEncode for StoppedRecovery {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new().field("itemID", &self.item_id).finish()
     }
 }
 impl DomainEncode for Task {
@@ -452,6 +483,7 @@ impl DomainEncode for Task {
             .field("revision", &self.revision)
             .field("time", &self.time)
             .optional("pinnedAt", &self.pinned_at)
+            .optional("stoppedRecovery", &self.stopped_recovery)
             .finish()
     }
 }
@@ -700,11 +732,19 @@ impl DomainDecode for NotificationType {
             Some("failed") => Ok(Self::Failed),
             Some("cancelled") => Ok(Self::Cancelled),
             Some("lost") => Ok(Self::Lost),
+            Some("resumed") => Ok(Self::Resumed),
             _ => Err(p.error(DecodeErrorKind::Literal(
-                ["question", "completed", "failed", "cancelled", "lost"]
-                    .iter()
-                    .map(|s| JsonValue::String((*s).into()))
-                    .collect(),
+                [
+                    "question",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "lost",
+                    "resumed",
+                ]
+                .iter()
+                .map(|s| JsonValue::String((*s).into()))
+                .collect(),
             ))),
         }
     }
@@ -717,6 +757,7 @@ impl DomainEncode for NotificationType {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Lost => "lost",
+            Self::Resumed => "resumed",
         })
         .encode()
     }
@@ -759,11 +800,13 @@ impl DomainDecode for Change {
                     "progressed",
                     "question_asked",
                     "question_answered",
+                    "question_timed_out",
                     "cancel_requested",
                     "cancelled",
                     "completed",
                     "failed",
                     "lost",
+                    "resumed",
                 ],
             )?
             .as_str()
@@ -779,6 +822,7 @@ impl DomainDecode for Change {
                 prompt_digest: o.field("promptDigest")?,
                 background: o.field("background")?,
                 delivery: o.field("delivery")?,
+                usage_anchor: o.optional("usageAnchor")?,
             }),
             Some("started") => Ok(Self::Started),
             Some("backgrounded") => Ok(Self::Backgrounded),
@@ -790,6 +834,9 @@ impl DomainDecode for Change {
             }),
             Some("question_answered") => Ok(Self::QuestionAnswered {
                 answer: o.field("answer")?,
+            }),
+            Some("question_timed_out") => Ok(Self::QuestionTimedOut {
+                question_id: o.field("questionID")?,
             }),
             Some("cancel_requested") => Ok(Self::CancelRequested),
             Some("cancelled") => Ok(Self::Cancelled),
@@ -803,6 +850,7 @@ impl DomainDecode for Change {
             Some("lost") => Ok(Self::Lost {
                 excerpt: opt_str(&o, p, "excerpt", 16384)?,
             }),
+            Some("resumed") => Ok(Self::Resumed),
             _ => Err(p.error(DecodeErrorKind::Expected("change"))),
         }
     }
@@ -821,6 +869,7 @@ impl DomainEncode for Change {
                 prompt_digest,
                 background,
                 delivery,
+                usage_anchor,
             } => ObjectEncoder::new()
                 .field("type", "launched")
                 .field("parentID", parent_id)
@@ -833,6 +882,7 @@ impl DomainEncode for Change {
                 .field("promptDigest", prompt_digest)
                 .field("background", background)
                 .field("delivery", delivery)
+                .optional("usageAnchor", usage_anchor)
                 .finish(),
             Self::Started => ObjectEncoder::new().field("type", "started").finish(),
             Self::Backgrounded => ObjectEncoder::new().field("type", "backgrounded").finish(),
@@ -847,6 +897,10 @@ impl DomainEncode for Change {
             Self::QuestionAnswered { answer } => ObjectEncoder::new()
                 .field("type", "question_answered")
                 .field("answer", answer)
+                .finish(),
+            Self::QuestionTimedOut { question_id } => ObjectEncoder::new()
+                .field("type", "question_timed_out")
+                .field("questionID", question_id)
                 .finish(),
             Self::CancelRequested => ObjectEncoder::new()
                 .field("type", "cancel_requested")
@@ -865,6 +919,7 @@ impl DomainEncode for Change {
                 .field("type", "lost")
                 .optional("excerpt", excerpt)
                 .finish(),
+            Self::Resumed => ObjectEncoder::new().field("type", "resumed").finish(),
         }
     }
 }

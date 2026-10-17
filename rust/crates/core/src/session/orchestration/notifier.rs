@@ -1,6 +1,6 @@
 use super::{
     identity::{Launch, notification_name},
-    service::{Error, Service, launch_ids, now, restart_lost_id},
+    service::{Error, Service, launch_ids, now, restart_lost_id, synthetic},
 };
 use crate::session::key;
 use std::collections::BTreeSet;
@@ -147,17 +147,21 @@ impl Service {
             .field("revision", &(row.revision as f64))
             .optional("excerpt", &row.excerpt)
             .finish();
+        let input = synthetic(
+            format!(
+                "Subagent notification:\n{}",
+                ycoding_schema::stringify_json(&data)
+            ),
+            "Subagent notification",
+            data,
+            "steer",
+        )?;
         let admitted = self
-            .admit_synthetic(
+            .admit(
                 &parent_id,
                 &ids.notification(row.revision, &kind),
-                format!(
-                    "Subagent notification:\n{}",
-                    ycoding_schema::stringify_json(&data)
-                ),
-                "Subagent notification",
-                data,
-                "steer",
+                input,
+                None,
             )
             .await;
         let held = match admitted {
@@ -202,6 +206,7 @@ fn notification_type(row: &Notification) -> Result<NotificationType, Error> {
         Some("failed") => Ok(NotificationType::Failed),
         Some("cancelled") => Ok(NotificationType::Cancelled),
         Some("lost") => Ok(NotificationType::Lost),
+        Some("resumed") => Ok(NotificationType::Resumed),
         _ => Err(Error::Store(ycoding_store::Error::Rejected(
             "Unknown task notification type",
         ))),

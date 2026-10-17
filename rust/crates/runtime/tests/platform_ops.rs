@@ -1370,3 +1370,133 @@ async fn pty_external_expired_ticket_and_stale_control_are_rejected() {
     server.shutdown().await.unwrap();
     fixture.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_wire_reports_queue_position_and_removes_queued_shells() {
+    let fixture = Fixture::new().await;
+    let (server, mut client) = fixture.open().await;
+    let enqueue = |command: &'static str| {
+        let fixture = &fixture;
+        async move {
+            let input = ycoding_core::ycoding_schema::shell::CreateInput::decode(
+                &ycoding_core::ycoding_schema::parse_json(&format!(
+                    r#"{{"command":"{command}","timeout":0}}"#
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            let mut prepared = fixture
+                .platform
+                .shell
+                .prepare(input, &fixture.platform.config)
+                .unwrap();
+            fixture
+                .platform
+                .shell
+                .enqueue(&mut prepared, "ses_wire_queue", None)
+                .await
+                .unwrap()
+        }
+    };
+    let holder = enqueue("sleep 30").await;
+    let waiting = enqueue("printf queued").await;
+    assert_eq!(waiting.status, Status::Queued);
+    let holder_id = text_of(&holder.id);
+    let waiting_id = text_of(&waiting.id);
+    let mut get = async |id: String| {
+        ask::<_, v5::ShellGetResult>(
+            &mut client,
+            "shell.get",
+            fixture.scope(),
+            v5::ShellGetRequest {
+                params: v5::ShellGetRequestParams { id: text(&id) },
+                query: query(fixture.directory(), None),
+            },
+        )
+        .await
+        .data
+    };
+    for _ in 0..500 {
+        if get(holder_id.clone()).await.status == v5::ShellInfoStatus::Running as i32 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let running = get(holder_id.clone()).await;
+    assert_eq!(running.status, v5::ShellInfoStatus::Running as i32);
+    assert!(running.queue_position.is_none());
+    assert!(running.time.queued.is_some());
+    let queued = get(waiting_id.clone()).await;
+    assert_eq!(queued.status, v5::ShellInfoStatus::Queued as i32);
+    assert_eq!(queued.queue_position, Some(1));
+    assert!(queued.pid.is_none() && queued.exit.is_none() && queued.time.queued.is_none());
+    let list: v5::ShellListResult = ask(
+        &mut client,
+        "shell.list",
+        fixture.scope(),
+        v5::ShellListRequest {
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    let mut listed: Vec<_> = list
+        .data
+        .items
+        .iter()
+        .map(|item| (units(&item.id), item.status))
+        .collect();
+    listed.sort();
+    let mut expected = vec![
+        (holder_id.clone(), v5::ShellInfoStatus::Running as i32),
+        (waiting_id.clone(), v5::ShellInfoStatus::Queued as i32),
+    ];
+    expected.sort();
+    assert_eq!(listed, expected);
+    let _: v5::ShellRemoveResult = ask(
+        &mut client,
+        "shell.remove",
+        fixture.scope(),
+        v5::ShellRemoveRequest {
+            params: v5::ShellRemoveRequestParams {
+                id: text(&waiting_id),
+            },
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    let missing: v5::ShellNotFoundError = refuse(
+        &mut client,
+        "shell.get",
+        fixture.scope(),
+        v5::ShellGetRequest {
+            params: v5::ShellGetRequestParams {
+                id: text(&waiting_id),
+            },
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    assert_eq!(units(&missing.id), waiting_id);
+    let _: v5::ShellRemoveResult = ask(
+        &mut client,
+        "shell.remove",
+        fixture.scope(),
+        v5::ShellRemoveRequest {
+            params: v5::ShellRemoveRequestParams {
+                id: text(&holder_id),
+            },
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    drop(client);
+    server.shutdown().await.unwrap();
+    fixture.shutdown().await;
+}
+
+fn text_of(id: &ycoding_core::ycoding_schema::shell::Id) -> String {
+    match id.encode() {
+        JsonValue::String(value) => value.to_utf8().unwrap(),
+        other => panic!("{other:?}"),
+    }
+}

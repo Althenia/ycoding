@@ -1,0 +1,645 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/telemetry.test.ts:
+(pass) declares machine-global bounded telemetry ingest and read routes [2.85ms]
+
+test/public-event-coverage.test.ts:
+ 9 | test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history", async () => {
+10 |   expect(publicEvents.map((event) => [event.name, event.durable]).sort()).toEqual(
+11 |     EventManifest.ServerDefinitions.map((event) => [event.type, event.durability === "durable"]).sort(),
+12 |   )
+13 |   expect(publicEvents).toHaveLength(101)
+14 |   expect(publicEvents.filter((event) => event.durable)).toHaveLength(51)
+                                                             ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 51
+Received length: 50
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/public-event-coverage.test.ts:14:57)
+(fail) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [3.62ms]
+37 |   )
+38 | })
+39 | 
+40 | test("REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions", () => {
+41 |   const log = messages["ycoding.v5.SessionLogItem"].fields
+42 |   expect(log).toHaveLength(52)
+                   ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 52
+Received length: 51
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/public-event-coverage.test.ts:42:15)
+(fail) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [0.10ms]
+90 |         field.required,
+91 |         field.repeated,
+92 |         field.target || undefined,
+93 |       ]),
+94 |       name,
+95 |     ).toEqual(
+           ^
+error: ProviderRequest_Timing
+
+  [
+    [
+      1,
+      "firstOutputMs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      2,
+      "totalMs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      3,
+      "retryWaitMs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      4,
+      "promptEvalDurationNs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      5,
+      "generationDurationNs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      6,
+      "observedGenerationDurationNs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+      7,
+      "generatedTokens",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+-     8,
++     9,
+      "estimatedTokens",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+-     9,
++     10,
+      "estimatedGenerationDurationNs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+    [
+-     10,
++     8,
+      "loadDurationNs",
+      4,
+      false,
+      false,
+      undefined,
+    ],
+  ]
+
+- Expected  - 3
++ Received  + 3
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/public-event-coverage.test.ts:95:7)
+(fail) REQ-WIRE-005 every public event field retains its source type, tag and presence [13.44ms]
+
+test/descriptor-goldens.test.ts:
+(pass) digest-bearing negative goldens retain their specific rejection reasons [0.99ms]
+(pass) Muse response-stream source appends ordinal six and preserves existing source ordinals [1.14ms]
+
+test/session-projection.test.ts:
+(pass) homogeneous nonempty arrays preserve their minimum and optional never has no wire field [0.23ms]
+(pass) UTC admission timestamps retain the finite millisecond JSON representation [0.24ms]
+
+test/platform-coverage.test.ts:
+38 | 
+39 | test("platform slice exactly matches all 55 baseline and live endpoint declarations", async () => {
+40 |   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
+41 |   expect(live).toHaveLength(55)
+42 |   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+43 |   expect(manifest.counts).toEqual({ endpoint: 198, connector: 66, notice: 4 })
+                               ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "connector": 66,
+-   "endpoint": 198,
++   "connector": 70,
++   "endpoint": 201,
+    "notice": 4,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/platform-coverage.test.ts:43:27)
+(fail) platform slice exactly matches all 55 baseline and live endpoint declarations [6.97ms]
+146 |       ),
+147 |     )
+148 |     expect(
+149 |       enums.get(name)?.map((value) => value.number),
+150 |       name,
+151 |     ).toEqual(values.map((_, index) => index + 1))
+            ^
+error: Telemetry_RequestSample_operation
+
+  [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+-   65,
+-   66,
+    67,
+    68,
+    69,
+    70,
++   65,
++   66,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/platform-coverage.test.ts:151:7)
+(fail) every platform field, presence, enum and typed error matches the live Effect contract [10.79ms]
+(pass) canonical platform descriptors preserve IDs, associations, errors and delivery policies [2.87ms]
+(pass) wildcard asset path, native ticket headers and metadata retain their source boundaries [2.28ms]
+(pass) source ordering cannot change canonical tags, operation IDs or projected bytes [159.17ms]
+(pass) every platform domain obligation names a live source owner [8.18ms]
+(pass) result wrapper overrides are exactly the two verified prost collisions [3.69ms]
+
+test/session-usage-report.test.ts:
+(pass) decodes and validates usage report query bounds [1.59ms]
+(pass) publishes the additive location-owned usage report OpenAPI operation [8.59ms]
+
+test/canonical-remote.test.ts:
+(pass) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [0.22ms]
+(pass) REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds [0.06ms]
+(pass) REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result [0.06ms]
+
+test/phase-b-contract.test.ts:
+(pass) global Forms append one local-only Location selector without changing real-Session scopes [0.26ms]
+(pass) receipt-confirmation timeout after Ready handoff closes the unestablished producer with 1008 [1.16ms]
+(pass) asset MIME  cannot cross the metadata boundary [0.09ms]
+(pass) asset MIME text cannot cross the metadata boundary [0.02ms]
+(pass) asset MIME text/ cannot cross the metadata boundary [0.01ms]
+(pass) asset MIME text/plain
+X: injected cannot cross the metadata boundary [0.01ms]
+(pass) asset MIME text/😀 cannot cross the metadata boundary [0.03ms]
+(pass) asset MIME text/plain; charset="unterminated cannot cross the metadata boundary [0.02ms]
+(pass) both asset metadata consumers preserve valid MIME application/octet-stream and exact zero length [0.18ms]
+(pass) both asset metadata consumers preserve valid MIME image/svg+xml and exact zero length [0.07ms]
+(pass) both asset metadata consumers preserve valid MIME text/plain; charset=utf-8 and exact zero length [0.06ms]
+(pass) both asset metadata consumers preserve valid MIME  Text/Plain ; charset="utf-8;version=1"  and exact zero length [0.08ms]
+
+test/event.test.ts:
+(pass) decodes the ephemeral prediction on the public stream, not the Session log [0.37ms]
+(pass) refuses private profile binding and provenance on public event and Session log streams [0.16ms]
+(pass) classifies public events by type [0.01ms]
+(pass) shares one source epoch across health, connection, session projection, and log contracts [0.36ms]
+(pass) decodes the current durable session creation event [0.10ms]
+(pass) public step events preserve provider cache telemetry and omit the legacy cache mechanism [0.14ms]
+
+test/session-coverage.test.ts:
+33 | test("session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe", async () => {
+34 |   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+35 |   expect(manifest.members.filter((member) => member.kind !== "endpoint").map((member) => member.name).sort()).toEqual(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT)).map((operation) => operation.diagnosticName).sort())
+36 |   const endpoints = manifest.members.filter((member) => member.kind === "endpoint")
+37 |   const excluded = [...Object.keys(resourceIDs), ...Object.keys(platformIDs), ...Object.keys(platformExclusions)]
+38 |   expect(excluded).toHaveLength(115)
+                        ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 115
+Received length: 116
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:38:20)
+(fail) session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe [5.47ms]
+103 |         repeated: field.repeated,
+104 |         target: field.target || undefined,
+105 |         group: field.group,
+106 |       })),
+107 |       name,
+108 |     ).toEqual(
+            ^
+error: ProviderRequest_Timing
+
+  [
+    {
+      "group": undefined,
+      "name": "firstOutputMs",
+      "repeated": false,
+      "required": false,
+      "tag": 1,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "totalMs",
+      "repeated": false,
+      "required": false,
+      "tag": 2,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "retryWaitMs",
+      "repeated": false,
+      "required": false,
+      "tag": 3,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "promptEvalDurationNs",
+      "repeated": false,
+      "required": false,
+      "tag": 4,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "generationDurationNs",
+      "repeated": false,
+      "required": false,
+      "tag": 5,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "observedGenerationDurationNs",
+      "repeated": false,
+      "required": false,
+      "tag": 6,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "generatedTokens",
+      "repeated": false,
+      "required": false,
+      "tag": 7,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "estimatedTokens",
+      "repeated": false,
+      "required": false,
+-     "tag": 8,
++     "tag": 9,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "estimatedGenerationDurationNs",
+      "repeated": false,
+      "required": false,
+-     "tag": 9,
++     "tag": 10,
+      "target": undefined,
+      "type": 4,
+    },
+    {
+      "group": undefined,
+      "name": "loadDurationNs",
+      "repeated": false,
+      "required": false,
+-     "tag": 10,
++     "tag": 8,
+      "target": undefined,
+      "type": 4,
+    },
+  ]
+
+- Expected  - 3
++ Received  + 3
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:108:7)
+(fail) all session fields, tags, presence, enums and obligations match live source projection [7.71ms]
+(pass) session descriptors preserve IDs, typed associations, middleware errors and delivery policies [5.37ms]
+(pass) typed subscriptions preserve log items and finite StreamEnd without SSE or synchronous prompt execution [5.49ms]
+(pass) source reordering preserves canonical bytes and frozen materialization rejects overwrite [208.47ms]
+268 |   )
+269 |   const files = new Map<string, string>()
+270 |   for (const source of sources) {
+271 |     const [file, name] = source.split("#")
+272 |     if (!files.has(file)) files.set(file, await Bun.file(path.resolve(import.meta.dir, "../../..", file)).text())
+273 |     expect(new RegExp(`(?:const|class|function) ${name.split(".").at(-1)!}\\b`).test(files.get(file)!), source).toBe(
+                                                                                                                      ^
+error: packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue2
+
+Expected: true
+Received: false
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:273:113)
+(fail) every session domain obligation names a live source owner [10.30ms]
+(pass) session result wrapper overrides cannot grow or become stale without a real collision [129.36ms]
+
+test/resources-coverage.test.ts:
+12 | import { operations, Paging, PeerRole } from "../src/generated/v5/index.js"
+13 | import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
+14 | 
+15 | test("resource RPC membership equals the live 60-operation Protocol slice", async () => {
+16 |   const sources = resourceSources()
+17 |   expect(sources).toHaveLength(60)
+                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 60
+Received length: 61
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:17:19)
+(fail) resource RPC membership equals the live 60-operation Protocol slice [2.94ms]
+(pass) enum literal names match live Effect literals, including single-member tagged fields [2.49ms]
+(pass) shared declarations are exactly those reached by live endpoints outside the resource slice [180.93ms]
+117 |     expect(actualEnums[`ycoding.v5.${name}`], name).toEqual(values.map((_, index) => index + 1))
+118 |   const reachable = new Set(
+119 |     contract.operations.flatMap((operation) => [operation.request, operation.result, ...operation.errors]),
+120 |   )
+121 |   expect(reachable.size >= 120).toBe(true)
+122 |   expect(new Set(contract.operations.map((operation) => operation.id)).size).toBe(60)
+                                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: 60
+Received: 61
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:122:78)
+(fail) every request, result and typed error matches the live Effect field types and presence [2.16ms]
+(pass) every checked live source field has exact structural metadata and an unenforced source obligation [4.68ms]
+155 |         name: operation.diagnosticName,
+156 |         request: operation.requestType,
+157 |         result: operation.resultType,
+158 |         errors: operation.errorTypes,
+159 |       })),
+160 |   ).toEqual(
+          ^
+error: expect(received).toEqual(expected)
+
+@@ -680,21 +680,10 @@
+      "errors": [
+        "ycoding.v5.ServiceUnavailableError",
+        "ycoding.v5.UnauthorizedError",
+        "ycoding.v5.InvalidRequestError",
+      ],
+-     "id": 2063,
+-     "name": "providerUsage.forecast",
+-     "request": "ycoding.v5.providerUsage_forecast_Request",
+-     "result": "ycoding.v5.providerUsage_forecast_Result",
+-   },
+-   {
+-     "errors": [
+-       "ycoding.v5.ServiceUnavailableError",
+-       "ycoding.v5.UnauthorizedError",
+-       "ycoding.v5.InvalidRequestError",
+-     ],
+      "id": 2054,
+      "name": "providerUsage.get",
+      "request": "ycoding.v5.providerUsage_get_Request",
+      "result": "ycoding.v5.providerUsage_get_Result",
+    },
+
+- Expected  - 11
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:160:5)
+(fail) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [1.56ms]
+177 |   const text = new Map<string, string>()
+178 |   for (const source of sources) {
+179 |     const [file, name] = source.split("#")
+180 |     if (!text.has(file)) text.set(file, await Bun.file(path.resolve(import.meta.dir, "../../..", file)).text())
+181 |     const symbol = name.split(".").at(-1)!
+182 |     expect(new RegExp(`(?:const|class|function) ${symbol}\\b`).test(text.get(file)!), source).toBe(true)
+                                                                                                    ^
+error: packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue2
+
+Expected: true
+Received: false
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:182:95)
+(fail) every domain obligation names a live source schema owner [2.62ms]
+(pass) named integer schemas retain 64-bit integer wire types rather than ref-shaped double fallthrough [1.40ms]
+(pass) numeric offset paging is distinct from opaque cursor paging [1.17ms]
+
+test/local-family.test.ts:
+(pass) M7 session.capturedChanges.list admits the canonical local read through the connection [1.10ms]
+(pass) M7 session.team.economics admits the canonical local read through the connection [0.42ms]
+(pass) M7 session.family.activity admits the canonical local read through the connection [0.28ms]
+(pass) M7 session.capturedChanges.list rejects an unrelated scope and server/agent request authority [0.23ms]
+(pass) M7 session.team.economics rejects an unrelated scope and server/agent request authority [0.18ms]
+(pass) M7 session.family.activity rejects an unrelated scope and server/agent request authority [0.15ms]
+(pass) M7 widens exactly three connector reads without adding remote operations [0.03ms]
+
+test/usage-accounting.test.ts:
+(pass) prompt and recursive task costs are bounded Session-owned GET reads [5.73ms]
+(pass) forecast is a read-only provider-usage endpoint with explicit local token scope [0.34ms]
+(pass) report query preserves selected effort and provider-qualified profile filters [0.18ms]
+
+test/public-event-connection.test.ts:
+(pass) REQ-WIRE-005 event.subscribe accepts typed ephemerals and rejects Session log sync markers [2.24ms]
+(pass) REQ-WIRE-006 canonical remote event requests accept Session scope and deny global feed authority [0.43ms]
+
+test/frontend-boundary.test.ts:
+(pass) custom endpoints reject the removed RunPod wire alternative [0.28ms]
+(pass) M3/M4/M5/M10 have closed local-only completed mutation descriptors [0.07ms]
+(pass) M3/M4/M5/M10 descriptors declare exact closed errors and secret inputs [0.07ms]
+(pass) M3 compatible endpoint, model overrides and optional empty lists round trip [0.76ms]
+(pass) M4 persistent requests reuse both existing ServerConfig branches without echoing secrets [0.37ms]
+(pass) M5 package identity, digests and same-host presentation assets round trip [0.58ms]
+(pass) M10 enrollment preserves optional replace and returns only redacted device status [0.53ms]
+(pass) M3/M4/M5/M10 all declared failure codes round trip and reject open enums [0.72ms]
+(pass) M3/M5/M10 reject missing presence, unknown credential fields and budget overflow [25.65ms]
+(pass) S2/M8 append optional metadata and retain absent projections [0.43ms]
+(pass) M3/M4/M5/M10 results and provider writes have no credential-shaped fields [0.64ms]
+(pass) M3/M4/M5/M10 remote and relay request admission rejects local-only descriptors [0.45ms]
+
+test/field-constraints.test.ts:
+(pass) integer constraints preserve signed and uint64 boundaries [2.37ms]
+(pass) text constraints distinguish UTF-16, codepoints, UTF-8 and lone units [0.06ms]
+(pass) count bounds do not claim to enforce domain obligations [0.03ms]
+(pass) live Effect checks require source-bound obligations without claiming enforcement [0.09ms]
+
+test/usage-wire-contract.test.ts:
+(pass) operations > prompt and task costs are Session-scoped reads for local, remote and relay peers [0.12ms]
+(pass) operations > the usage forecast is a Location read that remote and relay peers address at machine or Session scope [0.03ms]
+(pass) operations > the Session usage report becomes remote and relay readable [0.01ms]
+(pass) operations > operation IDs stay contiguous in the Session and resource ranges [0.09ms]
+(pass) operations > remote and relay allowlists grow by the four usage reads [0.04ms]
+(pass) operations > each new request type wraps its declared parameters [0.03ms]
+(pass) allocated tags and values > report queries keep their tags and append the four filters [0.02ms]
+(pass) allocated tags and values > report groups append seven values [0.33ms]
+(pass) allocated tags and values > timing, speed, report and diagnostics fields append after their existing tags [0.06ms]
+(pass) allocated tags and values > attribution fields are optional appended event fields [0.02ms]
+(pass) allocated tags and values > web latency operations append four values after the keep-awake values [0.18ms]
+(pass) tool progress > is a live-only public event in its original slot [0.02ms]
+(pass) tool progress > leaves its durable slot reserved without renumbering later events [0.18ms]
+
+test/usage.test.ts:
+(pass) declares local-runtime global usage summary and report operations [0.58ms]
+
+test/operation-generation.test.ts:
+(pass) operation generation rejects duplicate [77.97ms]
+(pass) operation generation rejects missing [49.25ms]
+(pass) operation generation rejects range [46.14ms]
+(pass) operation generation rejects unknown [44.29ms]
+(pass) canonical descriptor and structural metadata are extracted from protoc [26.96ms]
+(pass) metadata generation rejects inverted constraint bounds [47.63ms]
+(pass) metadata generation rejects constraint type mismatch [51.83ms]
+(pass) metadata generation rejects invalid domain obligation source [47.00ms]
+
+test/wire-allocation.test.ts:
+(pass) message field tags > a message without an allocation keeps declaration order [0.10ms]
+(pass) message field tags > reordering the declaration does not move an allocated tag [0.01ms]
+(pass) message field tags > a field appended to the declaration keeps every earlier tag only when it is allocated last [0.01ms]
+(pass) message field tags > a reserved slot keeps its number and later fields keep theirs [0.02ms]
+(pass) message field tags > a message with no reserved slot renders no reserved statement
+(pass) message field tags > preset tags are used as given and must be unique [0.07ms]
+(pass) message field tags > a field missing from the allocation is rejected [0.03ms]
+(pass) message field tags > an allocated name that is neither declared nor reserved is rejected [0.04ms]
+(pass) message field tags > a duplicated allocation entry is rejected [0.04ms]
+(pass) enum numbers > an enum without an allocation keeps literal order [0.02ms]
+(pass) enum numbers > reordering or appending literals does not move an allocated number [0.01ms]
+(pass) enum numbers > a reserved slot keeps its number and later literals keep theirs
+(pass) enum numbers > non-string literals are allocated by value [0.04ms]
+(pass) enum numbers > unallocated, stale and duplicate entries are rejected [0.04ms]
+(pass) union members > members are numbered by position without an allocation [0.11ms]
+(pass) union members > a removed member leaves its slot reserved and later names and tags stay put [0.04ms]
+(pass) union members > reordering the declared members does not move an allocated slot [0.03ms]
+(pass) union members > a member appended to the declaration takes the next allocated slot [0.06ms]
+(pass) union members > unallocated, stale and duplicate members are rejected [0.05ms]
+(pass) union members > a member without a type identity cannot be allocated [0.03ms]
+(pass) projection > the current allocation renders every checked-in descriptor unchanged [130.97ms]
+(pass) projection > session descriptor honors message and enum allocations [37.76ms]
+(pass) projection > resources descriptor honors message and enum allocations [12.31ms]
+(pass) projection > shared descriptor honors message and enum allocations [189.54ms]
+(pass) projection > platform descriptor honors message and enum allocations [21.74ms]
+(pass) projection > events descriptor honors the PublicEvent allocation [14.92ms]
+(pass) projection > an incomplete allocation fails the descriptor render [17.00ms]
+
+test/connector-coverage.test.ts:
+(pass) 74 live source names resolve to 70 canonical connector and four relay notice operations [0.26ms]
+(pass) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.07ms]
+(pass) descriptor role-scope and event payload metadata append fresh fields [0.01ms]
+(pass) all connector fields, presence, associations and constraints match the bounded remote source projection [5.38ms]
+(pass) spec admission table matches the connector inventory, descriptor roles and mutation classes [0.71ms]
+(pass) relay forwards exactly the connector set; agents and servers send no operation requests [0.11ms]
+(pass) no local-only operation gains remote authority and all shared IDs retain local authority [0.07ms]
+
+12 tests failed:
+(fail) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [3.62ms]
+(fail) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [0.10ms]
+(fail) REQ-WIRE-005 every public event field retains its source type, tag and presence [13.44ms]
+(fail) platform slice exactly matches all 55 baseline and live endpoint declarations [6.97ms]
+(fail) every platform field, presence, enum and typed error matches the live Effect contract [10.79ms]
+(fail) session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe [5.47ms]
+(fail) all session fields, tags, presence, enums and obligations match live source projection [7.71ms]
+(fail) every session domain obligation names a live source owner [10.30ms]
+(fail) resource RPC membership equals the live 60-operation Protocol slice [2.94ms]
+(fail) every request, result and typed error matches the live Effect field types and presence [2.16ms]
+(fail) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [1.56ms]
+(fail) every domain obligation names a live source schema owner [2.62ms]
+
+ 126 pass
+ 12 fail
+ 13644 expect() calls
+Ran 138 tests across 21 files. [1.86s]

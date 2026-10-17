@@ -36,6 +36,7 @@ export async function renderScreen(input: {
   settle:
     | string
     | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
+  settlementTimeoutMS?: number
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
@@ -44,6 +45,8 @@ export async function renderScreen(input: {
   packages?: PackageResolver
   builtins?: readonly Plugin.Definition[]
 }) {
+  const { resetRailExpansion } = await import("../../src/routes/session/rail-section")
+  resetRailExpansion()
   const setup = await createTestRenderer({
     width: input.width,
     height: input.height,
@@ -128,21 +131,61 @@ export async function renderScreen(input: {
       Effect.provide(input.state ? FrontendPaths.layerWith({ state: input.state }) : FrontendPaths.layer),
       Effect.provide(FileSystem.layerNoop({})),
     ),
+  ).then(
+    () => ({ status: "completed" as const }),
+    (error: unknown) => ({ status: "failed" as const, error }),
   )
 
-  const settled = () =>
-    typeof input.settle === "string"
-      ? setup.captureCharFrame().includes(input.settle) &&
-        (!input.settle.startsWith("Message ") || setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
+  async function dispose() {
+    try {
+      try {
+        if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+        const outcome = await task
+        if (outcome.status === "failed") throw outcome.error
+      } finally {
+        await server.stop()
+      }
+    } finally {
+      restoreData?.()
+      restoreBuiltins?.()
+      restoreClipboard?.()
+      mock.module("../../src/plugin/runtime", () => originalRuntime)
+    }
+  }
+
+  let frame = setup.captureCharFrame()
+  const settled = () => {
+    frame = setup.captureCharFrame()
+    return typeof input.settle === "string"
+      ? frame.includes(input.settle) &&
+          (!input.settle.startsWith("Message ") || setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
       : input.settle(setup)
-  const deadline = Date.now() + 25_000
-  while (Date.now() < deadline) {
-    await Bun.sleep(50)
-    if (setup.renderer.isDestroyed) break
-    if (!settled()) continue
-    // Commit pending layout and hit-grid work before callers inspect or click the frame.
-    await setup.renderOnce()
-    if (settled()) break
+  }
+  let ready = false
+  try {
+    const deadline = Date.now() + (input.settlementTimeoutMS ?? 25_000)
+    while (Date.now() < deadline) {
+      await Bun.sleep(50)
+      if (setup.renderer.isDestroyed) break
+      if (!settled()) continue
+      if (setup.renderer.isDestroyed) break
+      await setup.renderOnce()
+      if (settled() && !setup.renderer.isDestroyed) {
+        ready = true
+        break
+      }
+    }
+    if (!ready)
+      throw new Error(
+        `Screen did not settle on ${typeof input.settle === "string" ? JSON.stringify(input.settle) : input.settle.name || "settlement predicate"} (renderer destroyed: ${setup.renderer.isDestroyed})\nFinal frame:\n${frame}`,
+      )
+  } catch (error) {
+    try {
+      await dispose()
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Screen settlement and cleanup failed", { cause: error })
+    }
+    throw error
   }
 
   return {
@@ -181,18 +224,7 @@ export async function renderScreen(input: {
         .lines.flatMap((line) => line.spans)
         .find((span) => span.text.includes(text))
         ?.fg.toInts(),
-    async dispose() {
-      try {
-        if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-        await task.catch(() => {})
-        await server.stop()
-      } finally {
-        restoreData?.()
-        restoreBuiltins?.()
-        restoreClipboard?.()
-        mock.module("../../src/plugin/runtime", () => originalRuntime)
-      }
-    },
+    dispose,
   }
 }
 

@@ -62,7 +62,7 @@ type TeamCueInput =
       readonly id: string
       readonly kind: "reported"
       readonly childID: string
-      readonly outcome: "completed" | "failed" | "cancelled" | "lost"
+      readonly outcome: "completed" | "failed" | "cancelled" | "lost" | "resumed"
     }
 
 export type TeamInput = {
@@ -111,7 +111,7 @@ export type OfficeCue = {
   readonly kind: "delegate" | "report"
   readonly fromActorID: string
   readonly toActorID: string
-  readonly outcome?: "completed" | "failed" | "cancelled" | "lost"
+  readonly outcome?: "completed" | "failed" | "cancelled" | "lost" | "resumed"
 }
 
 export type OfficeSnapshot = {

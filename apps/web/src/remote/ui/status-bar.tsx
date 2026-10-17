@@ -1,19 +1,25 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Portal } from "solid-js/web"
 import { useRemote } from "../context"
-import { sessionStatusLabel, sessionStatusTimed } from "../projection"
+import {
+  autonomyDeciders,
+  reviewItemsInScope,
+  sessionExecutionLabel,
+  sessionStatusTimed,
+  yoloLevelName,
+} from "../projection"
+import { createRemoteQuery } from "../query"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
 
 const levels = [
-  { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
+  { level: 0 as const, label: "Ask first", detail: "Asks you for tool permissions and routine reviews." },
   {
     level: 1 as const,
-    label: "YOLO 1",
-    detail: "Automatically approves tool permissions and ordinary guardrail reviews.",
+    label: "Allow tools",
+    detail: "Auto-approves ask-level tool permissions. Routine reviews still ask.",
   },
-  { level: 2 as const, label: "YOLO 2", detail: "Also answers questions and forms." },
-  { level: 3 as const, label: "YOLO 3", detail: "Same as YOLO 2: also answers questions and forms." },
+  { level: 2 as const, label: "Tools + reviews", detail: "Also auto-approves routine reviews while awake." },
 ]
 
 export function ComposerStatus() {
@@ -45,17 +51,16 @@ export function ComposerStatus() {
     const timer = setInterval(() => setNow(Date.now()), 100)
     onCleanup(() => clearInterval(timer))
   })
-  const label = () => (current() ? sessionStatusLabel(current()!, now(), waiting()) : "ready")
+  const label = () => (current() ? sessionExecutionLabel(current()!, now(), waiting()) : "ready")
   const stateText = () =>
     label()
-      .replace(/^(?:YOLO \d+(?: \+ Goal)?|Goal) · (?:auto-approve|autonomous) · /, "")
       .replace(/\? awaiting input/i, "Waiting for your decision")
       .replace(/cooking/i, "Running")
   const elapsed = () =>
     current()?.executionStarted === undefined
       ? ""
       : `${Math.floor(Math.max(0, now() - current()!.executionStarted!) / 60_000)}:${String(Math.floor(Math.max(0, now() - current()!.executionStarted!) / 1000) % 60).padStart(2, "0")}`
-  const visible = () => current()?.status === "running" || current()?.status === "failed"
+  const visible = () => current()?.status === "running" || current()?.status === "failed" || review() > 0
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
   const goalSetting = () =>
@@ -68,7 +73,44 @@ export function ComposerStatus() {
           typeof mutation.input.goal === "string" &&
           mutation.state === "sending",
       )
-  const yolo = () => view()?.autonomy?.yolo ?? 0
+  const yolo = () => view()?.autonomy?.effective?.yolo ?? view()?.autonomy?.yolo ?? 0
+  const autoAnswer = () => view()?.autonomy?.autoAnswer === true
+  const autoAnswerBusy = () =>
+    remote
+      .state()
+      .mutations.some(
+        (mutation) =>
+          mutation.sessionID === view()?.id &&
+          mutation.operation === "session.autonomy.set" &&
+          "autoAnswer" in mutation.input &&
+          mutation.state === "sending",
+      )
+  const asleep = () => view()?.autonomy?.effective?.asleep ?? view()?.autonomy?.sleep !== undefined
+  const reachable = () => remote.state().transport.kind === "open" && remote.state().connection.kind === "connected"
+  const keepAwake = createRemoteQuery(remote.store.queryClient, () =>
+    remote.queries.keepAwake(remote.scope(), asleep() && reachable()),
+  )
+  const machineMaySleep = () => {
+    const read = keepAwake().data
+    return read?.read === "ready" && read.status !== undefined && read.status.state !== "on"
+  }
+  const review = () => {
+    const selected = view()
+    return selected === undefined ? 0 : reviewItemsInScope(selected).length
+  }
+  const modes = () => [
+    ...(autoAnswer() ? [{ key: "auto-answer", label: "auto-answer", compact: "AA", tone: "on" }] : []),
+    ...(asleep()
+      ? [
+          machineMaySleep()
+            ? { key: "sleep", label: "asleep · machine may sleep", compact: "Zz!", tone: "attention" }
+            : { key: "sleep", label: "asleep", compact: "Zz", tone: "on" },
+        ]
+      : []),
+    ...(review() > 0
+      ? [{ key: "review", label: `review ${review()}`, compact: `R${review()}`, tone: "attention" }]
+      : []),
+  ]
   const close = (focus = false) => {
     if (!open() || leaving()) return
     const trigger = open() === "yolo" ? yoloTrigger : goalTrigger
@@ -177,7 +219,7 @@ export function ComposerStatus() {
           aria-expanded={open() === "yolo" && !leaving()}
           onClick={() => toggle("yolo")}
         >
-          <span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Standard"}</span>
+          <span class="session-status__yolo-full">{yoloLevelName(yolo())}</span>
           <span class="session-status__yolo-compact" aria-hidden="true">
             Y{yolo()}
           </span>
@@ -201,6 +243,20 @@ export function ComposerStatus() {
             </span>
           </Show>
         </button>
+        <For each={modes()}>
+          {(mode) => (
+            <span
+              class={`session-status__mode session-status__mode--${mode.tone}`}
+              data-mode={mode.key}
+              title={mode.label}
+            >
+              <span class="session-status__mode-full">{mode.label}</span>
+              <span class="session-status__mode-compact" aria-hidden="true">
+                {mode.compact}
+              </span>
+            </span>
+          )}
+        </For>
         <Show when={goalActive()}>
           <span class="session-status__active-goal" role="status" title={goal()?.text}>
             Goal active · {goal()?.text}
@@ -265,8 +321,42 @@ export function ComposerStatus() {
                     )}
                   </For>
                 </div>
+                <dl class="session-status__deciders">
+                  <For each={autonomyDeciders(view()?.autonomy)}>
+                    {(row) => (
+                      <div class="session-status__decider">
+                        <dt>{row.label}</dt>
+                        <dd>{row.value}</dd>
+                      </div>
+                    )}
+                  </For>
+                </dl>
+                <div class="session-status__auto-answer">
+                  <span class="session-status__auto-answer-text">
+                    <strong id="session-status-auto-answer-label">Auto-answer</strong>
+                    <span id="session-status-auto-answer-detail">
+                      On permits automatic answers in this Session. Off while asleep sends requests to Review. Existing
+                      items stay yours.
+                    </span>
+                  </span>
+                  <label class="switch">
+                    <input
+                      type="checkbox"
+                      aria-labelledby="session-status-auto-answer-label"
+                      aria-describedby="session-status-auto-answer-detail"
+                      checked={autoAnswer()}
+                      disabled={autoAnswerBusy()}
+                      onChange={(event) => {
+                        void remote.store.setAutoAnswer(event.currentTarget.checked)
+                        event.currentTarget.checked = autoAnswer()
+                      }}
+                    />
+                    <span>{autoAnswer() ? "On" : "Off"}</span>
+                  </label>
+                </div>
                 <p class="session-status__guardrail-note">
-                  Hard guardrail reviews always require a human decision, even at level 3.
+                  Hard reviews never follow YOLO. Model reviews follow this machine's guardrail settings, shown above as
+                  reported.
                 </p>
               </Show>
               <Show when={open() === "goal"}>

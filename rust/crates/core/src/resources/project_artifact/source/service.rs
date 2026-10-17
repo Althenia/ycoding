@@ -96,7 +96,7 @@ struct CatalogState {
 struct State {
     registration: Option<u64>,
     active: BTreeMap<String, Provenance>,
-    executions: BTreeMap<session::Id, (bool, i64)>,
+    executions: BTreeMap<session::Id, BTreeMap<i64, (bool, i64)>>,
     terminals: BTreeSet<String>,
     managed: BTreeMap<session::Id, BTreeMap<LosslessString, project_artifact::Activation>>,
     diagnostics: BTreeSet<&'static str>,
@@ -120,7 +120,8 @@ struct Invocation {
 impl Service {
     pub fn new(options: Options, standard: Catalogs) -> Self {
         let key = ycoding_schema::stringify_json(&options.location.encode());
-        Self(Arc::new(Inner {
+        let client = options.client.clone();
+        let service = Self(Arc::new(Inner {
             options,
             key,
             catalogs: tokio::sync::Mutex::new(CatalogState {
@@ -130,7 +131,16 @@ impl Service {
                 enabled: true,
             }),
             state: Mutex::new(State::default()),
-        }))
+        }));
+        let inner = Arc::downgrade(&service.0);
+        client.observe_events(move |events| {
+            let Some(inner) = inner.upgrade() else {
+                return false;
+            };
+            Self(inner).capture_starts(events);
+            true
+        });
+        service
     }
     pub async fn catalogs(&self) -> Catalogs {
         self.0.catalogs.lock().await.current.clone()
@@ -652,7 +662,6 @@ impl Service {
             .subscribe_types(
                 Scope::Global,
                 &[
-                    "session.execution.started.1",
                     "session.execution.succeeded.1",
                     "session.execution.failed.1",
                     "session.execution.interrupted.1",
@@ -665,30 +674,65 @@ impl Service {
         let service = self.clone();
         let observed_feed = feed.clone();
         let task = tokio::spawn(async move {
-            let mut barrier: Option<Barrier> = None;
-            loop {
-                if barrier.is_none() {
-                    match commands.try_recv() {
-                        Ok(command) => barrier = Some(command),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                            barrier = Some(Barrier {
-                                position: observed_feed.watermark(),
-                                close: true,
-                                reply: None,
-                            })
+            let result: Result<(), Error> = async {
+                let mut barrier: Option<Barrier> = None;
+                loop {
+                    if barrier.is_none() {
+                        match commands.try_recv() {
+                            Ok(command) => barrier = Some(command),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                barrier = Some(Barrier {
+                                    position: observed_feed.watermark(),
+                                    close: true,
+                                    reply: None,
+                                })
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
                         }
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
                     }
-                }
-                if let Some(item) = subscriber
-                    .next()
-                    .map_err(|_| failure("Artifact feed overflow"))?
-                {
-                    if barrier
-                        .as_ref()
-                        .is_some_and(|barrier| item.position > barrier.position)
+                    if let Some(item) = subscriber
+                        .next()
+                        .map_err(|_| failure("Artifact feed overflow"))?
                     {
-                        let command = barrier.take().expect("barrier was checked");
+                        if barrier
+                            .as_ref()
+                            .is_some_and(|barrier| item.position > barrier.position)
+                        {
+                            let command = barrier.take().expect("barrier was checked");
+                            if let Some(reply) = command.reply {
+                                let _ = reply.send(());
+                            }
+                            if command.close {
+                                return Ok(());
+                            }
+                        }
+                        let Payload::Durable(event) = &item.payload else {
+                            continue;
+                        };
+                        if !matches!(
+                            event.type_.as_str(),
+                            Some(
+                                "session.execution.succeeded.1"
+                                    | "session.execution.failed.1"
+                                    | "session.execution.interrupted.1"
+                            )
+                        ) {
+                            continue;
+                        }
+                        let service = service.clone();
+                        let event = event.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if service.observe_event(&event).is_err() {
+                                lock(&service.0.state)
+                                    .diagnostics
+                                    .insert("terminal-observation-failed");
+                            }
+                        })
+                        .await
+                        .map_err(|_| failure("Artifact governor task failed"))?;
+                        continue;
+                    }
+                    if let Some(command) = barrier.take() {
                         if let Some(reply) = command.reply {
                             let _ = reply.send(());
                         }
@@ -696,46 +740,18 @@ impl Service {
                             return Ok(());
                         }
                     }
-                    let Payload::Durable(event) = &item.payload else {
-                        continue;
-                    };
-                    if !matches!(
-                        event.type_.as_str(),
-                        Some(
-                            "session.execution.started.1"
-                                | "session.execution.succeeded.1"
-                                | "session.execution.failed.1"
-                                | "session.execution.interrupted.1"
-                        )
-                    ) {
-                        continue;
+                    tokio::select! {
+                        _ = notify.notified() => {},
+                        command = commands.recv() => barrier = Some(command.unwrap_or_else(|| Barrier { position: observed_feed.watermark(), close: true, reply: None })),
                     }
-                    let service = service.clone();
-                    let event = event.clone();
-                    tokio::task::spawn_blocking(move || {
-                        if service.observe_event(&event).is_err() {
-                            lock(&service.0.state)
-                                .diagnostics
-                                .insert("terminal-observation-failed");
-                        }
-                    })
-                    .await
-                    .map_err(|_| failure("Artifact governor task failed"))?;
-                    continue;
-                }
-                if let Some(command) = barrier.take() {
-                    if let Some(reply) = command.reply {
-                        let _ = reply.send(());
-                    }
-                    if command.close {
-                        return Ok(());
-                    }
-                }
-                tokio::select! {
-                    _ = notify.notified() => {},
-                    command = commands.recv() => barrier = Some(command.unwrap_or_else(|| Barrier { position: observed_feed.watermark(), close: true, reply: None })),
                 }
             }
+            .await;
+            let mut state = lock(&service.0.state);
+            state.executions.clear();
+            state.running = false;
+            drop(state);
+            result
         });
         Ok(Governor {
             service: self.clone(),
@@ -744,9 +760,62 @@ impl Service {
             task,
         })
     }
+    fn capture_starts(&self, events: &[Event]) {
+        for event in events
+            .iter()
+            .filter(|event| event.type_.as_str() == Some("session.execution.started.1"))
+        {
+            if self.capture_start(event).is_err() {
+                lock(&self.0.state)
+                    .diagnostics
+                    .insert("terminal-observation-failed");
+            }
+        }
+    }
+    fn capture_start(&self, event: &Event) -> Result<(), Error> {
+        if !lock(&self.0.state).running {
+            return Ok(());
+        }
+        let id = session::Id::new(event.aggregate_id.clone())
+            .map_err(|error| Error::Record(Box::new(error)))?;
+        let sessions = crate::session::store::Service::new(self.0.options.client.clone());
+        if sessions
+            .get(&id)?
+            .is_none_or(|session| session.location != self.0.options.location)
+        {
+            return Ok(());
+        }
+        let goal = autonomy::Service::new(self.0.options.client.clone())
+            .get(&id)
+            .map_err(|_| failure("Autonomy read failed"))?;
+        let mut state = lock(&self.0.state);
+        if state.running {
+            state.executions.entry(id).or_default().insert(
+                event.seq,
+                (
+                    goal.goal.as_ref().is_some_and(|goal| goal.is_active()),
+                    event.created,
+                ),
+            );
+        }
+        Ok(())
+    }
+    fn take_start(&self, id: &session::Id, terminal: i64) -> Option<(bool, i64)> {
+        let mut state = lock(&self.0.state);
+        let starts = state.executions.get_mut(id)?;
+        let later = starts.split_off(&terminal);
+        let start = starts.last_key_value().map(|(_, start)| *start);
+        if later.is_empty() {
+            state.executions.remove(id);
+        } else {
+            state.executions.insert(id.clone(), later);
+        }
+        start
+    }
     fn observe_event(&self, event: &Event) -> Result<(), Error> {
         let id = session::Id::new(event.aggregate_id.clone())
             .map_err(|error| Error::Record(Box::new(error)))?;
+        let execution = self.take_start(&id, event.seq);
         let sessions = crate::session::store::Service::new(self.0.options.client.clone());
         let Some(session) = sessions
             .get(&id)?
@@ -758,16 +827,6 @@ impl Service {
         let goal = autonomy
             .get(&id)
             .map_err(|_| failure("Autonomy read failed"))?;
-        if event.type_.as_str() == Some("session.execution.started.1") {
-            lock(&self.0.state).executions.insert(
-                id,
-                (
-                    goal.goal.as_ref().is_some_and(|goal| goal.is_active()),
-                    event.created,
-                ),
-            );
-            return Ok(());
-        }
         let assistant = sessions.latest(&id, "assistant")?;
         let assistant = assistant.as_ref().and_then(|message| {
             if let session_message::Info::Assistant(assistant) = message {
@@ -788,19 +847,16 @@ impl Service {
                     .to_string())
                 .unwrap_or_else(|| format!("boundary:{}", event.seq))
         );
-        let (execution, activations) = {
+        let activations = {
             let state = lock(&self.0.state);
             if state.terminals.contains(&terminal) {
                 return Ok(());
             }
-            (
-                state.executions.get(&id).copied(),
-                state
-                    .managed
-                    .get(&id)
-                    .map(|activations| activations.values().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default(),
-            )
+            state
+                .managed
+                .get(&id)
+                .map(|activations| activations.values().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
         };
         let snapshot = self.0.options.client.snapshot()?;
         let compaction = history::latest_compaction(&snapshot, &id)?;
@@ -962,7 +1018,6 @@ impl Service {
         {
             let mut state = lock(&self.0.state);
             state.terminals.insert(terminal);
-            state.executions.remove(&id);
         }
         let mut evaluated = BTreeSet::new();
         for observation in observations {
@@ -1054,6 +1109,7 @@ impl Governor {
             .and_then(|result| result);
         let mut state = lock(&self.service.0.state);
         state.running = false;
+        state.executions.clear();
         if let Some(owner) = state.registration.take() {
             lock(&self.service.0.options.registry).remove_owner(&self.service.0.key, owner);
         }

@@ -38,6 +38,7 @@ pub struct Request<'a> {
     pub user: String,
     pub character_limit: usize,
     pub cancellation: &'a Cancellation,
+    pub attribution: crate::session::usage_attribution::Attribution,
 }
 
 pub type Generation<'a> = Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;

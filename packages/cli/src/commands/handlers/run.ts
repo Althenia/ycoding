@@ -8,7 +8,7 @@ export default Runtime.handler(RunCommand, (input) => {
   if (process.argv.slice(2, separator === -1 ? undefined : separator).includes("--yolo") && Option.isNone(input.yolo))
     return Effect.sync(() => {
       process.exitCode = 1
-      process.stderr.write("ycoding: --yolo requires one of 0, 1, 2, or 3\n")
+      process.stderr.write("ycoding: --yolo requires one of 0, 1, or 2\n")
     })
   return runCommand({
     server: Option.getOrUndefined(input.server),

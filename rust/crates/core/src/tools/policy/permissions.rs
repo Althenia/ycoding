@@ -1,13 +1,15 @@
-use super::{Authority, Effect, Publisher, SessionAuthority, Wait, decision, state};
+use super::{Authority, Effect, Publisher, Reviews, SessionAuthority, Wait, decision, state};
+use crate::session::review::{self, FingerprintInput, GrantKind};
 use std::{
     collections::BTreeMap,
     ops::Bound,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::oneshot;
 use ycoding_schema::{
-    LosslessString, permission, permission_saved, project_id::ProjectId, session_id::SessionId,
+    DomainDecode, LosslessString, ObjectEncoder, permission, permission_saved,
+    project_id::ProjectId, session_id::SessionId, session_review,
 };
 use ycoding_store::{
     Client, KeyPart, TableSpec,
@@ -29,6 +31,13 @@ pub enum Error {
     },
     Declined,
     Corrected(LosslessString),
+    Deferred {
+        item_id: session_review::Id,
+    },
+    ReviewFull {
+        limit: usize,
+    },
+    Review(review::Error),
 }
 impl From<state::Error> for Error {
     fn from(value: state::Error) -> Self {
@@ -160,6 +169,7 @@ struct Inner {
     project: ProjectId,
     publish: Publisher,
     pending: Mutex<BTreeMap<permission::Id, Pending>>,
+    reviews: OnceLock<(Reviews, LosslessString)>,
 }
 #[derive(Clone)]
 pub struct Permissions(Arc<Inner>);
@@ -179,7 +189,51 @@ impl Permissions {
             project,
             publish,
             pending: Mutex::new(BTreeMap::new()),
+            reviews: OnceLock::new(),
         }))
+    }
+
+    pub fn with_reviews(self, reviews: Reviews, workdir: LosslessString) -> Self {
+        let _ = self.0.reviews.set((reviews, workdir));
+        self
+    }
+
+    pub async fn defer_pending(&self, session: &SessionId) -> Result<usize, Error> {
+        let Some((reviews, workdir)) = self.0.reviews.get().cloned() else {
+            return Ok(0);
+        };
+        let items = {
+            let mut pending = self
+                .0
+                .pending
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let ids = pending
+                .iter()
+                .filter(|(_, item)| &item.request.session_id == session)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            ids.iter()
+                .filter_map(|id| pending.remove(id))
+                .collect::<Vec<_>>()
+        };
+        let mut deferred = 0;
+        for item in items {
+            let outcome = defer(
+                &self.0.publish,
+                &reviews,
+                &item.request,
+                fingerprint(&item.request, &workdir),
+                session_review::Reason::SleepEntry,
+                true,
+            )
+            .await;
+            if matches!(outcome, Err(Error::Deferred { .. })) {
+                deferred += 1;
+            }
+            let _ = item.sender.send(outcome);
+        }
+        Ok(deferred)
     }
 
     fn configured(
@@ -242,7 +296,50 @@ impl Permissions {
         } else {
             effect
         };
+        let reviews = self.0.reviews.get().cloned();
+        let effect = match &reviews {
+            Some((reviews, workdir))
+                if effect == Effect::Ask
+                    && reviews
+                        .service
+                        .consume_now(
+                            &request.session_id,
+                            GrantKind::Permission,
+                            &fingerprint(&request, workdir),
+                            now(),
+                        )
+                        .map_err(Error::Review)? =>
+            {
+                Effect::Allow
+            }
+            _ => effect,
+        };
         let id = request.id.clone();
+        if effect == Effect::Ask
+            && authority.autonomy.asleep
+            && let Some((reviews, workdir)) = reviews
+        {
+            let (sender, receiver) = oneshot::channel();
+            let publish = self.0.publish.clone();
+            let digest = fingerprint(&request, &workdir);
+            tokio::spawn(async move {
+                let outcome = defer(
+                    &publish,
+                    &reviews,
+                    &request,
+                    digest,
+                    session_review::Reason::Disabled,
+                    false,
+                )
+                .await;
+                let _ = sender.send(outcome);
+            });
+            return Ok(Admission {
+                id,
+                effect,
+                wait: Some(Wait::new(receiver, || {})),
+            });
+        }
         if effect != Effect::Ask {
             return Ok(Admission {
                 id,
@@ -478,4 +575,79 @@ impl Permissions {
             let _ = item.sender.send(Err(Error::Declined));
         }
     }
+}
+
+fn fingerprint(
+    request: &permission::Request,
+    workdir: &LosslessString,
+) -> session_review::Fingerprint {
+    review::fingerprint(&FingerprintInput {
+        action: request.action.clone(),
+        resources: request.resources.clone(),
+        workdir: workdir.clone(),
+        rule_ids: vec![],
+        hard_review: false,
+        metadata: request.metadata.clone(),
+    })
+}
+
+async fn defer(
+    publish: &Publisher,
+    reviews: &Reviews,
+    request: &permission::Request,
+    fingerprint: session_review::Fingerprint,
+    reason: session_review::Reason,
+    conversion: bool,
+) -> Result<(), Error> {
+    let origin = request
+        .source
+        .as_ref()
+        .and_then(|source| {
+            session_review::Origin::decode(
+                &ObjectEncoder::new()
+                    .field("messageID", &source.message_id)
+                    .field("callID", &source.call_id)
+                    .finish(),
+            )
+            .ok()
+        })
+        .unwrap_or_else(|| super::request_origin(&request.id));
+    let item_id = match reviews
+        .defer(
+            &request.session_id,
+            session_review::Kind::Permission,
+            reason,
+            origin,
+            session_review::Payload::Permission(session_review::PermissionPayload {
+                action: request.action.clone(),
+                resources: request.resources.clone(),
+                save: request.save.clone().filter(|save| !save.is_empty()),
+                fingerprint,
+                request_id: request.id.clone(),
+            }),
+            conversion,
+        )
+        .await
+    {
+        Ok(item_id) => item_id,
+        Err(review::Error::Full { limit, .. }) => return Err(Error::ReviewFull { limit }),
+        Err(error) => return Err(Error::Review(error)),
+    };
+    state::emit::<permission::Deferred>(
+        publish,
+        &permission::DeferredData {
+            session_id: request.session_id.clone(),
+            request_id: request.id.clone(),
+            item_id: item_id.clone(),
+        },
+    )
+    .map_err(Error::Publish)?;
+    Err(Error::Deferred { item_id })
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis() as i64
 }

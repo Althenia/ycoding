@@ -23,6 +23,10 @@ const REPLY: &str = "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\"
 
 struct Quiet;
 impl orchestration::Execution for Quiet {
+    fn resume(&self, _: &session::Id) -> ycoding_core::session::run_coordinator::RunFuture {
+        panic!("unexpected explicit resumption")
+    }
+
     fn wake(&self, _: &session::Id) -> ycoding_core::session::run_coordinator::Outcome {
         Ok(())
     }
@@ -198,6 +202,7 @@ async fn flow() {
     let core = Core::production(
         store.client(),
         Production {
+            analytics: roots.data.join("analytics"),
             configuration: config::LoadOptions {
                 directory,
                 roots: roots.clone(),

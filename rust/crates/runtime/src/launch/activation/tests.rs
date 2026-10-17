@@ -1,6 +1,6 @@
 use super::{
-    ImportError, LaunchError, LosslessString, Options, Phase, Store, activate, import, kind_name,
-    parse_json, read_selection, store_options, stringify_json,
+    ImportError, LaunchError, LosslessString, Metadata, Options, Phase, Store, activate, import,
+    kind_name, parse_json, read_selection, store_options, stringify_json,
 };
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -54,14 +54,7 @@ impl Fixture {
         kind: import::DatabaseKind,
         progress: impl FnMut(Phase) -> Result<(), LaunchError>,
     ) -> Result<(), LaunchError> {
-        activate(
-            &self.source(),
-            &self.file(),
-            &self.marker(),
-            &self.0.join("tmp"),
-            kind,
-            progress,
-        )
+        self.activate_from(&ImportSource::Default(self.source()), kind, progress)
     }
     fn rows(&self, kind: import::DatabaseKind) -> Vec<artifacts::Migration> {
         let store = Store::open(self.file(), store_options(kind), import::catalog(kind)).unwrap();
@@ -76,6 +69,20 @@ impl Fixture {
         drop(snapshot);
         store.shutdown().unwrap();
         rows
+    }
+    fn create_rollback(&self) {
+        std::fs::create_dir_all(self.source().parent().unwrap()).unwrap();
+        let script = "import sqlite3,sys\ndb=sqlite3.connect(sys.argv[1])\ndb.executescript(\"CREATE TABLE migration(id TEXT PRIMARY KEY,time_completed INTEGER NOT NULL);CREATE TABLE database_format(id TEXT PRIMARY KEY,time_created INTEGER NOT NULL);INSERT INTO database_format VALUES('current-2026-08-04',0);INSERT INTO migration VALUES('baseline',1);\")\ndb.commit();db.close()";
+        let output = Command::new("python3")
+            .args(["-c", script])
+            .arg(self.source())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     fn sql(&self, sql: &str) {
         let output = Command::new("python3").args(["-c", "import sqlite3,sys;db=sqlite3.connect(sys.argv[1]);db.executescript(sys.argv[2]);db.commit();db.close()"])
@@ -617,4 +624,433 @@ fn real_process_death_recovers_per_store_selection_and_acknowledged_writes() {
             if phase == "StorePublished" { 2 } else { 1 }
         );
     }
+}
+
+fn core_attachment(
+    fixture: &Fixture,
+) -> (
+    ycoding_core::ycoding_schema::prompt::ManagedAttachmentContent,
+    PathBuf,
+) {
+    let attachments = ycoding_core::resources::attachment_store::Store::new(
+        fixture.source().parent().unwrap().to_path_buf(),
+    )
+    .unwrap();
+    let content = attachments.import(b"synthetic attachment").unwrap();
+    fixture.sql(&attachment_sql(&content));
+    let path = attachments.absolute_path(&content).unwrap();
+    (content, path)
+}
+
+fn native_target(fixture: &Fixture) {
+    Store::initialize(
+        fixture.file(),
+        store_options(import::DatabaseKind::Bootstrap),
+        import::catalog(import::DatabaseKind::Bootstrap),
+        Metadata::new([7; 16], 1),
+    )
+    .unwrap()
+    .shutdown()
+    .unwrap();
+}
+
+#[test]
+fn core_cancellation_at_each_phase_resumes_with_resources_and_an_unchanged_source() {
+    for phase in [
+        Phase::Copied,
+        Phase::Imported(import::Progress::Created),
+        Phase::Imported(import::Progress::Validating),
+        Phase::Imported(import::Progress::Verifying),
+        Phase::Imported(import::Progress::Complete),
+        Phase::Sealed,
+        Phase::ResourcesPublished,
+        Phase::StorePublished,
+        Phase::MarkerPublished,
+    ] {
+        let fixture = Fixture::new();
+        fixture.create(import::DatabaseKind::Core, "");
+        let (content, attachment) = core_attachment(&fixture);
+        let relative = attachment
+            .strip_prefix(fixture.source().parent().unwrap())
+            .unwrap()
+            .to_path_buf();
+        let target_resource = fixture.file().parent().unwrap().join(&relative);
+        let source_before = std::fs::read(fixture.source()).unwrap();
+        let resource_before = std::fs::read(&attachment).unwrap();
+        assert!(
+            fixture
+                .activate(import::DatabaseKind::Core, |current| {
+                    if current == phase {
+                        return Err(LaunchError::Usage("synthetic cancellation".into()));
+                    }
+                    Ok(())
+                })
+                .is_err(),
+            "{phase:?}"
+        );
+        let published = matches!(
+            phase,
+            Phase::ResourcesPublished | Phase::StorePublished | Phase::MarkerPublished
+        );
+        assert_eq!(target_resource.exists(), published, "{phase:?}");
+        assert_eq!(
+            fixture.file().exists(),
+            matches!(phase, Phase::StorePublished | Phase::MarkerPublished),
+            "{phase:?}"
+        );
+        assert_eq!(
+            fixture.marker().exists(),
+            phase == Phase::MarkerPublished,
+            "{phase:?}"
+        );
+        fixture
+            .activate(import::DatabaseKind::Core, |_| Ok(()))
+            .unwrap();
+        assert!(
+            fixture
+                .rows(import::DatabaseKind::Core)
+                .iter()
+                .any(|row| row.id.as_str() == Some("baseline")),
+            "{phase:?}"
+        );
+        let reader = ycoding_core::resources::attachment_store::Store::new(
+            fixture.file().parent().unwrap().to_path_buf(),
+        )
+        .unwrap();
+        assert_eq!(
+            reader.read(&content).unwrap(),
+            b"synthetic attachment",
+            "{phase:?}"
+        );
+        assert_eq!(std::fs::read(fixture.source()).unwrap(), source_before);
+        assert_eq!(std::fs::read(&attachment).unwrap(), resource_before);
+    }
+}
+
+#[test]
+fn source_changed_before_sealing_is_busy_and_the_next_start_is_a_new_generation() {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Bootstrap, "");
+    let result = fixture.activate(import::DatabaseKind::Bootstrap, |phase| {
+        if phase == Phase::Imported(import::Progress::Complete) {
+            fixture.sql("UPDATE migration SET time_completed=2;");
+        }
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(LaunchError::Import(ImportError::SourceBusy))
+    ));
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
+    let prior = read_selection(
+        &fixture.marker().with_extension("stage-v2"),
+        import::DatabaseKind::Bootstrap,
+    )
+    .unwrap();
+    assert!(!prior.sealed);
+    fixture
+        .activate(import::DatabaseKind::Bootstrap, |_| Ok(()))
+        .unwrap();
+    let current = read_selection(&fixture.marker(), import::DatabaseKind::Bootstrap).unwrap();
+    assert_ne!(current.id, prior.id);
+    assert!(current.sealed);
+    assert_eq!(
+        fixture.rows(import::DatabaseKind::Bootstrap)[0].time_completed,
+        2
+    );
+}
+
+#[test]
+fn resource_added_before_sealing_is_busy_and_the_next_start_publishes_it() {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Core, "");
+    let (content, _) = core_attachment(&fixture);
+    let late = fixture
+        .source()
+        .parent()
+        .unwrap()
+        .join("attachments/late.bin");
+    let result = fixture.activate(import::DatabaseKind::Core, |phase| {
+        if phase == Phase::Imported(import::Progress::Complete) {
+            std::fs::write(&late, b"late synthetic resource").unwrap();
+        }
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(LaunchError::Import(ImportError::SourceBusy))
+    ));
+    let target = fixture.file().parent().unwrap().to_path_buf();
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
+    assert!(!target.join("attachments").exists());
+    fixture
+        .activate(import::DatabaseKind::Core, |_| Ok(()))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(target.join("attachments/late.bin")).unwrap(),
+        b"late synthetic resource"
+    );
+    let reader = ycoding_core::resources::attachment_store::Store::new(target).unwrap();
+    assert_eq!(reader.read(&content).unwrap(), b"synthetic attachment");
+}
+
+#[test]
+fn existing_target_with_an_unsealed_journal_is_refused_and_left_unchanged() {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Bootstrap, "");
+    assert!(
+        fixture
+            .activate(import::DatabaseKind::Bootstrap, |phase| {
+                if phase == Phase::Imported(import::Progress::Complete) {
+                    Err(LaunchError::Usage("interrupt".into()))
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err()
+    );
+    let journal = fixture.marker().with_extension("stage-v2");
+    assert!(
+        !read_selection(&journal, import::DatabaseKind::Bootstrap)
+            .unwrap()
+            .sealed
+    );
+    native_target(&fixture);
+    let target_before = std::fs::read(fixture.file()).unwrap();
+    let journal_before = std::fs::read(&journal).unwrap();
+    let source_before = std::fs::read(fixture.source()).unwrap();
+    assert!(matches!(
+        fixture.activate(import::DatabaseKind::Bootstrap, |_| Ok(())),
+        Err(LaunchError::Import(ImportError::InvalidState))
+    ));
+    assert_eq!(std::fs::read(fixture.file()).unwrap(), target_before);
+    assert_eq!(std::fs::read(&journal).unwrap(), journal_before);
+    assert_eq!(std::fs::read(fixture.source()).unwrap(), source_before);
+    assert!(!fixture.marker().exists());
+}
+
+#[test]
+fn existing_native_target_without_marker_or_journal_is_refused_and_left_unchanged() {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Bootstrap, "");
+    std::fs::create_dir_all(fixture.file().parent().unwrap()).unwrap();
+    native_target(&fixture);
+    let target_before = std::fs::read(fixture.file()).unwrap();
+    let source_before = std::fs::read(fixture.source()).unwrap();
+    assert!(matches!(
+        fixture.activate(import::DatabaseKind::Bootstrap, |_| Ok(())),
+        Err(LaunchError::Import(ImportError::InvalidState))
+    ));
+    assert_eq!(std::fs::read(fixture.file()).unwrap(), target_before);
+    assert_eq!(std::fs::read(fixture.source()).unwrap(), source_before);
+    assert!(!fixture.marker().exists());
+    assert!(!fixture.marker().with_extension("stage-v2").exists());
+}
+
+#[test]
+fn marker_loss_and_sealed_markers_never_read_a_removed_changed_or_different_source() {
+    for variant in ["removed", "changed", "different"] {
+        let fixture = Fixture::new();
+        fixture.create(import::DatabaseKind::Bootstrap, "");
+        fixture
+            .activate(import::DatabaseKind::Bootstrap, |_| Ok(()))
+            .unwrap();
+        beta_write(&fixture);
+        match variant {
+            "removed" => std::fs::remove_dir_all(fixture.source().parent().unwrap()).unwrap(),
+            "changed" => fixture.sql("UPDATE migration SET time_completed=2;"),
+            _ => {
+                std::fs::remove_file(fixture.source()).unwrap();
+                fixture.create(
+                    import::DatabaseKind::Bootstrap,
+                    "INSERT INTO migration VALUES('other',9);",
+                );
+            }
+        }
+        fixture
+            .activate(import::DatabaseKind::Bootstrap, |_| Ok(()))
+            .unwrap();
+        std::fs::remove_file(fixture.marker()).unwrap();
+        fixture
+            .activate(import::DatabaseKind::Bootstrap, |_| Ok(()))
+            .unwrap();
+        assert!(fixture.marker().exists(), "{variant}");
+        let mut ids = fixture
+            .rows(import::DatabaseKind::Bootstrap)
+            .into_iter()
+            .map(|row| row.id.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, ["baseline", "beta-write"], "{variant}");
+        assert_eq!(fixture.source().exists(), variant != "removed", "{variant}");
+    }
+}
+
+#[test]
+fn rollback_source_without_journal_evidence_is_refused_and_left_unchanged() {
+    let fixture = Fixture::new();
+    fixture.create_rollback();
+    let before = std::fs::read(fixture.source()).unwrap();
+    assert!(matches!(
+        fixture.activate(import::DatabaseKind::Bootstrap, |_| Ok(())),
+        Err(LaunchError::Import(ImportError::JournalMode))
+    ));
+    assert_eq!(std::fs::read(fixture.source()).unwrap(), before);
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
+}
+
+use super::{ImportSource, Paths};
+
+impl Fixture {
+    fn activate_from(
+        &self,
+        source: &ImportSource,
+        kind: import::DatabaseKind,
+        progress: impl FnMut(Phase) -> Result<(), LaunchError>,
+    ) -> Result<(), LaunchError> {
+        let file = self.file();
+        let marker = self.marker();
+        let scratch_root = self.0.join("tmp");
+        let source_resources = self.0.join("stable");
+        let target_resources = self.0.join("beta");
+        activate(
+            source,
+            Paths {
+                file: &file,
+                marker: &marker,
+                scratch_root: &scratch_root,
+                source_resources: &source_resources,
+                target_resources: &target_resources,
+                create_parents: true,
+            },
+            kind,
+            progress,
+        )
+    }
+
+    fn journal(&self) -> PathBuf {
+        self.marker().with_extension("stage-v2")
+    }
+
+    fn scratch(&self, id: &str) -> PathBuf {
+        self.0.join("tmp").join(format!("stable-import-{id}"))
+    }
+
+    fn candidate(&self, id: &str) -> PathBuf {
+        self.file()
+            .with_file_name(format!(".stable-import-{id}.redb"))
+    }
+}
+
+fn names(directory: &std::path::Path) -> Vec<String> {
+    let mut names = match std::fs::read_dir(directory) {
+        Ok(entries) => entries
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    names
+}
+
+fn interrupt_at(target: Phase) -> impl FnMut(Phase) -> Result<(), LaunchError> {
+    move |phase| {
+        if phase == target {
+            return Err(LaunchError::Usage("synthetic interruption".into()));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn explicit_source_removed_after_sealing_is_missing_and_the_sealed_generation_is_preserved() {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Bootstrap, "");
+    let explicit = ImportSource::Explicit(fixture.source());
+    assert!(
+        fixture
+            .activate_from(
+                &explicit,
+                import::DatabaseKind::Bootstrap,
+                interrupt_at(Phase::Sealed)
+            )
+            .is_err()
+    );
+    let sealed = read_selection(&fixture.journal(), import::DatabaseKind::Bootstrap).unwrap();
+    assert!(sealed.sealed);
+    let candidate = fixture.candidate(&sealed.id);
+    let scratch = fixture.scratch(&sealed.id);
+    assert!(candidate.exists());
+    assert!(scratch.join("source.sqlite").exists());
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
+    let journal_before = std::fs::read(fixture.journal()).unwrap();
+    let candidate_before = std::fs::read(&candidate).unwrap();
+    let scratch_before = names(&scratch);
+    let copy_before = std::fs::read(scratch.join("source.sqlite")).unwrap();
+
+    std::fs::remove_dir_all(fixture.source().parent().unwrap()).unwrap();
+    let result = fixture.activate_from(&explicit, import::DatabaseKind::Bootstrap, |_| Ok(()));
+
+    assert!(
+        matches!(result, Err(LaunchError::Import(ImportError::SourceMissing))),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(fixture.journal()).unwrap(), journal_before);
+    assert_eq!(std::fs::read(&candidate).unwrap(), candidate_before);
+    assert_eq!(names(&scratch), scratch_before);
+    assert_eq!(
+        std::fs::read(scratch.join("source.sqlite")).unwrap(),
+        copy_before
+    );
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
+}
+
+#[test]
+fn explicit_import_interrupted_after_copy_is_not_replaced_by_an_empty_store_when_no_source_is_given()
+ {
+    let fixture = Fixture::new();
+    fixture.create(import::DatabaseKind::Bootstrap, "");
+    assert!(
+        fixture
+            .activate_from(
+                &ImportSource::Explicit(fixture.source()),
+                import::DatabaseKind::Bootstrap,
+                interrupt_at(Phase::Copied)
+            )
+            .is_err()
+    );
+    let copied = read_selection(&fixture.journal(), import::DatabaseKind::Bootstrap).unwrap();
+    assert!(copied.imported);
+    assert!(!copied.sealed);
+    let scratch = fixture.scratch(&copied.id);
+    assert!(scratch.join("source.sqlite").exists());
+    let journal_before = std::fs::read(fixture.journal()).unwrap();
+    let scratch_before = names(&scratch);
+    let target_before = names(fixture.file().parent().unwrap());
+    let temporary_before = names(&fixture.0.join("tmp"));
+
+    let result =
+        fixture.activate_from(&ImportSource::None, import::DatabaseKind::Bootstrap, |_| {
+            Ok(())
+        });
+
+    assert!(
+        matches!(
+            result,
+            Err(LaunchError::Import(ImportError::InterruptedImport))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(std::fs::read(fixture.journal()).unwrap(), journal_before);
+    assert_eq!(names(&scratch), scratch_before);
+    assert_eq!(names(fixture.file().parent().unwrap()), target_before);
+    assert_eq!(names(&fixture.0.join("tmp")), temporary_before);
+    assert!(!fixture.candidate(&copied.id).exists());
+    assert!(!fixture.file().exists());
+    assert!(!fixture.marker().exists());
 }

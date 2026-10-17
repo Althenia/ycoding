@@ -1,6 +1,7 @@
 import { Schema, SchemaAST } from "effect"
 import type { HttpApiEndpoint } from "effect/unstable/httpapi"
 import type { HttpApiSchema } from "effect/unstable/httpapi"
+import { unionSlots, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 
 export type WireField = {
   name: string
@@ -10,6 +11,8 @@ export type WireField = {
   ast?: SchemaAST.AST
   source?: string
   countMin?: number
+  tag?: number
+  itemChecks?: readonly Schema.Annotations.Filter[]
 }
 export type WireMessage = { fields: WireField[]; oneof: boolean }
 const identifier = (value: string) => value.replace(/[^a-zA-Z0-9]/g, "_")
@@ -28,6 +31,7 @@ export function wireContract(
   middlewareErrors: readonly Schema.Top[],
   resultNames: Readonly<Record<string, string>> = {},
   declarations: readonly Schema.Top[] = [],
+  allocation: WireAllocation = wireAllocation,
 ) {
   const messages = new Map<string, WireMessage>()
   const enums = new Map<string, readonly (string | number | boolean)[]>()
@@ -88,14 +92,19 @@ export function wireContract(
       }
       if (messages.has(name)) return name
       messages.set(name, { fields: [], oneof: true })
-      const fields = types.map((type, index) => ({
-        name: type._tag === "Null" ? "clear" : type._tag === "Undefined" ? "none" : `value_${index + 1}`,
-        type: build(type, `${name}Value${index + 1}`),
-        presence: "oneof" as const,
-        constraints: checks(type),
-        ast: type,
-        source: checks(type).length ? sourceIdentity(type, name) : undefined,
-      }))
+      const slots = unionSlots(name, types.map(memberIdentity), allocation)
+      const fields = types.map((type, index) => {
+        const slot = slots?.[index] ?? index + 1
+        return {
+          name: type._tag === "Null" ? "clear" : type._tag === "Undefined" ? "none" : `value_${slot}`,
+          type: build(type, `${name}Value${slot}`),
+          presence: "oneof" as const,
+          constraints: checks(type),
+          ast: type,
+          source: checks(type).length ? sourceIdentity(type, name) : undefined,
+          ...(slots ? { tag: slot } : {}),
+        }
+      })
       messages.set(name, { fields, oneof: true })
       return name
     }
@@ -104,15 +113,17 @@ export function wireContract(
     if (ast._tag === "Arrays") {
       if (ast.rest.length !== 1 || ast.elements.some((element) => element !== ast.rest[0]))
         throw new Error(`${name}: unsupported tuple`)
+      const itemChecks = checks(ast.rest[0])
       messages.set(name, {
         fields: [
           {
             name: "items",
             type: build(ast.rest[0], `${name}Item`),
             presence: "repeated",
+            itemChecks,
             constraints: [
               ...checks(ast),
-              ...checks(ast.rest[0]),
+              ...itemChecks,
               ...(ast.elements.length
                 ? [
                     {
@@ -260,6 +271,15 @@ export function wireContract(
     build(schema.ast, name)
   })
   return { messages, enums, operations }
+}
+
+function memberIdentity(ast: SchemaAST.AST) {
+  if (ast._tag === "Null") return "clear"
+  if (ast._tag === "Undefined") return "none"
+  if (ast._tag === "Literal" && typeof ast.literal === "number") return String(ast.literal)
+  if (ast._tag !== "Objects") return undefined
+  const discriminant = ast.propertySignatures.find((property) => property.name === "type")?.type
+  return discriminant?._tag === "Literal" && typeof discriminant.literal === "string" ? discriminant.literal : undefined
 }
 
 export function wireSharedSet(

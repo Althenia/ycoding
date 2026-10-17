@@ -103,13 +103,18 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     }
     return { input: undefined, structured: undefined }
   })
-  createEffect(on(() => props.request.source?.messageID, (messageID) => {
-    if (!messageID || data.session.message.get(props.request.sessionID, messageID)) return
-    const sessionID = props.request.sessionID
-    const ownsHistory = !data.session.message.history(sessionID)
-    if (ownsHistory) onCleanup(() => data.session.message.evict(sessionID))
-    void data.session.message.find(sessionID, messageID).catch(() => undefined)
-  }))
+  createEffect(
+    on(
+      () => props.request.source?.messageID,
+      (messageID) => {
+        if (!messageID || data.session.message.get(props.request.sessionID, messageID)) return
+        const sessionID = props.request.sessionID
+        const ownsHistory = !data.session.message.history(sessionID)
+        if (ownsHistory) onCleanup(() => data.session.message.evict(sessionID))
+        void data.session.message.find(sessionID, messageID).catch(() => undefined)
+      },
+    ),
+  )
 
   const { theme } = useTheme()
 
@@ -394,7 +399,7 @@ function RejectPrompt(props: {
 
 export function Prompt<const T extends Record<string, string>>(props: {
   title: string
-  kind?: "permission" | "guardrail"
+  kind?: "permission" | "guardrail" | "recovery"
   semanticLabel?: string
   instance: string
   body: JSX.Element
@@ -403,6 +408,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
   defaultOption?: keyof T
   hardReview?: boolean
   escapeKey?: keyof T
+  disabled?: boolean
+  nonMutatingOptions?: readonly (keyof T)[]
   onSelect: (option: keyof T) => void
 }) {
   const { theme } = useTheme().contextual("elevated")
@@ -411,23 +418,34 @@ export function Prompt<const T extends Record<string, string>>(props: {
   let details: ScrollBoxRenderable | undefined
   const kind = props.kind ?? "permission"
   const keys = createMemo(() => Object.keys(props.options) as (keyof T)[])
+  const enabled = (option: keyof T) => !props.disabled || props.nonMutatingOptions?.includes(option) === true
   const [store, setStore] = createStore({
     selected: props.defaultOption ?? keys()[0],
   })
   const footer = () =>
     props.footer ??
-    (kind === "guardrail" ? <text fg={theme.text.subdued}>{props.hardReview ? "hard reviews always need you" : "ordinary reviews auto-approve from YOLO 1"}</text> : undefined)
+    (kind === "guardrail" ? (
+      <text fg={theme.text.subdued}>
+        {props.hardReview ? "hard reviews need you while awake" : "ordinary reviews auto-approve at level 2 while awake"}
+      </text>
+    ) : undefined)
   const compact = () => dimensions().height < 30
   const chromeHeight = () =>
-    3 + keys().length * (compact() ? 1 : 2) + Number(props.footer !== undefined || kind === "guardrail") + (compact() ? 0 : 3)
+    3 +
+    keys().length * (compact() ? 1 : 2) +
+    Number(props.footer !== undefined || kind === "guardrail") +
+    (compact() ? 0 : 3)
   const detailsHeight = () =>
     Math.max(
       1,
-      Math.min(dimensions().height - 1, Math.max(chromeHeight() + 2, Math.floor(dimensions().height * 0.65))) - chromeHeight(),
+      Math.min(dimensions().height - 1, Math.max(chromeHeight() + 2, Math.floor(dimensions().height * 0.65))) -
+        chromeHeight(),
     )
   const move = (direction: -1 | 1) => {
-    const index = keys().indexOf(store.selected)
-    setStore("selected", keys()[(index + direction + keys().length) % keys().length])
+    const options = keys().filter(enabled)
+    if (options.length === 0) return
+    const index = options.indexOf(store.selected)
+    setStore("selected", options[(index + direction + options.length) % options.length])
   }
   createEffect(
     on(
@@ -441,6 +459,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
 
   Keymap.createLayer(() => ({
     mode: "base",
+    enabled: !props.disabled || keys().some(enabled),
     commands: [
       {
         bind: "pageup",
@@ -460,7 +479,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         group: "Permission",
         bind: false,
         run() {
-          if (!props.escapeKey) return
+          if (!props.escapeKey || !enabled(props.escapeKey)) return
           props.onSelect(props.escapeKey)
         },
       },
@@ -504,7 +523,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
         bind: "return",
         title: "Select permission option",
         group: "Permission",
-        run: () => props.onSelect(store.selected),
+        run: () => {
+          if (enabled(store.selected)) props.onSelect(store.selected)
+        },
       },
       ...(props.escapeKey
         ? [
@@ -512,7 +533,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
               bind: "escape",
               title: "Reject permission",
               group: "Permission",
-              run: () => props.onSelect(props.escapeKey!),
+              run: () => {
+                if (enabled(props.escapeKey!)) props.onSelect(props.escapeKey!)
+              },
             },
           ]
         : []),
@@ -547,7 +570,13 @@ export function Prompt<const T extends Record<string, string>>(props: {
         <text fg={theme.text.default}>{props.title}</text>
         <box flexGrow={1} />
         <box width={3} flexShrink={0}>
-          <text fg={theme.text.subdued} onMouseUp={() => props.onSelect(props.escapeKey ?? keys()[keys().length - 1])}>
+          <text
+            fg={theme.text.subdued}
+            onMouseUp={() => {
+              const option = props.escapeKey ?? keys()[keys().length - 1]
+              if (enabled(option)) props.onSelect(option)
+            }}
+          >
             esc
           </text>
         </box>
@@ -593,13 +622,16 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 label: props.options[option],
                 focused: option === store.selected,
                 selected: option === store.selected,
-                disabled: false,
+                disabled: !enabled(option),
               }))}
               width="100%"
               height={compact() ? 1 : 2}
               flexDirection="column"
-              onMouseOver={() => setStore("selected", option)}
+              onMouseOver={() => {
+                if (enabled(option)) setStore("selected", option)
+              }}
               onMouseUp={() => {
+                if (!enabled(option)) return
                 setStore("selected", option)
                 props.onSelect(option)
               }}
@@ -611,18 +643,20 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 paddingLeft={6}
                 paddingRight={3}
                 backgroundColor={
-                  option === store.selected
+                  enabled(option) && option === store.selected
                     ? theme.background.action.primary.focused
                     : theme.background.surface.offset
                 }
               >
                 <text
                   fg={
-                    option === store.selected
-                      ? theme.text.action.primary.focused
-                      : option === "reject"
-                        ? theme.text.feedback.error.default
-                        : theme.text.default
+                    !enabled(option)
+                      ? theme.text.subdued
+                      : option === store.selected
+                        ? theme.text.action.primary.focused
+                        : option === "reject"
+                          ? theme.text.feedback.error.default
+                          : theme.text.default
                   }
                 >
                   {props.options[option]}
@@ -648,7 +682,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
         flexShrink={0}
       >
         <text fg={theme.text.subdued} wrapMode="none">
-          {dimensions().width < 60 ? "pgup/pgdn review · enter/esc" : "pgup/pgdn review · ↑↓ choose · enter select · esc"}
+          {dimensions().width < 60
+            ? "pgup/pgdn review · enter/esc"
+            : "pgup/pgdn review · ↑↓ choose · enter select · esc"}
         </text>
         <Show when={footer()}>{footer()}</Show>
       </box>

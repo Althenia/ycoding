@@ -103,6 +103,8 @@ test("CLI preserves the Rust Store and actionable backend startup refusal withou
         XDG_CONFIG_HOME: path.join(root, "config"),
         XDG_STATE_HOME: path.join(root, "state"),
         YCODING_CONFIG_DIR: undefined,
+        YCODING_DB: store,
+        YCODING_SQLITE_IMPORT_SOURCE: undefined,
         YCODING_SERVICE_STARTUP_ERROR_FILE: diagnostic,
         YCODING_DISABLE_MODELS_FETCH: "1",
       },

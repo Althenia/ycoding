@@ -158,15 +158,31 @@ impl Coordinator {
             transition.doorbell = true;
             return Ok(());
         }
-        if let Some(entry) = state.entries.get_mut(id) {
+        let task = if let Some(entry) = state.entries.get_mut(id) {
             entry.pending_wake = true;
+            None
         } else {
-            start(&self.0, &mut state, id.clone(), false);
+            Some(start(&self.0, &mut state, id.clone(), false))
+        };
+        drop(state);
+        if let Some(task) = task {
+            spawn(&self.0, task);
         }
         Ok(())
     }
 
     pub async fn run(&self, id: &session::Id) -> Outcome {
+        wait(self.admit_resume(id).await?).await
+    }
+
+    pub async fn request_resume(&self, id: &session::Id) -> Outcome {
+        self.admit_resume(id).await.map(|_| ())
+    }
+
+    async fn admit_resume(
+        &self,
+        id: &session::Id,
+    ) -> Result<watch::Receiver<Option<Outcome>>, Error> {
         loop {
             self.reap();
             let transition = self
@@ -185,7 +201,7 @@ impl Coordinator {
                 }
                 continue;
             }
-            let (receiver, stopping) = {
+            let (receiver, stopping, task) = {
                 let mut state = self
                     .0
                     .state
@@ -197,18 +213,20 @@ impl Coordinator {
                 if state.transitions.contains_key(id) {
                     continue;
                 }
-                if !state.entries.contains_key(id) {
-                    start(&self.0, &mut state, id.clone(), true);
-                }
+                let task = (!state.entries.contains_key(id))
+                    .then(|| start(&self.0, &mut state, id.clone(), true));
                 let entry = state.entries.get(id).expect("started execution exists");
-                (entry.done.subscribe(), entry.stopping)
+                (entry.done.subscribe(), entry.stopping, task)
             };
-            let outcome = wait(receiver).await;
-            if !stopping {
-                return outcome;
+            if let Some(task) = task {
+                spawn(&self.0, task);
             }
+            if !stopping {
+                return Ok(receiver);
+            }
+            let outcome = wait(receiver).await;
             if !matches!(outcome, Ok(()) | Err(Error::Interrupted(_))) {
-                return outcome;
+                outcome?;
             }
         }
     }
@@ -378,7 +396,12 @@ fn stop(state: &mut State, id: &session::Id, reason: InterruptReason) -> bool {
     false
 }
 
-fn start(inner: &Arc<Inner>, state: &mut State, id: session::Id, force: bool) {
+fn start(
+    inner: &Arc<Inner>,
+    state: &mut State,
+    id: session::Id,
+    force: bool,
+) -> impl Future<Output = ()> + Send + 'static {
     state.generation += 1;
     let generation = state.generation;
     let (done, _) = watch::channel(None);
@@ -402,69 +425,83 @@ fn start(inner: &Arc<Inner>, state: &mut State, id: session::Id, force: bool) {
         finished: false,
     };
     let drain = inner.drain.clone();
-    inner
+    async move {
+        let mut owner = owner;
+        let mut cancellation = Cancellation(cancellation);
+        let started = protect(async { drain.started(id.clone()).await }).await;
+        let outcome = match started {
+            Err(error) => Err(error),
+            Ok(()) => {
+                let mut force = force;
+                loop {
+                    let request = DrainRequest {
+                        session_id: id.clone(),
+                        force,
+                        cancellation: cancellation.clone(),
+                    };
+                    let outcome = tokio::select! {
+                        biased;
+                        reason = cancellation.cancelled() => Err(Error::Interrupted(reason)),
+                        outcome = protect(async { drain.drain(request).await }) => outcome,
+                    };
+                    if outcome.is_err() {
+                        break outcome;
+                    }
+                    let again = owner.inner.upgrade().is_some_and(|inner| {
+                        let mut state = inner
+                            .state
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        state.entries.get_mut(&id).is_some_and(|entry| {
+                            if entry.stopping || !entry.pending_wake {
+                                return false;
+                            }
+                            entry.pending_wake = false;
+                            true
+                        })
+                    });
+                    if !again {
+                        break Ok(());
+                    }
+                    force = false;
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        if let Some(inner) = owner.inner.upgrade()
+            && let Some(entry) = inner
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .entries
+                .get_mut(&id)
+        {
+            entry.settling = true;
+        }
+        let outcome = match protect(async { drain.settled(id, outcome.clone()).await }).await {
+            Ok(()) => outcome,
+            Err(error) => Err(error),
+        };
+        owner.finish(outcome, true);
+    }
+}
+
+fn spawn(inner: &Arc<Inner>, task: impl Future<Output = ()> + Send + 'static) {
+    let mut tasks = inner
         .tasks
         .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let closed = inner
+        .state
+        .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .spawn(async move {
-            let mut owner = owner;
-            let mut cancellation = Cancellation(cancellation);
-            let started = protect(async { drain.started(id.clone()).await }).await;
-            let outcome = match started {
-                Err(error) => Err(error),
-                Ok(()) => {
-                    let mut force = force;
-                    loop {
-                        let request = DrainRequest {
-                            session_id: id.clone(),
-                            force,
-                            cancellation: cancellation.clone(),
-                        };
-                        let outcome = tokio::select! {
-                            biased;
-                            reason = cancellation.cancelled() => Err(Error::Interrupted(reason)),
-                            outcome = protect(async { drain.drain(request).await }) => outcome,
-                        };
-                        if outcome.is_err() {
-                            break outcome;
-                        }
-                        let again = owner.inner.upgrade().is_some_and(|inner| {
-                            let mut state = inner
-                                .state
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner());
-                            state.entries.get_mut(&id).is_some_and(|entry| {
-                                if entry.stopping || !entry.pending_wake {
-                                    return false;
-                                }
-                                entry.pending_wake = false;
-                                true
-                            })
-                        });
-                        if !again {
-                            break Ok(());
-                        }
-                        force = false;
-                        tokio::task::yield_now().await;
-                    }
-                }
-            };
-            if let Some(inner) = owner.inner.upgrade()
-                && let Some(entry) = inner
-                    .state
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .entries
-                    .get_mut(&id)
-            {
-                entry.settling = true;
-            }
-            let outcome = match protect(async { drain.settled(id, outcome.clone()).await }).await {
-                Ok(()) => outcome,
-                Err(error) => Err(error),
-            };
-            owner.finish(outcome);
-        });
+        .closed;
+    if closed {
+        drop(tasks);
+        drop(task);
+        return;
+    }
+    tasks.spawn(task);
 }
 
 struct Owner {
@@ -475,13 +512,13 @@ struct Owner {
     finished: bool,
 }
 impl Owner {
-    fn finish(&mut self, outcome: Outcome) {
+    fn finish(&mut self, outcome: Outcome, followup: bool) {
         if let Some(inner) = self.inner.upgrade() {
             let mut state = inner
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if state
+            let task = if state
                 .entries
                 .get(&self.id)
                 .is_some_and(|entry| entry.generation == self.generation)
@@ -490,13 +527,22 @@ impl Owner {
                     .entries
                     .remove(&self.id)
                     .expect("owned execution exists");
-                if entry.pending_wake && !state.closed {
+                if followup && entry.pending_wake && !state.closed {
                     if let Some(transition) = state.transitions.get_mut(&self.id) {
                         transition.doorbell = true;
+                        None
                     } else {
-                        start(&inner, &mut state, self.id.clone(), false);
+                        Some(start(&inner, &mut state, self.id.clone(), false))
                     }
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+            drop(state);
+            if let Some(task) = task {
+                spawn(&inner, task);
             }
         }
         self.done.send_replace(Some(outcome));
@@ -527,12 +573,19 @@ impl Drop for Reservation {
                 .remove(&self.id)
                 .expect("last transition exists");
             transition.done.send_replace(true);
-            if transition.doorbell && !state.closed {
+            let task = if transition.doorbell && !state.closed {
                 if let Some(entry) = state.entries.get_mut(&self.id) {
                     entry.pending_wake = true;
+                    None
                 } else {
-                    start(&inner, &mut state, self.id.clone(), false);
+                    Some(start(&inner, &mut state, self.id.clone(), false))
                 }
+            } else {
+                None
+            };
+            drop(state);
+            if let Some(task) = task {
+                spawn(&inner, task);
             }
         }
     }
@@ -540,7 +593,7 @@ impl Drop for Reservation {
 impl Drop for Owner {
     fn drop(&mut self) {
         if !self.finished {
-            self.finish(Err(Error::Panicked));
+            self.finish(Err(Error::Panicked), false);
         }
     }
 }

@@ -87,7 +87,7 @@ impl Directory {
                 &json!({ "transcription": { "chunkSeconds": 1, "overlapSeconds": 0 } }),
             )
             .unwrap(),
-            Arc::new(|_| Box::pin(async { Ok("analysis-session".to_owned()) })),
+            Arc::new(|_, _| Box::pin(async { Ok("analysis-session".to_owned()) })),
         );
         options.provider_factory = Some(factory);
         options

@@ -61,6 +61,7 @@ pub(super) fn notification_name(kind: &NotificationType) -> &'static str {
         NotificationType::Failed => "failed",
         NotificationType::Cancelled => "cancelled",
         NotificationType::Lost => "lost",
+        NotificationType::Resumed => "resumed",
     }
 }
 

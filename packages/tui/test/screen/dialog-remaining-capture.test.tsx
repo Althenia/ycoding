@@ -1105,7 +1105,7 @@ async function route(url: URL, request: Request) {
   )
     return json({ location, data: [] })
   if (url.pathname === "/api/session/active") return json({ data: {} })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === "/api/session/ses_subagent_capture/subagent")

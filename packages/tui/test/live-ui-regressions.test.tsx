@@ -20,6 +20,7 @@ import { Toast, ToastProvider, useToast } from "../src/ui/toast"
 import { createApi, createEventStream, createFetch, directory, json, sessionSnapshot } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { localAutonomyView } from "../src/util/session-autonomy"
 
 test("centers the first rail section title in a full-width three-row background band", async () => {
   const dimensions = { width: 189, height: 69 }
@@ -164,7 +165,7 @@ test("keeps subagent and shell footer counts as independent segments", async () 
   function FooterFixture() {
     const data = useData()
     onMount(() => void data.session.subagent.sync("ses_footer"))
-    return <Footer branch="main" sessionID="ses_footer" autonomy={{ mode: "normal", yolo: false }} />
+    return <Footer branch="main" sessionID="ses_footer" autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
   }
 
   const app = await testRender(

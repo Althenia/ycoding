@@ -1,25 +1,110 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
+import { KeyEvent, type Renderable } from "@opentui/core"
 import { afterEach, describe, expect, test } from "bun:test"
 import { createSignal, onMount, Show } from "solid-js"
 import type { ToolLifecycleInput } from "../src/routes/session/activity-row"
-import { registerYCodingSpinner } from "../src/component/register-spinner"
-import { TestTuiContexts } from "./fixture/tui-environment"
-import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { SessionActivityRow, ToolLifecycleStatus } from "../src/routes/session/activity-row"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider, useData } from "../src/context/data"
-import { createApi, createFetch, json } from "./fixture/tui-client"
+import { registerYCodingSpinner } from "../src/component/register-spinner"
+import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "./fixture/tui-client"
+import { TestTuiContexts } from "./fixture/tui-environment"
+import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 const originalSetInterval = global.setInterval
 const originalClearInterval = global.clearInterval
 registerYCodingSpinner()
-const subagentTask = createSignal({
-  sessionID: "child",
-  state: "running",
-  time: { updated: 1_000 },
-})
+function findFocusable(renderable: Renderable): Renderable | undefined {
+  if (renderable.focusable) return renderable
+  return renderable.getChildren().map(findFocusable).find(Boolean)
+}
 
-const { SessionActivityRow, ToolLifecycleStatus } = await import("../src/routes/session/activity-row")
+async function renderGuardrailRow() {
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../src/config"),
+    import("../src/context/theme"),
+  ])
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <SessionActivityRow
+              row={{
+                type: "guardrail",
+                requestID: "dismissed-1",
+                reason: "standard.review.database-destructive",
+                decided: "match verifier · not a real match · 0.99",
+                detail: [
+                  { label: "tool", value: "shell" },
+                  { label: "command", value: "drop table users" },
+                  { label: "rule", value: "standard.review.database-destructive" },
+                  { label: "outcome", value: "match verifier · not a real match · 0.99" },
+                ],
+              }}
+            />
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 120, height: 10 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("match verifier"))
+  return app
+}
+
+describe("guardrail provenance disclosure", () => {
+  test("starts collapsed and toggles with the mouse", async () => {
+    const app = await renderGuardrailRow()
+    try {
+      expect(app.captureCharFrame()).toContain("+")
+      expect(app.captureCharFrame()).not.toContain("drop table users")
+      const row = app.captureCharFrame().split("\n").findIndex((line) => line.includes("match verifier"))
+      await app.mockMouse.click(4, row)
+      await app.waitForFrame((frame) => frame.includes("drop table users"))
+      expect(app.captureCharFrame()).toContain("tool shell")
+      expect(app.captureCharFrame()).toContain("rule standard.review.database-destructive")
+      expect(app.captureCharFrame()).toContain("outcome match verifier · not a real match · 0.99")
+      await app.mockMouse.click(4, row)
+      await app.waitForFrame((frame) => !frame.includes("drop table users"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("toggles with the keyboard when focused", async () => {
+    const app = await renderGuardrailRow()
+    try {
+      const focusable = findFocusable(app.renderer.root)
+      expect(focusable).toBeDefined()
+      focusable?.focus()
+      const press = (name: string) =>
+        app.renderer.keyInput.emit(
+          "keypress",
+          new KeyEvent({
+            name,
+            ctrl: false,
+            meta: false,
+            shift: false,
+            option: false,
+            sequence: name === "return" ? "\r" : " ",
+            number: false,
+            raw: name === "return" ? "\r" : " ",
+            eventType: "press",
+            source: "raw",
+          }),
+        )
+      press("return")
+      await app.waitForFrame((frame) => frame.includes("drop table users"))
+      press("space")
+      await app.waitForFrame((frame) => !frame.includes("drop table users"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+})
 
 afterEach(() => {
   global.setInterval = originalSetInterval
@@ -61,8 +146,9 @@ describe("session activity duration intervals", () => {
         callbacks.push(callback)
         return callbacks.length as unknown as ReturnType<typeof setInterval>
       }) as typeof setInterval
-      global.clearInterval = (() => {
-        clears += 1
+      global.clearInterval = ((timer) => {
+        if (typeof timer === "number" && timer > 0 && timer <= callbacks.length) clears += 1
+        else Reflect.apply(originalClearInterval, global, [timer])
       }) as typeof clearInterval
 
       const lifecycle = createSignal<ToolLifecycleInput>({
@@ -87,9 +173,7 @@ describe("session activity duration intervals", () => {
       return 1 as unknown as ReturnType<typeof setInterval>
     }) as typeof setInterval
 
-    const app = await renderLifecycle(
-      createSignal<ToolLifecycleInput>({ status: "running", time: { created: 0, ran: 0 } }),
-    )
+    const app = await renderLifecycle(createSignal<ToolLifecycleInput>({ status: "running", time: { created: 0, ran: 0 } }))
 
     expect(interval).toBe(1_000)
     app.renderer.destroy()
@@ -97,66 +181,38 @@ describe("session activity duration intervals", () => {
 
   test("self-stops a subagent interval when its durable task completes", async () => {
     const callbacks: Array<() => void> = []
-    const timers = new Set<ReturnType<typeof setInterval>>()
     let clears = 0
-    global.setInterval = ((callback: () => void, milliseconds?: number) => {
-      if (milliseconds !== 1_000) return originalSetInterval(callback, milliseconds)
+    global.setInterval = ((callback: () => void, delay?: number) => {
+      if (delay !== 1_000) return originalSetInterval(callback, delay)
       callbacks.push(callback)
-      const timer = callbacks.length as unknown as ReturnType<typeof setInterval>
-      timers.add(timer)
-      return timer
+      return callbacks.length as unknown as ReturnType<typeof setInterval>
     }) as typeof setInterval
-    global.clearInterval = ((timer: ReturnType<typeof setInterval>) => {
-      if (!timers.has(timer)) return originalClearInterval(timer)
-      clears += 1
+    global.clearInterval = ((timer) => {
+      if (typeof timer === "number" && timer > 0 && timer <= callbacks.length) clears += 1
+      else Reflect.apply(originalClearInterval, global, [timer])
     }) as typeof clearInterval
 
-    subagentTask[1]({ sessionID: "child", state: "running", time: { updated: 1_000 } })
-    const api = createApi(
-      createFetch((url) => {
-        if (url.pathname === "/api/session/child")
-          return json({ data: { id: "child", parentID: "parent", time: { created: 0, updated: 1_000 } } })
-        if (url.pathname === "/api/session/parent/subagent")
-          return json({
-            data: [
-              {
-                ...subagentTask[0](),
-                parentID: "parent",
-                description: "Child",
-                agent: "build",
-                model: { providerID: "fixture", id: "fixture" },
-                background: true,
-                revision: 1,
-                time: { created: 0, updated: 1_000 },
-              },
-            ],
-            summary: {
-              total: 1,
-              active: subagentTask[0]().state === "running" ? 1 : 0,
-              running: subagentTask[0]().state === "running" ? 1 : 0,
-              waiting: 0,
-            },
-            cursor: {},
-          })
-        return undefined
-      }).fetch,
-    )
-    const ready = Promise.withResolvers<void>()
+    const task = {
+      sessionID: "child", parentID: "parent", description: "Review", agent: "build",
+      model: { providerID: "openai", id: "fixture-model" },
+      background: true, state: "running", revision: 1, time: { created: 0, updated: 1_000 },
+    }
+    const events = createEventStream()
+    const calls = createFetch((url) => {
+      if (url.pathname === "/api/session/child/snapshot")
+        return sessionSnapshot("child", [], { session: { parentID: "parent" } })
+      if (url.pathname === "/api/session/parent/subagent")
+        return json({ data: [task], summary: { total: 1, active: task.state === "running" ? 1 : 0, running: task.state === "running" ? 1 : 0, waiting: 0 }, cursor: {} })
+      return undefined
+    }, events)
     let data!: ReturnType<typeof useData>
-    function Row() {
+    function Fixture() {
       data = useData()
-      const [loaded, setLoaded] = createSignal(false)
+      const [ready, setReady] = createSignal(false)
       onMount(() => {
-        void Promise.all([data.session.sync("child"), data.session.subagent.sync("parent")]).then(() => {
-          setLoaded(true)
-          ready.resolve()
-        }, ready.reject)
+        void Promise.all([data.session.message.sync("child"), data.session.subagent.sync("parent")]).then(() => setReady(true))
       })
-      return (
-        <Show when={loaded()}>
-          <SessionActivityRow row={{ type: "subagent", sessionID: "child", agent: "Build", created: 0 }} />
-        </Show>
-      )
+      return <Show when={ready()}><SessionActivityRow row={{ type: "subagent", sessionID: "child", agent: "Build", created: 0 }} /></Show>
     }
     const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
       import("../src/config"),
@@ -167,31 +223,77 @@ describe("session activity duration intervals", () => {
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ClientProvider api={api}>
-                <DataProvider>
-                  <Row />
-                </DataProvider>
-              </ClientProvider>
+              <ClientProvider api={createApi(calls.fetch)}><DataProvider><Fixture /></DataProvider></ClientProvider>
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
       ),
       { width: 80, height: 3 },
     )
-    app.renderer.start()
-    await ready.promise
-    await app.waitForFrame((frame) => frame.includes("running"))
-    expect(callbacks).toHaveLength(1)
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes("running"))
+      expect(callbacks).toHaveLength(1)
 
-    subagentTask[1]({ sessionID: "child", state: "completed", time: { updated: 1_000 } })
-    data.session.subagent.invalidate("parent")
-    await data.session.subagent.sync("parent")
-    await app.waitForFrame((frame) => frame.includes("completed 1s"))
-    const terminalFrame = app.captureCharFrame()
-    callbacks[0]?.()
+      task.state = "completed"
+      data.session.subagent.invalidate("parent")
+      await data.session.subagent.sync("parent")
+      await app.waitForFrame((frame) => frame.includes("completed 1s"))
+      const terminalFrame = app.captureCharFrame()
+      callbacks[0]?.()
 
-    expect(clears).toBe(2)
-    expect(app.captureCharFrame()).toBe(terminalFrame)
-    app.renderer.destroy()
+      expect(clears).toBe(2)
+      expect(app.captureCharFrame()).toBe(terminalFrame)
+    } finally {
+      app.renderer.destroy()
+      events.disconnect()
+    }
+  })
+  test("a subagent row whose task carries stoppedRecovery reads stopped instead of its terminal state", async () => {
+    const task = {
+      sessionID: "child", parentID: "parent", description: "Review", agent: "build",
+      model: { providerID: "openai", id: "fixture-model" },
+      background: true, state: "cancelled", stoppedRecovery: { itemID: "rvw_recovery" }, revision: 2, time: { created: 0, updated: 1_000 },
+    }
+    const events = createEventStream()
+    const calls = createFetch((url) => {
+      if (url.pathname === "/api/session/child/snapshot")
+        return sessionSnapshot("child", [], { session: { parentID: "parent" } })
+      if (url.pathname === "/api/session/parent/subagent")
+        return json({ data: [task], summary: { total: 1, active: 0, running: 0, waiting: 0 }, cursor: {} })
+      return undefined
+    }, events)
+    function Fixture() {
+      const data = useData()
+      const [ready, setReady] = createSignal(false)
+      onMount(() => {
+        void Promise.all([data.session.message.sync("child"), data.session.subagent.sync("parent")]).then(() => setReady(true))
+      })
+      return <Show when={ready()}><SessionActivityRow row={{ type: "subagent", sessionID: "child", agent: "Build", created: 0 }} /></Show>
+    }
+    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+      import("../src/config"),
+      import("../src/context/theme"),
+    ])
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ClientProvider api={createApi(calls.fetch)}><DataProvider><Fixture /></DataProvider></ClientProvider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 80, height: 3 },
+    )
+    try {
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes("stopped 1s"))
+      expect(app.captureCharFrame()).not.toContain("cancelled")
+    } finally {
+      app.renderer.destroy()
+      events.disconnect()
+    }
   })
 })

@@ -7,6 +7,7 @@ pub mod config;
 pub mod discovery;
 pub mod history;
 pub mod intelligence;
+pub mod owner;
 pub mod pcm;
 pub mod runtime;
 pub mod service;

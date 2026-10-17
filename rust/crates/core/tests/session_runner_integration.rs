@@ -2727,7 +2727,7 @@ async fn request_latency_requires_consent_while_generation_counts_are_always_rep
     assert!(unconsented.total_ms.is_none());
     assert!(unconsented.retry_wait_ms.is_none());
     assert_eq!(unconsented.generated_tokens.unwrap().get(), 2);
-    assert!(unconsented.observed_generation_duration_ns.is_none());
+    assert!(unconsented.observed_generation_duration_ns.unwrap().get() > 0);
     let timing = rows[1].timing.as_ref().unwrap().domain().unwrap();
     assert!(timing.first_output_ms.is_some());
     assert!(timing.total_ms.is_some());
@@ -3061,6 +3061,7 @@ async fn overlapping_step_and_helper_ordinals_follow_initiation_not_settlement_o
         user: "Suggest".into(),
         character_limit: 100,
         cancellation: &cancellation,
+        attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
     });
     assert_eq!(
         tokio::time::timeout(std::time::Duration::from_secs(5), helper)
@@ -3641,6 +3642,7 @@ fn child_task(state: &str, revision: i64) -> ycoding_store::session::Task {
         revision,
         time_created: 1,
         time_updated: 1,
+        usage_anchor: None,
     }
 }
 
@@ -3934,4 +3936,321 @@ async fn a_backgrounded_mcp_completion_is_admitted_as_a_steer_input_and_wakes_th
     tools.stop().await.unwrap();
     mcp.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn w40_ref(session: &str, input: &str) -> ycoding_schema::usage_anchor::Ref {
+    ycoding_schema::usage_anchor::Ref::decode(
+        &parse_json(&format!(
+            r#"{{"sessionID":"{session}","inputID":"{input}"}}"#
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn w40_request(session: &str, input: &str, body: &str) -> ycoding_core::session::pending::Request {
+    ycoding_core::session::pending::Request {
+        id: session_message::Id::new(input).unwrap(),
+        session_id: session::Id::new(session).unwrap(),
+        input: ycoding_schema::session_pending::Message::decode(&parse_json(body).unwrap())
+            .unwrap(),
+        event_id: ycoding_schema::event::Id::new(format!("evt_{input}")).unwrap(),
+        created: 1,
+    }
+}
+
+#[tokio::test]
+async fn tool_progress_is_live_only_and_absent_from_durable_history() {
+    use ycoding_core::event_feed::{Data, Payload, Scope};
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let tools = registry();
+    let _registration = tools
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Progress tool",
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                    None,
+                    None,
+                    |input, context| {
+                        Box::pin(async move {
+                            let ycoding_schema::JsonValue::Object(structured) =
+                                parse_json(r#"{"stage":"working"}"#).unwrap()
+                            else {
+                                panic!()
+                            };
+                            context
+                                .report(ycoding_core::tools::context::Progress {
+                                    structured,
+                                    content: Vec::new(),
+                                })
+                                .await;
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let services = snapshot_services(&store, &endpoint, tools);
+    let id = session::Id::new("ses_one").unwrap();
+    let events = services
+        .events
+        .subscribe(Scope::Session(id.clone()), None, || {})
+        .unwrap();
+    let other = services
+        .events
+        .subscribe(
+            Scope::Session(session::Id::new("ses_two").unwrap()),
+            None,
+            || {},
+        )
+        .unwrap();
+    let coordinator = Coordinator::new(Arc::new(Local::new(services)));
+    coordinator.run(&id).await.unwrap();
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let observed = std::iter::from_fn(|| events.next().unwrap()).collect::<Vec<_>>();
+    assert_eq!(observed.iter().filter(|item| matches!(&item.payload, Payload::Ephemeral(event) if matches!(event.data, Data::SessionToolProgress(_)))).count(), 1);
+    assert!(!observed.iter().any(|item| matches!(&item.payload, Payload::Durable(event) if event.type_.as_str() == Some("session.tool.progress.1"))));
+    assert!(other.next().unwrap().is_none());
+    assert_eq!(count(&event_types(&store), "session.tool.progress"), 0);
+    assert!(
+        service
+            .log(&id, None, 100)
+            .unwrap()
+            .events
+            .iter()
+            .all(|entry| entry.event.0.event_type.as_str() != Some("session.tool.progress"))
+    );
+}
+
+async fn w40_tool_context(
+    resolves: bool,
+) -> (
+    Vec<ycoding_core::session::usage_attribution::Attribution>,
+    Vec<ycoding_core::session::usage_attribution::Attribution>,
+    Vec<Option<ycoding_schema::usage_anchor::Ref>>,
+) {
+    use ycoding_core::session::usage_attribution::entry;
+    let store = support::store();
+    let service = Service::new(store.client());
+    let user = r#"{"type":"user","data":{"text":"Prompt"},"delivery":"steer"}"#;
+    service
+        .admit_input(w40_request("ses_two", "msg_origin", user))
+        .await
+        .unwrap();
+    service
+        .admit_attributed(
+            w40_request("ses_one", "msg_input", user),
+            (!resolves).then(|| w40_ref("ses_two", "msg_missing")),
+        )
+        .await
+        .unwrap();
+    let registry = registry();
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let current = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (seen, now_current, sessions, client) = (
+        observed.clone(),
+        current.clone(),
+        service.clone(),
+        store.client(),
+    );
+    let _registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Echo input",
+                    parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(),
+                    None,
+                    None,
+                    move |input, context| {
+                        let (seen, now_current, sessions, client) = (
+                            seen.clone(),
+                            now_current.clone(),
+                            sessions.clone(),
+                            client.clone(),
+                        );
+                        Box::pin(async move {
+                            seen.lock().unwrap().push(context.attribution.clone());
+                            let ses_one = session::Id::new("ses_one").unwrap();
+                            sessions
+                                .admit_input_attributed(
+                                    w40_request(
+                                        "ses_one",
+                                        "msg_note",
+                                        r#"{"type":"synthetic","data":{"text":"note","description":"note","metadata":{}},"delivery":"steer"}"#,
+                                    ),
+                                    Some(w40_ref("ses_two", "msg_origin")),
+                                )
+                                .await
+                                .unwrap();
+                            sessions
+                                .promote_input(
+                                    &ses_one,
+                                    session_message::Id::new("msg_note").unwrap().as_lossless(),
+                                    2,
+                                )
+                                .await
+                                .unwrap();
+                            let current = entry(&client, ses_one.as_lossless()).await.unwrap();
+                            now_current.lock().unwrap().push(current);
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let ledger = ycoding_store::resources::requests(
+        &store.snapshot().unwrap(),
+        &"ses_one".into(),
+        ycoding_store::IndexOrder::Ascending,
+        None,
+        10,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|entry| {
+        entry
+            .record
+            .usage_anchor
+            .and_then(|anchor| anchor.domain().ok())
+    })
+    .collect();
+    let observed = observed.lock().unwrap().clone();
+    let current = current.lock().unwrap().clone();
+    (observed, current, ledger)
+}
+
+#[tokio::test]
+async fn w40_tools_receive_the_anchor_captured_when_their_step_request_began() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    let (observed, current, ledger) = w40_tool_context(true).await;
+    assert_eq!(
+        observed,
+        vec![Attribution::Anchored(w40_ref("ses_one", "msg_input"))]
+    );
+    assert_eq!(
+        current,
+        vec![Attribution::Anchored(w40_ref("ses_two", "msg_origin"))]
+    );
+    assert_eq!(
+        ledger,
+        vec![
+            Some(w40_ref("ses_one", "msg_input")),
+            Some(w40_ref("ses_two", "msg_origin"))
+        ]
+    );
+}
+
+#[tokio::test]
+async fn w40_tools_receive_a_resolved_none_capture_even_after_a_prompt_becomes_current() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    let (observed, current, ledger) = w40_tool_context(false).await;
+    assert_eq!(observed, vec![Attribution::Unanchored]);
+    assert_eq!(
+        current,
+        vec![Attribution::Anchored(w40_ref("ses_two", "msg_origin"))]
+    );
+    assert_eq!(ledger, vec![None, Some(w40_ref("ses_two", "msg_origin"))]);
+}
+
+fn prompt_status(service: &Service) -> (String, i64) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let costs = service
+        .prompt_costs(
+            &session::Id::new("ses_one").unwrap(),
+            &ycoding_schema::usage_accounting::PromptInput::decode(
+                &parse_json(r#"{"inputIDs":["msg_input"]}"#).unwrap(),
+            )
+            .unwrap(),
+            &ycoding_core::session::usage_accounting::Context {
+                now,
+                records_days: 7,
+                active: &std::collections::BTreeSet::new(),
+                pricer: None,
+            },
+        )
+        .unwrap();
+    let unit = &costs.units[0];
+    (
+        unit.status.0.as_str().unwrap().to_owned(),
+        unit.total.requests.get(),
+    )
+}
+
+#[tokio::test]
+async fn a_completed_real_prompt_settles_its_cost_status_while_the_runner_and_service_stay_alive() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    admit(&service).await;
+    let registry = registry();
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let during = observed.clone();
+    let reader = Service::new(store.client());
+    let _registration = registry
+        .register(
+            vec![(
+                "echo".into(),
+                Arc::new(ycoding_core::tools::registry::DynamicTool::new(
+                    "Echo input",
+                    parse_json(r#"{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"#).unwrap(),
+                    None,
+                    None,
+                    move |input, _| {
+                        *during.lock().unwrap() = Some(prompt_status(&reader));
+                        Box::pin(async move {
+                            Ok(ycoding_ai::llm::ToolOutput {
+                                structured: input,
+                                content: Vec::new(),
+                            })
+                        })
+                    },
+                )),
+            )],
+            ycoding_core::tools::registry::Options::direct(),
+        )
+        .unwrap();
+    let (endpoint, _requests, server) = server(vec![TOOL, TEXT]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint, registry)));
+    coordinator
+        .run(&session::Id::new("ses_one").unwrap())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        observed.lock().unwrap().clone(),
+        Some(("so-far".to_owned(), 0))
+    );
+    assert_eq!(prompt_status(&service), ("settled".to_owned(), 2));
+    assert_eq!(
+        prompt_status(&Service::new(store.client())),
+        ("settled".to_owned(), 2)
+    );
+    coordinator.shutdown().await.unwrap();
 }

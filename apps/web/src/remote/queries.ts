@@ -1,10 +1,22 @@
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
-import type { OperationName, WorkspaceView } from "./wire-views"
+import type {
+  IncidentGuidanceInputView,
+  IncidentGuidanceView,
+  IncidentRecentInputView,
+  IncidentRecentView,
+  IncidentReportInputView,
+  IncidentReportView,
+  OperationName,
+  UsageForecastView,
+  WorkspaceView,
+} from "./wire-views"
+import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
 import {
   reportKey,
+  reportNeedsNewerConnector,
   type UsageProvider,
   type UsageReport,
   type UsageReportInput,
@@ -42,11 +54,21 @@ export const remoteKeys = {
   usage: (scope: QueryScope) => [...remoteKeys.scope(scope), "usage"] as const,
   usageProviders: (scope: QueryScope) => [...remoteKeys.usage(scope), "providers"] as const,
   usageSummary: (scope: QueryScope) => [...remoteKeys.usage(scope), "summary"] as const,
+  usageForecast: (scope: QueryScope) => [...remoteKeys.usage(scope), "forecast", "backend"] as const,
   usageReport: (scope: QueryScope, input: UsageReportInput) =>
     [...remoteKeys.usage(scope), "report", reportKey(input)] as const,
+  incident: (scope: QueryScope) => [...remoteKeys.scope(scope), "incident"] as const,
+  incidentReport: (scope: QueryScope, input: IncidentReportInputView) =>
+    [...remoteKeys.incident(scope), "report", JSON.stringify({ group: input.group, from: input.from, to: input.to, offset: input.offset, limit: input.limit })] as const,
+  incidentRecent: (scope: QueryScope, input: IncidentRecentInputView) =>
+    [...remoteKeys.incident(scope), "recent", JSON.stringify({ provider: input.provider, model: input.model, agent: input.agent, limit: input.limit })] as const,
+  incidentGuidance: (scope: QueryScope, input: IncidentGuidanceQueryInput) =>
+    [...remoteKeys.incident(scope), "guidance", input.provider, input.model, input.sessionID] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
 }
+
+export type IncidentGuidanceQueryInput = IncidentGuidanceInputView & { readonly sessionID: string }
 
 export type UsageResult<T> = { readonly status: "ready"; readonly data: T } | { readonly status: "unsupported" }
 
@@ -166,6 +188,19 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       unreadable: "The device returned unreadable usage data.",
     })
 
+  const usageForecast = (scope: QueryScope | undefined, enabled: boolean) =>
+    usageQuery<UsageForecastView>({
+      scope,
+      enabled,
+      key: remoteKeys.usageForecast,
+      operation: "providerUsage.forecast",
+      request: () => ({ input: { localScope: "backend" } }),
+      read: readUsageForecast,
+      unsupported: () => false,
+      label: "Usage forecast",
+      unreadable: "The device returned an unreadable usage forecast.",
+    })
+
   const usageReport = (scope: QueryScope | undefined, enabled: boolean, report: UsageReportInput) =>
     usageQuery<UsageReport>({
       scope,
@@ -179,10 +214,32 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       unsupported: (outcome) =>
         outcome.status === "failed" &&
         (outcome.error.code === "unknown_operation" ||
-          (report.timeZone !== undefined && outcome.error.code === "invalid_message")),
+          (reportNeedsNewerConnector(report) && outcome.error.code === "invalid_message")),
       label: "Usage report",
       unreadable: "The device returned an unreadable usage report.",
     })
+
+  const incidentReport = (scope: QueryScope | undefined, enabled: boolean, input: IncidentReportInputView) => usageQuery<IncidentReportView["data"]>({
+    scope, enabled: enabled && validIncidentReport(input), key: (current) => remoteKeys.incidentReport(current, input),
+    operation: "incident.report", request: () => ({ input: reportInput(input) }),
+    read: (raw) => readIncidentReport(raw, input.group), unsupported: unknownOperation,
+    label: "Incident report", unreadable: "The device returned an unreadable incident report.",
+  })
+
+  const incidentRecent = (scope: QueryScope | undefined, enabled: boolean, input: IncidentRecentInputView) => usageQuery<IncidentRecentView["data"]>({
+    scope, enabled: enabled && validIncidentRecent(input), key: (current) => remoteKeys.incidentRecent(current, input),
+    operation: "incident.recent", request: () => ({ input: recentInput(input) }),
+    read: readIncidentRecent, unsupported: unknownOperation,
+    label: "Recent incidents", unreadable: "The device returned unreadable incident data.",
+  })
+
+  const incidentGuidance = (scope: QueryScope | undefined, enabled: boolean, input: IncidentGuidanceQueryInput) => usageQuery<IncidentGuidanceView["data"]>({
+    scope, enabled: enabled && validModelPair(input) && input.sessionID.length > 0,
+    key: (current) => remoteKeys.incidentGuidance(current, input),
+    operation: "incident.guidance.get", request: () => guidanceRequest(input),
+    read: readIncidentGuidance, unsupported: unknownOperation,
+    label: "Model guidance", unreadable: "The device returned unreadable model guidance.",
+  })
 
   /** Explicit refresh or retry: the next read of each key sends any refresh flag, skips an exhausted error, and replaces a read in flight. */
   const refetchFresh = async (keys: readonly (readonly unknown[])[]) => {
@@ -190,11 +247,16 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     await Promise.all(keys.map((queryKey) => client.refetchQueries({ queryKey, type: "all" })))
   }
 
-  const refreshUsage = (scope: QueryScope) =>
-    refetchFresh([remoteKeys.usageProviders(scope), remoteKeys.usageSummary(scope)])
+  const refreshUsage = async (scope: QueryScope) => {
+    await refetchFresh([remoteKeys.usageProviders(scope), remoteKeys.usageSummary(scope)])
+    await refetchFresh([remoteKeys.usageForecast(scope)])
+  }
 
   const retryUsageReport = (scope: QueryScope, input: UsageReportInput) =>
     refetchFresh([remoteKeys.usageReport(scope, input)])
+  const retryIncidentReport = (scope: QueryScope, input: IncidentReportInputView) => refetchFresh([remoteKeys.incidentReport(scope, input)])
+  const retryIncidentRecent = (scope: QueryScope, input: IncidentRecentInputView) => refetchFresh([remoteKeys.incidentRecent(scope, input)])
+  const retryIncidentGuidance = (scope: QueryScope, input: IncidentGuidanceQueryInput) => refetchFresh([remoteKeys.incidentGuidance(scope, input)])
 
   const keepAwake = (scope: QueryScope | undefined, enabled: boolean) => {
     const current = scope ?? idleScope
@@ -289,6 +351,17 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     }
   }
 
+  const toggleKeepAwake = async (scope: QueryScope): Promise<{ readonly reached: boolean; readonly message?: string }> => {
+    const state = await client.fetchQuery(keepAwake(scope, true))
+    if (state.read === "outdated") return { reached: false, message: "Update YCoding on this machine to keep it awake from here." }
+    if (state.read !== "ready" || state.status === undefined) return { reached: false, message: state.message ?? "Keep machine awake could not be read." }
+    if (state.status.state === "unsupported") return { reached: false, message: state.status.message ?? "This machine cannot be kept awake from YCoding." }
+    const mutation = keepAwakeMutation(scope)
+    const result = await mutation.mutationFn(!(state.status.manual ?? state.status.state === "on"))
+    await mutation.onSettled(result)
+    return { reached: result.reached }
+  }
+
   const workspaces = (scope: QueryScope | undefined, enabled: boolean) => {
     const current = scope ?? idleScope
     return queryOptions({
@@ -307,18 +380,116 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
   }
 
   return {
-    usageProviders,
-    usageSummary,
-    usageReport,
-    refreshUsage,
-    retryUsageReport,
-    keepAwake,
-    keepAwakeMutation,
-    workspaces,
+    usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport,
+    incidentReport, incidentRecent, incidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
+    keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,
   }
 }
 
 export type RemoteQueries = ReturnType<typeof createRemoteQueries>
+
+const integerIn = (value: unknown, minimum: number, maximum: number) =>
+  value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
+const name = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+
+const validModelPair = (input: IncidentGuidanceInputView) => name(input.provider) && name(input.model)
+
+const validIncidentReport = (input: IncidentReportInputView) =>
+  (input.group === "model" || input.group === "agent") && integerIn(input.from, 0, Number.MAX_SAFE_INTEGER) && integerIn(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+  integerIn(input.offset, 0, Number.MAX_SAFE_INTEGER) && integerIn(input.limit, 1, 200) &&
+  (input.from === undefined || input.to === undefined || input.from <= input.to)
+
+const validIncidentRecent = (input: IncidentRecentInputView) =>
+  validModelPair(input) && (input.agent === undefined || name(input.agent)) && integerIn(input.limit, 1, 50)
+
+const reportInput = (input: IncidentReportInputView): IncidentReportInputView => ({
+  group: input.group,
+  ...(input.from === undefined ? {} : { from: input.from }),
+  ...(input.to === undefined ? {} : { to: input.to }),
+  ...(input.offset === undefined ? {} : { offset: input.offset }),
+  ...(input.limit === undefined ? {} : { limit: input.limit }),
+})
+
+const recentInput = (input: IncidentRecentInputView): IncidentRecentInputView => ({
+  provider: input.provider,
+  model: input.model,
+  ...(input.agent === undefined ? {} : { agent: input.agent }),
+  ...(input.limit === undefined ? {} : { limit: input.limit }),
+})
+
+const guidanceRequest = (input: IncidentGuidanceQueryInput): RemoteTransportRequest => ({
+  input: { provider: input.provider, model: input.model },
+  sessionID: input.sessionID,
+})
+
+export function readIncidentReport(value: unknown, group: IncidentReportInputView["group"]): IncidentReportView["data"] | undefined {
+  if (typeof value !== "object" || value === null || !Array.isArray(Reflect.get(value, "rows")) || !count(Reflect.get(value, "groups"))) return undefined
+  const rows = (Reflect.get(value, "rows") as unknown[]).flatMap((row) => {
+    if (typeof row !== "object" || row === null) return []
+    const agent = Reflect.get(row, "agent")
+    const providerID = Reflect.get(row, "providerID")
+    const modelID = Reflect.get(row, "modelID")
+    const fallbacks = Reflect.get(row, "fallbacks")
+    const escalated = Reflect.get(row, "escalated")
+    const rejected = Reflect.get(row, "rejected")
+    const last = Reflect.get(row, "last")
+    if (!name(providerID) || !name(modelID) || (group === "agent") !== (agent !== undefined) || (agent !== undefined && !name(agent)) ||
+      !count(fallbacks) || !count(escalated) || !count(rejected) || !count(last)) return []
+    return [{ providerID, modelID, ...(agent === undefined ? {} : { agent }), fallbacks, escalated, rejected, last }]
+  })
+  const groups = Reflect.get(value, "groups") as number
+  if (rows.length !== (Reflect.get(value, "rows") as unknown[]).length || rows.length > groups) return undefined
+  return { rows, groups }
+}
+
+const incidentKinds = ["fallback", "guardrail-escalated", "guardrail-rejected"] as const
+
+function readModelRef(value: unknown) {
+  if (typeof value !== "object" || value === null) return undefined
+  const id = Reflect.get(value, "id")
+  const providerID = Reflect.get(value, "providerID")
+  const variant = Reflect.get(value, "variant")
+  const profile = Reflect.get(value, "profile")
+  if (!name(id) || !name(providerID) || (variant !== undefined && !name(variant)) || (profile !== undefined && !name(profile))) return undefined
+  return { id, providerID, ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }) }
+}
+
+export function readIncidentRecent(value: unknown): IncidentRecentView["data"] | undefined {
+  const items = typeof value === "object" && value !== null ? Reflect.get(value, "items") : undefined
+  if (!Array.isArray(items)) return undefined
+  const read = items.flatMap((item: unknown) => {
+    if (typeof item !== "object" || item === null) return []
+    const id = Reflect.get(item, "id")
+    const time = Reflect.get(item, "time")
+    const kind = Reflect.get(item, "kind")
+    const category = Reflect.get(item, "category")
+    const ruleIDs = Reflect.get(item, "ruleIDs")
+    const agent = Reflect.get(item, "agent")
+    const variant = Reflect.get(item, "variant")
+    const profile = Reflect.get(item, "profile")
+    const decidedBy = Reflect.get(item, "decidedBy")
+    const target = Reflect.get(item, "target") === undefined ? undefined : readModelRef(Reflect.get(item, "target"))
+    if (!name(id) || !count(time) || !incidentKinds.includes(kind) || typeof category !== "string" || category.length > 128 ||
+      !Array.isArray(ruleIDs) || !ruleIDs.every((rule) => typeof rule === "string" && rule.length <= 128) || !name(agent) ||
+      (variant !== undefined && !name(variant)) || (profile !== undefined && !name(profile)) ||
+      (decidedBy !== undefined && decidedBy !== "decision-model" && decidedBy !== "human") ||
+      (Reflect.get(item, "target") !== undefined && target === undefined)) return []
+    return [{ id, time, kind, category, ruleIDs: [...ruleIDs], agent,
+      ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }),
+      ...(target === undefined ? {} : { target }), ...(decidedBy === undefined ? {} : { decidedBy }) }]
+  })
+  return read.length === items.length ? { items: read } : undefined
+}
+
+export function readIncidentGuidance(value: unknown): IncidentGuidanceView["data"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const enabled = Reflect.get(value, "enabled")
+  const text = Reflect.get(value, "text")
+  const clearedAt = Reflect.get(value, "clearedAt")
+  if (typeof enabled !== "boolean" || (text !== undefined && (typeof text !== "string" || text.length > 4_096)) || (clearedAt !== undefined && !count(clearedAt))) return undefined
+  return { enabled, ...(text === undefined ? {} : { text }), ...(clearedAt === undefined ? {} : { clearedAt }) }
+}
 
 function readUsageProviders(value: unknown): readonly UsageProvider[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -367,8 +538,7 @@ function readUsageMetrics(value: unknown): UsageSummary | undefined {
     typeof Reflect.get(tokens, "cache") !== "object" ||
     Reflect.get(tokens, "cache") === null ||
     ["read", "write"].some((field) => !Number.isFinite(Reflect.get(Reflect.get(tokens, "cache"), field))) ||
-    (Reflect.get(value, "cost") !== undefined &&
-      (!Number.isFinite(Reflect.get(value, "cost")) || Reflect.get(value, "cost") < 0)) ||
+    (Reflect.get(value, "cost") !== undefined && !Number.isFinite(Reflect.get(value, "cost"))) ||
     (Reflect.get(value, "costProvenance") !== undefined &&
       !["recorded", "current_catalog"].includes(Reflect.get(value, "costProvenance")))
   )
@@ -376,7 +546,7 @@ function readUsageMetrics(value: unknown): UsageSummary | undefined {
   return value as UsageSummary
 }
 
-function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
+export function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -402,7 +572,47 @@ function readUsageReport(value: unknown, group: UsageReportInput["group"]): Usag
     )
   )
     return undefined
+  if (rows.some((row) => !validReportRow(row, group))) return undefined
   return value as UsageReport
+}
+
+const dimensionGroups: readonly string[] = [
+  "provider",
+  "provider-profile-model",
+  "provider-model",
+  "model-id",
+  "profile",
+  "prompt",
+  "task",
+]
+
+function validReportRow(row: unknown, group: UsageReportInput["group"]) {
+  if (typeof row !== "object" || row === null) return false
+  const counts = (value: unknown, keys: readonly string[]) =>
+    typeof value === "object" &&
+    value !== null &&
+    keys.every((key) => Number.isSafeInteger(Reflect.get(value, key)) && Reflect.get(value, key) >= 0)
+  const coverage = Reflect.get(row, "costCoverage")
+  if (coverage !== undefined && !counts(coverage, ["pricedRequests", "unpricedRequests"])) return false
+  const speed = Reflect.get(row, "speed")
+  if (
+    speed !== undefined &&
+    !counts(speed, ["generationSamples", "providerTimedSamples", "observedSamples", "samples"])
+  )
+    return false
+  if (!dimensionGroups.includes(group)) return true
+  const dimension = Reflect.get(row, "dimensions")
+  if (Reflect.get(row, "model") !== undefined || typeof dimension !== "object" || dimension === null) return false
+  if (Reflect.get(dimension, "group") !== group) return false
+  const text = (key: string) => typeof Reflect.get(dimension, key) === "string"
+  if (["provider", "provider-profile-model", "provider-model", "profile"].includes(group) && !text("providerID"))
+    return false
+  if (["model-id", "provider-model", "provider-profile-model"].includes(group) && !text("modelID")) return false
+  if (group === "profile" || group === "provider-profile-model") {
+    const state = Reflect.get(dimension, "profileState")
+    return (state === "recorded" || state === "provider-default") && (state === "recorded") === text("profile")
+  }
+  return true
 }
 
 export function readWorkspaces(payload: unknown): readonly WorkspaceView[] | undefined {

@@ -179,7 +179,20 @@ test("REQ-WIRE-004 reads autonomy values without truthiness or numeric remapping
       typeName: session_autonomy_get_ResultSchema.typeName,
       payload: encodeStrict(
         session_autonomy_get_ResultSchema,
-        create(session_autonomy_get_ResultSchema, { data: { mode: 1, yolo: { kind: { case: "value3", value: 2 } } } }),
+        create(session_autonomy_get_ResultSchema, {
+          data: {
+            mode: 1,
+            yolo: { kind: { case: "value3", value: 2 } },
+            effective: {
+              yolo: { kind: { case: "value3", value: 2 } },
+              asleep: false,
+              guardrailsEnabled: true,
+              ordinaryReviewsAuto: true,
+              modelReviews: false,
+              hardModelReviews: true,
+            },
+          },
+        }),
       ),
     })
   const client = make({
@@ -190,7 +203,18 @@ test("REQ-WIRE-004 reads autonomy values without truthiness or numeric remapping
     },
   })
   try {
-    expect(await client.session.autonomy.get({ sessionID: "ses_owner" })).toEqual({ mode: "normal", yolo: 2 })
+    expect(await client.session.autonomy.get({ sessionID: "ses_owner" })).toEqual({
+      mode: "normal",
+      yolo: 2,
+      effective: {
+        yolo: 2,
+        asleep: false,
+        guardrailsEnabled: true,
+        ordinaryReviewsAuto: true,
+        modelReviews: false,
+        hardModelReviews: true,
+      },
+    })
   } finally {
     client.transport.close()
   }

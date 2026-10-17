@@ -1,5 +1,10 @@
-import { Schema } from "effect"
-import { create } from "@bufbuild/protobuf"
+import { fileURLToPath } from "node:url"
+const { Schema } = await import(
+  Bun.resolveSync("effect", fileURLToPath(new URL("../../../../../packages/schema/", import.meta.url)))
+)
+const { create } = await import(
+  Bun.resolveSync("@bufbuild/protobuf", fileURLToPath(new URL("../../../../../packages/protocol/", import.meta.url)))
+)
 import type { DescEnum, DescField, DescMessage } from "@bufbuild/protobuf"
 import { EventManifest } from "../../../../../packages/schema/src/event-manifest.ts"
 import {
@@ -58,11 +63,13 @@ const samples: Record<string, Record<string, unknown>> = {
   "session.text.delta": { sessionID, assistantMessageID, ordinal: 0, delta: lossless },
   "session.reasoning.delta": { sessionID, assistantMessageID, ordinal: 0, delta: lossless },
   "session.tool.input.delta": { sessionID, assistantMessageID, callID: lossless, delta: "" },
+  "session.tool.progress": { sessionID, assistantMessageID, callID: lossless, structured: {}, content: [] },
   "session.compaction.delta": { sessionID, text: lossless },
   "filesystem.changed": { file: lossless, event: "add" },
   "reference.updated": {},
   "permission.asked": { id: "per_fixture", sessionID, action: "read", resources: ["/project"] },
   "permission.replied": { sessionID, requestID: "per_fixture", reply: "once" },
+  "permission.deferred": { sessionID, requestID: "per_fixture", itemID: "rvw_fixture" },
   "guardrail.asked": {
     id: "grq_fixture",
     rootSessionID: sessionID,
@@ -75,6 +82,7 @@ const samples: Record<string, Record<string, unknown>> = {
   },
   "guardrail.replied": { rootSessionID: sessionID, sessionID, requestID: "grq_fixture", reply: "once" },
   "guardrail.decided": { rootSessionID: sessionID, sessionID, action: "shell", ruleIDs: [], decision: "allow" },
+  "guardrail.deferred": { rootSessionID: sessionID, sessionID, requestID: "grq_fixture", itemID: "rvw_fixture" },
   "plugin.added": { id: lossless },
   "plugin.updated": {},
   "project.directories.updated": { projectID: "prj_one" },
@@ -91,9 +99,13 @@ const samples: Record<string, Record<string, unknown>> = {
   "question.asked": { id: "que_fixture", sessionID, questions: [{ question: lossless, header: "", options: [] }] },
   "question.replied": { sessionID, requestID: "que_fixture", answers: [[]] },
   "question.rejected": { sessionID, requestID: "que_fixture" },
+  "question.timed_out": { sessionID, requestID: "que_fixture" },
+  "question.deferred": { sessionID, requestID: "que_fixture", itemID: "rvw_fixture" },
   "form.created": { form: { id: "frm_fixture", sessionID, title: lossless, fields: [{ key: "ok", type: "boolean" }] } },
   "form.replied": { id: "frm_fixture", sessionID, answer: {} },
   "form.cancelled": { id: "frm_fixture", sessionID },
+  "form.timed_out": { id: "frm_fixture", sessionID },
+  "form.deferred": { id: "frm_fixture", sessionID, itemID: "rvw_fixture" },
   "todo.updated": { sessionID, todos: [] },
   "session.status": { sessionID, status: { type: "idle" } },
   "session.idle": { sessionID },
@@ -109,6 +121,13 @@ const samples: Record<string, Record<string, unknown>> = {
 }
 const speed = { model, tokens: 1, durationNs: 1000000000, tokensPerSecond: 1 }
 const extra: Record<string, Record<string, unknown>> = {
+  "session.tool.progress": {
+    structured: opaque,
+    content: [
+      { type: "text", text: lossless },
+      { type: "file", uri: "file:///fixture", mime: "text/plain", name: "" },
+    ],
+  },
   "permission.asked": {
     save: [],
     metadata: opaque,
@@ -118,6 +137,20 @@ const extra: Record<string, Record<string, unknown>> = {
     hardReview: false,
     risk: { level: 1, label: "", score: 0.5, metric: "confidence" },
     metadata: opaque,
+    escalation: {
+      choice: "escalate",
+      confidence: 0.25,
+      grades: [
+        { choice: "approve", confidence: 0.25, evidence: lossless },
+        { choice: "escalate", confidence: 0.75, evidence: "fixture" },
+      ],
+    },
+  },
+  "guardrail.replied": {
+    decidedBy: "decision-model",
+    choice: "approve_all",
+    confidence: 0.95,
+    grades: [{ choice: "approve_all", confidence: 0.95, evidence: lossless }],
   },
   "question.asked": {
     questions: [
@@ -323,6 +356,17 @@ add("permission.replied", "always", { sessionID, requestID: "per_fixture", reply
 add("permission.replied", "reject", { sessionID, requestID: "per_fixture", reply: "reject" })
 add("guardrail.replied", "always", { rootSessionID: sessionID, sessionID, requestID: "grq_fixture", reply: "always" })
 add("guardrail.replied", "reject", { rootSessionID: sessionID, sessionID, requestID: "grq_fixture", reply: "reject" })
+add("guardrail.replied", "decided-reject", {
+  rootSessionID: sessionID,
+  sessionID,
+  requestID: "grq_fixture",
+  reply: "reject",
+  decidedBy: "decision-model",
+  choice: "reject",
+})
+add("guardrail.asked", "escalation-empty", { ...samples["guardrail.asked"], escalation: {} })
+add("form.timed_out", "global", { id: "frm_fixture", sessionID: "global" })
+add("form.deferred", "global", { id: "frm_fixture", sessionID: "global", itemID: "rvw_fixture" })
 add("guardrail.decided", "deny", { rootSessionID: sessionID, sessionID, action: "", ruleIDs: [], decision: "deny" })
 add("guardrail.decided", "ask", { rootSessionID: sessionID, sessionID, action: "", ruleIDs: [], decision: "ask" })
 add("guardrail.decided", "cap_exceeded", {

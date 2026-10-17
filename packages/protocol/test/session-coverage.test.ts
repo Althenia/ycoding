@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { enumNumbers, messageTags } from "./wire-allocation.js"
 import { frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 import path from "node:path"
 import { generateManifest } from "../../../script/rust-parity/manifest.js"
@@ -30,15 +31,25 @@ import { isWireSse } from "./wire-contract.js"
 import { SessionLogItem } from "../src/groups/session.js"
 import { connectorRoles } from "./connector-source.js"
 
-test("session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe", async () => {
+test("session slice completes the 207 endpoints without overlap and adds only inventory unsubscribe", async () => {
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.members.filter((member) => member.kind !== "endpoint").map((member) => member.name).sort()).toEqual(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT)).map((operation) => operation.diagnosticName).sort())
+  expect(
+    manifest.members
+      .filter((member) => member.kind !== "endpoint")
+      .map((member) => member.name)
+      .sort(),
+  ).toEqual(
+    operations
+      .filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))
+      .map((operation) => operation.diagnosticName)
+      .sort(),
+  )
   const endpoints = manifest.members.filter((member) => member.kind === "endpoint")
   const excluded = [...Object.keys(resourceIDs), ...Object.keys(platformIDs), ...Object.keys(platformExclusions)]
-  expect(excluded).toHaveLength(115)
-  expect(new Set(excluded).size).toBe(115)
+  expect(excluded).toHaveLength(120)
+  expect(new Set(excluded).size).toBe(120)
   const remaining = endpoints.filter((member) => !excluded.includes(member.name))
-  expect(remaining).toHaveLength(83)
+  expect(remaining).toHaveLength(87)
   const live = Object.values(ClientApi.groups).flatMap((group) =>
     Object.values(group.endpoints).map((endpoint) => endpoint.identifier),
   )
@@ -54,10 +65,10 @@ test("session slice completes the 198 endpoints without overlap and adds only in
       .map((member) => member.name)
       .sort(),
   ).toEqual(["event.subscribe", "session.attachment.read", "session.log", "session.message", "session.messages"])
-  expect(remaining.filter((member) => member.disposition === "RPC")).toHaveLength(78)
+  expect(remaining.filter((member) => member.disposition === "RPC")).toHaveLength(82)
   expect(remaining.filter((member) => member.disposition === "EXTERNAL")).toEqual([])
   const actual = operations.filter((operation) => operation.operationId >= 4000 && operation.operationId <= 4199)
-  expect(actual).toHaveLength(84)
+  expect(actual).toHaveLength(88)
   expect(actual.map((operation) => operation.diagnosticName).sort()).toEqual(
     [...remaining.map((member) => member.name), "event.unsubscribe"].sort(),
   )
@@ -107,7 +118,7 @@ test("all session fields, tags, presence, enums and obligations match live sourc
       name,
     ).toEqual(
       message.fields.map((field, index) => ({
-        tag: index + 1,
+        tag: messageTags(name, message.fields)[index],
         name: field.name,
         type: primitives[field.type] ?? (contract.enums.has(field.type) ? 14 : 11),
         required: field.presence === "required",
@@ -152,7 +163,7 @@ test("all session fields, tags, presence, enums and obligations match live sourc
     expect(
       enums.get(name)?.map((value) => value.number),
       name,
-    ).toEqual(values.map((_, index) => index + 1))
+    ).toEqual(enumNumbers(name, values))
   }
   const file = set.file.find((file) => file.name === "ycoding/v5/session.proto")!
   const shared = sharedSet()

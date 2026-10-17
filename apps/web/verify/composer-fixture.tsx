@@ -85,6 +85,14 @@ const catalog: CatalogView = {
   references: [{ name: "design-system", uri: "file:///workspace/design-system" }],
   resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
+const fixtureEffective = (yolo: 0 | 1 | 2) => ({
+  yolo,
+  asleep: false,
+  guardrailsEnabled: true,
+  ordinaryReviewsAuto: yolo === 2,
+  modelReviews: false,
+  hardModelReviews: false,
+})
 const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
 const workspace = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
@@ -124,7 +132,10 @@ const seed: RemoteStoreState = {
     [catalogKey({ workspaceID: "work_one" })]: catalog,
     [catalogKey({ workspaceID: "work_two" })]: catalog,
   },
-  view: { ...createSessionView("ses_fixture"), autonomy: { mode: "normal", yolo: 0 } },
+  view: {
+    ...createSessionView("ses_fixture"),
+    autonomy: { mode: "normal", yolo: 0, autoAnswer: false, effective: fixtureEffective(0) },
+  },
   devices: [],
   advertised: [],
   sessions: [],
@@ -210,7 +221,10 @@ Object.assign(window, {
       ...state(),
       activeSessionID: sessionID,
       selectedSessionInfo: { ...state().selectedSessionInfo!, id: sessionID },
-      view: { ...createSessionView(sessionID), autonomy: { mode: "normal", yolo: 0 } },
+      view: {
+        ...createSessionView(sessionID),
+        autonomy: { mode: "normal", yolo: 0, autoAnswer: false, effective: fixtureEffective(0) },
+      },
     }),
 })
 let workspaceGate: Promise<void> | undefined
@@ -359,9 +373,19 @@ const store: RemoteStore = {
       ...state(),
       view: {
         ...state().view!,
-        autonomy: { ...state().view!.autonomy!, mode: level ? "yolo" : "normal", yolo: level },
+        autonomy: {
+          ...state().view!.autonomy!,
+          mode: level ? "yolo" : "normal",
+          yolo: level,
+          effective: fixtureEffective(level),
+        },
       },
     })
+    return true
+  },
+  setAutoAnswer: async (enabled) => {
+    requests.push({ operation: "session.autonomy.set", input: { autoAnswer: enabled } })
+    update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, autoAnswer: enabled } } })
     return true
   },
   setGoal: async (goal) => {
@@ -371,8 +395,8 @@ const store: RemoteStore = {
       view: {
         ...state().view!,
         autonomy: {
+          ...state().view!.autonomy!,
           mode: "goal",
-          yolo: state().view?.autonomy?.yolo ?? 0,
           goal: { text: goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
         },
       },
@@ -383,7 +407,7 @@ const store: RemoteStore = {
     requests.push({ operation: "session.autonomy.set", input: { goal: null } })
     update({
       ...state(),
-      view: { ...state().view!, autonomy: { mode: "normal", yolo: state().view?.autonomy?.yolo ?? 0 } },
+      view: { ...state().view!, autonomy: { ...state().view!.autonomy!, mode: "normal", goal: undefined } },
     })
   },
   setAutonomy: () => {},
@@ -486,11 +510,17 @@ Object.assign(window, {
             ? {
                 mode: "goal",
                 yolo: status === "goal-yolo" ? 2 : 0,
+                autoAnswer: false,
+                effective: fixtureEffective(status === "goal-yolo" ? 2 : 0),
                 goal: { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 },
               }
             : {
                 mode: status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? "yolo" : "normal",
-                yolo: status === "yolo" ? 2 : status === "tool-yolo" || status === "family-yolo" ? 3 : 0,
+                yolo: status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? 2 : 0,
+                autoAnswer: false,
+                effective: fixtureEffective(
+                  status === "yolo" || status === "tool-yolo" || status === "family-yolo" ? 2 : 0,
+                ),
               },
       },
       sessionStatus:
@@ -500,6 +530,7 @@ Object.assign(window, {
               attention: new Set<string>(),
               outstanding: new Set<string>(),
               failed: new Set<string>(),
+              lost: new Set<string>(),
             }
           : undefined,
     }),
@@ -529,6 +560,20 @@ Object.assign(window, {
   composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }),
 })
 Object.assign(window, {
+  composerSetHardReviewPolicy: (hardModelReviews: boolean) =>
+    update({
+      ...state(),
+      view: {
+        ...state().view!,
+        autonomy: {
+          ...state().view!.autonomy!,
+          yolo: 0,
+          effective: { ...fixtureEffective(0), guardrailsEnabled: false, hardModelReviews },
+        },
+      },
+    }),
+})
+Object.assign(window, {
   composerSetWorkspaceLoading: (loading: boolean) => {
     if (!loading) return releaseWorkspaces?.()
     workspaceGate = new Promise<void>((resolve) => {
@@ -551,7 +596,9 @@ Object.assign(window, {
         ...state().view!,
         autonomy: {
           mode: status === "active" ? "goal" : "normal",
-          yolo: 3,
+          yolo: 2,
+          autoAnswer: false,
+          effective: fixtureEffective(2),
           ...(status ? { goal: { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } } : {}),
         },
       },
@@ -639,11 +686,17 @@ Object.assign(window, {
   },
 })
 Object.assign(window, {
-  composerSetDiagnostics: (status: "known" | "unknown" | "mismatch") => {
+  composerSetDiagnostics: (status: "known" | "unknown" | "mismatch" | "estimated" | "other-effort") => {
     const selected = state().selectedSessionInfo?.model
     const model = status === "mismatch" ? { providerID: "anthropic", id: "claude-opus-5-5" } : selected
     const first = model && { model, tokens: 3, durationNs: 1_000_000, tokensPerSecond: 3_000 }
-    const latest = model && { model, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
+    const latest = model && {
+      model: status === "other-effort" ? { ...model, variant: "other-effort", profile: "other-profile" } : model,
+      tokens: 12,
+      durationNs: 2_000_000,
+      tokensPerSecond: 6_000,
+      ...(status === "estimated" ? { estimated: true } : {}),
+    }
     update({
       ...state(),
       view: {

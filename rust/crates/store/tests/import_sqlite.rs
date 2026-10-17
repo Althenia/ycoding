@@ -368,7 +368,7 @@ fn core_round_trip_preserves_rows_documents_indexes_and_source_bytes() {
         |_| ControlFlow::Continue(()),
     )
     .unwrap();
-    assert_eq!(report.tables.len(), 49);
+    assert_eq!(report.tables.len(), 52);
     assert_eq!(
         report.tables.iter().find(|t| t.name == "kv").unwrap().rows,
         2
@@ -1298,5 +1298,173 @@ fn hard_process_death_at_import_checkpoints_resumes_without_duplicate_records() 
         .unwrap();
         assert_eq!(report.tables[0].rows, 258);
         assert!(import::sealed(&fixture.candidate(), DatabaseKind::Bootstrap).is_ok());
+    }
+}
+
+const ANALYTICS_COLUMNS: [(&str, &str, &str); 4] = [
+    ("session_compaction_job", "usage_anchor", "text"),
+    ("session_provider_request", "usage_anchor", "text"),
+    ("session_task", "usage_anchor", "text"),
+    ("session", "usage_pruned_through", "integer"),
+];
+
+fn analytics_schema(db: &Connection) {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS `usage_analytics_request` (
+          `id` text PRIMARY KEY,
+          `session_id` text NOT NULL,
+          `project_id` text NOT NULL,
+          `directory` text NOT NULL,
+          `workspace_id` text,
+          `session_updated` integer NOT NULL,
+          `agent` text NOT NULL,
+          `source` text NOT NULL,
+          `model` text NOT NULL,
+          `usage_anchor` text,
+          `task_path` text NOT NULL,
+          `request` integer NOT NULL,
+          `attempts` integer NOT NULL,
+          `continuation` text NOT NULL,
+          `invalidation` text NOT NULL,
+          `prompt_cache_key` text NOT NULL,
+          `cache_read_reported` integer,
+          `tokens` text NOT NULL,
+          `cost` real,
+          `timing` text,
+          `time_created` integer NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS `usage_analytics_request_time_created_id_idx` ON `usage_analytics_request` (`time_created`,`id`);",
+    )
+    .unwrap();
+    for (table, column, type_) in ANALYTICS_COLUMNS {
+        let mut statement = db
+            .prepare(&format!("PRAGMA table_xinfo('{table}')"))
+            .unwrap();
+        let present = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .any(|name| name.unwrap() == column);
+        if !present {
+            db.execute_batch(&format!("ALTER TABLE `{table}` ADD `{column}` {type_};"))
+                .unwrap();
+        }
+    }
+    db.execute_batch(
+        "INSERT OR IGNORE INTO migration VALUES ('20261015122915_usage-analytics', 1);",
+    )
+    .unwrap();
+}
+
+fn analytics_fact(db: &Connection, id: &str, session: &str, anchor: Option<&str>, time: i64) {
+    db.execute(
+        "INSERT INTO usage_analytics_request (id,session_id,project_id,directory,workspace_id,session_updated,agent,source,model,usage_anchor,task_path,request,attempts,continuation,invalidation,prompt_cache_key,cache_read_reported,tokens,cost,timing,time_created)
+         VALUES (?1,?2,'p','/synthetic',NULL,5,'build','step','{\"providerID\":\"openai\",\"id\":\"gpt\"}',?3,'[]',1,1,'full','first-request','abcdefgh',1,'{\"input\":1,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}',0.5,NULL,?4)",
+        rusqlite::params![id, session, anchor, time],
+    )
+    .unwrap();
+}
+
+fn analytics_source(fixture: &Fixture) -> Connection {
+    let db = fixture.create(DatabaseKind::Core);
+    analytics_schema(&db);
+    db.execute_batch(
+        "INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p','/synthetic',1,1,'[]');
+         INSERT INTO session (id,project_id,directory,title,time_created,time_updated,usage_pruned_through) VALUES ('ses_live','p','/synthetic','live',1,1,1234);",
+    )
+    .unwrap();
+    analytics_fact(
+        &db,
+        "fact_live",
+        "ses_live",
+        Some(r#"{"sessionID":"ses_live","inputID":"msg_live"}"#),
+        10,
+    );
+    analytics_fact(&db, "fact_orphan_a", "ses_gone", None, 20);
+    analytics_fact(&db, "fact_orphan_b", "ses_other_gone", None, 30);
+    db
+}
+
+#[test]
+fn analytics_era_source_imports_orphan_facts_verbatim_without_changing_the_source() {
+    let fixture = Fixture::new();
+    drop(analytics_source(&fixture));
+    let source = fixture.source();
+    let candidate = fixture.candidate();
+    let original = std::fs::read(&source).unwrap();
+    let report = import::stage(
+        fixture.request(DatabaseKind::Core, &source, &candidate),
+        |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    let facts = report
+        .tables
+        .iter()
+        .find(|table| table.name == "usage_analytics_request")
+        .unwrap();
+    assert_eq!(facts.rows, 3);
+    assert_eq!(facts.digest.len(), 64);
+    assert_eq!(
+        report
+            .tables
+            .iter()
+            .find(|table| table.name == "session")
+            .unwrap()
+            .rows,
+        1
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    assert!(import::sealed(&candidate, DatabaseKind::Core).is_ok());
+}
+
+#[test]
+fn analytics_migration_label_selects_only_the_complete_table_and_column_inventory() {
+    let label = "20261015122915_usage-analytics";
+    let mut variants = vec![
+        (
+            "label only".to_owned(),
+            false,
+            format!("INSERT INTO migration VALUES ('{label}', 1);"),
+        ),
+        (
+            "table and columns without label".to_owned(),
+            true,
+            format!("DELETE FROM migration WHERE id = '{label}';"),
+        ),
+        (
+            "label without table".to_owned(),
+            true,
+            "DROP TABLE usage_analytics_request;".to_owned(),
+        ),
+    ];
+    for (table, column, _) in ANALYTICS_COLUMNS {
+        variants.push((
+            format!("label without {table}.{column}"),
+            true,
+            format!("ALTER TABLE {table} DROP COLUMN {column};"),
+        ));
+    }
+    for (name, with_schema, sql) in variants {
+        let fixture = Fixture::new();
+        let db = fixture.create(DatabaseKind::Core);
+        if with_schema {
+            analytics_schema(&db);
+        }
+        db.execute_batch(&sql).unwrap();
+        drop(db);
+        let source = fixture.source();
+        let candidate = fixture.candidate();
+        let original = std::fs::read(&source).unwrap();
+        assert!(
+            matches!(
+                import::stage(
+                    fixture.request(DatabaseKind::Core, &source, &candidate),
+                    |_| ControlFlow::Continue(())
+                ),
+                Err(import::Error::Source(_))
+            ),
+            "{name}"
+        );
+        assert!(!candidate.exists(), "{name}");
+        assert_eq!(std::fs::read(source).unwrap(), original, "{name}");
     }
 }

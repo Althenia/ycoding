@@ -77,8 +77,11 @@ export function CommandPalette(props: {
         id: sessionID,
         running: state.view?.id === sessionID && state.view.status === "running",
         managedChild: props.managedChild,
-        yolo: state.view?.id === sessionID ? state.view.autonomy?.yolo ?? 0 : 0,
+        yolo: state.view?.id === sessionID ? state.view.autonomy?.effective?.yolo ?? state.view.autonomy?.yolo ?? 0 : 0,
+        ...(state.view?.id === sessionID && state.view.autonomy !== undefined ? { autoAnswer: state.view.autonomy.autoAnswer === true } : {}),
         goalActive: state.view?.id === sessionID && state.view.autonomy?.goal?.status === "active",
+        ...(state.view?.id === sessionID && state.view.autonomy !== undefined
+          ? { asleep: state.view.autonomy.effective?.asleep ?? state.view.autonomy.sleep !== undefined } : {}),
       },
       commands: ready?.commands ?? [],
       skills: ready?.skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })) ?? [],
@@ -142,6 +145,13 @@ export function CommandPalette(props: {
       case "interrupt": void remote.store.interrupt(); return
       case "stopGoal": void remote.store.stopGoal(); return
       case "yolo": void remote.store.setYolo(intent.level); return
+      case "autoAnswer": void remote.store.setAutoAnswer(intent.enabled); return
+      case "sleep": void remote.store.setSleep(intent.sleep); return
+      case "keepAwake": {
+        const scope = remote.scope()
+        if (scope) void remote.queries.toggleKeepAwake(scope)
+        return
+      }
       case "skill": void remote.store.activateSkill(intent.skill); return
       case "draft": props.handlers.draft(intent.text); return
       case "go": props.handlers.go(intent.view); return

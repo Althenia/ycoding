@@ -1,5 +1,6 @@
 import { SchemaAST } from "effect"
 import { wireContract, wireSharedSet } from "./wire-contract.js"
+import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { middlewareErrors, allEndpoints } from "./resources-source.js"
 import { resourceSharedSet, resourceContract, resourceFieldConstraints, resourceProto } from "./resources-contract.js"
 import { platformRpcEndpoints, platformExclusions, assetSource } from "./platform-source.js"
@@ -119,13 +120,15 @@ export function platformSourceIdentity(ast: SchemaAST.AST, hint: string): string
   return `packages/protocol/src/groups/${file}.ts#${symbol[group]}`
 }
 
-export function platformContract(endpoints = platformRpcEndpoints()) {
+export function platformContract(endpoints = platformRpcEndpoints(), allocation: WireAllocation = wireAllocation) {
   const contract = wireContract(
     [...endpoints].sort((a, b) => a.endpoint.identifier.localeCompare(b.endpoint.identifier)),
     platformIDs,
     platformSourceIdentity,
     middlewareErrors,
     platformResultNames,
+    [],
+    allocation,
   )
   const path = contract.messages.get("Platform_AssetPath")!.fields[0]
   path.source = assetSource
@@ -173,13 +176,22 @@ export function sharedSet() {
   return new Set([...resourceSharedSet(), ...platformSharedSet()])
 }
 
-export function sharedProto() {
-  const contract = platformContract()
+export function sharedProto(allocation: WireAllocation = wireAllocation) {
+  const contract = platformContract(undefined, allocation)
   const moved = new Set([...platformSharedSet()].filter((name) => !resourceSharedSet().has(name)))
-  return resourceProto(true).trimEnd() + "\n\n" + platformDeclarations(contract, moved).trimEnd() + "\n"
+  return (
+    resourceProto(true, allocation).trimEnd() +
+    "\n\n" +
+    platformDeclarations(contract, moved, allocation).trimEnd() +
+    "\n"
+  )
 }
 
-function platformDeclarations(contract: ReturnType<typeof platformContract>, names: ReadonlySet<string>) {
+function platformDeclarations(
+  contract: ReturnType<typeof platformContract>,
+  names: ReadonlySet<string>,
+  allocation: WireAllocation,
+) {
   return (
     [...contract.enums]
       .filter(([name]) => names.has(name))
@@ -190,9 +202,9 @@ function platformDeclarations(contract: ReturnType<typeof platformContract>, nam
               (value, index) =>
                 `  ${name.toUpperCase()}_${String(value)
                   .replace(/[^a-zA-Z0-9]/g, "_")
-                  .toUpperCase()} = ${index + 1};`,
+                  .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
             )
-            .join("\n")}\n}`,
+            .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
       )
       .join("\n\n") +
     "\n\n" +
@@ -200,7 +212,7 @@ function platformDeclarations(contract: ReturnType<typeof platformContract>, nam
       .filter(([name]) => names.has(name))
       .map(
         ([name, message]) =>
-          `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${platformFieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
+          `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${platformFieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
       )
       .join("\n\n")
   )
@@ -217,8 +229,12 @@ function platformFieldOption(field: WireField) {
   return entries.length ? ` [(ycoding.v5.constraints) = { ${entries.join(" ")} }]` : ""
 }
 
-export function platformProto(endpoints = platformRpcEndpoints(), moveShared = true) {
-  const contract = platformContract(endpoints)
+export function platformProto(
+  endpoints = platformRpcEndpoints(),
+  moveShared = true,
+  allocation: WireAllocation = wireAllocation,
+) {
+  const contract = platformContract(endpoints, allocation)
   const shared = moveShared ? sharedSet() : resourceSharedSet()
   const resources = resourceContract()
   for (const name of [...contract.messages.keys(), ...contract.enums.keys()]) {
@@ -231,6 +247,7 @@ export function platformProto(endpoints = platformRpcEndpoints(), moveShared = t
       platformDeclarations(
         contract,
         new Set([...contract.enums.keys(), ...contract.messages.keys()].filter((name) => !shared.has(name))),
+        allocation,
       ) +
       "\n\n" +
       [...new Set(contract.operations.map((operation) => operation.group))]

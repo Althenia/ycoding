@@ -10,13 +10,14 @@ export function alertCopy(category: RemoteNoticeCategory, detail: RemoteAlertDet
   if (detail.need === "review") return { title: "YCoding — guardrail review", body: `${subject} is waiting for you to approve or reject a guarded action.` }
   if (detail.need === "blocked") return { title: "YCoding — action blocked", body: `A guardrail blocked an action in ${detail.title === undefined ? "a session" : subject}. Open it to review.` }
   if (detail.need === "failed") return { title: "YCoding — session failed", body: `${subject} stopped with an error. Open it to review and retry.` }
-  return { title: "YCoding — needs your attention", body: `${subject} is waiting for you.` }
+  if (detail.need === "lost") return { title: "YCoding — background result lost", body: `${subject} has a lost background-work result. Open it to review.` }
+  return { title: "YCoding — needs your attention", body: `${subject} needs attention. Open it to review.` }
 }
 
 export function overflowCopy(category: RemoteNoticeCategory, count: number): { readonly title: string; readonly body: string } {
   const sessions = count === 1 ? "1 more session" : `${count} more sessions`
   if (category === "agent-completed") return { title: "YCoding — more work finished", body: `${sessions} finished ${count === 1 ? "its" : "their"} work. Open YCoding to see them.` }
-  return { title: "YCoding — more sessions need you", body: `${sessions} ${count === 1 ? "is" : "are"} waiting for you. Open YCoding to see them.` }
+  return { title: "YCoding — more sessions need attention", body: `${sessions} ${count === 1 ? "needs" : "need"} attention. Open YCoding to see them.` }
 }
 
 export function sessionSearch(sessionID: string, deviceID?: string, noticeID?: string): { session_id: string; device_id?: string; notice_id?: string } {

@@ -1,10 +1,10 @@
 import { createStore } from "solid-js/store"
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import open from "open"
 import { useTheme } from "../../context/theme"
-import type { FormField, FormValue } from "@ycoding-ai/client"
+import type { FormAnswer, FormField, FormValue } from "@ycoding-ai/client"
 import type { FormWithLocation } from "../../context/data"
 import { useClient } from "../../context/client"
 import { useClipboard } from "../../context/clipboard"
@@ -42,7 +42,12 @@ function requestOptions(form: FormWithLocation) {
   }
 }
 
-export function FormPrompt(props: { form: FormWithLocation }) {
+export function FormPrompt(props: {
+  form: FormWithLocation
+  onSubmit?: (answer: FormAnswer) => Promise<void> | void
+  onCancel?: () => void
+  disabled?: boolean
+}) {
   const client = useClient()
   const { theme, mode: themeMode } = useTheme().contextual("elevated")
   const renderer = useRenderer()
@@ -66,6 +71,9 @@ export function FormPrompt(props: { form: FormWithLocation }) {
 
   let textarea: TextareaRenderable | undefined
   let review: ScrollBoxRenderable | undefined
+  createEffect(() => {
+    if (props.disabled && textarea && !textarea.isDestroyed) textarea.blur()
+  })
 
   const message = createMemo(() => {
     const value = props.form.metadata?.["message"]
@@ -187,20 +195,22 @@ export function FormPrompt(props: { form: FormWithLocation }) {
     )
   }
 
+  function replyForm(answer: FormAnswer) {
+    if (props.disabled) return Promise.resolve()
+    if (props.onSubmit) return Promise.resolve(props.onSubmit(answer))
+    return client.api.form.reply(
+      { sessionID: props.form.sessionID, formID: props.form.id, answer },
+      requestOptions(props.form),
+    )
+  }
+
   function replySingle(field: FormAnswerField, value: FormValue) {
-    client.api.form
-      .reply(
-        {
-          sessionID: props.form.sessionID,
-          formID: props.form.id,
-          answer: { [field.key]: value },
-        },
-        requestOptions(props.form),
-      )
+    replyForm({ [field.key]: value })
       .catch(reportError)
   }
 
   function pick(value: FormValue, customValue?: string) {
+    if (props.disabled) return
     const current = answerField()
     if (!current) return
     const invalid = formValidateValue(current, value)
@@ -218,6 +228,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function toggle(value: string) {
+    if (props.disabled) return
     const current = answerField()
     if (!current) return
     answer(current.key, formToggleMultiselect(store.answers[current.key], value))
@@ -234,6 +245,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function selectTab(index: number) {
+    if (props.disabled) return
     if (!confirm() && index > store.tab && !validateCurrent()) return
     const next = fields()[index]
     setStore("tab", index)
@@ -350,12 +362,18 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function cancel() {
+    if (props.disabled) return
+    if (props.onCancel) {
+      props.onCancel()
+      return
+    }
     void client.api.form
       .cancel({ sessionID: props.form.sessionID, formID: props.form.id }, requestOptions(props.form))
       .catch(reportError)
   }
 
   function openExternal() {
+    if (props.disabled) return
     const current = externalField()
     if (!current) return
     setStore("error", "")
@@ -365,6 +383,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function copyExternal() {
+    if (props.disabled) return
     const current = externalField()
     if (!current || !clipboard.write) return
     void clipboard
@@ -377,6 +396,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function acknowledgeExternal() {
+    if (props.disabled) return
     const current = externalField()
     if (!current) return
     if (store.answers[current.key] === true) {
@@ -392,6 +412,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
   }
 
   function submit() {
+    if (props.disabled) return
     const unacknowledged = fields().find((field) => field.type === "external" && store.answers[field.key] !== true)
     if (unacknowledged) {
       setStore("error", `External action must be acknowledged: ${formLabel(unacknowledged)}`)
@@ -404,20 +425,14 @@ export function FormPrompt(props: { form: FormWithLocation }) {
       setStore("error", formValidateValue(invalid, store.answers[invalid.key]) ?? "Invalid answer")
       return
     }
-    client.api.form
-      .reply(
-        {
-          sessionID: props.form.sessionID,
-          formID: props.form.id,
-          answer: Object.fromEntries(
-            fields().flatMap((field) => {
-              const value = store.answers[field.key]
-              return value === undefined ? [] : [[field.key, value] as const]
-            }),
-          ),
-        },
-        requestOptions(props.form),
-      )
+    replyForm(
+      Object.fromEntries(
+        fields().flatMap((field) => {
+          const value = store.answers[field.key]
+          return value === undefined ? [] : [[field.key, value] as const]
+        }),
+      ),
+    )
       .catch(reportError)
   }
 
@@ -425,7 +440,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
 
   Keymap.createLayer(() => ({
     mode: FORM_MODE,
-    enabled: (store.editing || textual()) && !confirm(),
+    enabled: !props.disabled && (store.editing || textual()) && !confirm(),
     commands: [
       {
         id: "prompt.clear",
@@ -501,7 +516,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
 
     return {
       mode: FORM_MODE,
-      enabled: !store.editing && !textual(),
+      enabled: !props.disabled && !store.editing && !textual(),
       commands: [
         {
           id: "app.exit",
@@ -618,6 +633,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
 
   return (
     <box
+      visible={!props.disabled}
       backgroundColor={theme.background.default}
       border={["left"]}
       borderColor={theme.hue.interactive[themeMode() === "light" ? 800 : 200]}

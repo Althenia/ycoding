@@ -60,6 +60,48 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue5",
   },
   {
+    name: "session.guardrail.dismissed",
+    durable: true,
+    tag: 104,
+    type: "ycoding.v5.SessionLogItemValue53",
+  },
+  {
+    name: "session.guardrail.escalated",
+    durable: true,
+    tag: 105,
+    type: "ycoding.v5.SessionLogItemValue54",
+  },
+  {
+    name: "session.guardrail.decided",
+    durable: true,
+    tag: 106,
+    type: "ycoding.v5.SessionLogItemValue55",
+  },
+  {
+    name: "session.review.deferred",
+    durable: true,
+    tag: 107,
+    type: "ycoding.v5.SessionLogItemValue56",
+  },
+  {
+    name: "session.review.decided",
+    durable: true,
+    tag: 108,
+    type: "ycoding.v5.SessionLogItemValue57",
+  },
+  {
+    name: "session.review.withdrawn",
+    durable: true,
+    tag: 109,
+    type: "ycoding.v5.SessionLogItemValue58",
+  },
+  {
+    name: "session.review.consumed",
+    durable: true,
+    tag: 110,
+    type: "ycoding.v5.SessionLogItemValue59",
+  },
+  {
     name: "session.moved",
     durable: true,
     tag: 11,
@@ -240,6 +282,12 @@ export const publicEvents = [
     type: "ycoding.v5.SessionLogItemValue32",
   },
   {
+    name: "session.step.rerouted",
+    durable: true,
+    tag: 111,
+    type: "ycoding.v5.SessionLogItemValue60",
+  },
+  {
     name: "session.text.started",
     durable: true,
     tag: 41,
@@ -301,9 +349,9 @@ export const publicEvents = [
   },
   {
     name: "session.tool.progress",
-    durable: true,
+    durable: false,
     tag: 51,
-    type: "ycoding.v5.SessionLogItemValue40",
+    type: "ycoding.v5.PublicEvent_session_tool_progress",
   },
   {
     name: "session.tool.success",
@@ -402,6 +450,12 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_permission_replied",
   },
   {
+    name: "permission.deferred",
+    durable: false,
+    tag: 112,
+    type: "ycoding.v5.PublicEvent_permission_deferred",
+  },
+  {
     name: "guardrail.asked",
     durable: false,
     tag: 68,
@@ -418,6 +472,12 @@ export const publicEvents = [
     durable: false,
     tag: 70,
     type: "ycoding.v5.PublicEvent_guardrail_decided",
+  },
+  {
+    name: "guardrail.deferred",
+    durable: false,
+    tag: 113,
+    type: "ycoding.v5.PublicEvent_guardrail_deferred",
   },
   {
     name: "plugin.added",
@@ -486,6 +546,12 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_shell_created",
   },
   {
+    name: "shell.updated",
+    durable: false,
+    tag: 116,
+    type: "ycoding.v5.PublicEvent_shell_updated",
+  },
+  {
     name: "shell.exited",
     durable: false,
     tag: 82,
@@ -516,6 +582,18 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_question_rejected",
   },
   {
+    name: "question.timed_out",
+    durable: false,
+    tag: 102,
+    type: "ycoding.v5.PublicEvent_question_timed_out",
+  },
+  {
+    name: "question.deferred",
+    durable: false,
+    tag: 114,
+    type: "ycoding.v5.PublicEvent_question_deferred",
+  },
+  {
     name: "form.created",
     durable: false,
     tag: 87,
@@ -532,6 +610,18 @@ export const publicEvents = [
     durable: false,
     tag: 89,
     type: "ycoding.v5.PublicEvent_form_cancelled",
+  },
+  {
+    name: "form.timed_out",
+    durable: false,
+    tag: 103,
+    type: "ycoding.v5.PublicEvent_form_timed_out",
+  },
+  {
+    name: "form.deferred",
+    durable: false,
+    tag: 115,
+    type: "ycoding.v5.PublicEvent_form_deferred",
   },
   {
     name: "todo.updated",

@@ -1,0 +1,632 @@
+include!("policy_fixture.rs");
+use std::sync::{Arc, Mutex};
+use ycoding_core::{
+    process::guardrails::{self, Guardrails, Input, Limits, Paths, ReviewPolicy, Settings},
+    session::{
+        autonomy,
+        review::{
+            ChildAnswer, DecideInput, Delivery, DeliveryError, DeliveryFuture, FingerprintInput,
+            RecoveryResolution, Service as ReviewService, fingerprint, prompt_id,
+        },
+        store,
+    },
+    tools::policy::{
+        Effect, Reviews,
+        forms::Forms,
+        permissions::{self, Permissions},
+        questions::{self, Admission, Questions},
+    },
+};
+use ycoding_schema::{
+    DomainDecode, JsonValue, LosslessString, form, parse_json, permission, question, session,
+    session_id::SessionId,
+    session_review::{Decision, Item, Kind, Payload, Reason},
+};
+use ycoding_store::{KeyPart, session::PendingTable, tuple_key};
+
+const WORKDIR: &str = "/workspace/project";
+
+#[derive(Default)]
+struct Woken(Mutex<Vec<session::Id>>);
+
+impl Delivery for Woken {
+    fn wake(&self, session_id: &session::Id) {
+        self.0.lock().unwrap().push(session_id.clone());
+    }
+    fn answer_child<'a>(&'a self, _: ChildAnswer) -> DeliveryFuture<'a> {
+        Box::pin(async { Err(DeliveryError::Conflict("no child in this fixture".into())) })
+    }
+    fn resolve_recovery<'a>(&'a self, _: RecoveryResolution) -> DeliveryFuture<'a> {
+        Box::pin(async {
+            Err(DeliveryError::Conflict(
+                "no recovery in this fixture".into(),
+            ))
+        })
+    }
+}
+
+struct Harness {
+    fixture: Fixture,
+    reviews: ReviewService,
+    autonomy: autonomy::Service,
+}
+
+fn harness() -> Harness {
+    let fixture = Fixture::default();
+    let client = fixture.store.client();
+    Harness {
+        reviews: ReviewService::new(
+            store::Service::new(client.clone()),
+            Arc::new(Woken::default()),
+        ),
+        autonomy: autonomy::Service::new(client),
+        fixture,
+    }
+}
+
+impl Harness {
+    fn reviews(&self, limit: usize) -> Reviews {
+        Reviews {
+            service: self.reviews.clone(),
+            limit,
+        }
+    }
+    fn questions(&self, limit: usize) -> Questions {
+        Questions::new(self.fixture.authority(), self.fixture.publisher())
+            .with_reviews(self.reviews(limit))
+    }
+    fn forms(&self, limit: usize) -> Forms {
+        Forms::new(self.fixture.authority(), self.fixture.publisher())
+            .with_reviews(self.reviews(limit))
+    }
+    fn permissions(&self, limit: usize) -> Permissions {
+        self.fixture
+            .permissions()
+            .with_reviews(self.reviews(limit), WORKDIR.into())
+    }
+    fn guardrails(&self, limit: usize, decide_reviews: bool) -> Guardrails {
+        Guardrails::new(
+            self.fixture.authority(),
+            self.fixture.permissions(),
+            settings(decide_reviews),
+            self.fixture.publisher(),
+        )
+        .with_reviews(self.reviews(limit))
+    }
+    fn events(&self, kind: &str) -> Vec<JsonValue> {
+        self.fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.type_ == kind)
+            .map(|event| event.data.clone())
+            .collect()
+    }
+    fn items(&self, session: &SessionId) -> Vec<Item> {
+        self.reviews.list(session).unwrap()
+    }
+    async fn decide(&self, session: &SessionId, item: &Item, decision: &str) {
+        self.reviews
+            .decide(DecideInput {
+                session_id: session.clone(),
+                item_id: item.deferral.item_id.clone(),
+                decision: Decision::decode(&parse_json(decision).unwrap()).unwrap(),
+                now: 20,
+            })
+            .await
+            .unwrap();
+    }
+}
+
+fn settings(decide_reviews: bool) -> Settings {
+    Settings {
+        paths: Paths {
+            workdir: WORKDIR.into(),
+            project: WORKDIR.into(),
+            home: "/home/operator".into(),
+            tmpdir: None,
+            trusted_paths: vec![],
+        },
+        global_roots: vec!["/home/operator/.config/ycoding".into()],
+        custom: Arc::new(Vec::new),
+        enabled: true,
+        limits: Limits::default(),
+        decide_reviews,
+        decide_hard_reviews: true,
+    }
+}
+
+fn question(session: &SessionId, id: &str, options: &str) -> question::Request {
+    question::Request::decode(
+        &parse_json(&format!(
+            r#"{{"id":"{id}","sessionID":"{}","questions":[{{"header":"Plan","question":"Which plan?","options":{options}}}]}}"#,
+            text(session.as_lossless())
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn form(session: &SessionId, id: &str) -> form::Info {
+    form::Info::decode(
+        &parse_json(&format!(
+            r#"{{"id":"{id}","sessionID":"{}","title":"Evidence","fields":[{{"key":"text","type":"string","required":true,"default":"Suggested"}}]}}"#,
+            text(session.as_lossless())
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn request(session: &SessionId, id: &str, resource: &str) -> permission::Request {
+    permission::Request {
+        id: permission::Id::new(id).unwrap(),
+        session_id: session.clone(),
+        action: "edit".into(),
+        resources: vec![resource.into()],
+        save: Some(vec![resource.into()]),
+        metadata: None,
+        source: None,
+    }
+}
+
+fn shell(session: &SessionId, command: &str) -> Input {
+    Input {
+        session_id: session.clone(),
+        action: "shell".into(),
+        resources: vec![command.into()],
+        metadata: None,
+        skip_review: false,
+        holder: None,
+        defer_shell: false,
+        source: None,
+    }
+}
+
+fn text(value: &LosslessString) -> String {
+    value.to_utf8().unwrap()
+}
+
+fn field(value: &JsonValue, key: &str) -> Option<JsonValue> {
+    match value {
+        JsonValue::Object(object) => object.get(&key.into()).cloned(),
+        _ => None,
+    }
+}
+
+fn admitted(harness: &Harness, item: &Item) -> bool {
+    harness
+        .fixture
+        .store
+        .snapshot()
+        .unwrap()
+        .get::<PendingTable>(&tuple_key(&[KeyPart::String(
+            prompt_id(&item.deferral.item_id).as_lossless(),
+        )]))
+        .unwrap()
+        .is_some()
+}
+
+async fn asleep(harness: &Harness, session: &SessionId) {
+    harness.autonomy.set_sleep(session, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_sleeping_question_without_auto_answer_defers_disabled_and_a_human_answer_is_admitted() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 2, false, None);
+    let child = harness
+        .fixture
+        .session("ses_child", Some("ses_root"), 0, false, None);
+    asleep(&harness, &root).await;
+    let questions = harness.questions(16);
+    let Admission::Pending(wait) = questions
+        .ask(question(
+            &child,
+            "que_disabled",
+            r#"[{"label":"A","description":"First"}]"#,
+        ))
+        .unwrap()
+    else {
+        panic!("a sleeping family must not answer without auto-answer");
+    };
+    let deferred = wait.await.unwrap().unwrap_err();
+    let questions::Error::Deferred { item_id } = deferred else {
+        panic!("expected a deferred question, got {deferred:?}");
+    };
+    assert!(questions.list().is_empty());
+    let items = harness.items(&root);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].deferral.item_id, item_id);
+    assert_eq!(
+        (items[0].deferral.kind, items[0].deferral.reason),
+        (Kind::Question, Reason::Disabled)
+    );
+    assert_eq!(text(items[0].session_id.as_lossless()), "ses_child");
+    assert!(matches!(items[0].deferral.payload, Payload::Question(_)));
+    let event = harness.events("question.deferred");
+    assert_eq!(event.len(), 1);
+    assert_eq!(
+        field(&event[0], "itemID"),
+        Some(JsonValue::String(item_id.as_lossless().clone()))
+    );
+    harness
+        .decide(&root, &items[0], r#"{"kind":"question","answers":[["A"]]}"#)
+        .await;
+    assert!(admitted(&harness, &items[0]));
+    assert!(harness.autonomy.get(&root).unwrap().is_asleep());
+}
+
+#[tokio::test]
+async fn a_sleeping_free_text_question_defers_even_with_auto_answer_on() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let Admission::Pending(wait) = harness
+        .questions(16)
+        .ask(question(&root, "que_free", "[]"))
+        .unwrap()
+    else {
+        panic!("free text must not be answered automatically while asleep");
+    };
+    assert!(matches!(
+        wait.await.unwrap(),
+        Err(questions::Error::Deferred { .. })
+    ));
+    assert_eq!(harness.items(&root)[0].deferral.reason, Reason::FreeText);
+}
+
+#[tokio::test]
+async fn an_awake_question_waits_for_the_human_without_a_review_item() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    let questions = harness.questions(16);
+    let Admission::Pending(_wait) = questions.ask(question(&root, "que_awake", "[]")).unwrap()
+    else {
+        panic!("an awake question without auto-answer waits");
+    };
+    assert_eq!(questions.list().len(), 1);
+    assert!(harness.items(&root).is_empty());
+    assert!(harness.events("question.deferred").is_empty());
+}
+
+#[tokio::test]
+async fn a_full_review_box_reports_the_limit_without_recording_a_question() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    asleep(&harness, &root).await;
+    let questions = harness.questions(1);
+    let Admission::Pending(first) = questions.ask(question(&root, "que_first", "[]")).unwrap()
+    else {
+        panic!("expected deferral")
+    };
+    assert!(matches!(
+        first.await.unwrap(),
+        Err(questions::Error::Deferred { .. })
+    ));
+    let Admission::Pending(second) = questions.ask(question(&root, "que_second", "[]")).unwrap()
+    else {
+        panic!("expected deferral attempt")
+    };
+    assert!(matches!(
+        second.await.unwrap(),
+        Err(questions::Error::ReviewFull { limit: 1 })
+    ));
+    assert_eq!(harness.items(&root).len(), 1);
+    assert_eq!(harness.events("question.deferred").len(), 1);
+}
+
+#[tokio::test]
+async fn a_sleeping_required_free_text_form_defers_despite_a_suggested_default() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let forms = harness.forms(16);
+    let state = forms
+        .ask(form(&root, "frm_default"))
+        .unwrap()
+        .await
+        .unwrap();
+    let form::State::Deferred { item_id } = state else {
+        panic!("expected a deferred form, got {state:?}");
+    };
+    let items = harness.items(&root);
+    assert_eq!(items[0].deferral.item_id, item_id);
+    assert_eq!(items[0].deferral.reason, Reason::FreeText);
+    assert!(forms.list(None).is_empty());
+    assert_eq!(harness.events("form.deferred").len(), 1);
+}
+
+#[tokio::test]
+async fn a_sleeping_permission_ask_defers_and_a_once_grant_admits_one_identical_reissue() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    asleep(&harness, &root).await;
+    let permissions = harness.permissions(16);
+    let error = permissions
+        .assert(request(&root, "per_first", "outside.txt"), None)
+        .await
+        .unwrap_err();
+    let permissions::Error::Deferred { item_id } = error else {
+        panic!("expected deferral, got {error:?}");
+    };
+    assert!(permissions.list().is_empty());
+    let item = harness.items(&root).remove(0);
+    assert_eq!(item.deferral.item_id, item_id);
+    let Payload::Permission(payload) = &item.deferral.payload else {
+        panic!("expected a permission payload");
+    };
+    assert_eq!(
+        payload.fingerprint,
+        fingerprint(&FingerprintInput {
+            action: "edit".into(),
+            resources: vec!["outside.txt".into()],
+            workdir: WORKDIR.into(),
+            rule_ids: vec![],
+            hard_review: false,
+            metadata: None,
+        })
+    );
+    assert_eq!(harness.events("permission.deferred").len(), 1);
+    harness
+        .decide(&root, &item, r#"{"kind":"permission","reply":"once"}"#)
+        .await;
+    assert!(matches!(
+        permissions
+            .assert(request(&root, "per_changed", "other.txt"), None)
+            .await,
+        Err(permissions::Error::Deferred { .. })
+    ));
+    permissions
+        .assert(request(&root, "per_again", "outside.txt"), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        permissions
+            .assert(request(&root, "per_third", "outside.txt"), None)
+            .await,
+        Err(permissions::Error::Deferred { .. })
+    ));
+}
+
+#[tokio::test]
+async fn permission_auto_approval_and_awake_asks_do_not_defer() {
+    let harness = harness();
+    let automatic = harness.fixture.session("ses_auto", None, 1, false, None);
+    let awake = harness.fixture.session("ses_awake", None, 0, false, None);
+    asleep(&harness, &automatic).await;
+    let permissions = harness.permissions(16);
+    permissions
+        .assert(request(&automatic, "per_auto", "outside.txt"), None)
+        .await
+        .unwrap();
+    let admission = permissions
+        .ask(request(&awake, "per_awake", "outside.txt"), None)
+        .unwrap();
+    assert_eq!(admission.effect, Effect::Ask);
+    assert_eq!(permissions.list().len(), 1);
+    assert!(harness.items(&automatic).is_empty() && harness.items(&awake).is_empty());
+}
+
+#[tokio::test]
+async fn a_sleeping_guardrail_review_defers_redacted_and_grants_one_identical_reissue() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 2, false, None);
+    asleep(&harness, &root).await;
+    let guardrails = harness.guardrails(16, false);
+    let command = "TOKEN=synthetic-secret git reset --hard";
+    let admission = guardrails.assert(shell(&root, command)).unwrap();
+    assert!(admission.request.is_some());
+    let error = admission
+        .wait
+        .unwrap()
+        .await
+        .unwrap()
+        .err()
+        .expect("a sleeping review must defer");
+    let guardrails::Error::Deferred { item_id, .. } = error else {
+        panic!("expected deferral, got {error:?}");
+    };
+    let item = harness.items(&root).remove(0);
+    assert_eq!(item.deferral.item_id, item_id);
+    assert_eq!(
+        (item.deferral.kind, item.deferral.reason),
+        (Kind::Guardrail, Reason::Disabled)
+    );
+    let Payload::Guardrail(payload) = &item.deferral.payload else {
+        panic!("expected a guardrail payload");
+    };
+    assert!(payload.hard_review);
+    assert_eq!(
+        payload.resources,
+        vec![LosslessString::from("TOKEN=[redacted] git reset --hard")]
+    );
+    assert!(!format!("{:?}", harness.items(&root)).contains("synthetic-secret"));
+    assert_eq!(
+        payload.fingerprint,
+        fingerprint(&FingerprintInput {
+            action: "shell".into(),
+            resources: vec![command.into()],
+            workdir: WORKDIR.into(),
+            rule_ids: payload.rule_ids.clone(),
+            hard_review: true,
+            metadata: None,
+        })
+    );
+    assert!(guardrails.for_session(&root).unwrap().is_empty());
+    assert_eq!(harness.events("guardrail.deferred").len(), 1);
+    assert!(
+        harness
+            .reviews
+            .decide(DecideInput {
+                session_id: root.clone(),
+                item_id: item.deferral.item_id.clone(),
+                decision: Decision::decode(
+                    &parse_json(r#"{"kind":"guardrail","reply":"always"}"#).unwrap()
+                )
+                .unwrap(),
+                now: 20,
+            })
+            .await
+            .is_err()
+    );
+    harness
+        .decide(&root, &item, r#"{"kind":"guardrail","reply":"once"}"#)
+        .await;
+    let granted = guardrails.assert(shell(&root, command)).unwrap();
+    assert_eq!(granted.effect, Effect::Allow);
+    granted.reservation.unwrap().release();
+    let again = guardrails.assert(shell(&root, command)).unwrap();
+    assert!(matches!(
+        again.wait.unwrap().await.unwrap(),
+        Err(guardrails::Error::Deferred { .. })
+    ));
+    assert!(guardrails.assert(shell(&root, "rm -rf /")).is_err());
+    assert_eq!(harness.items(&root).len(), 1);
+}
+
+#[tokio::test]
+async fn awake_guardrail_reviews_still_reach_the_human_and_yolo_two_skips_only_awake_ordinary_reviews()
+ {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    let automatic = harness
+        .fixture
+        .session("ses_automatic", None, 2, false, None);
+    let guardrails = harness.guardrails(16, false);
+    let admission = guardrails.assert(shell(&root, "git reset --hard")).unwrap();
+    assert_eq!(admission.effect, Effect::Ask);
+    assert_eq!(guardrails.for_session(&root).unwrap().len(), 1);
+    let ordinary = "touch /outside/review-note";
+    let approved = guardrails.assert(shell(&automatic, ordinary)).unwrap();
+    assert_eq!(approved.effect, Effect::Allow);
+    approved.reservation.unwrap().release();
+    asleep(&harness, &automatic).await;
+    let sleeping = guardrails.assert(shell(&automatic, ordinary)).unwrap();
+    assert!(matches!(
+        sleeping.wait.unwrap().await.unwrap(),
+        Err(guardrails::Error::Deferred { .. })
+    ));
+    assert!(harness.items(&root).is_empty());
+    assert_eq!(harness.items(&automatic).len(), 1);
+}
+
+#[tokio::test]
+async fn a_full_review_box_declines_a_sleeping_guardrail_review_without_recording_it() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    asleep(&harness, &root).await;
+    let guardrails = harness.guardrails(1, false);
+    let first = guardrails.assert(shell(&root, "git reset --hard")).unwrap();
+    assert!(matches!(
+        first.wait.unwrap().await.unwrap(),
+        Err(guardrails::Error::Deferred { .. })
+    ));
+    let second = guardrails.assert(shell(&root, "git clean -fdx")).unwrap();
+    assert!(matches!(
+        second.wait.unwrap().await.unwrap(),
+        Err(guardrails::Error::ReviewFull { limit: 1 })
+    ));
+    assert_eq!(harness.items(&root).len(), 1);
+    assert!(guardrails.for_session(&root).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sleep_entry_converts_every_pending_request_beyond_the_cap_and_settles_waiters_as_deferred()
+{
+    let harness = harness();
+    let root = harness.fixture.session("ses_root", None, 0, false, None);
+    let child = harness
+        .fixture
+        .session("ses_child", Some("ses_root"), 0, false, None);
+    let questions = harness.questions(1);
+    let forms = harness.forms(1);
+    let permissions = harness.permissions(1);
+    let guardrails = harness.guardrails(1, false);
+    let Admission::Pending(question_wait) =
+        questions.ask(question(&root, "que_pending", "[]")).unwrap()
+    else {
+        panic!("awake question waits")
+    };
+    let form_wait = forms.ask(form(&child, "frm_pending")).unwrap();
+    let created = forms.create(form(&root, "frm_created")).unwrap();
+    let permission_wait = permissions
+        .ask(request(&child, "per_pending", "outside.txt"), None)
+        .unwrap()
+        .wait
+        .unwrap();
+    let guardrail_wait = guardrails
+        .assert(shell(&root, "git reset --hard"))
+        .unwrap()
+        .wait
+        .unwrap();
+    asleep(&harness, &root).await;
+    assert_eq!(questions.defer_pending(&root).await.unwrap(), 1);
+    assert_eq!(forms.defer_pending(&child).await.unwrap(), 1);
+    assert_eq!(forms.defer_pending(&root).await.unwrap(), 0);
+    assert_eq!(permissions.defer_pending(&child).await.unwrap(), 1);
+    assert_eq!(guardrails.defer_pending(&root).await.unwrap(), 1);
+    assert!(matches!(
+        question_wait.await.unwrap(),
+        Err(questions::Error::Deferred { .. })
+    ));
+    assert!(matches!(
+        form_wait.await.unwrap(),
+        form::State::Deferred { .. }
+    ));
+    assert!(matches!(
+        permission_wait.await.unwrap(),
+        Err(permissions::Error::Deferred { .. })
+    ));
+    assert!(matches!(
+        guardrail_wait.await.unwrap(),
+        Err(guardrails::Error::Deferred { .. })
+    ));
+    let items = harness.items(&root);
+    assert_eq!(items.len(), 4);
+    assert!(
+        items
+            .iter()
+            .all(|item| item.deferral.reason == Reason::SleepEntry)
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.deferral.kind)
+            .collect::<Vec<_>>(),
+        [
+            Kind::Question,
+            Kind::Question,
+            Kind::Permission,
+            Kind::Guardrail
+        ]
+    );
+    assert!(questions.list().is_empty() && permissions.list().is_empty());
+    assert_eq!(
+        forms
+            .list(None)
+            .iter()
+            .map(|info| info.id.clone())
+            .collect::<Vec<_>>(),
+        [created.id]
+    );
+    assert!(guardrails.for_session(&root).unwrap().is_empty());
+    assert_eq!(questions.defer_pending(&root).await.unwrap(), 0);
+}
+
+#[test]
+fn the_review_policy_reports_the_configured_model_review_switches() {
+    let harness = harness();
+    assert_eq!(
+        harness.guardrails(16, false).review_policy(),
+        ReviewPolicy {
+            enabled: true,
+            decide_reviews: false,
+            decide_hard_reviews: true,
+        }
+    );
+    assert!(harness.guardrails(16, true).review_policy().decide_reviews);
+}

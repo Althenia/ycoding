@@ -214,66 +214,370 @@ async fn stale_continuation_authority_does_not_revoke_an_otherwise_valid_termina
     assert!(assistant.time.completed.is_some());
 }
 
+const SECOND: u64 = 1_000_000_000;
+const SAFE: u64 = 9_007_199_254_740_991;
+
+fn reported(output: f64, reasoning: Option<f64>) -> ycoding_core::ycoding_ai::llm::Usage {
+    ycoding_core::ycoding_ai::llm::Usage {
+        output_tokens: Some(output),
+        reasoning_tokens: reasoning,
+        ..Default::default()
+    }
+}
+
+fn measured(tokens: u64, observed: Option<u64>) -> Option<ycoding_schema::JsonValue> {
+    Some(
+        parse_json(&match observed {
+            Some(duration) => format!(
+                r#"{{"generatedTokens":{tokens},"observedGenerationDurationNs":{duration}}}"#
+            ),
+            None => format!(r#"{{"generatedTokens":{tokens}}}"#),
+        })
+        .unwrap(),
+    )
+}
+
+fn estimated(tokens: u64, duration: u64) -> Option<ycoding_schema::JsonValue> {
+    Some(
+        parse_json(&format!(
+            r#"{{"estimatedTokens":{tokens},"estimatedGenerationDurationNs":{duration}}}"#
+        ))
+        .unwrap(),
+    )
+}
+
+fn timed(
+    usage: Option<&ycoding_core::ycoding_ai::llm::Usage>,
+    times: usage::GenerationTimes,
+) -> Option<ycoding_schema::JsonValue> {
+    usage::generation_timing(usage, &times)
+}
+
 #[test]
-fn generation_timing_counts_only_the_observed_token_span_and_hides_uncertain_reasoning() {
+fn generation_timing_keeps_short_windows_and_counts_reasoning_with_provider_output() {
     let times = usage::GenerationTimes {
-        text: Some(40_000_000_000),
+        reasoning: Some(SECOND),
+        text: Some(1_050_000_000),
+        ended: Some(1_100_000_000),
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, Some(4.0))), times),
+        measured(12, Some(100_000_000))
+    );
+}
+
+#[test]
+fn generation_timing_starts_at_the_earliest_output_so_folded_reasoning_is_never_hidden_or_dropped()
+{
+    let both = || usage::GenerationTimes {
+        text: Some(2 * SECOND),
+        reasoning: Some(SECOND),
+        ended: Some(3 * SECOND),
+        ..Default::default()
+    };
+    let text_only = || usage::GenerationTimes {
+        reasoning: None,
+        ..both()
+    };
+    let unreported = ycoding_core::ycoding_ai::llm::Usage {
+        output_may_include_unreported_reasoning: Some(true),
+        ..reported(12.0, None)
+    };
+    assert_eq!(
+        timed(Some(&unreported), text_only()),
+        measured(12, Some(SECOND))
+    );
+    assert_eq!(
+        timed(Some(&unreported), both()),
+        measured(12, Some(2 * SECOND))
+    );
+    assert_eq!(
+        timed(Some(&reported(12.0, Some(4.0))), text_only()),
+        measured(12, Some(SECOND))
+    );
+    assert_eq!(
+        timed(Some(&reported(12.0, Some(4.0))), both()),
+        measured(12, Some(2 * SECOND))
+    );
+    assert_eq!(
+        timed(
+            Some(&reported(2_355.0, None)),
+            usage::GenerationTimes {
+                text: Some(30 * SECOND),
+                ended: Some(30_071_223_792),
+                ..Default::default()
+            }
+        ),
+        measured(2_355, Some(71_223_792))
+    );
+    let folded = || usage::GenerationTimes {
+        reasoning: Some(10 * SECOND),
+        text: Some(29 * SECOND),
+        ended: Some(30 * SECOND),
+        ..Default::default()
+    };
+    for reasoning in [None, Some(0.0)] {
+        assert_eq!(
+            timed(Some(&reported(1_123.0, reasoning)), folded()),
+            measured(1_123, Some(20 * SECOND))
+        );
+    }
+}
+
+#[test]
+fn generation_timing_counts_all_reported_output_even_when_it_exceeds_the_visible_span() {
+    let times = usage::GenerationTimes {
+        text: Some(40 * SECOND),
         reasoning: Some(0),
-        tool_input: Some(39_000_000_000),
-        ended: Some(43_000_000_000),
-    };
-    let mut reported = ycoding_core::ycoding_ai::llm::Usage {
-        output_tokens: Some(4200.0),
-        reasoning_tokens: Some(4000.0),
+        tool_input: Some(39 * SECOND),
+        ended: Some(43 * SECOND),
         ..Default::default()
     };
     assert_eq!(
-        usage::generation_timing(Some(&reported), &times),
-        Some(
-            parse_json(r#"{"generatedTokens":200,"observedGenerationDurationNs":4000000000}"#)
-                .unwrap()
-        )
+        timed(Some(&reported(4_200.0, Some(4_000.0))), times),
+        measured(4_200, Some(43 * SECOND))
     );
-    reported.reasoning_tokens = None;
-    reported.output_tokens = Some(12.0);
+}
+
+#[test]
+fn generation_timing_uses_the_request_window_without_first_output_and_ignores_provider_duration() {
+    let window = || usage::GenerationTimes {
+        started: Some(SECOND),
+        ended: Some(1_500_000_000),
+        ..Default::default()
+    };
+    let provider_timed = ycoding_core::ycoding_ai::llm::Usage {
+        generation_duration_ns: Some(9_000_000_000.0),
+        ..reported(12.0, None)
+    };
     assert_eq!(
-        usage::generation_timing(Some(&reported), &times),
-        Some(
-            parse_json(r#"{"generatedTokens":12,"observedGenerationDurationNs":43000000000}"#)
-                .unwrap()
-        )
+        timed(Some(&provider_timed), window()),
+        measured(12, Some(500_000_000))
     );
-    reported.output_may_include_unreported_reasoning = Some(true);
-    assert_eq!(usage::generation_timing(Some(&reported), &times), None);
-    reported.generation_duration_ns = Some(2_000_000.0);
     assert_eq!(
-        usage::generation_timing(Some(&reported), &times),
-        Some(parse_json(r#"{"generatedTokens":12}"#).unwrap())
+        timed(
+            None,
+            usage::GenerationTimes {
+                streamed_output_units: 11,
+                ..window()
+            }
+        ),
+        estimated(3, 500_000_000)
     );
-    reported.generation_duration_ns = None;
-    reported.output_may_include_unreported_reasoning = None;
-    let burst = usage::GenerationTimes {
+    let first_output = usage::GenerationTimes {
+        text: Some(1_200_000_000),
+        ..window()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), first_output),
+        measured(12, Some(300_000_000))
+    );
+}
+
+#[test]
+fn generation_timing_without_any_start_keeps_only_the_measured_tokens() {
+    let ended = usage::GenerationTimes {
+        ended: Some(3 * SECOND),
+        streamed_output_units: 40,
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), ended),
+        measured(12, None)
+    );
+    let ended = usage::GenerationTimes {
+        ended: Some(3 * SECOND),
+        streamed_output_units: 40,
+        ..Default::default()
+    };
+    assert_eq!(timed(None, ended), None);
+    let provider_timed = ycoding_core::ycoding_ai::llm::Usage {
+        generation_duration_ns: Some(2_000_000.0),
+        output_may_include_unreported_reasoning: Some(true),
+        ..reported(12.0, None)
+    };
+    assert_eq!(
+        timed(Some(&provider_timed), usage::GenerationTimes::default()),
+        measured(12, None)
+    );
+}
+
+#[test]
+fn generation_timing_without_an_end_keeps_only_the_measured_tokens() {
+    let open = || usage::GenerationTimes {
+        text: Some(SECOND),
+        streamed_output_units: 40,
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), open()),
+        measured(12, None)
+    );
+    assert_eq!(timed(None, open()), None);
+}
+
+#[test]
+fn generation_timing_estimates_every_nonempty_tool_only_stream() {
+    for (units, tokens) in [(1, 1), (16, 4)] {
+        let times = usage::GenerationTimes {
+            tool_input: Some(SECOND),
+            ended: Some(1_010_000_000),
+            streamed_output_units: units,
+            ..Default::default()
+        };
+        assert_eq!(timed(None, times), estimated(tokens, 10_000_000), "{units}");
+    }
+}
+
+#[test]
+fn generation_timing_estimates_round_half_up_and_never_fall_below_one() {
+    for (units, tokens) in [
+        (1, 1),
+        (2, 1),
+        (3, 1),
+        (6, 2),
+        (9, 2),
+        (10, 3),
+        (11, 3),
+        (14, 4),
+    ] {
+        let times = usage::GenerationTimes {
+            text: Some(0),
+            ended: Some(SECOND),
+            streamed_output_units: units,
+            ..Default::default()
+        };
+        assert_eq!(timed(None, times), estimated(tokens, SECOND), "{units}");
+    }
+}
+
+#[test]
+fn generation_timing_is_absent_without_reported_tokens_or_streamed_output() {
+    let window = || usage::GenerationTimes {
+        started: Some(0),
+        ended: Some(1_000_000),
+        ..Default::default()
+    };
+    assert_eq!(timed(None, window()), None);
+    assert_eq!(timed(Some(&reported(0.0, None)), window()), None);
+    assert_eq!(
+        timed(
+            Some(&ycoding_core::ycoding_ai::llm::Usage::default()),
+            window()
+        ),
+        None
+    );
+}
+
+#[test]
+fn generation_timing_turns_a_zero_window_into_one_nanosecond() {
+    let zero = |units| usage::GenerationTimes {
+        started: Some(5 * SECOND),
+        ended: Some(5 * SECOND),
+        streamed_output_units: units,
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), zero(0)),
+        measured(12, Some(1))
+    );
+    assert_eq!(timed(None, zero(8)), estimated(2, 1));
+}
+
+#[test]
+fn generation_timing_drops_regressive_and_overflowing_windows_but_keeps_measured_tokens() {
+    let regressive = || usage::GenerationTimes {
+        text: Some(2 * SECOND),
+        reasoning: Some(SECOND),
+        ended: Some(2_000_000),
+        streamed_output_units: 40,
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), regressive()),
+        measured(12, None)
+    );
+    assert_eq!(timed(None, regressive()), None);
+    let overflow = |ended| usage::GenerationTimes {
+        started: Some(0),
+        ended: Some(ended),
+        streamed_output_units: 40,
+        ..Default::default()
+    };
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), overflow(SAFE + 1)),
+        measured(12, None)
+    );
+    assert_eq!(timed(None, overflow(SAFE + 1)), None);
+    assert_eq!(
+        timed(Some(&reported(12.0, None)), overflow(SAFE)),
+        measured(12, Some(SAFE))
+    );
+    assert_eq!(timed(None, overflow(SAFE)), estimated(10, SAFE));
+}
+
+#[test]
+fn generation_timing_falls_back_to_the_estimate_for_unusable_provider_token_counts() {
+    let window = || usage::GenerationTimes {
+        text: Some(SECOND),
+        ended: Some(2 * SECOND),
+        streamed_output_units: 8,
+        ..Default::default()
+    };
+    for unusable in [12.5, -3.0, f64::NAN, f64::INFINITY, 9_007_199_254_740_992.0] {
+        assert_eq!(
+            timed(Some(&reported(unusable, None)), window()),
+            estimated(2, SECOND),
+            "{unusable}"
+        );
+        assert_eq!(
+            timed(
+                Some(&reported(unusable, None)),
+                usage::GenerationTimes {
+                    streamed_output_units: 0,
+                    ..window()
+                }
+            ),
+            None,
+            "{unusable}"
+        );
+    }
+}
+
+#[test]
+fn measured_and_estimated_timing_never_appear_together() {
+    let window = usage::GenerationTimes {
         text: Some(0),
-        ended: Some(999_999_999),
+        ended: Some(SECOND),
+        streamed_output_units: 100,
         ..Default::default()
     };
     assert_eq!(
-        usage::generation_timing(Some(&reported), &burst),
-        Some(parse_json(r#"{"generatedTokens":12}"#).unwrap())
+        timed(Some(&reported(12.0, None)), window),
+        measured(12, Some(SECOND))
     );
-    let boundary = usage::GenerationTimes {
-        ended: Some(1_000_000_000),
-        ..burst
+}
+
+#[test]
+fn estimated_output_never_enters_the_actual_token_counters() {
+    let window = || usage::GenerationTimes {
+        text: Some(0),
+        ended: Some(SECOND),
+        streamed_output_units: 64,
+        ..Default::default()
     };
+    assert_eq!(timed(None, window()), estimated(16, SECOND));
     assert_eq!(
-        usage::generation_timing(Some(&reported), &boundary),
-        Some(
-            parse_json(r#"{"generatedTokens":12,"observedGenerationDurationNs":1000000000}"#)
-                .unwrap()
-        )
+        usage::tokens(None),
+        parse_json(r#"{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}"#).unwrap()
     );
-    reported.output_tokens = Some(0.0);
-    assert_eq!(usage::generation_timing(Some(&reported), &boundary), None);
+    let unusable = reported(f64::NAN, None);
+    assert_eq!(timed(Some(&unusable), window()), estimated(16, SECOND));
+    assert_eq!(
+        usage::tokens(Some(&unusable)),
+        parse_json(r#"{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}"#).unwrap()
+    );
 }
 
 fn timing(value: &str) -> ycoding_schema::provider_request::Timing {
@@ -281,7 +585,7 @@ fn timing(value: &str) -> ycoding_schema::provider_request::Timing {
 }
 
 #[test]
-fn generation_speed_keeps_eight_recent_steps_for_the_newest_model_and_variant() {
+fn generation_speed_aggregates_eight_recent_steps_across_variants_of_the_newest_model() {
     let mut records = (0..10)
         .map(|index| {
             (
@@ -297,16 +601,24 @@ fn generation_speed_keeps_eight_recent_steps_for_the_newest_model_and_variant() 
         r#"{"generatedTokens":10,"generationDurationNs":0,"observedGenerationDurationNs":2000000000}"#,
     ));
     let history = diagnostics::generation_speed(&records).unwrap();
-    assert!(history.latest.is_none());
     assert_eq!(
         history
             .recent
             .iter()
             .map(|sample| sample.tokens.get())
             .collect::<Vec<_>>(),
-        [12, 13, 14, 15, 16, 17, 18]
+        [12, 13, 14, 15, 16, 17, 18, 10]
     );
-    assert_eq!(history.recent.last().unwrap().tokens_per_second, 9000.0);
+    assert_eq!(history.recent[6].tokens_per_second, 9000.0);
+    assert_eq!(history.recent[7].tokens_per_second, 5.0);
+    let latest = history.latest.as_ref().unwrap();
+    assert_eq!(
+        (latest.tokens.get(), latest.duration_ns.get()),
+        (115, 2_014_000_000)
+    );
+    assert_eq!(latest.tokens_per_second, 115_f64 * 1e9 / 2_014_000_000_f64);
+    assert_eq!(latest.estimated, None);
+    assert_eq!(latest.model, begin().model);
     let mut variant = begin().model;
     variant.variant = Some("high".into());
     records.push((
@@ -315,13 +627,22 @@ fn generation_speed_keeps_eight_recent_steps_for_the_newest_model_and_variant() 
             r#"{"generatedTokens":80,"observedGenerationDurationNs":1000000000}"#,
         )),
     ));
+    let history = diagnostics::generation_speed(&records).unwrap();
     assert_eq!(
-        diagnostics::generation_speed(&records)
-            .unwrap()
+        history
             .recent
-            .len(),
-        1
+            .iter()
+            .map(|sample| sample.tokens.get())
+            .collect::<Vec<_>>(),
+        [13, 14, 15, 16, 17, 18, 10, 80]
     );
+    let latest = history.latest.as_ref().unwrap();
+    assert_eq!(
+        (latest.tokens.get(), latest.duration_ns.get()),
+        (183, 3_012_000_000)
+    );
+    assert_eq!(latest.model, variant);
+    assert_eq!(history.model, Some(variant.clone()));
     records.push((
         variant,
         Some(timing(
@@ -329,8 +650,20 @@ fn generation_speed_keeps_eight_recent_steps_for_the_newest_model_and_variant() 
         )),
     ));
     let history = diagnostics::generation_speed(&records).unwrap();
-    assert!(history.latest.is_none());
-    assert_eq!(history.recent[0].tokens.get(), 80);
+    assert_eq!(
+        history
+            .recent
+            .iter()
+            .map(|sample| sample.tokens.get())
+            .collect::<Vec<_>>(),
+        [14, 15, 16, 17, 18, 10, 80, 2355]
+    );
+    let latest = history.latest.as_ref().unwrap();
+    assert_eq!(
+        (latest.tokens.get(), latest.duration_ns.get()),
+        (2525, 3_081_223_792)
+    );
+    assert_eq!(latest.tokens_per_second, 2525_f64 * 1e9 / 3_081_223_792_f64);
     assert!(diagnostics::generation_speed(&[]).is_none());
 }
 
@@ -411,9 +744,16 @@ async fn request_summary_counts_helpers_but_speed_uses_only_steps_and_snapshot_i
     assert_eq!(summary.latest_namespace.unwrap().as_str(), Some("aaaaaaaa"));
     assert!(summary.latest_timing.is_none());
     let speed = diagnostics.generation_speed.unwrap();
-    assert!(speed.latest.is_none());
+    assert_eq!(speed.model, Some(begin().model));
     assert_eq!(speed.recent.len(), 1);
     assert_eq!(speed.recent[0].tokens_per_second, 6.0);
+    let latest = speed.latest.as_ref().unwrap();
+    assert_eq!(
+        (latest.tokens.get(), latest.duration_ns.get()),
+        (12, 2_000_000_000)
+    );
+    assert_eq!(latest.tokens_per_second, 6.0);
+    assert_eq!(latest.estimated, None);
     assert_eq!(
         service
             .snapshot(&begin().session, 1, None)
@@ -508,5 +848,13 @@ fn measured_diagnostics_include_an_empty_request_summary_without_fabricated_spee
         .unwrap()
         .unwrap();
     assert_eq!(diagnostics.requests.unwrap().logical.get(), 0);
-    assert!(diagnostics.generation_speed.is_none());
+    let speed = diagnostics.generation_speed.unwrap();
+    let model = speed.model.unwrap();
+    assert_eq!(
+        (model.provider_id.0.as_str(), model.id.as_str()),
+        (Some("openai"), Some("gpt-5.6"))
+    );
+    assert!(speed.latest.is_none());
+    assert!(speed.recent.is_empty());
+    assert!(speed.unreported_reason.is_none());
 }

@@ -143,6 +143,10 @@ pub async fn report(
     let core = invocation.core()?;
     let query = request.query;
     let input = session_read_models::report_input(&v5::SessionUsageReportRequestQuery {
+        provider_id: query.provider_id,
+        model_id: query.model_id,
+        profile: query.profile,
+        selected_effort: query.selected_effort,
         group: query.group,
         time_zone: query.time_zone,
         from: query.from,

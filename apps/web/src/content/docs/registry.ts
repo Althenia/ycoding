@@ -68,7 +68,7 @@ export const DOC_INDEX: DocPage = {
             { title: "Plugins", text: "Runtime plugin ordering, options, and hook ownership.", href: "/docs/configuration/plugins" },
             { title: "MCP", text: "Local and remote servers, timeouts, and OAuth.", href: "/docs/configuration/mcp" },
             { title: "Goal", text: "Objectives, continuation, and terminal goal states.", href: "/docs/configuration/goal" },
-            { title: "YOLO mode", text: "Tiered autonomous execution and what each level answers.", href: "/docs/configuration/yolo" },
+            { title: "YOLO mode", text: "Tiered autonomous execution and what each level approves.", href: "/docs/configuration/yolo" },
             { title: "Guardrails", text: "Session-family reviews, caps, and custom rule files.", href: "/docs/configuration/guardrails" },
             { title: "Notifications", text: "Attention categories, desktop alerts, and sounds.", href: "/docs/configuration/notifications" },
             { title: "Permissions", text: "Ordered tool rules, effects, and inheritance.", href: "/docs/configuration/permissions" },

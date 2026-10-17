@@ -51,6 +51,7 @@ fn session_row(id: &str, parent: Option<&str>) -> Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn request(spec: &Usage) -> Request {
         )
         .unwrap(),
         time_created: spec.time,
+        usage_anchor: None,
     }
 }
 
@@ -144,6 +146,7 @@ fn report_query(
         limit: None,
         sort: None,
         order: None,
+        ..Default::default()
     }
 }
 

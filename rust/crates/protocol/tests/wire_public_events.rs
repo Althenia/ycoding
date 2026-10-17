@@ -22,14 +22,14 @@ fn vector(name: &str) -> Vec<u8> {
 
 #[test]
 fn public_event_membership_and_durability_are_closed() {
-    assert_eq!(PUBLIC_EVENTS.len(), 101);
-    assert_eq!(PUBLIC_EVENTS.iter().filter(|event| event.1).count(), 51);
+    assert_eq!(PUBLIC_EVENTS.len(), 116);
+    assert_eq!(PUBLIC_EVENTS.iter().filter(|event| event.1).count(), 58);
     assert_eq!(
         PUBLIC_EVENTS
             .iter()
             .filter(|event| event.0.starts_with("session."))
             .count(),
-        60
+        68
     );
     assert!(
         PUBLIC_EVENTS

@@ -118,7 +118,9 @@ fn ts_encoder_cases_cover_every_public_durable_variant_and_preserve_envelopes() 
             .collect::<BTreeSet<_>>(),
         expected
     );
-    assert_eq!(expected.len(), 51);
+    assert_eq!(expected.len(), 58);
+    assert!(!expected.contains(&"session.tool.progress".into()));
+    assert!(log::excluded("session.tool.progress.1"));
     for (name, entry, expected, _) in cases {
         let record =
             log::record(&entry, &id, &epoch).unwrap_or_else(|error| panic!("{name}: {error:?}"));
@@ -394,6 +396,145 @@ async fn unknown_durable_events_close_both_wire_streams_instead_of_advancing_sil
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_child_provenance_keeps_root_identity_and_independent_replay_cursors() {
+    let _serial = SERIAL.lock().await;
+    let root = "ses_provenance_root";
+    let child = "ses_provenance_child";
+    let sibling = "ses_provenance_sibling";
+    for id in [root, child, sibling] {
+        seed(id).await;
+    }
+    let server = start(
+        support::services(LocalAuth::disabled(), true),
+        standard().unwrap(),
+    )
+    .await;
+    let mut client = Client::open(server.address(), &[]).await.unwrap();
+    let live = subscribe(&mut client, root, false, None, true).await;
+    let request = client
+        .send(
+            "event.subscribe",
+            global(),
+            v5::EventSubscribeRequest { scope: global() }.encode_to_vec(),
+        )
+        .await;
+    let global_live = client.subscribe_events(&request, global()).await;
+    for index in 0..4 {
+        append(NewEvent {
+            id: format!("evt_provenance_child_{index}").into(),
+            aggregate_id: child.into(),
+            created: 10 + index,
+            type_: "session.renamed.1".into(),
+            data: ObjectEncoder::new()
+                .field("sessionID", child)
+                .field("title", "Child")
+                .finish(),
+        })
+        .await;
+    }
+    for (id, kind, created, data) in [
+        (
+            "evt_provenance_dismissed",
+            "session.guardrail.dismissed.1",
+            20,
+            format!(
+                r#"{{"sessionID":"{root}","reviewSessionID":"{child}","ruleID":"standard.review.outside-repository","confidence":0.95,"source":{{"messageID":"msg_provenance","callID":"call_provenance"}}}}"#
+            ),
+        ),
+        (
+            "evt_provenance_decided",
+            "session.guardrail.decided.1",
+            30,
+            format!(
+                r#"{{"sessionID":"{root}","reviewSessionID":"{child}","requestID":"grq_provenance","reply":"once","choice":"approve","confidence":0.91,"ruleIDs":["custom.review"],"source":{{"messageID":"msg_provenance","callID":"call_provenance"}}}}"#
+            ),
+        ),
+    ] {
+        append(NewEvent {
+            id: id.into(),
+            aggregate_id: root.into(),
+            created,
+            type_: kind.into(),
+            data: parse_json(&data).unwrap(),
+        })
+        .await;
+    }
+    let root_replay = subscribe(&mut client, root, true, None, false).await;
+    let child_replay = subscribe(&mut client, child, true, Some(2), false).await;
+    let sibling_replay = subscribe(&mut client, sibling, true, None, false).await;
+    until(&mut client, |client| {
+        [&root_replay, &child_replay, &sibling_replay]
+            .iter()
+            .all(|subscription| client.ended.contains(*subscription))
+            && durable_records(client, &live).len() == 2
+            && durable_records(client, &global_live).len() >= 6
+    })
+    .await;
+    let expected = durable_records(&client, &root_replay);
+    assert_eq!(expected.len(), 2);
+    assert_eq!(durable_records(&client, &live), expected);
+    assert_eq!(
+        durable_records(&client, &global_live)
+            .into_iter()
+            .filter(|record| record.durable.as_ref().unwrap().aggregate_id == root)
+            .collect::<Vec<_>>(),
+        expected,
+    );
+    for (index, record) in expected.iter().enumerate() {
+        assert_eq!(record.durable.as_ref().unwrap().aggregate_id, root);
+        assert_eq!(record.durable.as_ref().unwrap().sequence, index as u64);
+        match v5::SessionLogItem::decode(record.event.payload.as_slice())
+            .unwrap()
+            .kind
+            .unwrap()
+        {
+            v5::session_log_item::Kind::Value53(event) => {
+                assert_eq!(units(&event.durable.aggregate_id), root);
+                assert_eq!(units(&event.data.session_id), root);
+                assert_eq!(units(&event.data.review_session_id), child);
+                let source = event.data.source.unwrap();
+                assert_eq!(units(&source.message_id), "msg_provenance");
+                assert_eq!(units(&source.call_id), "call_provenance");
+            }
+            v5::session_log_item::Kind::Value55(event) => {
+                assert_eq!(units(&event.durable.aggregate_id), root);
+                assert_eq!(units(&event.data.session_id), root);
+                assert_eq!(units(&event.data.review_session_id), child);
+                assert_eq!(event.data.choice, Some(2));
+            }
+            _ => panic!("unexpected provenance branch"),
+        }
+    }
+    let child_records = durable_records(&client, &child_replay);
+    assert_eq!(child_records.len(), 1);
+    assert_eq!(child_records[0].event_id, "evt_provenance_child_3");
+    assert_eq!(child_records[0].durable.as_ref().unwrap().sequence, 3);
+    assert!(durable_records(&client, &sibling_replay).is_empty());
+    for (subscription, sequence) in [
+        (&root_replay, Some(1)),
+        (&child_replay, Some(3)),
+        (&sibling_replay, None),
+    ] {
+        let terminal = records(&client, subscription);
+        let Some(v5::session_log_item::Kind::Value52(synced)) =
+            v5::SessionLogItem::decode(terminal.last().unwrap().event.payload.as_slice())
+                .unwrap()
+                .kind
+        else {
+            panic!("missing synced watermark")
+        };
+        assert_eq!(synced.seq, sequence);
+    }
+    let mut reconnected = Client::open(server.address(), &[]).await.unwrap();
+    let resumed = subscribe(&mut reconnected, root, true, Some(0), false).await;
+    until(&mut reconnected, |client| client.ended.contains(&resumed)).await;
+    assert_eq!(durable_records(&reconnected, &resumed), expected[1..]);
+    assert!(client.resyncs.is_empty());
+    assert!(reconnected.resyncs.is_empty());
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_values_on_both_operations()
  {
     let _serial = SERIAL.lock().await;
@@ -473,7 +614,7 @@ async fn real_runner_flow_preserves_order_follow_watermark_cursor_and_full_value
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionReasoningDelta(value) if units(&value.data.delta) == "Think" && value.data.ordinal == 0)));
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionUsageUpdated(value) if value.data.tokens.input == 3.0 && value.data.tokens.output == 2.0)));
             assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context.total == 5 && value.data.diagnostics.tokens.uncached_input == 3 && value.data.diagnostics.tokens.output == 2 && !value.data.diagnostics.cache.read_reported)));
-            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context_breakdown.as_ref().is_some_and(|breakdown| breakdown.user > 0) && value.data.diagnostics.generation_speed.is_none())));
+            assert!(ephemerals.iter().any(|event| matches!(event, Kind::SessionDiagnosticsUpdated(value) if value.data.diagnostics.context_breakdown.as_ref().is_some_and(|breakdown| breakdown.user > 0) && value.data.diagnostics.generation_speed.as_ref().is_some_and(|speed| speed.recent.items.len() == 1 && speed.recent.items[0].tokens == 2 && speed.recent.items[0].duration_ns > 0 && speed.recent.items[0].tokens_per_second == 2_f64 * 1e9 / speed.recent.items[0].duration_ns as f64 && speed.latest.as_ref() == speed.recent.items.first() && speed.model.as_ref().is_some_and(|model| units(&model.provider_id) == "openai" && units(&model.id) == "gpt-reasoning")))));
             let diagnostics = live_records.iter().position(|record| record.durable.is_none() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionDiagnosticsUpdated(_)))).unwrap();
             let step_ended = live_records.iter().position(|record| record.durable.is_some() && matches!(v5::PublicEvent::decode(record.event.payload.as_slice()).unwrap().kind, Some(Kind::SessionStepEnded(_)))).unwrap();
             assert!(diagnostics < step_ended);

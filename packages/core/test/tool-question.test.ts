@@ -20,6 +20,7 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionReviewID } from "@ycoding-ai/schema/session-review-id"
 import { toolIdentity, executeTool, registerToolPlugin, settleTool, toolDefinitions } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_question_tool_test")
@@ -61,6 +62,35 @@ const seedSession = Effect.gen(function* () {
 })
 
 describe("QuestionTool", () => {
+  const terminalStates: ReadonlyArray<{ state: Form.TerminalState; message: string }> = [
+    {
+      state: { status: "timed_out", seconds: 60 },
+      message: "Question timed out after 60 seconds; no answer was received.",
+    },
+    {
+      state: { status: "deferred", itemID: SessionReviewID.make("rvw_question_deferred") },
+      message: "Question deferred to the review box; no answer was received.",
+    },
+  ]
+  for (const terminal of terminalStates) {
+    const terminalTool = testEffect(AppNodeBuilder.build(
+      LayerNode.group([ToolRegistry.node, questionToolNode]),
+      [...overrides, [Form.node, Layer.mock(Form.Service, { ask: () => Effect.succeed(terminal.state) })]],
+    ))
+    terminalTool.effect(`reports ${terminal.state.status} without fabricating an answer or a dismissal`, () => Effect.gen(function* () {
+      deny = false
+      const registry = yield* ToolRegistry.Service
+      expect(yield* settleTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: `call-${terminal.state.status}`, name: "question", input: questionInput },
+      })).toEqual({
+        result: { type: "error", value: terminal.message },
+        error: { type: "tool.execution", message: terminal.message },
+      })
+    }))
+  }
+
   withForms.effect("holds a blocker for human review and missing evidence until the real Form is answered", () => Effect.gen(function* () {
     deny = false
     const registry = yield* ToolRegistry.Service
@@ -167,12 +197,13 @@ describe("QuestionTool", () => {
     expect(capturedInput()?.fields[0]).toMatchObject({ options: [{ label: "Fast (Recommended)" }, { label: "Careful" }] })
   }))
 
-  autonomous.effect("autonomous questions retain the first-option answer without helper suggestions", () => Effect.gen(function* () {
+  autonomous.effect("autoAnswer questions retain the first-option answer without helper suggestions", () => Effect.gen(function* () {
     deny = false
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    for (const yolo of [2, 3] as const) {
+    yield* autonomy.set({ sessionID, autoAnswer: true })
+    for (const yolo of [0, 2] as const) {
       yield* autonomy.setYolo({ sessionID, yolo })
       expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
     }

@@ -100,8 +100,19 @@ export const Operation = Schema.Literals([
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "session.usageReport",
+  "session.promptCosts",
+  "session.taskCosts",
+  "usage.forecast",
+  "session.review.list",
+  "session.review.decide",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
+  "incident.report",
+  "incident.recent",
+  "incident.guidance",
+  "incident.guidance.get",
+  "incident.guidance.clear",
 ]).check(Schema.isMaxLength(64))
 
 export const RequestSample = Schema.Struct({

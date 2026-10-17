@@ -6,6 +6,10 @@
   min-block-size: 196px;
 }
 
+.running-sessions--loading {
+  grid-template-rows: auto auto;
+}
+
 .running-sessions--ready .running-sessions__list {
   animation: running-sessions-reveal var(--yc-dur-base) var(--yc-ease-entrance) both;
 }
@@ -124,6 +128,13 @@
   block-size: 6px;
   border-radius: 50%;
   background: var(--yc-green-strong);
+}
+
+.running-sessions__status--waiting {
+  color: var(--yc-yellow-strong);
+}
+.running-sessions__status--waiting .running-sessions__dot {
+  background: var(--yc-yellow-strong);
 }
 
 .running-sessions__pagination {

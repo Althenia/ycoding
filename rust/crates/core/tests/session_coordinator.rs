@@ -53,6 +53,187 @@ async fn pending(future: Pin<&mut impl Future<Output = Outcome>>) {
     .await;
 }
 
+#[test]
+fn runtime_drop_discards_pending_wakes_and_releases_admitted_waiters() {
+    const CHILD: &str = "YCODING_COORDINATOR_DROP_CHILD";
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    if std::env::var_os(CHILD).is_none() {
+        runtime.block_on(async {
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "runtime_drop_discards_pending_wakes_and_releases_admitted_waiters",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let status =
+                match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+                    Ok(status) => status.unwrap(),
+                    Err(_) => {
+                        child.kill().await.unwrap();
+                        panic!("runtime teardown blocked with a pending wake");
+                    }
+                };
+            assert!(
+                status.success(),
+                "coordinator teardown child failed: {status}"
+            );
+        });
+        return;
+    }
+    drop(runtime);
+    for polled in [false, true] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (coordinator, runner, mut started) = setup();
+        let session = id();
+        let mut joined = Box::pin(coordinator.run(&session));
+        {
+            let _entered = runtime.enter();
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(joined.as_mut().poll(&mut context).is_pending());
+        }
+        if polled {
+            runtime.block_on(async { started.recv().await.unwrap() });
+        }
+        coordinator.wake(&session).unwrap();
+        drop(runtime);
+        assert!(coordinator.active().is_empty());
+        assert_eq!(
+            *runner.calls.lock().unwrap(),
+            if polled { vec![(id(), true)] } else { vec![] }
+        );
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            joined.as_mut().poll(&mut context),
+            Poll::Ready(Err(Error::Panicked))
+        ));
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let handle = runtime.handle().clone();
+    drop(runtime);
+    let _entered = handle.enter();
+    let (coordinator, runner, _started) = setup();
+    let session = id();
+    coordinator.wake(&session).unwrap();
+    assert!(coordinator.active().is_empty());
+    let mut joined = Box::pin(coordinator.run(&session));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(matches!(
+        joined.as_mut().poll(&mut context),
+        Poll::Ready(Err(Error::Panicked))
+    ));
+    let mut transition =
+        Box::pin(coordinator.with_transition(&session, std::future::pending::<()>()));
+    assert!(transition.as_mut().poll(&mut context).is_pending());
+    coordinator.wake(&session).unwrap();
+    drop(transition);
+    assert!(coordinator.active().is_empty());
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resume_admission_returns_before_drain_and_keeps_coordinator_ownership() {
+    let (coordinator, runner, mut started) = setup();
+    let session = id();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        coordinator.request_resume(&session),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    started.recv().await.unwrap();
+    coordinator.request_resume(&session).await.unwrap();
+    assert_eq!(coordinator.active(), vec![session.clone()]);
+    assert_eq!(*runner.calls.lock().unwrap(), vec![(session.clone(), true)]);
+    let mut joined = Box::pin(coordinator.run(&session));
+    pending(joined.as_mut()).await;
+    coordinator.shutdown().await.unwrap();
+    assert!(matches!(
+        joined.await,
+        Err(Error::Interrupted(InterruptReason::Shutdown))
+    ));
+    assert!(coordinator.active().is_empty());
+    assert!(matches!(
+        coordinator.request_resume(&session).await,
+        Err(Error::Closed)
+    ));
+}
+
+#[tokio::test]
+async fn resume_admission_waits_for_a_transition_without_losing_force() {
+    let (coordinator, runner, mut started) = setup();
+    let session = id();
+    let mut transition =
+        Box::pin(coordinator.with_transition(&session, std::future::pending::<()>()));
+    poll_fn(|context| {
+        assert!(transition.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let mut admission = Box::pin(coordinator.request_resume(&session));
+    pending(admission.as_mut()).await;
+    assert!(runner.calls.lock().unwrap().is_empty());
+    drop(transition);
+    tokio::time::timeout(std::time::Duration::from_secs(2), admission)
+        .await
+        .unwrap()
+        .unwrap();
+    started.recv().await.unwrap();
+    assert_eq!(*runner.calls.lock().unwrap(), vec![(session, true)]);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn resume_admission_waits_for_interrupted_cleanup_but_not_the_next_drain() {
+    let (_, runner, mut started) = setup();
+    let (settling, mut settled) = mpsc::unbounded_channel();
+    let release = Arc::new(Semaphore::new(0));
+    let coordinator = Coordinator::new(Arc::new(Hooks {
+        runner: runner.clone(),
+        settling,
+        release: release.clone(),
+        failure: Mutex::new(None),
+        panic: false,
+    }));
+    let session = id();
+    coordinator.wake(&session).unwrap();
+    started.recv().await.unwrap();
+    coordinator
+        .request_interrupt(&session, InterruptReason::User)
+        .unwrap();
+    assert!(matches!(
+        settled.recv().await.unwrap(),
+        Err(Error::Interrupted(_))
+    ));
+    let mut admission = Box::pin(coordinator.request_resume(&session));
+    pending(admission.as_mut()).await;
+    release.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(2), admission)
+        .await
+        .unwrap()
+        .unwrap();
+    started.recv().await.unwrap();
+    assert_eq!(
+        *runner.calls.lock().unwrap(),
+        vec![(session.clone(), false), (session, true)]
+    );
+    release.add_permits(1);
+    coordinator.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn joins_concurrent_resumes_for_one_session_and_wake_started_execution() {
     let (coordinator, runner, mut started) = setup();

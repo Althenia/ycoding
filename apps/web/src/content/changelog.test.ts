@@ -59,8 +59,209 @@ describe("release entries", () => {
     })
   })
 
+  test("lists v0.10.12 named autonomy levels, per-Session auto-answer, and Meeting owner settings first", () => {
+    const release = RELEASES[1]
+    expect(release).toMatchObject({
+      version: "0.10.12",
+      date: "2026-10-17",
+      tags: ["Added", "Changed", "Fixed"],
+    })
+    expect(release?.changes.at(-1)?.tag).toBe("Fixed")
+    const text = release?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "Background result lost",
+      "Ask first",
+      "Allow tools",
+      "Tools + reviews",
+      "`/auto-answer`",
+      "`auto_answer`",
+      "Meeting owner",
+      "future Ask AI questions",
+      "Hard guardrail reviews",
+    ])
+      expect(text).toContain(fragment)
+    expect(RELEASES[2]?.version).toBe("0.10.11")
+  })
+
+  test("retains v0.10.11 fallback models, model incidents, restart recovery, and opt-in automation", () => {
+    const release = RELEASES[2]
+    expect(release).toMatchObject({
+      version: "0.10.11",
+      date: "2026-10-17",
+      tags: ["Added", "Changed", "Fixed"],
+    })
+    const text = release?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "`model_fallbacks`",
+      "Model incidents",
+      "Continue or Stop",
+      "`auto_answer`",
+      "`guardrails.decide_reviews`",
+      "off by default",
+    ])
+      expect(text).toContain(fragment)
+    expect(release?.changes.length).toBe(53)
+  })
+
+  test("retains v0.10.10 shell command queue, self-contained commits, and waiting for another database writer", () => {
+    expect(RELEASES[3]).toEqual({
+      version: "0.10.10",
+      date: "2026-10-15",
+      title: "Sleep mode, shell command queue, and faster web",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        {
+          tag: "Added",
+          text: "The shell tool has a queue channel for expensive commands such as typechecks, builds, and package-wide test suites. Queued commands from every YCoding process on the machine share running limits (two at once and one per Session by default), wait for enough free memory and a low enough CPU load, and report completion like background commands. Set the limits under shell_queue; the TUI and the web Team view show queued commands and their position.",
+        },
+        {
+          tag: "Added",
+          text: "/sleep lets the agent keep working while you are away: the root Session family answers its own questions and forms, settles guardrail reviews with the decision model, and keeps the machine awake. /wake or any message you send in the family ends sleep and restores your earlier review setting.",
+        },
+        {
+          tag: "Added",
+          text: "/guardrail-decision toggles decision-model review for a root Session family. A review is approved once when the model approves with confidence 0.8 or higher and rejected otherwise; explicit denies still apply and YOLO levels are unchanged.",
+        },
+        {
+          tag: "Added",
+          text: "Before a standard guardrail review reaches you, the decision model checks whether the action really matches the rule, and a confident false match is dismissed without a review.",
+        },
+        {
+          tag: "Added",
+          text: "/keep-awake toggles keeping the machine awake, also from web Settings → Machine. On macOS it keeps the Mac awake with the lid closed where lid control is available. Sleep holds keep-awake on until the last sleeping Session family wakes.",
+        },
+        {
+          tag: "Added",
+          text: "Unanswered questions, forms, and subagent questions time out after question_timeout_seconds (default 300; 0 disables). The agent then proceeds on its own judgment, and a late answer is rejected.",
+        },
+        {
+          tag: "Added",
+          text: "Before history pruning first deletes anything, YCoding writes a one-time verified copy of the database beside it as <database>.pre-prune-backup, for example ycoding.db.pre-prune-backup. With less free space than the database size plus 1 GiB, it prunes nothing and shows a warning at most once an hour. To restore the copy, stop every YCoding process, replace the database file with it, and delete the database's -wal and -shm files; delete the copy with rm once you no longer need it.",
+        },
+        {
+          tag: "Changed",
+          text: "Built-in agents commit only complete, self-contained changes: each commit includes its code, tests, docs, and release-note entries, is made after its checks pass, and has a summary that states its intent and a body that states why it exists, what behavior changed, and how it was verified.",
+        },
+        {
+          tag: "Changed",
+          text: "Built-in agents reply and write documentation, instruction files, code comments, and commit messages as directives and facts from verified evidence in the reader's own terms, without unrequested explanations, copying the request's wording, or mentioning the request or its style instructions.",
+        },
+        {
+          tag: "Changed",
+          text: "The Usage page shows the monthly provider total and its unit inside the donut ring. A total too wide for the ring is shortened to one decimal with a k, m, or b suffix, such as $2.0k; the exact total stays available on hover, on keyboard focus, and to screen readers, and the legend keeps each provider's exact value.",
+        },
+        {
+          tag: "Changed",
+          text: "Primary built-in agents start every remaining task that does not depend on running background work instead of waiting for it, and name the dependency of each task they hold back; a queued typecheck, build, or test suite delays only other heavy checks, not code-writing or review work.",
+        },
+        {
+          tag: "Changed",
+          text: "Settled Session history takes much less disk space. About a minute after a Session's work ends, and at startup and every hour, YCoding deletes the stored events that repeat what its saved messages and records already hold; resume, transcripts, forks, reverts, snapshots, and usage keep working from what remains.",
+        },
+        {
+          tag: "Changed",
+          text: "In Sessions idle for 24 hours, images in tool results are replaced with a short placeholder giving the image type and size, which the model also sees if the Session resumes. Base64 data longer than tool_output.max_bytes (50 KiB by default) is omitted from stored tool metadata.",
+        },
+        {
+          tag: "Changed",
+          text: "Tool progress is shown live but no longer stored: session.tool.progress is a live-only event and no longer appears in session.log or among the durable event types of the API and its clients.",
+        },
+        {
+          tag: "Changed",
+          text: "Standard GPT-6 requests on the OpenAI API no longer turn on OpenAI's automatic context compaction by default; YCoding's own Session compaction handles long contexts, which lets effort changes keep the provider cache. Configured context management still applies.",
+        },
+        {
+          tag: "Fixed",
+          text: "A shell command that runs git push and later another command with -f, such as rm -f or grep -f, no longer asks for a force-push hard review. Destructive Git and force-push checks now read each command of a compound command separately.",
+        },
+        {
+          tag: "Fixed",
+          text: "The web client opens and refreshes Sessions with fewer requests. Selecting a Session reads its transcript without waiting for the subscription to be confirmed; a Session-list change rereads the open transcript only when it missed events; list refreshes keep the visible rows instead of showing loading and run at most once per 750 ms; captured changes for a Session with many subagents are read once and shared; and Usage reads only when its page opens.",
+        },
+        {
+          tag: "Fixed",
+          text: "Usage reports no longer stall other requests. Each report reads through a separate read-only database connection in steps of at most 10,000 requests, so the TUI, web, and running Sessions keep responding while it runs; on a 9 GB database the summary report dropped from about 7.8 seconds to under half a second. Startup adds three usage indexes once.",
+        },
+        {
+          tag: "Fixed",
+          text: 'A subagent\'s "awaiting input" timer in the TUI header counts from when it asked its question and keeps counting while it waits, instead of showing the time since the subagent started.',
+        },
+        {
+          tag: "Fixed",
+          text: "The TUI no longer shows an UnexpectedStatus error while another YCoding process, such as ycoding run or a second TUI, writes to the same local database. Saving local telemetry samples now waits for the other writer to finish instead of failing at once.",
+        },
+        {
+          tag: "Fixed",
+          text: "Session speed no longer disappears when a provider's output token count is missing or unusable. YCoding then estimates tok/s from the output it streams, marked with ≈ in the TUI sidebar and the web composer; estimates never enter speed trends or Usage report throughput. A failed or interrupted step replaces the previous step's speed, a step retried after compaction shows its own speed, and a step without a usable sample shows unreported with its reason instead of an older rate.",
+        },
+        {
+          tag: "Fixed",
+          text: "Session speed and its trend match the selected provider, model, variant, and profile, and the web Usage page labels models whose identity includes a profile correctly.",
+        },
+        {
+          tag: "Fixed",
+          text: "Changing only a model's variant, such as its effort, no longer changes YCoding's prompt-cache key on any route. Where the provider documents a mid-conversation effort change, YCoding sends the new effort as an in-conversation update so the cached prompt prefix stays valid: GPT-6 on the OpenAI API, supported Claude models with adaptive thinking on the Anthropic API and Vertex, and GPT-6, Claude Fable 5.1, and Claude Opus 5 on OpenRouter. On Claude, an effort change made during a tool loop takes effect with your next message. Subscription routes (ChatGPT/Codex and Claude Code), the AI SDK OpenRouter and Vertex adapters, and other providers still change effort for the whole request and may rebuild the provider cache once.",
+        },
+      ],
+    })
+  })
+
+  test("lists v0.10.9 Muse quota on the usage dashboard first", () => {
+    expect(RELEASES[4]).toEqual({
+      version: "0.10.9",
+      date: "2026-10-14",
+      title: "Muse quota on the usage dashboard",
+      tags: ["Fixed"],
+      changes: [
+        {
+          tag: "Fixed",
+          text: "Muse (Meta) subscription quota now appears on the usage dashboard (the TUI Usage screen and the web Usage page) and survives quota refreshes, instead of disappearing after a quota was reported from a Muse response. Quota is still reported only after a Muse response and is retained in memory.",
+        },
+      ],
+    })
+  })
+
+  test("lists v0.10.8 smaller database and eval run controls first", () => {
+    expect(RELEASES[5]).toEqual({
+      version: "0.10.8",
+      date: "2026-10-14",
+      title: "Smaller database and eval run controls",
+      tags: ["Added", "Changed", "Fixed"],
+      changes: [
+        {
+          tag: "Added",
+          text: "A capabilities configuration object turns capabilities off for a run: global or project AGENTS.md files (or individual files by path pattern), including nested files the read tool injects, built-in instruction blocks by name, skills, tools, MCP servers, and external plugins by allow and deny lists, managed project artifacts, the ~/.agents and ~/.claude roots, and it can pin the websearch provider. It works in any configuration layer, including YCODING_CONFIG_CONTENT.",
+        },
+        {
+          tag: "Added",
+          text: "ycoding run --config <file> applies a JSON/JSONC configuration document as the highest-priority layer of a private server for that run.",
+        },
+        {
+          tag: "Added",
+          text: "ycoding run --isolated runs on a private server with a temporary data directory and database that are removed afterwards, so the run never touches your Sessions or database. Stored credentials are unavailable in an isolated run; provide provider keys through environment variables or configuration.",
+        },
+        {
+          tag: "Added",
+          text: "ycoding run --format json reports metrics for evaluation harnesses: step_start includes the agent and model, step_finish includes the context limit, context breakdown, and provider cache diagnostics when reported, and one final run_finish line gives the status, duration, steps, turns, tokens, cost, context size, and models, plus the usage, steps, and turns of the whole run including subagents and helper Sessions. Default text output is unchanged.",
+        },
+        {
+          tag: "Changed",
+          text: "History that a finished local compaction removed from model context is deleted by the startup and hourly retention sweep, shrinking the database. Sessions compacted by Codex remote compaction keep their full history. Copy and export start at the compaction checkpoint summary. Forking or reverting to a message in removed history reports an error and changes nothing. Failure events from the removed range are kept for 7 days.",
+        },
+        {
+          tag: "Fixed",
+          text: "Opening the shared database from another YCoding process, such as ycoding run --standalone or serve --stdio, no longer marks a running service's active child tasks as lost. Each active child task records its owning process, and only tasks whose owner process has exited are marked lost when a process starts.",
+        },
+        {
+          tag: "Fixed",
+          text: "Built-in guidance for a tool the agent cannot use, such as workspace memory while memory is disabled or decision while it is denied, is no longer included in the instructions.",
+        },
+      ],
+    })
+  })
+
   test("lists v0.10.7 background Chrome and computer use first", () => {
-    expect(RELEASES[1]).toEqual({
+    expect(RELEASES[6]).toEqual({
       version: "0.10.7",
       date: "2026-10-13",
       title: "Background Chrome and computer use",
@@ -84,7 +285,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.6 Muse (Meta) subscriptions, quota, and built-in agent updates first", () => {
-    expect(RELEASES[2]).toEqual({
+    expect(RELEASES[7]).toEqual({
       version: "0.10.6",
       date: "2026-10-13",
       title: "Muse (Meta) subscriptions and quota",
@@ -112,7 +313,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.5 MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails first", () => {
-    expect(RELEASES[3]).toEqual({
+    expect(RELEASES[8]).toEqual({
       version: "0.10.5",
       date: "2026-10-13",
       title: "MCP protocol 2026-07-28, lasting MCP sign-ins, and quieter guardrails",
@@ -147,7 +348,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.4 Session retention, directory-wide guardrail approvals, and bounded reads first", () => {
-    expect(RELEASES[4]).toEqual({
+    expect(RELEASES[9]).toEqual({
       version: "0.10.4",
       date: "2026-10-12",
       title: "Automatic Session retention and directory-wide guardrail approvals",
@@ -178,7 +379,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.3 bounded derived reads, output delivery, and parent-session question answers first", () => {
-    expect(RELEASES[5]).toEqual({
+    expect(RELEASES[10]).toEqual({
       version: "0.10.3",
       date: "2026-10-12",
       title: "Bounded reads and parent-session subagent answers",
@@ -205,7 +406,7 @@ describe("release entries", () => {
   })
 
   test("lists v0.10.2 prompt drafts, guardrail exemptions, and mobile fixes first", () => {
-    expect(RELEASES[6]).toEqual({
+    expect(RELEASES[11]).toEqual({
       version: "0.10.2",
       date: "2026-10-12",
       title: "Prompt drafts, quieter guardrails, and mobile fixes",
@@ -246,7 +447,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.1 on-demand suggestions and read receipts", () => {
-    expect(RELEASES[7]).toEqual({
+    expect(RELEASES[12]).toEqual({
       version: "0.10.1",
       date: "2026-10-11",
       title: "On-demand suggestions and read receipts",
@@ -269,26 +470,26 @@ describe("release entries", () => {
   })
 
   test("retains v0.10.0 merged profiles, Meeting, prediction, and Focus workspace", () => {
-    expect(RELEASES[8]).toMatchObject({
+    expect(RELEASES[13]).toMatchObject({
       version: "0.10.0",
       date: "2026-10-11",
       title: "Concurrent profiles, Meeting, prediction, and a Focus workspace",
       tags: ["Added", "Changed", "Fixed"],
     })
-    expect(RELEASES[8]?.changes).toContainEqual({
+    expect(RELEASES[13]?.changes).toContainEqual({
       tag: "Fixed",
       text: "Remote web requests no longer wait on each other in the relay: independent requests are authorized without holding one another back. Reads, including several reads of one Session, proceed independently; mutations keep arrival order per Session; a cancel waits only for its own request; and agent responses are not held behind status or event processing. Every request is still authorized.",
     })
-    expect(RELEASES[8]?.changes).toContainEqual({
+    expect(RELEASES[13]?.changes).toContainEqual({
       tag: "Changed",
       text: "Prompts show a receipt beneath the bubble. The web shows a static receipt: Sending until the prompt is admitted, Processing while the Session is running, Queued for queued input, and Sent or Read when the Session is idle. The TUI animates a dot trail while sending, shows ✓ once the prompt is admitted (✓ Queued for queued input), and ✓✓ once the model has read it, both while running and after the Session settles.",
     })
-    expect(RELEASES[8]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
-    expect(RELEASES[8]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
+    expect(RELEASES[13]?.changes.map((change) => change.text).join("\n")).not.toContain("Load earlier child changes")
+    expect(RELEASES[13]?.changes.map((change) => change.text).join("\n")).not.toContain("scope tool")
   })
 
   test("retains v0.9.5 model decisions and remote recovery", () => {
-    expect(RELEASES[9]).toEqual({
+    expect(RELEASES[14]).toEqual({
       version: "0.9.5",
       date: "2026-10-08",
       title: "Model-powered decisions and resilient remote access",
@@ -319,7 +520,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.4 independent Claude profiles and native decisions", () => {
-    expect(RELEASES[10]).toEqual({
+    expect(RELEASES[15]).toEqual({
       version: "0.9.4",
       date: "2026-10-07",
       title: "Independent Claude accounts and native decisions",
@@ -350,7 +551,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.3 remote navigation, attention refresh, transcript recovery, and terminal OAuth layout", () => {
-    expect(RELEASES[11]).toEqual({
+    expect(RELEASES[16]).toEqual({
       version: "0.9.3",
       date: "2026-10-07",
       title: "Session navigation and attachment fixes",
@@ -389,7 +590,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.2 submitted prompt visibility", () => {
-    expect(RELEASES[12]).toEqual({
+    expect(RELEASES[17]).toEqual({
       version: "0.9.2",
       date: "2026-10-06",
       title: "Keep submitted prompts visible",
@@ -404,7 +605,7 @@ describe("release entries", () => {
   })
 
   test("retains v0.9.1 Cursor models and machine-local Web diagnostics", () => {
-    expect(RELEASES[13]).toEqual({
+    expect(RELEASES[18]).toEqual({
       version: "0.9.1",
       date: "2026-10-05",
       title: "Cursor models and machine-local Web diagnostics",
@@ -435,7 +636,7 @@ describe("release entries", () => {
   })
 
   test("retains the v0.9.0 runtime and remote cutover", () => {
-    expect(RELEASES[14]).toEqual({
+    expect(RELEASES[19]).toEqual({
       version: "0.9.0",
       date: "2026-10-04",
       title: "Reliable shell recovery and remote protocol v4",
@@ -486,7 +687,7 @@ describe("release entries", () => {
   })
 
   test("retains the previous TUI release after v0.9.0", () => {
-    expect(RELEASES[15]).toEqual({
+    expect(RELEASES[20]).toEqual({
       version: "0.8.12",
       date: "2026-10-03",
       title: "Large images and actionable input requests",
@@ -502,7 +703,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[16]).toEqual({
+    expect(RELEASES[21]).toEqual({
       version: "0.8.11",
       date: "2026-10-02",
       title: "Specific and reliable System alerts",
@@ -549,7 +750,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[17]).toEqual({
+    expect(RELEASES[22]).toEqual({
       version: "0.8.10",
       date: "2026-10-02",
       title: "Keep working while background tasks run",
@@ -565,7 +766,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[18]).toEqual({
+    expect(RELEASES[23]).toEqual({
       version: "0.8.9",
       date: "2026-10-02",
       title: "Skills follow the prompt that invokes them",
@@ -585,7 +786,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[19]).toEqual({
+    expect(RELEASES[24]).toEqual({
       version: "0.8.8",
       date: "2026-10-01",
       title: "Responsive prompts and reliable model selection",
@@ -621,7 +822,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[20]).toEqual({
+    expect(RELEASES[25]).toEqual({
       version: "0.8.7",
       date: "2026-10-01",
       title: "Cursor cache reporting",
@@ -633,7 +834,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[21]).toEqual({
+    expect(RELEASES[26]).toEqual({
       version: "0.8.6",
       date: "2026-10-01",
       title: "Quieter attention notifications",
@@ -645,7 +846,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[22]).toEqual({
+    expect(RELEASES[27]).toEqual({
       version: "0.8.5",
       date: "2026-10-01",
       title: "Machine memory and steadier Session status",
@@ -661,7 +862,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[23]).toEqual({
+    expect(RELEASES[28]).toEqual({
       version: "0.8.4",
       date: "2026-10-01",
       title: "Forced update restarts and steadier Session catalogs",
@@ -685,7 +886,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[24]).toEqual({
+    expect(RELEASES[29]).toEqual({
       version: "0.8.3",
       date: "2026-10-01",
       title: "Cursor models and quotas",
@@ -709,7 +910,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[25]).toEqual({
+    expect(RELEASES[30]).toEqual({
       version: "0.8.2",
       date: "2026-10-01",
       title: "Cursor provider",
@@ -729,7 +930,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[26]).toEqual({
+    expect(RELEASES[31]).toEqual({
       version: "0.8.1",
       date: "2026-10-01",
       title: "Instant remote view transitions",
@@ -757,7 +958,7 @@ describe("release entries", () => {
         },
       ],
     })
-    expect(RELEASES[27]).toEqual({
+    expect(RELEASES[32]).toEqual({
       version: "0.8.0",
       date: "2026-10-01",
       title: "Multiplexed remote delivery and windowed transcripts",
@@ -1627,8 +1828,13 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 31)).toEqual([
+    expect(versions.slice(0, 36)).toEqual([
       "0.11.0-beta.1",
+      "0.10.12",
+      "0.10.11",
+      "0.10.10",
+      "0.10.9",
+      "0.10.8",
       "0.10.7",
       "0.10.6",
       "0.10.5",

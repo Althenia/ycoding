@@ -1,6 +1,6 @@
 # Composed remote relay flow
 
-Run from the repository root on macOS with Rust 1.98 or newer, Bun dependencies, a protobuf compiler, and Google Chrome installed at `/Applications/Google Chrome.app`. Set `PROTOC` when the compiler is not at `/opt/homebrew/bin/protoc`. Keep port 8807 free and serialize this flow with other builds, typechecks, and package-wide suites.
+Run from the repository root on macOS with Rust 1.98 or newer, Bun dependencies, a protobuf compiler, and Google Chrome installed at `/Applications/Google Chrome.app`. Set `PROTOC` when `protoc` is not on `PATH`. Keep port 8807 free and serialize this flow with other builds, typechecks, and package-wide suites.
 
 ```sh
 bun install --frozen-lockfile

@@ -4,7 +4,7 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 4000 last: 4083 };
+option (ycoding.v5.operation_range) = { first: 4000 last: 4087 };
 
 enum Form_When_op {
   FORM_WHEN_OP_EQ = 1;
@@ -205,6 +205,7 @@ enum Session_Message_Shell_status {
   SESSION_MESSAGE_SHELL_STATUS_TIMEOUT = 3;
   SESSION_MESSAGE_SHELL_STATUS_MEMORY_LIMIT = 4;
   SESSION_MESSAGE_SHELL_STATUS_KILLED = 5;
+  SESSION_MESSAGE_SHELL_STATUS_QUEUED = 6;
 }
 
 enum Session_Message_Assistant_type {
@@ -412,9 +413,24 @@ enum Form_StateValue3_status {
   FORM_STATEVALUE3_STATUS_CANCELLED = 1;
 }
 
+enum Form_StateValue4_status {
+  FORM_STATEVALUE4_STATUS_TIMED_OUT = 1;
+}
+
+enum Form_StateValue5_status {
+  FORM_STATEVALUE5_STATUS_DEFERRED = 1;
+}
+
 enum Guardrail_Risk_metric {
   GUARDRAIL_RISK_METRIC_CONFIDENCE = 1;
   GUARDRAIL_RISK_METRIC_PROBABILITY = 2;
+}
+
+enum Guardrail_DecisionChoice {
+  GUARDRAIL_DECISIONCHOICE_APPROVE_ALL = 1;
+  GUARDRAIL_DECISIONCHOICE_APPROVE = 2;
+  GUARDRAIL_DECISIONCHOICE_REJECT = 3;
+  GUARDRAIL_DECISIONCHOICE_ESCALATE = 4;
 }
 
 enum Guardrail_Reply {
@@ -480,6 +496,47 @@ enum session_prompt_Request_payload_delivery {
   SESSION_PROMPT_REQUEST_PAYLOAD_DELIVERY_QUEUE = 2;
 }
 
+enum UsageAccounting_PromptCost_status {
+  USAGEACCOUNTING_PROMPTCOST_STATUS_SETTLED = 1;
+  USAGEACCOUNTING_PROMPTCOST_STATUS_SO_FAR = 2;
+}
+
+enum UsageAccounting_PromptCost_attribution {
+  USAGEACCOUNTING_PROMPTCOST_ATTRIBUTION_COMPLETE = 1;
+  USAGEACCOUNTING_PROMPTCOST_ATTRIBUTION_PARTIAL = 2;
+  USAGEACCOUNTING_PROMPTCOST_ATTRIBUTION_UNATTRIBUTED = 3;
+}
+
+enum UsageAccounting_PromptCost_history {
+  USAGEACCOUNTING_PROMPTCOST_HISTORY_RETAINED = 1;
+  USAGEACCOUNTING_PROMPTCOST_HISTORY_PARTIAL = 2;
+}
+
+enum UsageAccounting_Breakdown_cost_provenance {
+  USAGEACCOUNTING_BREAKDOWN_COST_PROVENANCE_RECORDED = 1;
+  USAGEACCOUNTING_BREAKDOWN_COST_PROVENANCE_CURRENT_CATALOG = 2;
+}
+
+enum UsageAccounting_Helper_source {
+  USAGEACCOUNTING_HELPER_SOURCE_STEP = 1;
+  USAGEACCOUNTING_HELPER_SOURCE_TITLE = 2;
+  USAGEACCOUNTING_HELPER_SOURCE_GOAL = 3;
+  USAGEACCOUNTING_HELPER_SOURCE_COMPACTION = 4;
+  USAGEACCOUNTING_HELPER_SOURCE_DECISION = 5;
+  USAGEACCOUNTING_HELPER_SOURCE_PREDICTION = 6;
+  USAGEACCOUNTING_HELPER_SOURCE_PROMPT = 7;
+}
+
+enum UsageAccounting_Helper_cost_provenance {
+  USAGEACCOUNTING_HELPER_COST_PROVENANCE_RECORDED = 1;
+  USAGEACCOUNTING_HELPER_COST_PROVENANCE_CURRENT_CATALOG = 2;
+}
+
+enum UsageAccounting_PromptCosts_history {
+  USAGEACCOUNTING_PROMPTCOSTS_HISTORY_RETAINED = 1;
+  USAGEACCOUNTING_PROMPTCOSTS_HISTORY_PARTIAL = 2;
+}
+
 enum session_promptGenerate_Request_payload_mode {
   SESSION_PROMPTGENERATE_REQUEST_PAYLOAD_MODE_START = 1;
   SESSION_PROMPTGENERATE_REQUEST_PAYLOAD_MODE_STEER = 2;
@@ -510,6 +567,96 @@ enum SkillConflictNotFoundError__tag {
 
 enum SessionBusyError__tag {
   SESSIONBUSYERROR__TAG_SESSIONBUSYERROR = 1;
+}
+
+enum SessionReview_DecisionValue1_kind {
+  SESSIONREVIEW_DECISIONVALUE1_KIND_QUESTION = 1;
+}
+
+enum SessionReview_DecisionValue2_kind {
+  SESSIONREVIEW_DECISIONVALUE2_KIND_SUBAGENT_QUESTION = 1;
+}
+
+enum SessionReview_DecisionValue3_kind {
+  SESSIONREVIEW_DECISIONVALUE3_KIND_GUARDRAIL = 1;
+}
+
+enum SessionReview_DecisionValue4_kind {
+  SESSIONREVIEW_DECISIONVALUE4_KIND_PERMISSION = 1;
+}
+
+enum SessionReview_DecisionValue5_kind {
+  SESSIONREVIEW_DECISIONVALUE5_KIND_RECOVERY = 1;
+}
+
+enum SessionReview_DecisionValue5_choice {
+  SESSIONREVIEW_DECISIONVALUE5_CHOICE_CONTINUE = 1;
+  SESSIONREVIEW_DECISIONVALUE5_CHOICE_STOP = 2;
+}
+
+enum SessionReview_DecisionValue6_kind {
+  SESSIONREVIEW_DECISIONVALUE6_KIND_QUESTION = 1;
+  SESSIONREVIEW_DECISIONVALUE6_KIND_SUBAGENT_QUESTION = 2;
+}
+
+enum ReviewItemNotFoundError__tag {
+  REVIEWITEMNOTFOUNDERROR__TAG_REVIEWITEMNOTFOUNDERROR = 1;
+}
+
+enum SessionReview_ItemValue1_kind {
+  SESSIONREVIEW_ITEMVALUE1_KIND_QUESTION = 1;
+}
+
+enum SessionReview_Reason {
+  SESSIONREVIEW_REASON_DISABLED = 1;
+  SESSIONREVIEW_REASON_FREE_TEXT = 2;
+  SESSIONREVIEW_REASON_REFUSED = 3;
+  SESSIONREVIEW_REASON_LOW_CONFIDENCE = 4;
+  SESSIONREVIEW_REASON_ESCALATED = 5;
+  SESSIONREVIEW_REASON_ERROR = 6;
+  SESSIONREVIEW_REASON_TIMEOUT = 7;
+  SESSIONREVIEW_REASON_SLEEP_ENTRY = 8;
+  SESSIONREVIEW_REASON_RESTART = 9;
+}
+
+enum SessionReview_FormPayload_type {
+  SESSIONREVIEW_FORMPAYLOAD_TYPE_FORM = 1;
+}
+
+enum SessionReview_QuestionPayload_type {
+  SESSIONREVIEW_QUESTIONPAYLOAD_TYPE_QUESTION = 1;
+}
+
+enum SessionReview_ItemValue2_kind {
+  SESSIONREVIEW_ITEMVALUE2_KIND_SUBAGENT_QUESTION = 1;
+}
+
+enum SessionReview_SubagentQuestionPayload_type {
+  SESSIONREVIEW_SUBAGENTQUESTIONPAYLOAD_TYPE_SUBAGENT_QUESTION = 1;
+}
+
+enum SessionReview_ItemValue3_kind {
+  SESSIONREVIEW_ITEMVALUE3_KIND_GUARDRAIL = 1;
+}
+
+enum SessionReview_GuardrailPayload_type {
+  SESSIONREVIEW_GUARDRAILPAYLOAD_TYPE_GUARDRAIL = 1;
+}
+
+enum SessionReview_ItemValue4_kind {
+  SESSIONREVIEW_ITEMVALUE4_KIND_PERMISSION = 1;
+}
+
+enum SessionReview_PermissionPayload_type {
+  SESSIONREVIEW_PERMISSIONPAYLOAD_TYPE_PERMISSION = 1;
+}
+
+enum SessionReview_ItemValue5_kind {
+  SESSIONREVIEW_ITEMVALUE5_KIND_RECOVERY = 1;
+}
+
+enum SessionReview_RecoveryPayload_type {
+  SESSIONREVIEW_RECOVERYPAYLOAD_TYPE_RECOVERY = 1;
 }
 
 enum SkillNotFoundError__tag {
@@ -587,6 +734,27 @@ enum session_synthetic_Request_payload_delivery {
   SESSION_SYNTHETIC_REQUEST_PAYLOAD_DELIVERY_QUEUE = 2;
 }
 
+enum UsageAccounting_TaskCost_status {
+  USAGEACCOUNTING_TASKCOST_STATUS_SETTLED = 1;
+  USAGEACCOUNTING_TASKCOST_STATUS_SO_FAR = 2;
+}
+
+enum UsageAccounting_TaskCost_attribution {
+  USAGEACCOUNTING_TASKCOST_ATTRIBUTION_COMPLETE = 1;
+  USAGEACCOUNTING_TASKCOST_ATTRIBUTION_PARTIAL = 2;
+  USAGEACCOUNTING_TASKCOST_ATTRIBUTION_UNATTRIBUTED = 3;
+}
+
+enum UsageAccounting_TaskCost_history {
+  USAGEACCOUNTING_TASKCOST_HISTORY_RETAINED = 1;
+  USAGEACCOUNTING_TASKCOST_HISTORY_PARTIAL = 2;
+}
+
+enum UsageAccounting_TaskCosts_history {
+  USAGEACCOUNTING_TASKCOSTS_HISTORY_RETAINED = 1;
+  USAGEACCOUNTING_TASKCOSTS_HISTORY_PARTIAL = 2;
+}
+
 enum SessionTodo_Info_status {
   SESSIONTODO_INFO_STATUS_PENDING = 1;
   SESSIONTODO_INFO_STATUS_IN_PROGRESS = 2;
@@ -608,6 +776,13 @@ enum session_usageReport_Request_query_group {
   SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_SESSION = 5;
   SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROJECT = 6;
   SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_AGENT = 7;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROVIDER = 8;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROVIDER_PROFILE_MODEL = 9;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROVIDER_MODEL = 10;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_MODEL_ID = 11;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROFILE = 12;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_PROMPT = 13;
+  SESSION_USAGEREPORT_REQUEST_QUERY_GROUP_TASK = 14;
 }
 
 enum session_usageReport_Request_query_sort {
@@ -657,6 +832,47 @@ enum SessionLogItemValue4_type {
 
 enum SessionLogItemValue5_type {
   SESSIONLOGITEMVALUE5_TYPE_SESSION_PROJECT_ARTIFACTS_ENDED = 1;
+}
+
+enum SessionLogItemValue53_type {
+  SESSIONLOGITEMVALUE53_TYPE_SESSION_GUARDRAIL_DISMISSED = 1;
+}
+
+enum SessionLogItemValue54_type {
+  SESSIONLOGITEMVALUE54_TYPE_SESSION_GUARDRAIL_ESCALATED = 1;
+}
+
+enum SessionLogItemValue55_type {
+  SESSIONLOGITEMVALUE55_TYPE_SESSION_GUARDRAIL_DECIDED = 1;
+}
+
+enum SessionLogItemValue56_type {
+  SESSIONLOGITEMVALUE56_TYPE_SESSION_REVIEW_DEFERRED = 1;
+}
+
+enum SessionReview_Kind {
+  SESSIONREVIEW_KIND_QUESTION = 1;
+  SESSIONREVIEW_KIND_SUBAGENT_QUESTION = 2;
+  SESSIONREVIEW_KIND_GUARDRAIL = 3;
+  SESSIONREVIEW_KIND_PERMISSION = 4;
+  SESSIONREVIEW_KIND_RECOVERY = 5;
+}
+
+enum SessionLogItemValue57_type {
+  SESSIONLOGITEMVALUE57_TYPE_SESSION_REVIEW_DECIDED = 1;
+}
+
+enum SessionLogItemValue58_type {
+  SESSIONLOGITEMVALUE58_TYPE_SESSION_REVIEW_WITHDRAWN = 1;
+}
+
+enum SessionLogItemValue58_data_reason {
+  SESSIONLOGITEMVALUE58_DATA_REASON_REVERTED = 1;
+  SESSIONLOGITEMVALUE58_DATA_REASON_TASK_CLOSED = 2;
+}
+
+enum SessionLogItemValue59_type {
+  SESSIONLOGITEMVALUE59_TYPE_SESSION_REVIEW_CONSUMED = 1;
 }
 
 enum SessionLogItemValue6_type {
@@ -798,6 +1014,10 @@ enum SessionLogItemValue24_data_changeValue6_type {
   SESSIONLOGITEMVALUE24_DATA_CHANGEVALUE6_TYPE_QUESTION_ANSWERED = 1;
 }
 
+enum SessionLogItemValue24_data_changeValue12_type {
+  SESSIONLOGITEMVALUE24_DATA_CHANGEVALUE12_TYPE_QUESTION_TIMED_OUT = 1;
+}
+
 enum SessionLogItemValue24_data_changeValue7_type {
   SESSIONLOGITEMVALUE24_DATA_CHANGEVALUE7_TYPE_CANCEL_REQUESTED = 1;
 }
@@ -816,6 +1036,10 @@ enum SessionLogItemValue24_data_changeValue10_type {
 
 enum SessionLogItemValue24_data_changeValue11_type {
   SESSIONLOGITEMVALUE24_DATA_CHANGEVALUE11_TYPE_LOST = 1;
+}
+
+enum SessionLogItemValue24_data_changeValue13_type {
+  SESSIONLOGITEMVALUE24_DATA_CHANGEVALUE13_TYPE_RESUMED = 1;
 }
 
 enum SessionLogItemValue25_type {
@@ -863,6 +1087,10 @@ enum SessionLogItemValue32_type {
   SESSIONLOGITEMVALUE32_TYPE_SESSION_STEP_FAILED = 1;
 }
 
+enum SessionLogItemValue60_type {
+  SESSIONLOGITEMVALUE60_TYPE_SESSION_STEP_REROUTED = 1;
+}
+
 enum SessionLogItemValue33_type {
   SESSIONLOGITEMVALUE33_TYPE_SESSION_TEXT_STARTED = 1;
 }
@@ -899,10 +1127,6 @@ enum SessionLogItemValue38_type {
 
 enum SessionLogItemValue39_type {
   SESSIONLOGITEMVALUE39_TYPE_SESSION_TOOL_CALLED = 1;
-}
-
-enum SessionLogItemValue40_type {
-  SESSIONLOGITEMVALUE40_TYPE_SESSION_TOOL_PROGRESS = 1;
 }
 
 enum SessionLogItemValue41_type {
@@ -966,6 +1190,7 @@ enum SessionLogItemValue52_type {
 enum SessionsQuery_status {
   SESSIONSQUERY_STATUS_RUNNING = 1;
   SESSIONSQUERY_STATUS_IDLE = 2;
+  SESSIONSQUERY_STATUS_WAITING = 3;
 }
 
 enum SessionsQuery_searchFields {
@@ -1055,7 +1280,7 @@ message Form_When {
 message Form_When_value {
   oneof kind {
     LosslessString value_1 = 1;
-    double value_2 = 2;
+    double value_2 = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.When" }];
     bool value_3 = 3;
   }
 }
@@ -1077,9 +1302,9 @@ message Form_NumberField {
   optional bool required = 4;
   optional Form_NumberField_when when = 5;
   required Form_NumberField_type type = 6;
-  optional double minimum = 7;
-  optional double maximum = 8;
-  optional double default = 9;
+  optional double minimum = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.NumberField" }];
+  optional double maximum = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.NumberField" }];
+  optional double default = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.NumberField" }];
 }
 
 message Form_NumberField_when {
@@ -1093,9 +1318,9 @@ message Form_IntegerField {
   optional bool required = 4;
   optional Form_IntegerField_when when = 5;
   required Form_IntegerField_type type = 6;
-  optional double minimum = 7;
-  optional double maximum = 8;
-  optional double default = 9;
+  optional double minimum = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.IntegerField" }];
+  optional double maximum = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.IntegerField" }];
+  optional double default = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.IntegerField" }];
 }
 
 message Form_IntegerField_when {
@@ -1369,13 +1594,16 @@ message session_autonomy_get_Request {
 }
 
 message session_autonomy_get_Result {
-  required SessionAutonomyState data = 1;
+  required SessionAutonomyView data = 1;
 }
 
-message SessionAutonomyState {
+message SessionAutonomyView {
   required SessionAutonomyMode mode = 1;
   required SessionAutonomyYolo yolo = 2;
+  optional bool autoAnswer = 5;
   optional SessionAutonomyGoal goal = 3;
+  optional SessionAutonomySleep sleep = 4;
+  required SessionAutonomyEffective effective = 6;
 }
 
 message SessionAutonomyYolo {
@@ -1383,8 +1611,8 @@ message SessionAutonomyYolo {
     double value_1 = 1;
     double value_2 = 2;
     double value_3 = 3;
-    double value_4 = 4;
   }
+  reserved 4;
 }
 
 message SessionAutonomyGoal {
@@ -1396,6 +1624,19 @@ message SessionAutonomyGoal {
   optional LosslessString lastProgressDigest = 6;
 }
 
+message SessionAutonomySleep {
+
+}
+
+message SessionAutonomyEffective {
+  required SessionAutonomyYolo yolo = 1;
+  required bool asleep = 2;
+  required bool guardrailsEnabled = 3;
+  required bool ordinaryReviewsAuto = 4;
+  required bool modelReviews = 5;
+  required bool hardModelReviews = 6;
+}
+
 message session_autonomy_set_Request_params {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
 }
@@ -1404,6 +1645,8 @@ message SessionAutonomySet {
   oneof kind {
     SessionAutonomySetValue1 value_1 = 1;
     SessionAutonomySetValue2 value_2 = 2;
+    SessionAutonomySetValue3 value_3 = 3;
+    SessionAutonomySetValue4 value_4 = 4;
   }
 }
 
@@ -1425,13 +1668,21 @@ message SessionAutonomySetValue2 {
   required SessionAutonomyYolo yolo = 1;
 }
 
+message SessionAutonomySetValue3 {
+  required bool sleep = 1;
+}
+
+message SessionAutonomySetValue4 {
+  required bool autoAnswer = 1;
+}
+
 message session_autonomy_set_Request {
   required session_autonomy_set_Request_params params = 1;
   required SessionAutonomySet payload = 2;
 }
 
 message session_autonomy_set_Result {
-  required SessionAutonomyState data = 1;
+  required SessionAutonomyView data = 1;
 }
 
 message UnknownError {
@@ -1989,6 +2240,7 @@ message Session_Message_Assistant {
   optional Session_Message_Assistant_diagnostics diagnostics = 13;
   optional Session_StructuredError error = 14;
   optional Session_Message_Assistant_Retry retry = 15;
+  optional Session_Message_Assistant_reroutes reroutes = 16;
 }
 
 message Session_Message_Assistant_metadata {
@@ -2228,6 +2480,16 @@ message Session_ProviderCacheDiagnostics {
 message Session_Message_Assistant_Retry {
   required uint64 attempt = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-message.ts#SessionMessage.Assistant" integer_min: "1" integer_max: "9007199254740991" }];
   required double at = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  required Session_StructuredError error = 3;
+}
+
+message Session_Message_Assistant_reroutes {
+  repeated Session_Message_Assistant_Reroute items = 1;
+}
+
+message Session_Message_Assistant_Reroute {
+  required Model_Ref from = 1;
+  required Model_Ref model = 2;
   required Session_StructuredError error = 3;
 }
 
@@ -2578,6 +2840,8 @@ message Session_CacheDiagnostics_cache {
 }
 
 message Session_GenerationSpeedHistory {
+  optional Model_Ref model = 3;
+  optional LosslessString unreportedReason = 4;
   optional Session_GenerationSpeed latest = 1;
   required Session_GenerationSpeedHistory_recent recent = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-cache-diagnostics.ts#SessionCacheDiagnostics.GenerationSpeedHistory" }];
 }
@@ -2587,6 +2851,7 @@ message Session_GenerationSpeed {
   required uint64 tokens = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-cache-diagnostics.ts#SessionCacheDiagnostics.GenerationSpeed" integer_min: "1" integer_max: "9007199254740991" }];
   required uint64 durationNs = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-cache-diagnostics.ts#SessionCacheDiagnostics.GenerationSpeed" integer_min: "1" integer_max: "9007199254740991" }];
   required double tokensPerSecond = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-cache-diagnostics.ts#SessionCacheDiagnostics.GenerationSpeed" }];
+  optional bool estimated = 5;
 }
 
 message Session_GenerationSpeedHistory_recent {
@@ -2785,6 +3050,8 @@ message Form_State {
     Form_StateValue1 value_1 = 1;
     Form_StateValue2 value_2 = 2;
     Form_StateValue3 value_3 = 3;
+    Form_StateValue4 value_4 = 4;
+    Form_StateValue5 value_5 = 5;
   }
 }
 
@@ -2799,6 +3066,16 @@ message Form_StateValue2 {
 
 message Form_StateValue3 {
   required Form_StateValue3_status status = 1;
+}
+
+message Form_StateValue4 {
+  required Form_StateValue4_status status = 1;
+  required uint64 seconds = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.State" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message Form_StateValue5 {
+  required Form_StateValue5_status status = 1;
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/form.ts#Form.State" }];
 }
 
 message session_generate_Request_params {
@@ -2865,6 +3142,7 @@ message Guardrail_Request {
   required bool standard = 8;
   optional bool hardReview = 9;
   optional Guardrail_Risk risk = 10;
+  optional Guardrail_Escalation escalation = 12;
   optional Guardrail_Request_metadata metadata = 11;
 }
 
@@ -2881,6 +3159,22 @@ message Guardrail_Risk {
   required LosslessString label = 2;
   required double score = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Risk" }];
   required Guardrail_Risk_metric metric = 4;
+}
+
+message Guardrail_Escalation {
+  optional Guardrail_DecisionChoice choice = 1;
+  optional double confidence = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Escalation" }];
+  optional Guardrail_Escalation_grades grades = 3;
+}
+
+message Guardrail_Escalation_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message Guardrail_Grade {
+  required Guardrail_DecisionChoice choice = 1;
+  required double confidence = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Grade" }];
+  required LosslessString evidence = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Grade" utf16_max: 500 }];
 }
 
 message Guardrail_Request_metadata {
@@ -2936,6 +3230,8 @@ message Guardrail_Status {
   required uint64 blocked = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" integer_min: "0" integer_max: "9007199254740991" }];
   required Guardrail_Status_counters counters = 6;
   required Guardrail_Status_invalidFiles invalidFiles = 7;
+  optional Guardrail_Status_dismissals dismissals = 8;
+  optional Guardrail_Status_decisions decisions = 9;
 }
 
 message Guardrail_Status_counters {
@@ -2950,6 +3246,48 @@ message Guardrail_Counter {
 }
 
 message Guardrail_Status_invalidFiles {
+  repeated LosslessString items = 1;
+}
+
+message Guardrail_Status_dismissals {
+  repeated Guardrail_Status_dismissalsItem items = 1;
+}
+
+message Guardrail_Status_dismissalsItem {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" }];
+  required uint64 created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString eventID = 3;
+  required LosslessString ruleID = 4;
+  required double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" }];
+  optional Guardrail_Source source = 6;
+}
+
+message Guardrail_Source {
+  required LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Source" }];
+  required LosslessString callID = 2;
+}
+
+message Guardrail_Status_decisions {
+  repeated Guardrail_Status_decisionsItem items = 1;
+}
+
+message Guardrail_Status_decisionsItem {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" }];
+  required uint64 created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString requestID = 3;
+  required Guardrail_Reply reply = 4;
+  optional Guardrail_DecisionChoice choice = 5;
+  optional double confidence = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/guardrail.ts#Guardrail.Status" }];
+  optional Guardrail_Status_decisionsItem_grades grades = 7;
+  optional Guardrail_Status_decisionsItem_ruleIDs ruleIDs = 8;
+  optional Guardrail_Source source = 9;
+}
+
+message Guardrail_Status_decisionsItem_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message Guardrail_Status_decisionsItem_ruleIDs {
   repeated LosslessString items = 1;
 }
 
@@ -3036,6 +3374,8 @@ message SessionsQuery {
   optional LosslessString cursor = 9;
   optional SessionsQuery_status status = 10;
   optional SessionsQuery_searchFields searchFields = 11;
+  optional LosslessString around = 12;
+  optional uint64 before = 13 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#SessionListBefore" integer_min: "0" integer_max: "199" }];
 }
 
 message SessionsQuery_parentID {
@@ -3052,6 +3392,8 @@ message session_list_Request {
 message SessionsResponse {
   required SessionsResponse_data data = 1;
   required SessionsResponse_cursor cursor = 2;
+  optional Status status = 3;
+  optional bool stale = 4;
 }
 
 message SessionsResponse_data {
@@ -3403,6 +3745,81 @@ message session_prompt_Result {
   required SessionPending_User data = 1;
 }
 
+message session_promptCosts_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+}
+
+message UsageAccounting_PromptInput {
+  required UsageAccounting_PromptInput_inputIDs inputIDs = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.PromptInput" }];
+}
+
+message UsageAccounting_PromptInput_inputIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.PromptInput" count_min: 1 count_max: 100 }];
+}
+
+message session_promptCosts_Request {
+  required session_promptCosts_Request_params params = 1;
+  required UsageAccounting_PromptInput query = 2;
+}
+
+message session_promptCosts_Result {
+  required UsageAccounting_PromptCosts data = 1;
+}
+
+message UsageAccounting_PromptCosts {
+  required UsageAccounting_PromptCosts_units units = 1;
+  required UsageAccounting_Breakdown unattributed = 2;
+  required UsageAccounting_PromptCosts_history history = 3;
+}
+
+message UsageAccounting_PromptCosts_units {
+  repeated UsageAccounting_PromptCost items = 1;
+}
+
+message UsageAccounting_PromptCost {
+  required UsageAnchor_Ref anchor = 1;
+  required UsageAccounting_PromptCost_status status = 2;
+  required UsageAccounting_PromptCost_attribution attribution = 3;
+  required UsageAccounting_PromptCost_history history = 4;
+  required UsageAccounting_Breakdown total = 5;
+  required UsageAccounting_Breakdown main = 6;
+  required UsageAccounting_Breakdown children = 7;
+  required UsageAccounting_PromptCost_helpers helpers = 8;
+}
+
+message UsageAccounting_Breakdown {
+  required uint64 requests = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" integer_min: "0" integer_max: "9007199254740991" }];
+  required TokenUsage_Info tokens = 2;
+  required UsageAccounting_Breakdown_cost cost = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" }];
+}
+
+message UsageAccounting_Breakdown_cost {
+  optional double total = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" }];
+  optional double known = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" }];
+  required uint64 pricedRequests = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 unpricedRequests = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Breakdown" integer_min: "0" integer_max: "9007199254740991" }];
+  optional UsageAccounting_Breakdown_cost_provenance provenance = 5;
+}
+
+message UsageAccounting_PromptCost_helpers {
+  repeated UsageAccounting_Helper items = 1;
+}
+
+message UsageAccounting_Helper {
+  required UsageAccounting_Helper_source source = 1;
+  required uint64 requests = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" integer_min: "0" integer_max: "9007199254740991" }];
+  required TokenUsage_Info tokens = 3;
+  required UsageAccounting_Helper_cost cost = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" }];
+}
+
+message UsageAccounting_Helper_cost {
+  optional double total = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" }];
+  optional double known = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" }];
+  required uint64 pricedRequests = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 unpricedRequests = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.Helper" integer_min: "0" integer_max: "9007199254740991" }];
+  optional UsageAccounting_Helper_cost_provenance provenance = 5;
+}
+
 message session_promptGenerate_Request_params {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
 }
@@ -3607,6 +4024,340 @@ message session_revert_stage_Result {
   required Session_Revert data = 1;
 }
 
+message session_review_decide_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/review.ts#makeReviewGroup" }];
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/review.ts#makeReviewGroup" }];
+}
+
+message SessionReview_Decide {
+  required SessionReview_Decision decision = 1;
+}
+
+message SessionReview_Decision {
+  oneof kind {
+    SessionReview_DecisionValue1 value_1 = 1;
+    SessionReview_DecisionValue2 value_2 = 2;
+    SessionReview_DecisionValue3 value_3 = 3;
+    SessionReview_DecisionValue4 value_4 = 4;
+    SessionReview_DecisionValue5 value_5 = 5;
+    SessionReview_DecisionValue6 value_6 = 6;
+  }
+}
+
+message SessionReview_DecisionValue1 {
+  required SessionReview_DecisionValue1_kind kind = 1;
+  required SessionReview_DecisionValue1_answers answers = 2;
+}
+
+message SessionReview_DecisionValue1_answers {
+  oneof kind {
+    Form_Answer value_1 = 1;
+    SessionReview_DecisionValue1_answersValue2 value_2 = 2;
+  }
+}
+
+message SessionReview_DecisionValue1_answersValue2 {
+  repeated Question_Answer items = 1;
+}
+
+message SessionReview_DecisionValue2 {
+  required SessionReview_DecisionValue2_kind kind = 1;
+  required LosslessString text = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Decision" utf16_max: 65536 }];
+  optional Value data = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Decision" }];
+}
+
+message SessionReview_DecisionValue3 {
+  required SessionReview_DecisionValue3_kind kind = 1;
+  required Guardrail_Reply reply = 2;
+}
+
+message SessionReview_DecisionValue4 {
+  required SessionReview_DecisionValue4_kind kind = 1;
+  required Permission_Reply reply = 2;
+}
+
+message SessionReview_DecisionValue5 {
+  required SessionReview_DecisionValue5_kind kind = 1;
+  required SessionReview_DecisionValue5_choice choice = 2;
+}
+
+message SessionReview_DecisionValue6 {
+  required SessionReview_DecisionValue6_kind kind = 1;
+  required bool dismissed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Decision" }];
+}
+
+message session_review_decide_Request {
+  required session_review_decide_Request_params params = 1;
+  required SessionReview_Decide payload = 2;
+}
+
+message session_review_decide_Result {
+  required Empty data = 1;
+}
+
+message ReviewItemNotFoundError {
+  required ReviewItemNotFoundError__tag _tag = 1;
+  required LosslessString itemID = 2;
+  required LosslessString message = 3;
+}
+
+message session_review_list_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/review.ts#makeReviewGroup" }];
+}
+
+message session_review_list_Request {
+  required session_review_list_Request_params params = 1;
+}
+
+message session_review_list_Result {
+  required session_review_list_Result_data data = 1;
+}
+
+message session_review_list_Result_data {
+  repeated SessionReview_Item items = 1;
+}
+
+message SessionReview_Item {
+  oneof kind {
+    SessionReview_ItemValue1 value_1 = 1;
+    SessionReview_ItemValue2 value_2 = 2;
+    SessionReview_ItemValue3 value_3 = 3;
+    SessionReview_ItemValue4 value_4 = 4;
+    SessionReview_ItemValue5 value_5 = 5;
+  }
+}
+
+message SessionReview_ItemValue1 {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required SessionReview_ItemValue1_kind kind = 2;
+  required SessionReview_Reason reason = 3;
+  optional LosslessString choice = 4;
+  optional double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  optional SessionReview_ItemValue1_grades grades = 6;
+  required SessionReview_Origin origin = 7;
+  required SessionReview_ItemValue1_payload payload = 8;
+  required LosslessString sessionID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString rootSessionID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString sessionTitle = 11;
+  required uint64 created = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionReview_ItemValue1_child child = 13;
+}
+
+message SessionReview_ItemValue1_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_Origin {
+  oneof kind {
+    SessionReview_OriginValue1 value_1 = 1;
+    SessionReview_OriginValue2 value_2 = 2;
+    SessionReview_OriginValue3 value_3 = 3;
+  }
+}
+
+message SessionReview_OriginValue1 {
+  required LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Origin" }];
+  required LosslessString callID = 2;
+}
+
+message SessionReview_OriginValue2 {
+  required LosslessString questionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Origin" }];
+}
+
+message SessionReview_OriginValue3 {
+  required LosslessString requestID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Origin" utf16_min: 1 }];
+}
+
+message SessionReview_ItemValue1_payload {
+  oneof kind {
+    SessionReview_FormPayload value_1 = 1;
+    SessionReview_QuestionPayload value_2 = 2;
+  }
+}
+
+message SessionReview_FormPayload {
+  required SessionReview_FormPayload_type type = 1;
+  required LosslessString title = 2;
+  required Form_Fields fields = 3;
+  optional bool questionTool = 4;
+}
+
+message SessionReview_QuestionPayload {
+  required SessionReview_QuestionPayload_type type = 1;
+  required SessionReview_QuestionPayload_questions questions = 2;
+}
+
+message SessionReview_QuestionPayload_questions {
+  repeated Question_Info items = 1;
+}
+
+message SessionReview_ItemValue1_child {
+  required LosslessString agent = 1;
+  required LosslessString description = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" utf16_max: 4096 }];
+}
+
+message SessionReview_ItemValue2 {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required SessionReview_ItemValue2_kind kind = 2;
+  required SessionReview_Reason reason = 3;
+  optional LosslessString choice = 4;
+  optional double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  optional SessionReview_ItemValue2_grades grades = 6;
+  required SessionReview_Origin origin = 7;
+  required SessionReview_SubagentQuestionPayload payload = 8;
+  required LosslessString sessionID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString rootSessionID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString sessionTitle = 11;
+  required uint64 created = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionReview_ItemValue2_child child = 13;
+}
+
+message SessionReview_ItemValue2_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_SubagentQuestionPayload {
+  required SessionReview_SubagentQuestionPayload_type type = 1;
+  required LosslessString text = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.SubagentQuestionPayload" utf16_max: 8192 }];
+  optional Value data = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.SubagentQuestionPayload" }];
+}
+
+message SessionReview_ItemValue2_child {
+  required LosslessString agent = 1;
+  required LosslessString description = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" utf16_max: 4096 }];
+}
+
+message SessionReview_ItemValue3 {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required SessionReview_ItemValue3_kind kind = 2;
+  required SessionReview_Reason reason = 3;
+  optional LosslessString choice = 4;
+  optional double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  optional SessionReview_ItemValue3_grades grades = 6;
+  required SessionReview_Origin origin = 7;
+  required SessionReview_GuardrailPayload payload = 8;
+  required LosslessString sessionID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString rootSessionID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString sessionTitle = 11;
+  required uint64 created = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionReview_ItemValue3_child child = 13;
+}
+
+message SessionReview_ItemValue3_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_GuardrailPayload {
+  required SessionReview_GuardrailPayload_type type = 1;
+  required LosslessString action = 2;
+  required SessionReview_GuardrailPayload_resources resources = 3;
+  required SessionReview_GuardrailPayload_ruleIDs ruleIDs = 4;
+  required LosslessString reason = 5;
+  required bool hardReview = 6;
+  required SessionReview_GuardrailPayload_directories directories = 7;
+  required LosslessString fingerprint = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.GuardrailPayload" }];
+  required LosslessString requestID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.GuardrailPayload" }];
+}
+
+message SessionReview_GuardrailPayload_resources {
+  repeated LosslessString items = 1;
+}
+
+message SessionReview_GuardrailPayload_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message SessionReview_GuardrailPayload_directories {
+  repeated LosslessString items = 1;
+}
+
+message SessionReview_ItemValue3_child {
+  required LosslessString agent = 1;
+  required LosslessString description = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" utf16_max: 4096 }];
+}
+
+message SessionReview_ItemValue4 {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required SessionReview_ItemValue4_kind kind = 2;
+  required SessionReview_Reason reason = 3;
+  optional LosslessString choice = 4;
+  optional double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  optional SessionReview_ItemValue4_grades grades = 6;
+  required SessionReview_Origin origin = 7;
+  required SessionReview_PermissionPayload payload = 8;
+  required LosslessString sessionID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString rootSessionID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString sessionTitle = 11;
+  required uint64 created = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionReview_ItemValue4_child child = 13;
+}
+
+message SessionReview_ItemValue4_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_PermissionPayload {
+  required SessionReview_PermissionPayload_type type = 1;
+  required LosslessString action = 2;
+  required SessionReview_PermissionPayload_resources resources = 3;
+  optional SessionReview_PermissionPayload_save save = 4;
+  required LosslessString fingerprint = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.PermissionPayload" }];
+  required LosslessString requestID = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.PermissionPayload" }];
+}
+
+message SessionReview_PermissionPayload_resources {
+  repeated LosslessString items = 1;
+}
+
+message SessionReview_PermissionPayload_save {
+  repeated LosslessString items = 1;
+}
+
+message SessionReview_ItemValue4_child {
+  required LosslessString agent = 1;
+  required LosslessString description = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" utf16_max: 4096 }];
+}
+
+message SessionReview_ItemValue5 {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required SessionReview_ItemValue5_kind kind = 2;
+  required SessionReview_Reason reason = 3;
+  optional LosslessString choice = 4;
+  optional double confidence = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  optional SessionReview_ItemValue5_grades grades = 6;
+  required SessionReview_Origin origin = 7;
+  required SessionReview_RecoveryPayload payload = 8;
+  required LosslessString sessionID = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString rootSessionID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" }];
+  required LosslessString sessionTitle = 11;
+  required uint64 created = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionReview_ItemValue5_child child = 13;
+}
+
+message SessionReview_ItemValue5_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_RecoveryPayload {
+  required SessionReview_RecoveryPayload_type type = 1;
+  required SessionReview_RecoveryPayload_tools tools = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.RecoveryPayload" }];
+}
+
+message SessionReview_RecoveryPayload_tools {
+  repeated SessionReview_RecoveryTool items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.RecoveryPayload" count_min: 1 }];
+}
+
+message SessionReview_RecoveryTool {
+  required LosslessString messageID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.RecoveryTool" }];
+  required LosslessString callID = 2;
+  required LosslessString name = 3;
+}
+
+message SessionReview_ItemValue5_child {
+  required LosslessString agent = 1;
+  required LosslessString description = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-review.ts#SessionReview.Item" utf16_max: 4096 }];
+}
+
 message session_shell_Request_params {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
 }
@@ -3786,6 +4537,7 @@ message SessionOrchestration_Task {
   required uint64 revision = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Task" integer_min: "0" integer_max: "9007199254740991" }];
   required SessionOrchestration_Task_time time = 11;
   optional uint64 pinnedAt = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Task" integer_min: "0" integer_max: "9007199254740991" }];
+  optional SessionOrchestration_Task_stoppedRecovery stoppedRecovery = 13;
 }
 
 message SessionOrchestration_Progress {
@@ -3798,11 +4550,16 @@ message SessionOrchestration_Question {
   required LosslessString text = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Question" utf16_max: 8192 }];
   optional Value data = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Question" }];
   required uint64 time = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Question" integer_min: "0" integer_max: "9007199254740991" }];
+  optional bool deferred = 5;
 }
 
 message SessionOrchestration_Task_time {
   required uint64 created = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Task" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 updated = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Task" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
+message SessionOrchestration_Task_stoppedRecovery {
+  required LosslessString itemID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Task" }];
 }
 
 message session_subagent_cancel_Request_params {
@@ -3991,6 +4748,53 @@ message session_synthetic_Result {
   required SessionPending_Synthetic data = 1;
 }
 
+message session_taskCosts_Request_params {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+}
+
+message UsageAccounting_TaskInput {
+  required UsageAccounting_TaskInput_sessionIDs sessionIDs = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.TaskInput" }];
+}
+
+message UsageAccounting_TaskInput_sessionIDs {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.TaskInput" count_min: 1 count_max: 100 }];
+}
+
+message session_taskCosts_Request {
+  required session_taskCosts_Request_params params = 1;
+  required UsageAccounting_TaskInput query = 2;
+}
+
+message session_taskCosts_Result {
+  required UsageAccounting_TaskCosts data = 1;
+}
+
+message UsageAccounting_TaskCosts {
+  required UsageAccounting_TaskCosts_tasks tasks = 1;
+  required UsageAccounting_Breakdown total = 2;
+  required UsageAccounting_TaskCosts_history history = 3;
+}
+
+message UsageAccounting_TaskCosts_tasks {
+  repeated UsageAccounting_TaskCost items = 1;
+}
+
+message UsageAccounting_TaskCost {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-accounting.ts#UsageAccounting.TaskCost" }];
+  optional UsageAnchor_Ref usageAnchor = 2;
+  required UsageAccounting_TaskCost_status status = 3;
+  required UsageAccounting_TaskCost_attribution attribution = 4;
+  required UsageAccounting_TaskCost_history history = 5;
+  required UsageAccounting_Breakdown total = 6;
+  required UsageAccounting_Breakdown main = 7;
+  required UsageAccounting_Breakdown children = 8;
+  required UsageAccounting_TaskCost_helpers helpers = 9;
+}
+
+message UsageAccounting_TaskCost_helpers {
+  repeated UsageAccounting_Helper items = 1;
+}
+
 message session_todo_list_Request_params {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
 }
@@ -4080,6 +4884,10 @@ message session_usageReport_Request_params {
 
 message session_usageReport_Request_query {
   required session_usageReport_Request_query_group group = 1;
+  optional LosslessString providerID = 9;
+  optional LosslessString profile = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  optional LosslessString modelID = 11;
+  optional LosslessString selectedEffort = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
   optional LosslessString timeZone = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 utf16_max: 128 }];
   optional uint64 from = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 to = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
@@ -4095,7 +4903,7 @@ message session_usageReport_Request {
 }
 
 message session_usageReport_Result {
-  required ProviderRequest_Report data = 1;
+  required ProviderRequest_Report data = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" }];
 }
 
 message session_wait_Request_params {
@@ -4117,6 +4925,13 @@ message SessionLogItem {
     SessionLogItemValue3 value_3 = 3;
     SessionLogItemValue4 value_4 = 4;
     SessionLogItemValue5 value_5 = 5;
+    SessionLogItemValue53 value_53 = 53;
+    SessionLogItemValue54 value_54 = 54;
+    SessionLogItemValue55 value_55 = 55;
+    SessionLogItemValue56 value_56 = 56;
+    SessionLogItemValue57 value_57 = 57;
+    SessionLogItemValue58 value_58 = 58;
+    SessionLogItemValue59 value_59 = 59;
     SessionLogItemValue6 value_6 = 6;
     SessionLogItemValue7 value_7 = 7;
     SessionLogItemValue8 value_8 = 8;
@@ -4144,6 +4959,7 @@ message SessionLogItem {
     SessionLogItemValue30 value_30 = 30;
     SessionLogItemValue31 value_31 = 31;
     SessionLogItemValue32 value_32 = 32;
+    SessionLogItemValue60 value_60 = 60;
     SessionLogItemValue33 value_33 = 33;
     SessionLogItemValue34 value_34 = 34;
     SessionLogItemValue35 value_35 = 35;
@@ -4151,7 +4967,6 @@ message SessionLogItem {
     SessionLogItemValue37 value_37 = 37;
     SessionLogItemValue38 value_38 = 38;
     SessionLogItemValue39 value_39 = 39;
-    SessionLogItemValue40 value_40 = 40;
     SessionLogItemValue41 value_41 = 41;
     SessionLogItemValue42 value_42 = 42;
     SessionLogItemValue43 value_43 = 43;
@@ -4165,6 +4980,7 @@ message SessionLogItem {
     SessionLogItemValue51 value_51 = 51;
     SessionLogItemValue52 value_52 = 52;
   }
+  reserved 40;
 }
 
 message SessionLogItemValue1 {
@@ -4338,6 +5154,278 @@ message SessionLogItemValue5_data {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required LosslessString oldProjectID = 2;
   required LosslessString newProjectID = 3;
+}
+
+message SessionLogItemValue53 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue53_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue53_type type = 5;
+  required SessionLogItemValue53_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue53_data data = 8;
+}
+
+message SessionLogItemValue53_metadata {
+  repeated SessionLogItemValue53_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue53_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue53_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue53_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString reviewSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString ruleID = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double confidence = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  optional Guardrail_Source source = 5;
+}
+
+message SessionLogItemValue54 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue54_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue54_type type = 5;
+  required SessionLogItemValue54_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue54_data data = 8;
+}
+
+message SessionLogItemValue54_metadata {
+  repeated SessionLogItemValue54_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue54_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue54_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue54_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString requestID = 2;
+  optional Guardrail_DecisionChoice choice = 3;
+  optional double confidence = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  optional SessionLogItemValue54_data_grades grades = 5;
+  optional SessionLogItemValue54_data_ruleIDs ruleIDs = 6;
+  optional Guardrail_Source source = 7;
+}
+
+message SessionLogItemValue54_data_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionLogItemValue54_data_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message SessionLogItemValue55 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue55_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue55_type type = 5;
+  required SessionLogItemValue55_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue55_data data = 8;
+}
+
+message SessionLogItemValue55_metadata {
+  repeated SessionLogItemValue55_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue55_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue55_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue55_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString reviewSessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString requestID = 3;
+  required Guardrail_Reply reply = 4;
+  optional Guardrail_DecisionChoice choice = 5;
+  optional SessionLogItemValue55_data_grades grades = 6;
+  optional double confidence = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  optional SessionLogItemValue55_data_ruleIDs ruleIDs = 8;
+  optional Guardrail_Source source = 9;
+}
+
+message SessionLogItemValue55_data_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionLogItemValue55_data_ruleIDs {
+  repeated LosslessString items = 1;
+}
+
+message SessionLogItemValue56 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue56_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue56_type type = 5;
+  required SessionLogItemValue56_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue56_data data = 8;
+}
+
+message SessionLogItemValue56_metadata {
+  repeated SessionLogItemValue56_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue56_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue56_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue56_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required SessionReview_Kind kind = 3;
+  required SessionReview_Reason reason = 4;
+  optional LosslessString choice = 5;
+  optional double confidence = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  optional SessionLogItemValue56_data_grades grades = 7;
+  required SessionReview_Origin origin = 8;
+  required SessionReview_Payload payload = 9;
+}
+
+message SessionLogItemValue56_data_grades {
+  repeated Guardrail_Grade items = 1;
+}
+
+message SessionReview_Payload {
+  oneof kind {
+    SessionReview_FormPayload value_1 = 1;
+    SessionReview_QuestionPayload value_2 = 2;
+    SessionReview_SubagentQuestionPayload value_3 = 3;
+    SessionReview_GuardrailPayload value_4 = 4;
+    SessionReview_PermissionPayload value_5 = 5;
+    SessionReview_RecoveryPayload value_6 = 6;
+  }
+}
+
+message SessionLogItemValue57 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue57_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue57_type type = 5;
+  required SessionLogItemValue57_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue57_data data = 8;
+}
+
+message SessionLogItemValue57_metadata {
+  repeated SessionLogItemValue57_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue57_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue57_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue57_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required SessionReview_Decision decision = 3;
+}
+
+message SessionLogItemValue58 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue58_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue58_type type = 5;
+  required SessionLogItemValue58_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue58_data data = 8;
+}
+
+message SessionLogItemValue58_metadata {
+  repeated SessionLogItemValue58_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue58_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue58_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue58_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required SessionLogItemValue58_data_reason reason = 3;
+}
+
+message SessionLogItemValue59 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue59_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue59_type type = 5;
+  required SessionLogItemValue59_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue59_data data = 8;
+}
+
+message SessionLogItemValue59_metadata {
+  repeated SessionLogItemValue59_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue59_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue59_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue59_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString itemID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
 }
 
 message SessionLogItemValue6 {
@@ -4648,6 +5736,7 @@ message SessionLogItemValue15_data {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required LosslessString inputID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required SessionPending_Message input = 3;
+  optional UsageAnchor_Ref causedBy = 4;
 }
 
 message SessionPending_Message {
@@ -4701,7 +5790,7 @@ message SessionLogItemValue16_data {
 }
 
 message SessionLogItemValue16_data_inputIDs {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 count_min: 1 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" count_min: 1 }];
 }
 
 message SessionLogItemValue17 {
@@ -4976,11 +6065,13 @@ message SessionLogItemValue24_data_change {
     SessionLogItemValue24_data_changeValue4 value_4 = 4;
     SessionLogItemValue24_data_changeValue5 value_5 = 5;
     SessionLogItemValue24_data_changeValue6 value_6 = 6;
+    SessionLogItemValue24_data_changeValue12 value_12 = 12;
     SessionLogItemValue24_data_changeValue7 value_7 = 7;
     SessionLogItemValue24_data_changeValue8 value_8 = 8;
     SessionLogItemValue24_data_changeValue9 value_9 = 9;
     SessionLogItemValue24_data_changeValue10 value_10 = 10;
     SessionLogItemValue24_data_changeValue11 value_11 = 11;
+    SessionLogItemValue24_data_changeValue13 value_13 = 13;
   }
 }
 
@@ -4996,6 +6087,7 @@ message SessionLogItemValue24_data_changeValue1 {
   required LosslessString promptDigest = 9;
   required bool background = 10;
   required SessionLogItemValue24_data_changeValue1_delivery delivery = 11;
+  optional UsageAnchor_Ref usageAnchor = 12;
 }
 
 message SessionLogItemValue24_data_changeValue2 {
@@ -5027,6 +6119,11 @@ message SessionOrchestration_Answer {
   optional Value data = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/session-orchestration.ts#SessionOrchestration.Answer" }];
 }
 
+message SessionLogItemValue24_data_changeValue12 {
+  required SessionLogItemValue24_data_changeValue12_type type = 1;
+  required LosslessString questionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+}
+
 message SessionLogItemValue24_data_changeValue7 {
   required SessionLogItemValue24_data_changeValue7_type type = 1;
 }
@@ -5049,6 +6146,10 @@ message SessionLogItemValue24_data_changeValue10 {
 message SessionLogItemValue24_data_changeValue11 {
   required SessionLogItemValue24_data_changeValue11_type type = 1;
   optional LosslessString excerpt = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_max: 16384 }];
+}
+
+message SessionLogItemValue24_data_changeValue13 {
+  required SessionLogItemValue24_data_changeValue13_type type = 1;
 }
 
 message SessionLogItemValue25 {
@@ -5351,6 +6452,39 @@ message SessionLogItemValue32_data_files {
   repeated LosslessString items = 1;
 }
 
+message SessionLogItemValue60 {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
+  optional SessionLogItemValue60_metadata metadata = 3;
+  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+  required SessionLogItemValue60_type type = 5;
+  required SessionLogItemValue60_durable durable = 6;
+  optional Location_Ref location = 7;
+  required SessionLogItemValue60_data data = 8;
+}
+
+message SessionLogItemValue60_metadata {
+  repeated SessionLogItemValue60_metadataEntry entries = 1;
+}
+
+message SessionLogItemValue60_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message SessionLogItemValue60_durable {
+  required LosslessString aggregateID = 1;
+  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
+  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
+}
+
+message SessionLogItemValue60_data {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required LosslessString assistantMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
+  required Model_Ref model = 3;
+  required Session_StructuredError error = 4;
+}
+
 message SessionLogItemValue33 {
   required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
@@ -5595,53 +6729,6 @@ message SessionLogItemValue39_data_inputEntry {
   required Value value = 2;
 }
 
-message SessionLogItemValue40 {
-  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
-  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
-  optional SessionLogItemValue40_metadata metadata = 3;
-  required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
-  required SessionLogItemValue40_type type = 5;
-  required SessionLogItemValue40_durable durable = 6;
-  optional Location_Ref location = 7;
-  required SessionLogItemValue40_data data = 8;
-}
-
-message SessionLogItemValue40_metadata {
-  repeated SessionLogItemValue40_metadataEntry entries = 1;
-}
-
-message SessionLogItemValue40_metadataEntry {
-  required LosslessString key = 1;
-  required Value value = 2;
-}
-
-message SessionLogItemValue40_durable {
-  required LosslessString aggregateID = 1;
-  required uint64 seq = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
-  required int64 version = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "1" integer_max: "9007199254740991" }];
-}
-
-message SessionLogItemValue40_data {
-  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
-  required LosslessString assistantMessageID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
-  required LosslessString callID = 3;
-  required SessionLogItemValue40_data_structured structured = 4;
-  required SessionLogItemValue40_data_content content = 5;
-}
-
-message SessionLogItemValue40_data_structured {
-  repeated SessionLogItemValue40_data_structuredEntry entries = 1;
-}
-
-message SessionLogItemValue40_data_structuredEntry {
-  required LosslessString key = 1;
-  required Value value = 2;
-}
-
-message SessionLogItemValue40_data_content {
-  repeated LLM_ToolContent items = 1;
-}
-
 message SessionLogItemValue41 {
   required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/schema.ts#DateTimeUtcFromMillis" }];
@@ -5823,6 +6910,7 @@ message SessionLogItemValue45_data {
   required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   required LosslessString jobID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" }];
   optional SessionCompaction_Pressure pressure = 3;
+  optional UsageAnchor_Ref usageAnchor = 4;
 }
 
 message SessionLogItemValue46 {
@@ -6020,6 +7108,14 @@ message SessionLogItemValue52 {
   required LosslessString aggregateID = 2;
   optional uint64 seq = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" integer_min: "0" integer_max: "9007199254740991" }];
   required LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/groups/session.ts#makeSessionGroup" utf16_min: 1 }];
+}
+
+message SessionAutonomyState {
+  required SessionAutonomyMode mode = 1;
+  required SessionAutonomyYolo yolo = 2;
+  optional bool autoAnswer = 5;
+  optional SessionAutonomyGoal goal = 3;
+  optional SessionAutonomySleep sleep = 4;
 }
 
 message event_unsubscribe_Request {
@@ -7358,6 +8454,8 @@ service server_session {
       error_types: "ycoding.v5.InvalidRequestError"
       error_types: "ycoding.v5.UnauthorizedError"
       roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
       scope: SESSION
       mutation: READ
       settlement: COMPLETED
@@ -7435,6 +8533,44 @@ service server_session {
       paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: SECRET
+    };
+  }
+  rpc session_promptCosts(session_promptCosts_Request) returns (session_promptCosts_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 4084
+      diagnostic_name: "session.promptCosts"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc session_taskCosts(session_taskCosts_Request) returns (session_taskCosts_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 4085
+      diagnostic_name: "session.taskCosts"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.ServiceUnavailableError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
     };
   }
 }
@@ -7528,6 +8664,48 @@ service server_message {
       roles: LOCAL_CLIENT
       scope: SESSION
       mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+}
+
+service server_review {
+  rpc session_review_list(session_review_list_Request) returns (session_review_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 4086
+      diagnostic_name: "session.review.list"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc session_review_decide(session_review_decide_Request) returns (session_review_decide_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 4087
+      diagnostic_name: "session.review.decide"
+      error_types: "ycoding.v5.InvalidRequestError"
+      error_types: "ycoding.v5.SessionNotFoundError"
+      error_types: "ycoding.v5.ReviewItemNotFoundError"
+      error_types: "ycoding.v5.ConflictError"
+      error_types: "ycoding.v5.UnknownError"
+      error_types: "ycoding.v5.UnauthorizedError"
+      roles: LOCAL_CLIENT
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: MUTATION
       settlement: COMPLETED
       paging: UNPAGED
       streaming: TYPED_BULK

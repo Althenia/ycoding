@@ -6,10 +6,7 @@ use std::time::Duration;
 use support::{machine, operation, services, session_scope, text, world};
 use ycoding_core::ycoding_schema::{model, parse_json, provider};
 use ycoding_core::ycoding_store::analytics::{self, Query};
-use ycoding_core::ycoding_store::{
-    resources::{Request, RequestTable},
-    session::Document,
-};
+use ycoding_core::ycoding_store::{resources::Request, session::Document};
 use ycoding_protocol::v5;
 use ycoding_runtime::{Environment, LocalAuth, Subscriptions, standard};
 
@@ -18,7 +15,7 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
     world()
         .store
         .submit(|tx| {
-            RequestTable::insert(
+            support::usage::retained(
                 tx,
                 &Request {
                     id: "prq_held_usage".into(),
@@ -54,6 +51,7 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
                     )
                     .unwrap(),
                     time_created: 1,
+                    usage_anchor: None,
                 },
             )
         })
@@ -100,6 +98,7 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
                     limit: None,
                     sort: None,
                     order: None,
+                    ..Default::default()
                 },
             }
             .encode_to_vec(),
@@ -122,6 +121,7 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
                     limit: None,
                     sort: None,
                     order: None,
+                    ..Default::default()
                 },
             }
             .encode_to_vec(),
@@ -147,7 +147,10 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
             },
         );
         let available = async {
-            entered.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(30), entered)
+                .await
+                .expect("the pricing callback was not reached")
+                .unwrap();
             let cheap = dispatcher
                 .invoke(
                     environment.clone(),
@@ -258,13 +261,17 @@ async fn held_usage_reads_leave_the_executor_and_canonical_store_available() {
                     limit: None,
                     sort: None,
                     order: None,
+                    ..Default::default()
                 },
             }
             .encode_to_vec(),
         },
     );
     let available = async {
-        entered.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), entered)
+            .await
+            .expect("the pricing callback was not reached")
+            .unwrap();
         world().store.submit(|_| Ok(())).unwrap().await.unwrap();
         let _ = progress.send(());
         watchdog.join().unwrap()

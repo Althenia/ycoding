@@ -1,0 +1,674 @@
+{
+  "package": "ycoding-runtime",
+  "targets": [
+    {
+      "artifact": "darwin-arm64",
+      "triple": "aarch64-apple-darwin"
+    },
+    {
+      "artifact": "darwin-x64",
+      "triple": "x86_64-apple-darwin"
+    },
+    {
+      "artifact": "linux-x64",
+      "triple": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "artifact": "windows-x64",
+      "triple": "x86_64-pc-windows-msvc"
+    }
+  ],
+  "nested": [
+    {
+      "crate": "aws-lc-sys",
+      "path": "aws-lc/LICENSE",
+      "action": "include",
+      "reason": "vendored AWS-LC sources are compiled into the binary"
+    },
+    {
+      "crate": "aws-lc-sys",
+      "path": "aws-lc/third_party/fiat/LICENSE",
+      "action": "include",
+      "reason": "vendored fiat-crypto sources are compiled into AWS-LC"
+    },
+    {
+      "crate": "chrono-tz",
+      "path": "tz/LICENSE",
+      "action": "include",
+      "reason": "the tz database is compiled into the binary as timezone data"
+    },
+    {
+      "crate": "image",
+      "path": "tests/images/tga/testsuite/LICENSE",
+      "action": "exclude",
+      "reason": "test images are not part of the library build"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/COPYING",
+      "action": "include",
+      "reason": "vendored libgit2 is compiled into the binary"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/deps/llhttp/LICENSE-MIT",
+      "action": "include",
+      "reason": "build.rs compiles libgit2/deps/llhttp"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/deps/pcre2/LICENCE.md",
+      "action": "include",
+      "reason": "build.rs compiles libgit2/deps/pcre2"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/deps/winhttp/COPYING.GPL",
+      "action": "exclude",
+      "reason": "winhttp import-library support files are not compiled by build.rs; Windows links the system winhttp"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/deps/winhttp/COPYING.LGPL",
+      "action": "exclude",
+      "reason": "winhttp import-library support files are not compiled by build.rs; Windows links the system winhttp"
+    },
+    {
+      "crate": "libgit2-sys",
+      "path": "libgit2/deps/zlib/LICENSE",
+      "action": "exclude",
+      "reason": "build.rs links libz-sys instead of the bundled libgit2 zlib"
+    },
+    {
+      "crate": "libsqlite3-sys",
+      "path": "sqlcipher/LICENSE",
+      "action": "exclude",
+      "reason": "SQLCipher sources are used only by the bundled-sqlcipher feature, which is not enabled"
+    },
+    {
+      "crate": "libz-sys",
+      "path": "src/zlib/LICENSE",
+      "action": "include",
+      "reason": "zlib sources are compiled when no system zlib is linked"
+    },
+    {
+      "crate": "libz-sys",
+      "path": "src/zlib/contrib/dotzlib/LICENSE_1_0.txt",
+      "action": "exclude",
+      "reason": "zlib contrib code is not compiled"
+    },
+    {
+      "crate": "libz-sys",
+      "path": "src/zlib/contrib/minizip/LICENSE.Info-Zip",
+      "action": "exclude",
+      "reason": "zlib contrib code is not compiled"
+    },
+    {
+      "crate": "libz-sys",
+      "path": "src/zlib-ng/LICENSE.md",
+      "action": "exclude",
+      "reason": "zlib-ng is used only by the zlib-ng feature, which is not enabled"
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "path": "lmdb/libraries/liblmdb/COPYRIGHT",
+      "action": "include",
+      "reason": "vendored LMDB sources are compiled into the binary"
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "path": "lmdb/libraries/liblmdb/LICENSE",
+      "action": "include",
+      "reason": "vendored LMDB sources are compiled into the binary"
+    },
+    {
+      "crate": "regex-syntax",
+      "path": "src/unicode_tables/LICENSE-UNICODE",
+      "action": "include",
+      "reason": "Unicode tables are compiled into the binary"
+    },
+    {
+      "crate": "ring",
+      "path": "src/polyfill/once_cell/LICENSE-APACHE",
+      "action": "include",
+      "reason": "vendored once_cell code is compiled into ring"
+    },
+    {
+      "crate": "ring",
+      "path": "src/polyfill/once_cell/LICENSE-MIT",
+      "action": "include",
+      "reason": "vendored once_cell code is compiled into ring"
+    },
+    {
+      "crate": "ring",
+      "path": "third_party/fiat/LICENSE",
+      "action": "include",
+      "reason": "vendored fiat-crypto sources are compiled into ring"
+    },
+    {
+      "crate": "tracing-core",
+      "path": "src/spin/LICENSE",
+      "action": "include",
+      "reason": "vendored spin code is compiled into tracing-core"
+    }
+  ],
+  "supplements": [
+    {
+      "source": "https://github.com/duckdb/duckdb-rs",
+      "revision": "0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/duckdb/duckdb-rs/0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e/LICENSE",
+      "file": "texts/duckdb-rs-LICENSE.txt",
+      "sha256": "e00a318e49c9ff90254194864b2b695efc04c0384a8682c93ef51518e77ff5ea",
+      "crates": [
+        "duckdb 1.10506.0"
+      ]
+    },
+    {
+      "source": "https://github.com/dmtrKovalenko/fff",
+      "revision": "28321da22836b0e11da81e30f40f7a043b8f8fb4",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/dmtrKovalenko/fff/28321da22836b0e11da81e30f40f7a043b8f8fb4/LICENSE",
+      "file": "texts/fff-LICENSE-28321da.txt",
+      "sha256": "f8264de82db188834a5711d7e348dc08c33db14f79bb587ccb42616fd694ee81",
+      "crates": [
+        "fff-grep 0.9.6",
+        "fff-query-parser 0.9.6"
+      ]
+    },
+    {
+      "source": "https://github.com/dmtrKovalenko/fff",
+      "revision": "7d7910b6ba78ea8406671eaac8cdb5eb9850d9d1",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/dmtrKovalenko/fff/7d7910b6ba78ea8406671eaac8cdb5eb9850d9d1/LICENSE",
+      "file": "texts/fff-LICENSE-7d7910b.txt",
+      "sha256": "f8264de82db188834a5711d7e348dc08c33db14f79bb587ccb42616fd694ee81",
+      "crates": [
+        "fff-search 0.9.4"
+      ]
+    },
+    {
+      "source": "https://github.com/meilisearch/heed",
+      "revision": "57025ff083b6fc68c9313edccb28c75d7ccf751f",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/meilisearch/heed/57025ff083b6fc68c9313edccb28c75d7ccf751f/LICENSE",
+      "file": "texts/heed-LICENSE.txt",
+      "sha256": "6d4e3db586416994db32596f0a256eaeee6c3f79e783bf6ac0fab3cc2e36759b",
+      "crates": [
+        "heed 0.22.1"
+      ]
+    },
+    {
+      "source": "https://github.com/meilisearch/heed",
+      "revision": "9de8469341cafcd5f239317fff85db955103fcd9",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/meilisearch/heed/9de8469341cafcd5f239317fff85db955103fcd9/LICENSE",
+      "file": "texts/heed-traits-LICENSE.txt",
+      "sha256": "c4ea684839984235efcebff570a4d253dcc456789edbd4fdf3e96ca15004e730",
+      "crates": [
+        "heed-traits 0.20.0"
+      ]
+    },
+    {
+      "source": "https://github.com/meilisearch/heed",
+      "revision": "178c53261595880bb89554bc7f1b55dcda45ae50",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/meilisearch/heed/178c53261595880bb89554bc7f1b55dcda45ae50/LICENSE",
+      "file": "texts/heed-types-LICENSE.txt",
+      "sha256": "c4ea684839984235efcebff570a4d253dcc456789edbd4fdf3e96ca15004e730",
+      "crates": [
+        "heed-types 0.21.0"
+      ]
+    },
+    {
+      "source": "https://github.com/Stranger6667/jsonschema",
+      "revision": "55ac1664384793c5d3b20745d3f9c169dfe2c06f",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/Stranger6667/jsonschema/55ac1664384793c5d3b20745d3f9c169dfe2c06f/LICENSE",
+      "file": "texts/jsonschema-LICENSE.txt",
+      "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038",
+      "crates": [
+        "jsonschema-regex 0.58.6",
+        "jsonschema-value 0.58.6"
+      ]
+    },
+    {
+      "source": "https://github.com/oxc-project/oxc",
+      "revision": "7f56ec9301e7327b4402c3010c87803b58b6ea30",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oxc-project/oxc/7f56ec9301e7327b4402c3010c87803b58b6ea30/LICENSE",
+      "file": "texts/oxc-LICENSE.txt",
+      "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "crates": [
+        "oxc_allocator 0.153.0",
+        "oxc_ast 0.153.0",
+        "oxc_ast_visit 0.153.0",
+        "oxc_data_structures 0.153.0",
+        "oxc_diagnostics 0.153.0",
+        "oxc_ecmascript 0.153.0",
+        "oxc_estree 0.153.0",
+        "oxc_parser 0.153.0",
+        "oxc_regular_expression 0.153.0",
+        "oxc_semantic 0.153.0",
+        "oxc_span 0.153.0",
+        "oxc_str 0.153.0",
+        "oxc_syntax 0.153.0"
+      ]
+    },
+    {
+      "source": "https://github.com/oxc-project/oxc-index-vec",
+      "revision": "8e09fe324eb6df02f56e4eacdfac958930300380",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oxc-project/oxc-index-vec/8e09fe324eb6df02f56e4eacdfac958930300380/LICENSE",
+      "file": "texts/oxc-index-vec-LICENSE.txt",
+      "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+      "crates": [
+        "oxc_index 5.0.0"
+      ]
+    },
+    {
+      "source": "https://github.com/modelcontextprotocol/rust-sdk",
+      "revision": "79437f291b2c44053d00dcd5db969fd0cca7c887",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/79437f291b2c44053d00dcd5db969fd0cca7c887/LICENSE",
+      "file": "texts/rmcp-LICENSE.txt",
+      "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+      "crates": [
+        "rmcp 3.5.1"
+      ]
+    },
+    {
+      "source": "https://github.com/Nugine/simd",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+      "file": "texts/simd-LICENSE.txt",
+      "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+      "crates": [
+        "uuid-simd 0.8.0",
+        "vsimd 0.8.0"
+      ]
+    },
+    {
+      "source": "https://github.com/Ethiraric/yaml-rust2",
+      "revision": "e12069447073e0c8dd9ceab415159c4c92927534",
+      "path": "Apache-LICENSE",
+      "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/Apache-LICENSE",
+      "file": "texts/yaml-rust2-Apache-LICENSE.txt",
+      "sha256": "278f0e5c23f023a2f1af8d528dd5c29dc3a5ea2dd63558aa8d4f077c09e037c7",
+      "crates": [
+        "yaml-rust2 0.13.0"
+      ]
+    },
+    {
+      "source": "https://github.com/Ethiraric/yaml-rust2",
+      "revision": "e12069447073e0c8dd9ceab415159c4c92927534",
+      "path": "MIT-LICENSE",
+      "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/MIT-LICENSE",
+      "file": "texts/yaml-rust2-MIT-LICENSE.txt",
+      "sha256": "3dd30063cdb4a378736348c215cb84b78b0711ba7e39903162cae5ce71dc9757",
+      "crates": [
+        "yaml-rust2 0.13.0"
+      ]
+    }
+  ],
+  "native": {
+    "duckdb": {
+      "crate": "libduckdb-sys",
+      "version": "1.10506.0",
+      "archive": "duckdb.tar.gz",
+      "source": "https://github.com/duckdb/duckdb",
+      "revision": "069cc9f9b5be802405797faecc284961b07c70ef",
+      "licenses": [
+        {
+          "directory": "brotli",
+          "path": "third_party/brotli/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/brotli/LICENSE",
+          "file": "texts/duckdb/brotli-LICENSE.txt",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+        },
+        {
+          "directory": "concurrentqueue",
+          "path": "third_party/concurrentqueue/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/concurrentqueue/LICENSE",
+          "file": "texts/duckdb/concurrentqueue-LICENSE.txt",
+          "sha256": "eaf0df40f77e929cd83cd4485de2bdf806c7908db84a52007a700588f6566331"
+        },
+        {
+          "directory": "fast_float",
+          "path": "third_party/fast_float/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fast_float/LICENSE",
+          "file": "texts/duckdb/fast_float-LICENSE.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "directory": "fastpforlib",
+          "path": "third_party/fastpforlib/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fastpforlib/LICENSE",
+          "file": "texts/duckdb/fastpforlib-LICENSE.txt",
+          "sha256": "9ff562631a04b8cb1030c53fdf461bd749c9af0655d86e4f17eb270e935a7fe2"
+        },
+        {
+          "directory": "fmt",
+          "path": "third_party/fmt/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fmt/LICENSE",
+          "file": "texts/duckdb/fmt-LICENSE.txt",
+          "sha256": "825c9324e70f8c839c8ba910543dd4a7daee243b86ef960594c11381a19980b8"
+        },
+        {
+          "directory": "fsst",
+          "path": "third_party/fsst/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fsst/LICENSE",
+          "file": "texts/duckdb/fsst-LICENSE.txt",
+          "sha256": "20e9c14ff437a73a6e2b105f1b5aaf9ef24a84d962741c0ab01d04b4910294ab"
+        },
+        {
+          "directory": "httplib",
+          "path": "third_party/httplib/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/httplib/LICENSE",
+          "file": "texts/duckdb/httplib-LICENSE.txt",
+          "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+        },
+        {
+          "directory": "hyperloglog",
+          "path": "third_party/hyperloglog/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/hyperloglog/LICENSE",
+          "file": "texts/duckdb/hyperloglog-LICENSE.txt",
+          "sha256": "3a3fcdbaecbeb1e7dea97843961100c637766e59de4674fed809760283b716e1"
+        },
+        {
+          "directory": "jaro_winkler",
+          "path": "third_party/jaro_winkler/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/jaro_winkler/LICENSE",
+          "file": "texts/duckdb/jaro_winkler-LICENSE.txt",
+          "sha256": "077815ffd10f0677d060e9d5c0059592d28c41d1e9985c848435e0ea17ea06c3"
+        },
+        {
+          "directory": "libpg_query",
+          "path": "third_party/libpg_query/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/libpg_query/LICENSE",
+          "file": "texts/duckdb/libpg_query-LICENSE.txt",
+          "sha256": "2780b6375a5ab1901472b7694958dd0c8c1381a21f0765cbb64e1923d94c6717"
+        },
+        {
+          "directory": "lz4",
+          "path": "third_party/lz4/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/lz4/LICENSE",
+          "file": "texts/duckdb/lz4-LICENSE.txt",
+          "sha256": "99b8d2d8011d1ce548c5aaf3270c6bee014507fa821c4f9a7e300a9e11015db7"
+        },
+        {
+          "directory": "mbedtls",
+          "path": "third_party/mbedtls/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/mbedtls/LICENSE",
+          "file": "texts/duckdb/mbedtls-LICENSE.txt",
+          "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+        },
+        {
+          "directory": "miniz",
+          "path": "third_party/miniz/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/miniz/LICENSE",
+          "file": "texts/duckdb/miniz-LICENSE.txt",
+          "sha256": "0115478d567121238cf6cc1c0c361926cf07a49d9e4c9e66da97fac6a01646b3"
+        },
+        {
+          "directory": "parquet",
+          "path": "third_party/parquet/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/parquet/LICENSE",
+          "file": "texts/duckdb/parquet-LICENSE.txt",
+          "sha256": "70b6a7d630fae9f49643f9b16bee42a2feda68301f9c14470e7fb5ad0599bb9f"
+        },
+        {
+          "directory": "pcg",
+          "path": "third_party/pcg/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/pcg/LICENSE",
+          "file": "texts/duckdb/pcg-LICENSE.txt",
+          "sha256": "3febf788fd814bf1f350db169bdc51b28ff7e7596ff1f09cc0181e4fde42b480"
+        },
+        {
+          "directory": "pdqsort",
+          "path": "third_party/pdqsort/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/pdqsort/LICENSE",
+          "file": "texts/duckdb/pdqsort-LICENSE.txt",
+          "sha256": "323fc18e35fcf058d69d684022ef844f206cb8fefb2bac1298fa1767e0b9ae38"
+        },
+        {
+          "directory": "re2",
+          "path": "third_party/re2/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/re2/LICENSE",
+          "file": "texts/duckdb/re2-LICENSE.txt",
+          "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+        },
+        {
+          "directory": "ska_sort",
+          "path": "third_party/ska_sort/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/ska_sort/LICENSE",
+          "file": "texts/duckdb/ska_sort-LICENSE.txt",
+          "sha256": "3c3a838f6ac2201bb8255b374fad34e3e1de07940c3acdc09e661e118fb75078"
+        },
+        {
+          "directory": "skiplist",
+          "path": "third_party/skiplist/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/skiplist/LICENSE",
+          "file": "texts/duckdb/skiplist-LICENSE.txt",
+          "sha256": "3b9cac57dbb2d7ec76298cb0d33afe12f891e1d0dbb38ff17993a14f3480ee7c"
+        },
+        {
+          "directory": "snappy",
+          "path": "third_party/snappy/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/snappy/LICENSE",
+          "file": "texts/duckdb/snappy-LICENSE.txt",
+          "sha256": "55172044f7e241207117448a4d9d6ba1d0925c8ad66b5d4c08c70adfa9cc3de6"
+        },
+        {
+          "directory": "tdigest",
+          "path": "third_party/tdigest/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/tdigest/LICENSE",
+          "file": "texts/duckdb/tdigest-LICENSE.txt",
+          "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+        },
+        {
+          "directory": "tdigest",
+          "path": "third_party/tdigest/NOTICES",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/tdigest/NOTICES",
+          "file": "texts/duckdb/tdigest-NOTICES.txt",
+          "sha256": "5ded9726da6c5360c0b0ba0725455f57b367dc9b4954bed7ca8f235d26cee33b"
+        },
+        {
+          "directory": "thrift",
+          "path": "third_party/thrift/thrift/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/thrift/thrift/LICENSE",
+          "file": "texts/duckdb/thrift-thrift-LICENSE.txt",
+          "sha256": "23df881cec3192d1f4474633c14eb2ec30a45b84f8daeb82b9de5d2bd3ac8218"
+        },
+        {
+          "directory": "utf8proc",
+          "path": "third_party/utf8proc/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/utf8proc/LICENSE",
+          "file": "texts/duckdb/utf8proc-LICENSE.txt",
+          "sha256": "fbc720fcc90fb44396985646f67e4d19be03e0c0539f7138ed9dc6efba49dc49"
+        },
+        {
+          "directory": "vergesort",
+          "path": "third_party/vergesort/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/vergesort/LICENSE",
+          "file": "texts/duckdb/vergesort-LICENSE.txt",
+          "sha256": "12dd392860ea2a3633bce5f33d7eebd4308a7e3386b4372260e5e72be7a64033"
+        },
+        {
+          "directory": "yyjson",
+          "path": "third_party/yyjson/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/yyjson/LICENSE",
+          "file": "texts/duckdb/yyjson-LICENSE.txt",
+          "sha256": "734d7fb3eb56f0a04e6b7ab0c5d3634624a8bfaa2acc87a2c03a029b20868cf8"
+        },
+        {
+          "directory": "zstd",
+          "path": "third_party/zstd/LICENSE",
+          "url": "https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/zstd/LICENSE",
+          "file": "texts/duckdb/zstd-LICENSE.txt",
+          "sha256": "8b7bc50ec3ecee27224e17d4d316a939fa2ddda9c88e0ddc2f059ce432edbfb9"
+        }
+      ]
+    },
+    "sqlite": {
+      "crate": "libsqlite3-sys",
+      "version": "0.38.2",
+      "file": "sqlite3/sqlite3.c"
+    }
+  },
+  "embedded": [
+    {
+      "component": "JSONC scanner derived from node-jsonc-parser",
+      "path": "rust/crates/core/src/resources/config/JSONC-LICENSE.txt"
+    },
+    {
+      "component": "fuzzysort ranking port",
+      "path": "rust/crates/core/src/platform/filesystem/FUZZYSORT-LICENSE.txt"
+    },
+    {
+      "component": "mime-db extension table",
+      "path": "rust/crates/core/src/platform/filesystem/MIME-DB-LICENSE.txt"
+    },
+    {
+      "component": "mime-types extension table",
+      "path": "rust/crates/core/src/platform/filesystem/MIME-TYPES-LICENSE.txt"
+    },
+    {
+      "component": "minimatch glob port",
+      "path": "rust/crates/core/src/platform/filesystem/MINIMATCH-LICENSE.txt"
+    },
+    {
+      "component": "Cursor provider client",
+      "path": "rust/crates/ai/src/cursor/LICENSE"
+    }
+  ],
+  "models": {
+    "component": "models.dev model catalog snapshot (packages/cli/script/models-dev.snapshot.json)",
+    "url": "https://raw.githubusercontent.com/anomalyco/models.dev/cfdcac88ddf30ba5217fd3e20df4b660759b1b68/LICENSE",
+    "file": "texts/models-dev-LICENSE.txt",
+    "sha256": "dc2dc41c9fea2fd3c41c21c6f484844cab367800b88ff24781f980ad3a9d160a"
+  },
+  "elections": [
+    {
+      "crate": "glidesort",
+      "version": "0.1.2",
+      "license": "Apache-2.0",
+      "file": "texts/apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "statement": {
+        "file": "README.md",
+        "text": "Glidesort is dual-licensed under the Apache License, Version 2.0 and the MIT license."
+      },
+      "evidence": [
+        "https://github.com/orlp/glidesort/issues/11 (author: \"The license is specified in Cargo.toml, it's MIT OR Apache-2.0.\")",
+        "https://github.com/orlp/glidesort/pull/6 (author declined a contributed license file or copyright line)"
+      ],
+      "caveats": []
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "version": "0.2.6",
+      "license": "Apache-2.0",
+      "file": "texts/apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "statement": {
+        "file": "Cargo.toml",
+        "text": "license = \"Apache-2.0\""
+      },
+      "evidence": [
+        "https://github.com/meilisearch/heed/tree/57025ff083b6fc68c9313edccb28c75d7ccf751f/lmdb-master-sys (wrapper crate declares Apache-2.0; LMDB's own OpenLDAP license and copyright files and source-header notices are reproduced separately)"
+      ],
+      "caveats": []
+    },
+    {
+      "crate": "objc2-core-foundation",
+      "version": "0.3.2",
+      "license": "Apache-2.0",
+      "file": "texts/apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "statement": {
+        "file": "Cargo.toml",
+        "text": "license = \"Zlib OR Apache-2.0 OR MIT\""
+      },
+      "evidence": [
+        "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md (sha256 7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54; describes the trio license and links the standard texts)",
+        "https://github.com/madsmtm/objc2/blob/ee9a7ada2131f5944b8750428e265c15632f2a19/LICENSE-APACHE.txt (sha256 0c9a5f6fe28e27015e12506ffe58c9e007cead169af9670ec15c1df0d14e4f2a; its first 176 lines are the canonical Apache-2.0 terms)"
+      ],
+      "caveats": [
+        "The pinned later LICENSE-APACHE.txt also carries the line \"Copyright 2026 Mads Marquart\"; it post-dates version 0.3.2 and is not applied, and notices of other contributors are not established.",
+        "The pinned LICENSE.md states that the crates are derived from Apple SDKs shipped with Xcode and that whether distributing such derived works is allowed under the Xcode license is unclear; this remains unresolved."
+      ]
+    },
+    {
+      "crate": "objc2-core-services",
+      "version": "0.3.2",
+      "license": "Apache-2.0",
+      "file": "texts/apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "statement": {
+        "file": "Cargo.toml",
+        "text": "license = \"Zlib OR Apache-2.0 OR MIT\""
+      },
+      "evidence": [
+        "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md (sha256 7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54; describes the trio license and links the standard texts)",
+        "https://github.com/madsmtm/objc2/blob/ee9a7ada2131f5944b8750428e265c15632f2a19/LICENSE-APACHE.txt (sha256 0c9a5f6fe28e27015e12506ffe58c9e007cead169af9670ec15c1df0d14e4f2a; its first 176 lines are the canonical Apache-2.0 terms)"
+      ],
+      "caveats": [
+        "The pinned later LICENSE-APACHE.txt also carries the line \"Copyright 2026 Mads Marquart\"; it post-dates version 0.3.2 and is not applied, and notices of other contributors are not established.",
+        "The pinned LICENSE.md states that the crates are derived from Apple SDKs shipped with Xcode and that whether distributing such derived works is allowed under the Xcode license is unclear; this remains unresolved."
+      ]
+    }
+  ],
+  "corrections": [
+    {
+      "crate": "nalgebra",
+      "version": "0.30.1",
+      "declared": "BSD-3-Clause",
+      "effective": "Apache-2.0",
+      "evidence": [
+        "https://github.com/dimforge/nalgebra/commit/d81a895a87e2e5a94a847c8033a7c2cce2fbed9a (2020-08-19, switched the license to Apache-2.0)",
+        "https://github.com/dimforge/nalgebra/commit/7d5cc4912dc8928e5d476d75a6b9f430468b0cdb (2021-01-29, reverted only the Cargo metadata to BSD-3-Clause)",
+        "https://github.com/dimforge/nalgebra/pull/1308 (merged 2023-11-12, commit bad63b642328dced9012e3eef9b51da3d5982e8b, corrected the crate metadata)"
+      ]
+    }
+  ],
+  "headers": [
+    {
+      "crate": "lmdb-master-sys",
+      "version": "0.2.6",
+      "component": "LMDB derived from Martin Hedenfalk's btree.c",
+      "file": "lmdb/libraries/liblmdb/lmdb.h",
+      "start": "This code is derived from btree.c written by Martin Hedenfalk.",
+      "end": "PERFORMANCE OF THIS SOFTWARE."
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "version": "0.2.6",
+      "component": "LMDB derived from Martin Hedenfalk's btree.c",
+      "file": "lmdb/libraries/liblmdb/mdb.c",
+      "start": "This code is derived from btree.c written by Martin Hedenfalk.",
+      "end": "PERFORMANCE OF THIS SOFTWARE."
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "version": "0.2.6",
+      "component": "OpenLDAP copyright and portions notice",
+      "file": "lmdb/libraries/liblmdb/midl.c",
+      "start": "This work is part of OpenLDAP Software",
+      "end": "<http://www.OpenLDAP.org/license.html>."
+    },
+    {
+      "crate": "lmdb-master-sys",
+      "version": "0.2.6",
+      "component": "OpenLDAP copyright and portions notice",
+      "file": "lmdb/libraries/liblmdb/midl.h",
+      "start": "This work is part of OpenLDAP Software",
+      "end": "<http://www.OpenLDAP.org/license.html>."
+    }
+  ]
+}

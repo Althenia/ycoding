@@ -318,7 +318,7 @@ async fn session_calls_stay_inside_the_hosts_location_and_follow_durable_admissi
         );
         assert_eq!(sessions.pending_list(&id("ses_one")).unwrap().len(), before);
         let denied = ToolFixture::new();
-        denied.authority.session("ses_parent", None, 1, false, None);
+        denied.authority.session("ses_parent", None, 2, false, None);
         denied.authority.session(
             "ses_tool",
             Some("ses_parent"),

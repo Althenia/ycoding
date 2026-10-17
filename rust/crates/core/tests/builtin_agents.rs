@@ -6,8 +6,6 @@ use ycoding_core::resources::{
 };
 use ycoding_schema::{DomainEncode, JsonValue, parse_json, permission};
 
-const CHECKPOINT: &str = "Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope; run full suites and every affected required check at the integration or merge checkpoint.";
-const BUILD_LANES: &str = " When build or test capacity is the bottleneck, run code-writing lanes on disjoint files that only compile-check and run one feature-level test pass, then merge them through one dedicated integration lane that resolves conflicts and runs the full checks.";
 const TS: &str = include_str!("../../../../packages/core/src/plugin/agent.ts");
 
 fn ts_template(name: &str) -> String {
@@ -26,6 +24,15 @@ fn ts_template(name: &str) -> String {
                 .0
                 .replace("\\`", "`")
         })
+}
+
+fn ts_notice() -> &'static str {
+    TS.split_once("const SUBAGENT_NOTICE =\n  \"")
+        .unwrap()
+        .1
+        .split_once('"')
+        .unwrap()
+        .0
 }
 
 fn hash(value: &str) -> String {
@@ -49,24 +56,8 @@ fn roots() -> Roots {
 fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
     let service = Service::new(agent::builtin::catalog(&roots()).unwrap());
     let project = ts_template("YCODING_PROJECT_PROMPT");
-    let project = if project.contains(CHECKPOINT) {
-        project
-    } else {
-        project.replace(
-            "Never make atomic commits.",
-            &format!("{CHECKPOINT}\n\nNever make atomic commits."),
-        )
-    };
     let main = ts_template("MAINCHAT_CAPABILITIES");
-    let main = if main.contains(BUILD_LANES) {
-        main
-    } else {
-        main.replace(
-            "at a time across all agents on the machine.",
-            &format!("at a time across all agents on the machine.{BUILD_LANES}"),
-        )
-    };
-    let notice = "Subagents always run in the background, and a shell may also run in the background. Both notify you when they finish. Do not poll them or wait idle for them. While either is running, continue every remaining task that is still your responsibility and does not depend on that result.";
+    let notice = ts_notice();
     let child = ts_template("SUBAGENT_CAPABILITIES");
     let fixtures = [
         (
@@ -76,7 +67,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../../../../packages/core/src/plugin/agent/GSD.md"),
-            "5db617aa23c9aa1c3fb516dfc89e4bb52151df3c3b4eb669351f34e62e3f49ff",
+            "60bc38ba9bf494fd0c5ce465ce3db08c7067e1c12a08c2bdb0562c2693fabc3f",
         ),
         (
             "architech",
@@ -85,7 +76,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#3498db",
             include_str!("../../../../packages/core/src/plugin/agent/architech.md"),
-            "96d694bf20e9fd36ac157db32f18d9aa35b63ece8a3926314f8376c32165e6cf",
+            "1b5cd6c326d88c00e8961b36e99339f956a534c6d9ee2774f9b8b24e225c87e7",
         ),
         (
             "god",
@@ -94,7 +85,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../../../../packages/core/src/plugin/agent/god.md"),
-            "97374856fef2a26673603e744a9cf70a41a10d568c85ea3b8672d30f5ce0c2c9",
+            "4ceaacb19c5a3f5f9cfdb25658b9ba84d539b5c55813b3f0e03b7d3327b73448",
         ),
         (
             "yangi",
@@ -103,7 +94,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../../../../packages/core/src/plugin/agent/yangi.md"),
-            "e9226d01c6aa303790b2ba2dd567d8776f7cfab66f6d838d193632e43ba9661b",
+            "de234f2a16a3c106b47c7bc6f05a1596ef1e54629b3dd00314b4edf38928c6c1",
         ),
         (
             "occam",
@@ -112,7 +103,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../../../../packages/core/src/plugin/agent/occam.md"),
-            "4aafb0d014eb8b6b1637f76853c6404b41fa5545f579fd9cb53274e122d52271",
+            "8d2f78f9796cd3d54efedc40daa2a18304beb87a672c2fb787e87c4da82efcc8",
         ),
         (
             "omoikane",
@@ -121,7 +112,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#3498db",
             include_str!("../../../../packages/core/src/plugin/agent/omoikane.md"),
-            "9eb5c76bd1d43e8d678bb083caccff4493081cfc3dadb491390387caedb5e686",
+            "bcf4c378eaa6d263b3b501f817ba674bdaf26168b53b95b977dbaf2638bb9a8f",
         ),
         (
             "wittgenstein",
@@ -130,7 +121,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../../../../packages/core/src/plugin/agent/wittgenstein.md"),
-            "14b2270c868057a0eda222fa5ba3221cb43b9452a3c392f459ae5ba4f40b4c77",
+            "4aa40c18744ff151dcef832f49773c2b911d2d21fea8b72ac32aa90e16a152b2",
         ),
         (
             "zeus",
@@ -139,12 +130,11 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../../../../packages/core/src/plugin/agent/zeus.md"),
-            "99e147bbf42e370cd624ea238498d8c41146234583160442cb6a615508dac60c",
+            "87618884b70196e99e9d43b83961237722075b93a847440f15a7de909d43ed42",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
-        let source = source.replace("- Use TDD for changed behavior: prove RED at the relevant boundary, fix, then prove GREEN. Add distinct required cases, not tests for their own sake.\n- Run focused tests and required affected checks. Run the full suite only when an affected required check demands it. Reuse settled results; do not weaken a check to make it pass.", "- Add distinct required test cases, not tests for their own sake. Reuse settled results; do not weaken a check to make it pass.");
-        let expected = markdown::parse(&source).unwrap();
+        let expected = markdown::parse(source).unwrap();
         let system = if mode == "primary" {
             [
                 project.as_str(),
@@ -217,7 +207,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
         (
             "goal",
             "Goal",
-            "733da9822f3c5c665f202af9a441d6d286764726744215dadae6ad45491c0c6c",
+            "5a223c80864faa0cd00127ab869a672ab1235b6ece4c4ddcaad4cfaef9291569",
         ),
         (
             "prediction",
@@ -440,5 +430,31 @@ fn user_then_project_overrides_preserve_builtin_identity_and_unspecified_values(
                 &"allow".into()
             )
         ]
+    );
+}
+
+#[test]
+fn main_session_prompts_describe_session_auto_answer_and_goal_authority() {
+    let autonomy = "- Keep autonomy explicit. YOLO 0 is manual; 1 auto-approves ask permissions only; 2 also auto-approves ordinary guardrail reviews while awake. Automatic question, form, and subagent-question answers require only the answering Session's auto-answer toggle, default off, independent of YOLO, goals, and sleep, and never inherited by parent or child Sessions. Goals grant no permission, answer, or review authority. Hard reviews always require a human decision. Explicit permission denies remain denied. Change YOLO only through /yolo or the UI toggle.";
+    for main in [
+        agent::prompts::MAIN.to_owned(),
+        ts_template("MAINCHAT_CAPABILITIES"),
+    ] {
+        assert_eq!(
+            main.lines()
+                .filter(|line| line.starts_with("- Keep autonomy explicit."))
+                .collect::<Vec<_>>(),
+            [autonomy]
+        );
+        assert!(!main.contains("auto_answer"));
+        assert!(!main.contains("3 currently behaves like 2"));
+    }
+}
+
+#[test]
+fn goal_session_helper_sends_the_ts_goal_prompt() {
+    assert_eq!(
+        ycoding_core::session::goal::agent().system,
+        Some(ts_template("PROMPT_GOAL").into())
     );
 }

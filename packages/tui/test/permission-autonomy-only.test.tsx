@@ -51,6 +51,8 @@ test("legacy local auto state cannot approve a permission outside durable autono
         )
       )
         return json({ data: [], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}/subagent`)
+        return json({ data: [], summary: { total: 0, active: 0 }, cursor: {} })
       if (url.pathname === `/api/session/${sessionID}/guardrail`)
         return json({
           data: {

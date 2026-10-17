@@ -93,6 +93,20 @@ function fixture(input?: {
         return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [], {
           session: sessions.find((item) => url.pathname === `/api/session/${item.id}/snapshot`),
         })
+      if (url.pathname === `/api/session/${childID}/guardrail`)
+        return json({
+          data: {
+            rootSessionID: parentID,
+            profile: "standard",
+            customRules: 0,
+            approvals: 0,
+            blocked: 0,
+            counters: [],
+            invalidFiles: [],
+            decisions: [],
+            dismissals: [],
+          },
+        })
       if (url.pathname.endsWith("/guardrail/request"))
         return json({
           data:
@@ -657,7 +671,7 @@ test("Subagents Answer focuses an inline parent question and restores its ordina
     screen.input.pressKey("t", { ctrl: true })
     await frame(screen, (value) => value.includes("ACTIVE"))
     screen.input.pressKey("r")
-    await frame(screen, (value) => value.includes("Enter answer") && value.includes("YOLO off"))
+    await frame(screen, (value) => value.includes("Enter answer") && value.includes("Ask first"))
     expect(screen.frame()).toContain("Should I continue the check?")
     await screen.input.typeText("/goal is an answer, not a command")
     screen.input.pressKey("RETURN")

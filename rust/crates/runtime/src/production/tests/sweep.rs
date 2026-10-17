@@ -280,6 +280,7 @@ async fn production_startup_and_hourly_sweep_prune_local_only() {
                         time_created: now,
                         time_started: Some(now),
                         time_ended: Some(now),
+                        usage_anchor: None,
                     },
                 )?;
             }

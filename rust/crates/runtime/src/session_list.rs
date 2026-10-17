@@ -8,7 +8,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, PathBuf},
 };
-use ycoding_core::session::list::{Order, Parent, Query, Scope};
+use ycoding_core::session::{
+    list::{Order, Parent, Query, Scope},
+    outstanding,
+    prompt_cache::sha256,
+};
 use ycoding_core::ycoding_schema::{
     JsonObject, JsonValue, LosslessString, parse_json,
     project_id::ProjectId,
@@ -22,6 +26,7 @@ const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
 const MAX_CURSOR_BYTES: usize = 1024;
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+type ClassifiedSessions = (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Sort {
@@ -37,11 +42,13 @@ struct Key {
     active: i64,
     pinned: Option<i64>,
     running: bool,
+    waiting: bool,
 }
 
 struct Anchor {
     key: Key,
     previous: bool,
+    epoch: Option<String>,
 }
 
 pub async fn list(
@@ -72,8 +79,7 @@ pub async fn list(
     };
     let status = match query.status {
         None | Some(0) => None,
-        Some(1) => Some(true),
-        Some(2) => Some(false),
+        Some(value @ 1..=3) => Some(value),
         Some(_) => return Err(Failure::Invalid("invalid status".into())),
     };
     let anchor = match &query.cursor {
@@ -83,6 +89,19 @@ pub async fn list(
         )?),
         None => None,
     };
+    if (query.around.is_some() || query.before.is_some())
+        && (sort != Sort::Active || anchor.is_some() || query.around.is_none())
+    {
+        return Err(Failure::Invalid("invalid Session window".into()));
+    }
+    if query.before.is_some_and(|before| before >= limit as u64) {
+        return Err(Failure::Invalid("invalid before".into()));
+    }
+    let around = query
+        .around
+        .as_ref()
+        .map(convert::identifier::<session::Id>)
+        .transpose()?;
     let sessions = core
         .sessions
         .list(&Query::default())
@@ -91,16 +110,26 @@ pub async fn list(
         .iter()
         .map(|info| (text(info.id.as_lossless()), info))
         .collect::<BTreeMap<_, _>>();
-    let running = core
-        .execution
-        .active()
-        .into_iter()
-        .map(|id| text(id.as_lossless()))
-        .collect::<BTreeSet<_>>();
+    let classified = sort == Sort::Active || status.is_some();
+    let (running, waiting, lost) = if classified {
+        classify(core, &by_id)?
+    } else {
+        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new())
+    };
     let running_roots = running
         .iter()
         .filter_map(|id| root(id, &by_id))
         .collect::<BTreeSet<_>>();
+    let is_running = |info: &session::Info| {
+        if info.parent_id.is_none() {
+            running_roots.contains(&text(info.id.as_lossless()))
+        } else {
+            running.contains(&text(info.id.as_lossless()))
+        }
+    };
+    let is_waiting = |info: &session::Info| {
+        info.parent_id.is_none() && waiting.contains(&text(info.id.as_lossless()))
+    };
     let key = |info: &session::Info| Key {
         id: text(info.id.as_lossless()),
         updated: info.time.updated.epoch_millis(),
@@ -111,11 +140,8 @@ pub async fn list(
                 active.epoch_millis()
             }),
         pinned: info.time.pinned.map(|pinned| pinned.epoch_millis()),
-        running: if info.parent_id.is_none() {
-            running_roots.contains(&text(info.id.as_lossless()))
-        } else {
-            running.contains(&text(info.id.as_lossless()))
-        },
+        running: info.parent_id.is_none() && is_running(info) && !is_waiting(info),
+        waiting: is_waiting(info),
     };
     let workspace = match &query.workspace {
         None => None,
@@ -185,8 +211,10 @@ pub async fn list(
         })
         .filter(|info| match status {
             None => true,
-            Some(true) => key(info).running,
-            Some(false) => !key(info).running && info.time.archived.is_none(),
+            Some(1) => is_running(info) && !is_waiting(info),
+            Some(2) => !is_running(info) && !is_waiting(info) && info.time.archived.is_none(),
+            Some(3) => is_waiting(info),
+            Some(_) => false,
         })
         .filter(|info| match &needle {
             None => true,
@@ -196,16 +224,112 @@ pub async fn list(
         })
         .collect::<Vec<_>>();
     matching.sort_by(|left, right| compare(&key(left), &key(right), sort));
-    let (page, previous, next) = paginate(&matching, &key, sort, anchor.as_ref(), limit);
+    let epoch = (sort == Sort::Active).then(|| {
+        let mut filters = query.clone();
+        filters.cursor = None;
+        filters.around = None;
+        filters.before = None;
+        filters.limit = None;
+        let mut fingerprint = JsonObject::new();
+        fingerprint.insert(
+            "filters".into(),
+            JsonValue::String(base64url(&prost::Message::encode_to_vec(&filters)).into()),
+        );
+        fingerprint.insert(
+            "keys".into(),
+            JsonValue::Array(
+                matching
+                    .iter()
+                    .map(|info| {
+                        let key = key(info);
+                        JsonValue::Array(vec![
+                            JsonValue::String(key.id.into()),
+                            JsonValue::Number(key.active as f64),
+                            JsonValue::Bool(key.waiting),
+                            JsonValue::Bool(key.running),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+        sha256(&stringify_json(&JsonValue::Object(fingerprint)))
+    });
+    if anchor
+        .as_ref()
+        .is_some_and(|anchor| sort == Sort::Active && anchor.epoch != epoch)
+    {
+        return Ok(v5::SessionListResult {
+            data: v5::SessionsResponse {
+                data: v5::SessionsResponseData { items: Vec::new() },
+                cursor: v5::SessionsResponseCursor {
+                    previous: None,
+                    next: None,
+                },
+                status: None,
+                stale: Some(true),
+            },
+        });
+    }
+    let (page, previous, next) = if let Some(around) = around {
+        let start = matching
+            .iter()
+            .position(|info| info.id == around)
+            .unwrap_or_default()
+            .saturating_sub(query.before.unwrap_or_default() as usize);
+        let page = matching
+            .iter()
+            .skip(start)
+            .take(limit)
+            .copied()
+            .collect::<Vec<_>>();
+        let previous = (start > 0)
+            .then(|| page.first().map(|info| key(info)))
+            .flatten();
+        let next = (start + page.len() < matching.len())
+            .then(|| page.last().map(|info| key(info)))
+            .flatten();
+        (page, previous, next)
+    } else {
+        paginate(&matching, &key, sort, anchor.as_ref(), limit)
+    };
+    let page_status = classified.then(|| {
+        let loss_only = page
+            .iter()
+            .filter(|info| {
+                info.parent_id.is_none()
+                    && lost.contains(&text(info.id.as_lossless()))
+                    && !key(info).waiting
+            })
+            .map(|info| text(info.id.as_lossless()))
+            .collect::<Vec<_>>();
+        v5::Status {
+            running: page
+                .iter()
+                .filter(|info| is_running(info))
+                .map(|info| text(info.id.as_lossless()))
+                .collect(),
+            attention: page
+                .iter()
+                .filter(|info| {
+                    key(info).waiting || loss_only.contains(&text(info.id.as_lossless()))
+                })
+                .map(|info| text(info.id.as_lossless()))
+                .collect(),
+            lost: (!loss_only.is_empty()).then_some(v5::IdentifierList { items: loss_only }),
+            outstanding: None,
+            failed: None,
+            details: None,
+        }
+    });
     Ok(v5::SessionListResult {
         data: v5::SessionsResponse {
             cursor: v5::SessionsResponseCursor {
                 previous: previous
-                    .map(|key| encode_anchor(&key, "previous", sort))
+                    .map(|key| encode_anchor(&key, "previous", sort, epoch.as_deref()))
                     .transpose()?
                     .map(|value| convert::text(&value)),
                 next: next
-                    .map(|key| encode_anchor(&key, "next", sort))
+                    .map(|key| encode_anchor(&key, "next", sort, epoch.as_deref()))
                     .transpose()?
                     .map(|value| convert::text(&value)),
             },
@@ -216,8 +340,74 @@ pub async fn list(
                     .collect::<Result<_, _>>()
                     .map_err(|_| unrepresentable())?,
             },
+            status: page_status,
+            stale: None,
         },
     })
+}
+
+fn classify(
+    core: &crate::Core,
+    sessions: &BTreeMap<String, &session::Info>,
+) -> Result<ClassifiedSessions, Failure> {
+    let work = outstanding::read(
+        &core.sessions,
+        &core.orchestration,
+        core.execution.jobs(),
+        &core.execution.active(),
+        false,
+    )
+    .map_err(|_| Failure::Unavailable("Session work unavailable".into()))?;
+    let running = work.running.iter().map(text).collect();
+    let lost = work
+        .lost
+        .iter()
+        .filter_map(|id| root(&text(id), sessions))
+        .collect();
+    let mut waiting = BTreeSet::new();
+    for (directory, workspace) in core.locations.cached() {
+        let services = core.locations.location(&directory, workspace.as_ref())?;
+        for services in core.locations.policy_sets(&services.info) {
+            for request in services.permissions.list() {
+                waiting.extend(root(&text(request.session_id.as_lossless()), sessions));
+            }
+            for request in services.questions.list() {
+                waiting.extend(root(&text(request.session_id.as_lossless()), sessions));
+            }
+            for form in services.forms.list(None) {
+                waiting.extend(root(&text(&form.session_id), sessions));
+            }
+            let mut reviewed = BTreeSet::new();
+            for info in sessions.values().filter(|info| {
+                info.location.directory == services.info.directory
+                    && info.location.workspace_id == services.info.workspace_id
+            }) {
+                if !root(&text(info.id.as_lossless()), sessions)
+                    .is_some_and(|id| reviewed.insert(id))
+                {
+                    continue;
+                }
+                for request in services
+                    .guardrails
+                    .for_session(&info.id)
+                    .map_err(|_| Failure::Unavailable("Session requests unavailable".into()))?
+                {
+                    waiting.extend(root(&text(request.session_id.as_lossless()), sessions));
+                }
+            }
+        }
+    }
+    for info in sessions.values().filter(|info| info.parent_id.is_none()) {
+        if !core
+            .reviews
+            .list(&info.id)
+            .map_err(|_| Failure::Unavailable("Session reviews unavailable".into()))?
+            .is_empty()
+        {
+            waiting.insert(text(info.id.as_lossless()));
+        }
+    }
+    Ok((running, waiting, lost))
 }
 
 fn local(
@@ -270,6 +460,8 @@ fn local(
                     .collect::<Result<_, _>>()
                     .map_err(|_| unrepresentable())?,
             },
+            status: None,
+            stale: None,
         },
     })
 }
@@ -372,14 +564,12 @@ fn compare(left: &Key, right: &Key, sort: Sort) -> Ordering {
             (Some(a), Some(b)) if a != b => a.cmp(&b),
             _ => by_updated(left, right).reverse(),
         },
-        Sort::Active => match (left.running, right.running) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            _ => right
-                .active
-                .cmp(&left.active)
-                .then_with(|| left.id.cmp(&right.id)),
-        },
+        Sort::Active => right
+            .waiting
+            .cmp(&left.waiting)
+            .then_with(|| right.running.cmp(&left.running))
+            .then_with(|| right.active.cmp(&left.active))
+            .then_with(|| left.id.cmp(&right.id)),
     }
 }
 
@@ -447,7 +637,12 @@ fn normalized(directory: &LosslessString) -> Option<LosslessString> {
     path.to_str().map(LosslessString::from)
 }
 
-fn encode_anchor(key: &Key, direction: &str, sort: Sort) -> Result<String, Failure> {
+fn encode_anchor(
+    key: &Key,
+    direction: &str,
+    sort: Sort,
+    epoch: Option<&str>,
+) -> Result<String, Failure> {
     let mut object = JsonObject::new();
     object.insert("id".into(), JsonValue::String(key.id.clone().into()));
     object.insert(
@@ -468,6 +663,11 @@ fn encode_anchor(key: &Key, direction: &str, sort: Sort) -> Result<String, Failu
     }
     if sort == Sort::Active {
         object.insert("running".into(), JsonValue::Bool(key.running));
+        object.insert("waiting".into(), JsonValue::Bool(key.waiting));
+        object.insert(
+            "epoch".into(),
+            JsonValue::String(epoch.ok_or_else(|| invalid_cursor(()))?.into()),
+        );
     }
     Ok(base64url(
         stringify_json(&JsonValue::Object(object)).as_bytes(),
@@ -513,6 +713,26 @@ fn decode_anchor(value: &str, sort: Sort) -> Result<Anchor, Failure> {
     if sort == Sort::Active && running.is_none() {
         return Err(invalid_cursor(()));
     }
+    let waiting = match object.get(&"waiting".into()) {
+        None => None,
+        Some(JsonValue::Bool(value)) => Some(*value),
+        Some(_) => return Err(invalid_cursor(())),
+    };
+    let epoch = match string("epoch") {
+        Some(epoch)
+            if epoch.len() == 64
+                && epoch
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            Some(epoch)
+        }
+        None if object.get(&"epoch".into()).is_none() => None,
+        _ => return Err(invalid_cursor(())),
+    };
+    if sort == Sort::Active && (waiting.is_none() || epoch.is_none()) {
+        return Err(invalid_cursor(()));
+    }
     Ok(Anchor {
         key: Key {
             id,
@@ -520,8 +740,10 @@ fn decode_anchor(value: &str, sort: Sort) -> Result<Anchor, Failure> {
             active: time,
             pinned: pinned.unwrap_or_default(),
             running: running.unwrap_or_default(),
+            waiting: waiting.unwrap_or_default(),
         },
         previous,
+        epoch,
     })
 }
 

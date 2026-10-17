@@ -13,7 +13,7 @@ use ycoding_core::ycoding_schema::{
 };
 use ycoding_core::ycoding_store::{
     KeyPart,
-    resources::{Request, RequestTable, Secret},
+    resources::{Request, Secret},
     session::{Document, SessionTable},
     tuple_key,
 };
@@ -91,6 +91,7 @@ async fn seed() {
             )
             .unwrap(),
             time_created: [1_761_438_600_000, 1_761_442_200_000, 1_761_445_800_000][index],
+            usage_anchor: None,
         })
         .collect::<Vec<_>>();
     world()
@@ -100,7 +101,7 @@ async fn seed() {
                 SessionTable::insert(tx, row)?;
             }
             for row in &requests {
-                RequestTable::insert(tx, row)?;
+                support::usage::retained(tx, row)?;
             }
             Ok(())
         })
@@ -112,6 +113,10 @@ async fn seed() {
 fn report_query(group: i32) -> v5::UsageReportRequestQuery {
     v5::UsageReportRequestQuery {
         group,
+        provider_id: None,
+        model_id: None,
+        profile: None,
+        selected_effort: None,
         time_zone: None,
         from: None,
         to: None,

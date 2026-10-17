@@ -5,8 +5,24 @@ export function statusColor(
   status: ShellInfo["status"],
   theme: ReturnType<typeof useTheme>["theme"],
 ) {
+  if (status === "queued") return theme.text.feedback.info.default
   if (status === "running") return theme.text.feedback.success.default
   if (status === "exited") return theme.text.feedback.success.default
   if (status === "timeout") return theme.text.feedback.warning.default
   return theme.text.feedback.error.default
+}
+
+export function shellStatusLabel(shell: Pick<ShellInfo, "status" | "queuePosition">) {
+  if (shell.status !== "queued") return shell.status
+  return shell.queuePosition === undefined ? "queued" : `queued #${shell.queuePosition}`
+}
+
+export const SHELL_OUTPUT_TAIL_LIMIT = 256 * 1024
+
+export function appendShellOutputTail(current: string, page: string, limit: number = SHELL_OUTPUT_TAIL_LIMIT): string {
+  const text = current + page
+  if (text.length <= limit) return text
+  const tail = text.slice(-limit)
+  const newline = tail.indexOf("\n")
+  return newline > 0 && newline < limit / 2 ? tail.slice(newline + 1) : tail
 }

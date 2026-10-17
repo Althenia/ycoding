@@ -1688,3 +1688,668 @@ async fn a_context_overflow_with_nothing_to_reduce_fails_the_step_without_compac
     assert_eq!(count(&recorded, "session.compaction.admitted.2"), 0);
     coordinator.shutdown().await.unwrap();
 }
+
+fn insert_unconsumed_user(store: &ycoding_store::Store) {
+    store
+        .submit(|tx| {
+            MessageTable::insert(
+                tx,
+                &Message {
+                    id: "msg_pending_user".into(),
+                    session_id: "ses_one".into(),
+                    type_: "user".into(),
+                    seq: 1,
+                    time_created: 1,
+                    time_updated: 1,
+                    data: parse_json(r#"{"text":"Unconsumed","time":{"created":1}}"#).unwrap(),
+                },
+            )?;
+            SequenceTable::put(
+                tx,
+                &Sequence {
+                    aggregate_id: "ses_one".into(),
+                    seq: 1,
+                    owner_id: None,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+fn through(message: &str, seq: i64) -> AdmitInput {
+    AdmitInput {
+        id: None,
+        session: session::Id::new("ses_one").unwrap(),
+        trigger: session_compaction::Trigger::Mandatory,
+        requested_through_message: session_message::Id::new(message).unwrap(),
+        requested_through_seq: seq,
+        base_context_revision: 0,
+        target_max_input_tokens: 4_200,
+        config_digest: "c".repeat(64),
+        pressure: None,
+    }
+}
+
+async fn claim_running(service: &Service) {
+    use ycoding_core::session::compaction_job::{Lease, Target};
+    service
+        .compaction_claim(
+            Target::Session(session::Id::new("ses_one").unwrap()),
+            Lease {
+                owner: "owner-a".into(),
+                now: 2,
+                expires_at: 100,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+async fn fail_deterministically(service: &Service, message: &str, seq: i64) {
+    use ycoding_core::session::compaction_job::FailInput;
+    let job = service
+        .compaction_admit(through(message, seq), 1)
+        .await
+        .unwrap();
+    claim_running(service).await;
+    service
+        .compaction_fail(FailInput {
+            id: session_compaction::Id::decode(&JsonValue::String(job.id.clone())).unwrap(),
+            owner: Some("owner-a".into()),
+            code: session_compaction::FailureCode::ContextLimitUnresolved,
+            now: 3,
+        })
+        .await
+        .unwrap();
+}
+
+async fn complete_compaction(
+    store: &ycoding_store::Store,
+    service: &Service,
+    message: &str,
+    seq: i64,
+) {
+    use ycoding_core::session::compaction_job::EndInput;
+    use ycoding_schema::schema::NonNegativeInt;
+    use ycoding_store::session::{Document, Manifest};
+    let job = service
+        .compaction_admit(through(message, seq), 1)
+        .await
+        .unwrap();
+    claim_running(service).await;
+    let digest = "d".repeat(64);
+    let stored = digest.clone();
+    let content = format!(
+        r#"{{"schemaVersion":1,"baseContextRevision":0,"coveredThrough":{{"messageID":"{message}","seq":{seq}}},"protectedState":[],"exclusions":[],"inputTokens":10,"retainedTokens":5}}"#
+    );
+    store
+        .submit(move |tx| {
+            ManifestTable::insert(
+                tx,
+                &Manifest {
+                    digest: stored.as_str().into(),
+                    schema_version: 1,
+                    content: Document::new(parse_json(&content).unwrap())?,
+                    input_tokens: 10,
+                    retained_tokens: 5,
+                    time_created: 3,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    service
+        .compaction_end(EndInput {
+            id: session_compaction::Id::decode(&JsonValue::String(job.id.clone())).unwrap(),
+            owner: "owner-a".into(),
+            manifest_digest: digest.as_str().into(),
+            revision: 1,
+            boundary: session_compaction::Boundary {
+                message_id: session_message::Id::new(message).unwrap(),
+                seq: NonNegativeInt::new(seq).unwrap(),
+            },
+            metrics: session_compaction::Metrics {
+                excluded_messages: NonNegativeInt::new(2).unwrap(),
+                excluded_parts: NonNegativeInt::new(3).unwrap(),
+                input_tokens: NonNegativeInt::new(10).unwrap(),
+                retained_tokens: NonNegativeInt::new(5).unwrap(),
+            },
+            now: 40,
+        })
+        .await
+        .unwrap();
+}
+
+fn admitted_boundaries(store: &ycoding_store::Store, service: &Service) -> Vec<(String, i64)> {
+    events(store)
+        .into_iter()
+        .filter(|(kind, _)| kind == "session.compaction.admitted.2")
+        .map(|(_, data)| {
+            let JsonValue::Object(data) = data else {
+                panic!("an admitted event carries an object")
+            };
+            let Some(JsonValue::String(job)) = data.get(&"jobID".into()) else {
+                panic!("an admitted event names its job")
+            };
+            let job = service
+                .compaction_job(
+                    &session_compaction::Id::decode(&JsonValue::String(job.clone())).unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+            (
+                job.requested_through_message_id.to_utf8().unwrap(),
+                job.requested_through_seq,
+            )
+        })
+        .collect()
+}
+
+fn stored(store: &ycoding_store::Store, id: &str) -> Message {
+    store
+        .snapshot()
+        .unwrap()
+        .get::<MessageTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&id.into()),
+        ]))
+        .unwrap()
+        .unwrap()
+}
+
+fn is_marker(row: &Message, status: &str) -> bool {
+    let JsonValue::Object(data) = &row.data else {
+        return false;
+    };
+    row.type_.as_str() == Some("compaction")
+        && matches!(
+            data.get(&"status".into()),
+            Some(JsonValue::String(value)) if value.as_str() == Some(status)
+        )
+}
+
+const REFUSED: &str = "Session has no completed message boundary to compact";
+
+#[tokio::test]
+async fn w48_r1_a_session_whose_only_closed_message_is_a_failed_marker_has_no_compaction_boundary()
+{
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    insert_unconsumed_user(&store);
+    fail_deterministically(&service, "msg_pending_user", 1).await;
+    let refused = within(
+        local(&store, "http://127.0.0.1:1").compact(&session::Id::new("ses_one").unwrap(), None),
+    )
+    .await;
+    assert!(
+        matches!(&refused, Err(IngressError::Compaction(error)) if error.to_string() == REFUSED),
+        "{refused:?}"
+    );
+    assert_eq!(count(&events(&store), "session.compaction.admitted.2"), 1);
+}
+
+#[tokio::test]
+async fn w48_r1_manual_compaction_skips_a_failed_marker_for_the_latest_complete_message() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "short earlier answer".into());
+    select_current(&service, "gpt-reasoning").await;
+    fail_deterministically(&service, "msg_old_assistant", 2).await;
+    let _ = within(
+        local(&store, "http://127.0.0.1:1").compact(&session::Id::new("ses_one").unwrap(), None),
+    )
+    .await;
+    let selected = stored(&store, "msg_current_model");
+    assert!(!is_marker(&selected, "failed"));
+    assert_eq!(
+        admitted_boundaries(&store, &service),
+        vec![
+            ("msg_old_assistant".to_string(), 2),
+            ("msg_current_model".to_string(), selected.seq)
+        ]
+    );
+}
+
+fn tiny_helper() -> helper::Settings {
+    pinned(r#"{"providerID":"openai","id":"gpt-tiny"}"#)
+}
+
+#[tokio::test]
+async fn w48_r1_an_unchanged_deterministic_failure_is_not_readmitted_by_the_next_gate_pass() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(
+        &store,
+        format!(
+            "OLD-HISTORY-MARKER {}",
+            "earlier answer detail. ".repeat(1_200)
+        ),
+    );
+    admit(&service, "Answer the prompt").await;
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    let step = text_of(within(requests.recv()).await.unwrap());
+    within(server).await.unwrap();
+    assert!(requests.try_recv().is_err());
+    assert!(!step.contains("<conversation-checkpoint>"));
+    let recorded = events(&store);
+    assert_eq!(count(&recorded, "session.compaction.admitted.2"), 1);
+    assert_eq!(count(&recorded, "session.compaction.failed.2"), 1);
+    assert_eq!(count(&recorded, "session.compaction.ended.2"), 0);
+    assert_eq!(count(&recorded, "session.step.ended.1"), 1);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn w48_r2_a_new_complete_message_after_a_deterministic_failure_admits_exactly_one_new_job() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(
+        &store,
+        format!(
+            "OLD-HISTORY-MARKER {}",
+            "earlier answer detail. ".repeat(1_200)
+        ),
+    );
+    fail_deterministically(&service, "msg_old_assistant", 2).await;
+    admit(&service, "Answer the prompt").await;
+    let (endpoint, mut requests, server) = server(vec![sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local_with(&store, &endpoint, tiny_helper())));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    within(requests.recv()).await.unwrap();
+    within(server).await.unwrap();
+    let boundaries = admitted_boundaries(&store, &service);
+    assert_eq!(boundaries.len(), 2, "{boundaries:?}");
+    assert_eq!(boundaries[0], ("msg_old_assistant".to_string(), 2));
+    assert_ne!(boundaries[1], boundaries[0]);
+    assert!(boundaries[1].1 > 2);
+    let boundary = stored(&store, &boundaries[1].0);
+    assert_eq!(boundary.seq, boundaries[1].1);
+    assert_ne!(boundary.type_.as_str(), Some("compaction"));
+    assert_eq!(count(&events(&store), "session.compaction.failed.2"), 2);
+    coordinator.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn w48_r3_a_completed_compaction_marker_remains_the_latest_boundary() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(&store, "short earlier answer".into());
+    select_current(&service, "gpt-reasoning").await;
+    complete_compaction(&store, &service, "msg_old_assistant", 2).await;
+    let _ = within(
+        local(&store, "http://127.0.0.1:1").compact(&session::Id::new("ses_one").unwrap(), None),
+    )
+    .await;
+    let boundaries = admitted_boundaries(&store, &service);
+    assert_eq!(boundaries.len(), 2, "{boundaries:?}");
+    assert_eq!(boundaries[0], ("msg_old_assistant".to_string(), 2));
+    let boundary = stored(&store, &boundaries[1].0);
+    assert_eq!(boundary.seq, boundaries[1].1);
+    assert!(boundary.seq > stored(&store, "msg_current_model").seq);
+    assert!(is_marker(&boundary, "completed"));
+}
+
+fn w40_anchor(session: &str, input: &str) -> JsonValue {
+    parse_json(&format!(
+        r#"{{"sessionID":"{session}","inputID":"{input}"}}"#
+    ))
+    .unwrap()
+}
+
+fn w40_stored<T: ycoding_schema::DomainDecode + ycoding_schema::DomainEncode>(
+    anchor: &Option<ycoding_store::session::Document<T>>,
+) -> Option<JsonValue> {
+    anchor.as_ref().map(|anchor| anchor.value().clone())
+}
+
+fn w40_field(data: &JsonValue, key: &str) -> Option<JsonValue> {
+    match data {
+        JsonValue::Object(object) => object.get(&key.into()).cloned(),
+        _ => None,
+    }
+}
+
+fn w40_job(
+    store: &ycoding_store::Store,
+    recorded: &[(String, JsonValue)],
+) -> (ycoding_store::session::Job, JsonValue) {
+    let admitted = recorded
+        .iter()
+        .find(|(name, _)| name == "session.compaction.admitted.2")
+        .map(|(_, data)| data.clone())
+        .unwrap();
+    let Some(JsonValue::String(job_id)) = w40_field(&admitted, "jobID") else {
+        panic!("admission names no job")
+    };
+    let job = store
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::session::JobTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&job_id),
+        ]))
+        .unwrap()
+        .unwrap();
+    (job, admitted)
+}
+
+fn w40_fact_anchor(
+    store: &ycoding_store::Store,
+    request: &ycoding_store::resources::Request,
+) -> Option<JsonValue> {
+    let fact = store
+        .snapshot()
+        .unwrap()
+        .get::<ycoding_store::resources::UsageAnalyticsRequestTable>(&ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(&request.id),
+        ]))
+        .unwrap()
+        .unwrap();
+    w40_stored(&fact.usage_anchor)
+}
+
+async fn w40_admit(service: &Service, input: &str, text: &str) {
+    service
+        .admit(ycoding_core::session::pending::Request {
+            id: session_message::Id::new(input).unwrap(),
+            session_id: session::Id::new("ses_one").unwrap(),
+            input: session_pending::Message::decode(
+                &parse_json(&format!(
+                    r#"{{"type":"user","data":{{"text":{}}},"delivery":"steer"}}"#,
+                    ycoding_schema::stringify_json(&JsonValue::String(text.into()))
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            event_id: ycoding_schema::event::Id::new(format!("evt_{input}")).unwrap(),
+            created: 1,
+        })
+        .await
+        .unwrap();
+}
+
+async fn w40_over_limit(
+    input: &str,
+) -> (
+    ycoding_store::Store,
+    Vec<JsonValue>,
+    Vec<(String, JsonValue)>,
+) {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(
+        &store,
+        format!(
+            "OLD-HISTORY-MARKER {}",
+            "earlier answer detail. ".repeat(1_200)
+        ),
+    );
+    w40_admit(&service, input, "Answer the prompt").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(6), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    within(server).await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let mut bodies = Vec::new();
+    while let Ok(body) = requests.try_recv() {
+        bodies.push(body);
+    }
+    let recorded = events(&store);
+    (store, bodies, recorded)
+}
+
+#[tokio::test]
+async fn w40_the_compaction_job_and_its_helper_request_inherit_the_prompt_current_at_admission() {
+    let (store, bodies, recorded) = w40_over_limit("msg_input").await;
+    assert_eq!(bodies.len(), 2);
+    let expected = w40_anchor("ses_one", "msg_input");
+    let (job, admitted) = w40_job(&store, &recorded);
+    assert_eq!(w40_stored(&job.usage_anchor), Some(expected.clone()));
+    assert_eq!(w40_field(&admitted, "usageAnchor"), Some(expected.clone()));
+
+    let helper = requests_of(
+        &store,
+        helper_session_of(&recorded).as_lossless().as_str().unwrap(),
+    );
+    let owner = requests_of(&store, "ses_one");
+    let (helper, owner) = (&helper[0], &owner[0]);
+    assert_eq!(helper.source.as_str(), Some("compaction"));
+    assert_eq!(owner.source.as_str(), Some("step"));
+    for request in [helper, owner] {
+        assert_eq!(w40_stored(&request.usage_anchor), Some(expected.clone()));
+        assert_eq!(w40_fact_anchor(&store, request), Some(expected.clone()));
+    }
+}
+
+#[tokio::test]
+async fn w40_a_job_admitted_without_an_anchor_keeps_its_helper_request_unanchored_while_the_step_is_anchored()
+ {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    seed_history(
+        &store,
+        format!("OLD-MARKER {}", "earlier answer detail. ".repeat(1_200)),
+    );
+    w40_admit(&service, "msg_input", "Answer the prompt").await;
+    let existing = service
+        .compaction_admit(through("msg_old_assistant", 2), 1)
+        .await
+        .unwrap();
+    assert!(existing.usage_anchor.is_none());
+    let (endpoint, _requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    within(server).await.unwrap();
+    coordinator.shutdown().await.unwrap();
+
+    let recorded = events(&store);
+    let (job, admitted) = w40_job(&store, &recorded);
+    assert_eq!(job.id, existing.id);
+    assert!(job.usage_anchor.is_none());
+    assert_eq!(w40_field(&admitted, "usageAnchor"), None);
+    let helper = requests_of(
+        &store,
+        helper_session_of(&recorded).as_lossless().as_str().unwrap(),
+    );
+    let owner = requests_of(&store, "ses_one");
+    assert_eq!(helper[0].source.as_str(), Some("compaction"));
+    assert!(helper[0].usage_anchor.is_none());
+    assert_eq!(w40_fact_anchor(&store, &helper[0]), None);
+    assert_eq!(
+        w40_stored(&owner[0].usage_anchor),
+        Some(w40_anchor("ses_one", "msg_input"))
+    );
+}
+
+async fn w40_fixed_run(
+    earlier: &str,
+    next: &str,
+) -> (
+    ycoding_store::Store,
+    Vec<JsonValue>,
+    Vec<(String, JsonValue)>,
+) {
+    let store = support::store();
+    let service = Service::new(store.client());
+    seed_context(&store);
+    w40_admit(&service, earlier, "Earlier question").await;
+    service
+        .promote_input(
+            &session::Id::new("ses_one").unwrap(),
+            session_message::Id::new(earlier).unwrap().as_lossless(),
+            2,
+        )
+        .await
+        .unwrap();
+    store
+        .submit(|tx| {
+            MessageTable::insert(
+                tx,
+                &Message {
+                    id: "msg_old_assistant".into(),
+                    session_id: "ses_one".into(),
+                    type_: "assistant".into(),
+                    seq: 2,
+                    time_created: 2,
+                    time_updated: 2,
+                    data: parse_json(&format!(
+                        r#"{{"agent":"build","model":{{"providerID":"openai","id":"gpt-reasoning"}},"content":[{{"type":"text","text":{}}}],"finish":"stop","time":{{"created":2,"completed":2}}}}"#,
+                        ycoding_schema::stringify_json(&JsonValue::String(
+                            format!("OLD-MARKER {}", "earlier answer detail. ".repeat(1_200))
+                                .as_str()
+                                .into()
+                        ))
+                    ))
+                    .unwrap(),
+                },
+            )?;
+            SequenceTable::put(
+                tx,
+                &Sequence {
+                    aggregate_id: "ses_one".into(),
+                    seq: 2,
+                    owner_id: None,
+                },
+            )
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    service
+        .compaction_admit(
+            AdmitInput {
+                id: Some(
+                    session_compaction::Id::decode(&JsonValue::String("cmp_w40_fixed".into()))
+                        .unwrap(),
+                ),
+                ..through("msg_old_assistant", 2)
+            },
+            3,
+        )
+        .await
+        .unwrap();
+    w40_admit(&service, next, "Answer the prompt").await;
+    let (endpoint, mut requests, server) = server(vec![helper_reply(2), sse("Answer")]).await;
+    let coordinator = Coordinator::new(Arc::new(local(&store, &endpoint)));
+    within(coordinator.run(&session::Id::new("ses_one").unwrap()))
+        .await
+        .unwrap();
+    within(server).await.unwrap();
+    coordinator.shutdown().await.unwrap();
+    let mut bodies = Vec::new();
+    while let Ok(body) = requests.try_recv() {
+        bodies.push(body);
+    }
+    let recorded = events(&store);
+    (store, bodies, recorded)
+}
+
+#[tokio::test]
+async fn w40_the_helper_keeps_the_job_anchor_when_a_later_prompt_becomes_current_before_it_runs() {
+    let (store, bodies, recorded) = w40_fixed_run("msg_p0", "msg_p1").await;
+    assert_eq!(bodies.len(), 2);
+    let (job, _) = w40_job(&store, &recorded);
+    assert_eq!(
+        w40_stored(&job.usage_anchor),
+        Some(w40_anchor("ses_one", "msg_p0"))
+    );
+    let helper = requests_of(
+        &store,
+        helper_session_of(&recorded).as_lossless().as_str().unwrap(),
+    );
+    let owner = requests_of(&store, "ses_one");
+    assert_eq!(
+        w40_stored(&helper[0].usage_anchor),
+        Some(w40_anchor("ses_one", "msg_p0"))
+    );
+    let step = owner
+        .iter()
+        .find(|request| request.source.as_str() == Some("step"))
+        .unwrap();
+    assert_eq!(
+        w40_stored(&step.usage_anchor),
+        Some(w40_anchor("ses_one", "msg_p1"))
+    );
+}
+
+#[tokio::test]
+async fn w40_provider_request_bytes_and_cache_identity_do_not_depend_on_the_anchor() {
+    let (store_a, bodies_a, recorded_a) = w40_fixed_run("msg_p0_a", "msg_p1_a").await;
+    let (store_b, bodies_b, recorded_b) = w40_fixed_run("msg_p0_b", "msg_p1_b").await;
+    assert_eq!(
+        helper_session_of(&recorded_a),
+        helper_session_of(&recorded_b)
+    );
+    assert_eq!(bodies_a.len(), 2);
+    assert_eq!(bodies_a.len(), bodies_b.len());
+    for (a, b) in bodies_a.iter().zip(&bodies_b) {
+        let (a, b) = (
+            ycoding_schema::stringify_json(a),
+            ycoding_schema::stringify_json(b),
+        );
+        assert_eq!(a, b);
+        for forbidden in ["causedBy", "usageAnchor", "msg_p0", "msg_p1", "inputID"] {
+            assert!(!a.contains(forbidden), "{forbidden}");
+        }
+    }
+    let identity = |store: &ycoding_store::Store, recorded: &[(String, JsonValue)]| {
+        let helper = helper_session_of(recorded);
+        [
+            requests_of(store, "ses_one"),
+            requests_of(store, helper.as_lossless().as_str().unwrap()),
+        ]
+        .concat()
+        .into_iter()
+        .map(|request| {
+            (
+                request.source,
+                request.prompt_cache_key,
+                request.system_digest,
+                request.tool_digest,
+                request.route_id,
+            )
+        })
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        identity(&store_a, &recorded_a),
+        identity(&store_b, &recorded_b)
+    );
+    for (store, earlier, next) in [
+        (&store_a, "msg_p0_a", "msg_p1_a"),
+        (&store_b, "msg_p0_b", "msg_p1_b"),
+    ] {
+        let step = requests_of(store, "ses_one")
+            .into_iter()
+            .find(|request| request.source.as_str() == Some("step"))
+            .unwrap();
+        assert_eq!(
+            w40_stored(&step.usage_anchor),
+            Some(w40_anchor("ses_one", next))
+        );
+        let (job, _) = w40_job(store, &events(store));
+        assert_eq!(
+            w40_stored(&job.usage_anchor),
+            Some(w40_anchor("ses_one", earlier))
+        );
+    }
+}

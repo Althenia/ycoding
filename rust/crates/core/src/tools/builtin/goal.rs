@@ -15,6 +15,7 @@ use ycoding_schema::{JsonValue, LosslessString, ObjectEncoder};
 
 pub struct Goal {
     pub autonomy: autonomy::Service,
+    pub sessions: crate::session::store::Service,
     pub policy: Arc<LeafPolicy>,
 }
 impl Tool for Goal {
@@ -86,22 +87,41 @@ impl Tool for Goal {
                     if !existing.is_some_and(autonomy::Goal::is_active) {
                         return Err(Failure::message("No active goal to report"));
                     }
-                    let state = self
-                        .autonomy
-                        .report(&context.session_id)
-                        .await
-                        .map_err(failure)?;
-                    let goal = state
-                        .goal
-                        .as_ref()
-                        .ok_or_else(|| Failure::Defect("Goal report lost goal".into()))?;
-                    let message = format!(
-                        "Goal no-progress attempt {}/{} reported; status {}.",
-                        goal.no_progress,
-                        goal.max_no_progress,
-                        goal.status.as_str()
-                    );
-                    (action, state, message)
+                    let open = self
+                        .sessions
+                        .client
+                        .snapshot()
+                        .and_then(|snapshot| {
+                            crate::session::review_fold::family_open(
+                                &snapshot,
+                                context.session_id.as_lossless(),
+                            )
+                        })
+                        .map_err(|error| Failure::Defect(error.to_string()))?
+                        .0;
+                    if open > 0 {
+                        let message = format!(
+                            "Not counted: {open} item(s) in this Session family await the user's review."
+                        );
+                        (action, before, message)
+                    } else {
+                        let state = self
+                            .autonomy
+                            .report(&context.session_id)
+                            .await
+                            .map_err(failure)?;
+                        let goal = state
+                            .goal
+                            .as_ref()
+                            .ok_or_else(|| Failure::Defect("Goal report lost goal".into()))?;
+                        let message = format!(
+                            "Goal no-progress attempt {}/{} reported; status {}.",
+                            goal.no_progress,
+                            goal.max_no_progress,
+                            goal.status.as_str()
+                        );
+                        (action, state, message)
+                    }
                 }
                 "complete" => {
                     if !existing.is_some_and(autonomy::Goal::is_active) {

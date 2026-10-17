@@ -13,7 +13,7 @@ impl Default for ToolFixture {
 impl ToolFixture {
     pub fn new() -> Self {
         let authority = Fixture::default();
-        authority.session("ses_tool", None, 1, false, None);
+        authority.session("ses_tool", None, 2, false, None);
         authority
             .rules
             .lock()
@@ -146,6 +146,8 @@ fn policy(
                 custom,
                 enabled: true,
                 limits,
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             authority.publisher(),
         ),

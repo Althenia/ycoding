@@ -6,13 +6,13 @@ use std::{
 };
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, model, provider_request,
-    session, token_usage,
+    session, session_id::SessionId, session_message_id, token_usage, usage_anchor,
 };
 use ycoding_store::{
     Error, IndexOrder, KeyPart, Snapshot, TableSpec,
     analytics::{Query, Value, reports},
-    resources::{Request, requests},
-    session::{Session, SessionTable},
+    resources::{Request, UsageAnalyticsRequest, UsageAnalyticsRequestTable, requests},
+    session::{Document, Session, SessionTable},
     tuple_key,
 };
 
@@ -80,11 +80,10 @@ fn analytics_report(
     pricer: Pricer<'_>,
 ) -> Result<provider_request::Report, Error> {
     let zone = zone(input)?;
-    let snapshot = client.snapshot()?;
-    let sessions = match id {
-        Some(id) => family(&snapshot, id)?,
-        None => all_sessions(&snapshot)?,
-    };
+    let mut snapshot = client.snapshot()?;
+    let sessions = id.map(|id| family(&snapshot, id)).transpose()?;
+    let prompts = sessions.is_some() && input.group.0.as_str() == Some("prompt");
+    let mut hints = BTreeMap::<String, (LosslessString, LosslessString)>::new();
     let handle = client.analytics().map_err(analytics_error)?;
     let selection = vec![
         id.map(|id| Value::Text(text(id.as_lossless())))
@@ -102,11 +101,40 @@ fn analytics_report(
     let mut resolved = std::collections::BTreeSet::new();
     let mut first = None::<i64>;
     let mut last = None::<i64>;
-    scan(&snapshot, &sessions, |_, session, row| {
+    let mut observe = |_: Family, row: Row| -> Result<(), Error> {
+        let model = row.model.domain()?;
+        if input
+            .provider_id
+            .as_ref()
+            .is_some_and(|value| value != &model.provider_id)
+            || input
+                .model_id
+                .as_ref()
+                .is_some_and(|value| value != &model.id)
+            || input
+                .profile
+                .as_ref()
+                .is_some_and(|value| Some(value) != model.profile.as_ref())
+            || input
+                .selected_effort
+                .as_ref()
+                .is_some_and(|value| Some(value) != model.variant.as_ref())
+        {
+            return Ok(());
+        }
         if input.from.is_some_and(|from| row.time_created < from.get())
             || input.to.is_some_and(|to| row.time_created >= to.get())
         {
             return Ok(());
+        }
+        if prompts && let Some((session, input)) = &row.hint {
+            hints.insert(
+                ycoding_schema::stringify_json(&JsonValue::Array(vec![
+                    session.encode(),
+                    input.encode(),
+                ])),
+                (session.clone(), input.clone()),
+            );
         }
         first = Some(first.map_or(row.time_created, |time| time.min(row.time_created)));
         last = Some(last.map_or(row.time_created, |time| time.max(row.time_created)));
@@ -115,7 +143,7 @@ fn analytics_report(
             && row.source.as_str() != Some("decision")
         {
             let model = row.model.domain()?;
-            let reference = pricing_ref(session, &model);
+            let reference = pricing_ref(&row, &model);
             let identity = price_identity(&reference);
             if resolved.insert(identity.clone())
                 && let Some(pricing) = pricer(&reference)
@@ -137,13 +165,49 @@ fn analytics_report(
             }
         }
         Ok(())
-    })?;
+    };
+    match &sessions {
+        Some(sessions) => scan(&snapshot, sessions, &mut observe)?,
+        None => scan_facts(&snapshot, &mut observe)?,
+    }
+    let mut resolved_hints = Vec::new();
+    for (lookup, (session, input)) in hints {
+        let session_id = SessionId::new(session).map_err(record_error)?;
+        let input_id = session_message_id::Id::new(input).map_err(record_error)?;
+        if let Some(anchor) = super::usage_attribution::resolve(
+            &mut snapshot,
+            &usage_anchor::Ref {
+                session_id,
+                input_id,
+            },
+        )? {
+            let anchor_session = lossy(anchor.session_id.as_lossless());
+            let anchor_input = lossy(anchor.input_id.as_lossless());
+            let key = ycoding_schema::stringify_json(&JsonValue::Array(vec![
+                LosslessString::from("prompt").encode(),
+                anchor.session_id.as_lossless().encode(),
+                anchor.input_id.as_lossless().encode(),
+            ]));
+            resolved_hints.push(
+                [
+                    lookup,
+                    anchor_session,
+                    anchor_input,
+                    key,
+                    ycoding_schema::stringify_json(&anchor.encode()),
+                ]
+                .map(|part| hex(&part))
+                .join("|"),
+            );
+        }
+        std::thread::yield_now();
+    }
     let offsets = time_zone_offsets(zone.as_ref(), first.zip(last))?;
     let offset = input.offset.map_or(0, |value| value.get());
     let limit = input
         .limit
         .map_or(DEFAULT_LIMIT as i64, |value| value.get());
-    let parameters = selection
+    let mut parameters: Vec<Value> = selection
         .into_iter()
         .chain([
             Value::Text(text(&input.group.0)),
@@ -164,14 +228,51 @@ fn analytics_report(
             Value::BigInt(limit),
             Value::Text(offsets.join(";")),
             Value::Text(prices.join(";")),
+            input
+                .provider_id
+                .as_ref()
+                .map(|value| Value::Text(text(&value.0)))
+                .unwrap_or(Value::Null),
+            input
+                .model_id
+                .as_ref()
+                .map(|value| Value::Text(text(value)))
+                .unwrap_or(Value::Null),
+            input
+                .profile
+                .as_ref()
+                .map(|value| Value::Text(text(&value.0)))
+                .unwrap_or(Value::Null),
+            input
+                .selected_effort
+                .as_ref()
+                .map(|value| Value::Text(text(value)))
+                .unwrap_or(Value::Null),
         ])
         .collect();
+    if sessions.is_some() {
+        parameters.push(Value::Text(resolved_hints.join(";")));
+    }
     let mut result = handle
         .report_snapshot(
             snapshot,
-            &["session", "project", "session_provider_request"],
+            if sessions.is_some() {
+                &["session", "project", "session_provider_request", "task"]
+            } else {
+                &["usage_analytics_request", "session", "project"]
+            },
             vec![Query {
-                sql: include_str!("usage_report.sql"),
+                sql: if sessions.is_some() {
+                    concat!(
+                        include_str!("usage_report_ledger.sql"),
+                        include_str!("usage_report_tail.sql")
+                    )
+                } else {
+                    concat!(
+                        include_str!("usage_report_facts.sql"),
+                        include_str!("usage_report_tail.sql")
+                    )
+                },
                 parameters,
                 max_rows: limit as usize + 1,
             }],
@@ -190,6 +291,78 @@ fn analytics_report(
                     "label",
                     &LosslessString::from(reports::value_text(&row[2])?),
                 );
+            let json = |index| -> Result<Option<JsonValue>, Error> {
+                if matches!(row[index], Value::Null) {
+                    return Ok(None);
+                }
+                ycoding_schema::parse_json(reports::value_text(&row[index])?)
+                    .map(Some)
+                    .map_err(|error| Error::Record(Box::new(error)))
+            };
+            let model = model::Ref::decode(
+                &json(31)?.ok_or(Error::Rejected("missing report model identity"))?,
+            )
+            .map_err(record_error)?;
+            let dimensions = ObjectEncoder::new().field("group", &input.group);
+            let dimensions = match input.group.0.as_str() {
+                Some("model") => {
+                    object = object.field("model", &model);
+                    None
+                }
+                Some("provider") => Some(dimensions.field("providerID", &model.provider_id)),
+                Some("provider-model") => Some(
+                    dimensions
+                        .field("providerID", &model.provider_id)
+                        .field("modelID", &model.id),
+                ),
+                Some("provider-profile-model" | "profile") => {
+                    let dimensions = dimensions
+                        .field("providerID", &model.provider_id)
+                        .optional("profile", &model.profile)
+                        .field(
+                            "profileState",
+                            &LosslessString::from(if model.profile.is_some() {
+                                "recorded"
+                            } else {
+                                "provider-default"
+                            }),
+                        );
+                    Some(
+                        if input.group.0.as_str() == Some("provider-profile-model") {
+                            dimensions.field("modelID", &model.id)
+                        } else {
+                            dimensions
+                        },
+                    )
+                }
+                Some("model-id") => Some(dimensions.field("modelID", &model.id)),
+                Some("prompt") => {
+                    let anchor = json(32)?;
+                    Some(dimensions.optional("anchor", &anchor).field(
+                        "attribution",
+                        &LosslessString::from(if anchor.is_some() {
+                            "complete"
+                        } else {
+                            "unattributed"
+                        }),
+                    ))
+                }
+                Some("task") => {
+                    let session = json(33)?;
+                    Some(dimensions.optional("sessionID", &session).field(
+                        "attribution",
+                        &LosslessString::from(if session.is_some() {
+                            "complete"
+                        } else {
+                            "unattributed"
+                        }),
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(dimensions) = dimensions {
+                object = object.field("dimensions", &dimensions.finish());
+            }
             let JsonValue::Object(metrics) = reports::metrics(&row[3..17])? else {
                 return Err(Error::Rejected("invalid usage metrics"));
             };
@@ -204,6 +377,21 @@ fn analytics_report(
                 object = object.field(
                     "speed",
                     &ObjectEncoder::new()
+                        .field("generationSamples", &value(26)?)
+                        .field("providerTimedSamples", &value(27)?)
+                        .field("observedSamples", &value(28)?)
+                        .optional(
+                            "generationP50TokensPerSecond",
+                            &(!matches!(row[29], Value::Null))
+                                .then(|| value(29))
+                                .transpose()?,
+                        )
+                        .optional(
+                            "generationP90TokensPerSecond",
+                            &(!matches!(row[30], Value::Null))
+                                .then(|| value(30))
+                                .transpose()?,
+                        )
                         .optional(
                             "firstOutputP50Ms",
                             &(!matches!(row[19], Value::Null))
@@ -320,10 +508,10 @@ fn time_zone_offsets(zone: Option<&Zone>, range: Option<(i64, i64)>) -> Result<V
     Ok(result)
 }
 
-fn pricing_ref(session: &Session, model: &model::Ref) -> PricingRef {
+fn pricing_ref(row: &Row, model: &model::Ref) -> PricingRef {
     PricingRef {
-        directory: session.directory.clone(),
-        workspace_id: session.workspace_id.clone(),
+        directory: row.directory.clone(),
+        workspace_id: row.workspace_id.clone(),
         provider: model.provider_id.0.clone(),
         model: model.id.clone(),
         profile: model.profile.as_ref().map(|profile| profile.0.clone()),
@@ -363,8 +551,78 @@ enum Zone {
     Iana(chrono_tz::Tz),
 }
 
+type Family = (i64, String);
+
+struct Row {
+    hint: Option<(LosslessString, LosslessString)>,
+    directory: LosslessString,
+    workspace_id: Option<LosslessString>,
+    source: LosslessString,
+    attempts: i64,
+    continuation: LosslessString,
+    cache_read_reported: Option<i64>,
+    timing: Option<Document<provider_request::Timing>>,
+    cost: Option<f64>,
+    tokens: Document<token_usage::Info>,
+    model: Document<model::Ref>,
+    time_created: i64,
+    request: i64,
+    invalidation: LosslessString,
+    prompt_cache_key: LosslessString,
+}
+
+impl Row {
+    fn ledger(session: &Session, row: Request) -> Self {
+        Self {
+            hint: row
+                .usage_anchor
+                .is_none()
+                .then(|| row.input_id.clone())
+                .flatten()
+                .map(|input| (row.session_id.clone(), input)),
+            directory: session.directory.clone(),
+            workspace_id: session.workspace_id.clone(),
+            source: row.source,
+            attempts: row.attempts,
+            continuation: row.continuation,
+            cache_read_reported: row.cache_read_reported,
+            timing: row.timing,
+            cost: row.cost,
+            tokens: row.tokens,
+            model: row.model,
+            time_created: row.time_created,
+            request: row.request,
+            invalidation: row.invalidation,
+            prompt_cache_key: row.prompt_cache_key,
+        }
+    }
+
+    fn fact(row: UsageAnalyticsRequest) -> (Family, Self) {
+        (
+            (row.session_updated, text(&row.session_id)),
+            Self {
+                hint: None,
+                directory: row.directory,
+                workspace_id: row.workspace_id,
+                source: row.source,
+                attempts: row.attempts,
+                continuation: row.continuation,
+                cache_read_reported: row.cache_read_reported,
+                timing: row.timing,
+                cost: row.cost,
+                tokens: row.tokens,
+                model: row.model,
+                time_created: row.time_created,
+                request: row.request,
+                invalidation: row.invalidation,
+                prompt_cache_key: row.prompt_cache_key,
+            },
+        )
+    }
+}
+
 struct Sample {
-    family: usize,
+    family: Family,
     model: model::Ref,
     step: bool,
     attempts: i64,
@@ -498,7 +756,7 @@ impl Sum {
 fn scan(
     snapshot: &Snapshot,
     sessions: &[Session],
-    mut visit: impl FnMut(usize, &Session, Request) -> Result<(), Error>,
+    visit: &mut dyn FnMut(Family, Row) -> Result<(), Error>,
 ) -> Result<(), Error> {
     for (index, session) in sessions.iter().enumerate() {
         let mut after = None;
@@ -515,8 +773,10 @@ fn scan(
             };
             after = Some(last.cursor.clone());
             for entry in page {
-                let row = entry.record;
-                visit(index, session, row)?;
+                visit(
+                    (index as i64, String::new()),
+                    Row::ledger(session, entry.record),
+                )?;
             }
             std::thread::yield_now();
         }
@@ -524,28 +784,28 @@ fn scan(
     Ok(())
 }
 
-fn all_sessions(snapshot: &Snapshot) -> Result<Vec<Session>, Error> {
-    let mut sessions = Vec::new();
-    let mut cursor = None;
+fn scan_facts(
+    snapshot: &Snapshot,
+    visit: &mut dyn FnMut(Family, Row) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut after: Option<Vec<u8>> = None;
     loop {
-        let page = snapshot.scan::<SessionTable>(
-            cursor.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+        let page = snapshot.scan::<UsageAnalyticsRequestTable>(
+            after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
             Bound::Unbounded,
             PAGE,
         )?;
         let Some(last) = page.last() else {
             break;
         };
-        cursor = Some(SessionTable::primary_key(last));
-        sessions.extend(page);
+        after = Some(UsageAnalyticsRequestTable::primary_key(last));
+        for fact in page {
+            let (family, row) = Row::fact(fact);
+            visit(family, row)?;
+        }
         std::thread::yield_now();
     }
-    sessions.sort_by(|left, right| {
-        left.time_updated
-            .cmp(&right.time_updated)
-            .then_with(|| text(&left.id).cmp(&text(&right.id)))
-    });
-    Ok(sessions)
+    Ok(())
 }
 
 fn family(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<Session>, Error> {
@@ -592,9 +852,8 @@ fn family(snapshot: &Snapshot, id: &session::Id) -> Result<Vec<Session>, Error> 
 }
 
 fn sample(
-    family: usize,
-    session: &Session,
-    row: Request,
+    family: Family,
+    row: Row,
     pricer: Pricer<'_>,
     prices: &mut VecDeque<(PricingRef, Option<Pricing>)>,
 ) -> Result<Sample, Error> {
@@ -602,7 +861,7 @@ fn sample(
     let tokens = row.tokens.domain()?;
     let estimate = match pricer {
         Some(pricer) if row.cost.is_none() && row.source.as_str() != Some("decision") => {
-            let reference = pricing_ref(session, &model);
+            let reference = pricing_ref(&row, &model);
             if !prices.iter().any(|(key, _)| key == &reference) {
                 if prices.len() == 256 {
                     prices.pop_front();
@@ -646,16 +905,12 @@ fn read_summary(
     id: Option<&session::Id>,
     pricer: Pricer<'_>,
 ) -> Result<provider_request::Summary, Error> {
-    let sessions = match id {
-        Some(id) => family(snapshot, id)?,
-        None => all_sessions(snapshot)?,
-    };
     let mut total = Acc::default();
     let mut groups: BTreeMap<String, (model::Ref, Acc)> = BTreeMap::new();
     let mut latest = None::<Sample>;
     let mut prices = VecDeque::new();
-    scan(snapshot, &sessions, |index, session, row| {
-        let sample = sample(index, session, row, pricer, &mut prices)?;
+    let mut observe = |family: Family, row: Row| -> Result<(), Error> {
+        let sample = sample(family, row, pricer, &mut prices)?;
         total.add(&sample);
         let identity = format!(
             "{:?}",
@@ -676,13 +931,17 @@ fn read_summary(
             .1
             .add(&sample);
         if latest.as_ref().is_none_or(|latest| {
-            (sample.time, sample.family, sample.request)
-                > (latest.time, latest.family, latest.request)
+            (sample.time, &sample.family, sample.request)
+                > (latest.time, &latest.family, latest.request)
         }) {
             latest = Some(sample);
         }
         Ok(())
-    })?;
+    };
+    match id {
+        Some(id) => scan(snapshot, &family(snapshot, id)?, &mut observe)?,
+        None => scan_facts(snapshot, &mut observe)?,
+    }
     let mut models = groups.into_values().collect::<Vec<_>>();
     models.sort_by(|(left_model, left), (right_model, right)| {
         right
@@ -807,6 +1066,16 @@ fn fixed_offset(name: &str) -> Option<Zone> {
     let (hours, minutes) = (hours.parse::<i64>().ok()?, minutes.parse::<i64>().ok()?);
     (hours <= 23 && minutes <= 59)
         .then(|| Zone::Fixed((sign * (hours * 3600 + minutes * 60)) as i32))
+}
+
+fn lossy(value: &LosslessString) -> String {
+    value
+        .to_utf8()
+        .unwrap_or_else(|_| String::from_utf16_lossy(&value.code_units().collect::<Vec<_>>()))
+}
+
+fn hex(value: &str) -> String {
+    value.bytes().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn text(value: &LosslessString) -> String {

@@ -530,7 +530,7 @@ fn seed(store: &Store, options: &Options) {
                     time_archived: None,
                     time_active: None,
                     time_pinned: None,
-                    time_suspended: None,
+                    time_suspended: None, usage_pruned_through: None,
                 },
             )?;
             let mut seq = 0;

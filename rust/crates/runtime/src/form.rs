@@ -273,6 +273,14 @@ fn state_wire(state: &form::State) -> Result<v5::FormState, Failure> {
         kind: Some(match state {
             form::State::Pending => Kind::Value1(v5::FormStateValue1 { status: 1 }),
             form::State::Cancelled => Kind::Value3(v5::FormStateValue3 { status: 1 }),
+            form::State::TimedOut { seconds } => Kind::Value4(v5::FormStateValue4 {
+                status: 1,
+                seconds: seconds.get() as u64,
+            }),
+            form::State::Deferred { item_id } => Kind::Value5(v5::FormStateValue5 {
+                status: 1,
+                item_id: convert::wire(item_id.as_lossless()),
+            }),
             form::State::Answered(answer) => Kind::Value2(v5::FormStateValue2 {
                 status: 1,
                 answer: v5::FormAnswer {
@@ -313,7 +321,7 @@ pub(crate) fn value_wire(value: &JsonValue) -> Result<v5::FormValue, Failure> {
     })
 }
 
-fn value_json(value: &v5::FormValue) -> Result<JsonValue, Failure> {
+pub(crate) fn value_json(value: &v5::FormValue) -> Result<JsonValue, Failure> {
     use v5::form_value::Kind;
     match value.kind.as_ref() {
         Some(Kind::Value1(text)) => convert::domain(text).map(JsonValue::String),
@@ -333,7 +341,7 @@ fn unrepresentable() -> Failure {
     Failure::Unavailable("stored form is not representable on the wire".into())
 }
 
-fn field_wire(field: &form::Field) -> v5::FormField {
+pub(crate) fn field_wire(field: &form::Field) -> v5::FormField {
     use v5::form_field::Kind;
     let when = |base: &form::Base| {
         base.when.as_ref().map(|items| {
@@ -701,4 +709,31 @@ fn number(object: &mut JsonObject, key: &str, value: Option<f64>) {
 
 fn count(object: &mut JsonObject, key: &str, value: Option<u64>) {
     number(object, key, value.map(|value| value as f64));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ycoding_core::ycoding_schema::{DomainDecode, parse_json};
+
+    #[test]
+    fn timed_out_and_deferred_form_states_keep_their_seconds_and_review_item() {
+        let state = |json: &str| {
+            state_wire(&form::State::decode(&parse_json(json).unwrap()).unwrap()).unwrap()
+        };
+        assert_eq!(
+            state(r#"{"status":"timed_out","seconds":120}"#).kind,
+            Some(v5::form_state::Kind::Value4(v5::FormStateValue4 {
+                status: 1,
+                seconds: 120
+            }))
+        );
+        assert_eq!(
+            state(r#"{"status":"deferred","itemID":"rvw_fixture"}"#).kind,
+            Some(v5::form_state::Kind::Value5(v5::FormStateValue5 {
+                status: 1,
+                item_id: convert::text("rvw_fixture")
+            }))
+        );
+    }
 }

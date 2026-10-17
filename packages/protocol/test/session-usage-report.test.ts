@@ -51,9 +51,13 @@ test("publishes the additive location-owned usage report OpenAPI operation", () 
 
   expect(endpoint.middlewares.has(SessionLocationMiddleware)).toBe(true)
   expect(operation?.operationId).toBe("session.usageReport")
-  expect(operation?.parameters?.map((parameter) => "$ref" in parameter ? parameter.$ref : parameter.name)).toEqual([
+  expect(operation?.parameters?.map((parameter) => ("$ref" in parameter ? parameter.$ref : parameter.name))).toEqual([
     "sessionID",
     "group",
+    "providerID",
+    "profile",
+    "modelID",
+    "selectedEffort",
     "timeZone",
     "from",
     "to",

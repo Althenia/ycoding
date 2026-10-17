@@ -1,10 +1,12 @@
+pub mod decision;
 mod paths;
 mod repository;
 mod service;
 mod shell;
 pub use paths::{dirname, resolve, within};
 pub use service::{
-    Admission, CustomLayers, Error, Guardrails, Input, Limits, Reservation, Settings, Snapshot,
+    Admission, CustomLayers, Error, Guardrails, Input, Limits, Reservation, ReviewPolicy, Settings,
+    Snapshot,
 };
 
 use crate::{
@@ -76,18 +78,34 @@ impl Evaluation {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Evidence {
+    pub matched_segment: LosslessString,
+    pub resolved_targets: Vec<LosslessString>,
+}
+
 pub fn classify(
     action: &str,
     resources: &[LosslessString],
     paths: &Paths,
     custom: &[CustomLayer],
 ) -> Evaluation {
+    matched(action, resources, paths, custom, &[]).0
+}
+
+pub(crate) fn matched(
+    action: &str,
+    resources: &[LosslessString],
+    paths: &Paths,
+    custom: &[CustomLayer],
+    dismissed: &[LosslessString],
+) -> (Evaluation, Option<Evidence>) {
     let standard = resources
         .iter()
-        .filter_map(|resource| standard(action, resource, paths))
+        .filter_map(|resource| standard(action, resource, paths, dismissed))
         .collect::<Vec<_>>();
-    if let Some(denied) = standard.iter().find(|item| item.effect == Effect::Deny) {
-        return denied.clone();
+    if let Some((denied, evidence)) = standard.iter().find(|item| item.0.effect == Effect::Deny) {
+        return (denied.clone(), Some(evidence.clone()));
     }
     let matching = custom
         .iter()
@@ -151,33 +169,67 @@ pub fn classify(
     if let Some(result) = &result
         && result.effect == Effect::Deny
     {
-        return result.clone();
+        return (result.clone(), None);
     }
-    if let Some(hard) = standard.iter().find(|item| item.hard_review) {
-        return hard.clone();
+    if let Some((hard, evidence)) = standard.iter().find(|item| item.0.hard_review) {
+        return (hard.clone(), Some(evidence.clone()));
     }
     if let Some(hard) = hard {
-        return Evaluation::custom(hard);
+        return (Evaluation::custom(hard), None);
     }
     if let Some(result) = result {
-        return result;
+        return (result, None);
     }
     standard
         .into_iter()
-        .find(|item| item.effect == Effect::Ask)
-        .unwrap_or_else(Evaluation::allow)
+        .find(|item| item.0.effect == Effect::Ask)
+        .map(|(evaluation, evidence)| (evaluation, Some(evidence)))
+        .unwrap_or_else(|| (Evaluation::allow(), None))
 }
 
-fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Evaluation> {
+fn standard(
+    action: &str,
+    resource: &LosslessString,
+    paths: &Paths,
+    dismissed: &[LosslessString],
+) -> Option<(Evaluation, Evidence)> {
+    let active = |id: &str| !dismissed.iter().any(|rule| rule.as_str() == Some(id));
     let outside = || {
-        (!outside_targets(action, resource, paths).is_empty()).then(|| {
+        let targets = outside_targets(action, resource, paths);
+        if targets.is_empty() || !active("standard.review.outside-repo") {
+            return None;
+        }
+        let matched_segment = if action == "shell" {
+            shell::workdirs(resource, paths)
+                .into_iter()
+                .map(|operation| (joined(&operation.segment.raw), operation.workdir))
+                .find(|(segment, workdir)| {
+                    !outside_targets(
+                        action,
+                        segment,
+                        &Paths {
+                            workdir: workdir.clone(),
+                            ..paths.clone()
+                        },
+                    )
+                    .is_empty()
+                })
+                .map_or_else(|| resource.clone(), |(segment, _)| segment)
+        } else {
+            resource.clone()
+        };
+        Some((
             Evaluation::standard(
                 "standard.review.outside-repo",
                 "Work outside the repository requires ordinary guardrail review.",
                 Effect::Ask,
                 false,
-            )
-        })
+            ),
+            Evidence {
+                matched_segment,
+                resolved_targets: targets.into_iter().map(|target| target.path).collect(),
+            },
+        ))
     };
     if action != "shell" {
         return outside();
@@ -201,9 +253,16 @@ fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Ev
         ),
     ] {
         if regex(&command, pattern, "i") {
-            return Some(Evaluation::standard(id, reason, Effect::Deny, false));
+            return Some((
+                Evaluation::standard(id, reason, Effect::Deny, false),
+                Evidence {
+                    matched_segment: resource.clone(),
+                    resolved_targets: vec![],
+                },
+            ));
         }
     }
+    let parsed = shell::segments(resource);
     let mut deletions = vec![];
     for operation in shell::removals(resource, paths)
         .into_iter()
@@ -273,31 +332,32 @@ fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Ev
                     .any(|target| dirname(target) == resolve(&paths.home, &paths.workdir, paths)),
             ),
         ];
-        if let Some((id, reason, effect, hard, _)) =
-            matches.into_iter().find(|(_, _, _, _, matches)| *matches)
+        if let Some((id, reason, effect, hard, _)) = matches
+            .into_iter()
+            .find(|(id, _, effect, _, matches)| *matches && (*effect == Effect::Deny || active(id)))
         {
-            deletions.push(Evaluation::standard(id, reason, effect, hard));
+            deletions.push((
+                Evaluation::standard(id, reason, effect, hard),
+                Evidence {
+                    matched_segment: parsed
+                        .iter()
+                        .find(|segment| segment.index == operation.segment)
+                        .map_or_else(|| resource.clone(), |segment| joined(&segment.raw)),
+                    resolved_targets: targets,
+                },
+            ));
         }
     }
     if let Some(result) = deletions
         .iter()
-        .find(|item| item.effect == Effect::Deny)
-        .or_else(|| deletions.iter().find(|item| item.hard_review))
+        .find(|item| item.0.effect == Effect::Deny)
+        .or_else(|| deletions.iter().find(|item| item.0.hard_review))
     {
         return Some(result.clone());
     }
-    let segments = shell::segments(resource)
-        .into_iter()
-        .map(|segment| {
-            let mut command = vec![];
-            for (index, token) in segment.raw.iter().enumerate() {
-                if index != 0 {
-                    command.push(32);
-                }
-                command.extend(token.code_units());
-            }
-            LosslessString::from_utf16(command)
-        })
+    let segments = parsed
+        .iter()
+        .map(|segment| joined(&segment.raw))
         .collect::<Vec<_>>();
     for (id, pattern, flags, reason) in [
         (
@@ -313,26 +373,54 @@ fn standard(action: &str, resource: &LosslessString, paths: &Paths) -> Option<Ev
             "Force push",
         ),
     ] {
-        if segments
+        if !active(id) {
+            continue;
+        }
+        if let Some(segment) = segments
             .iter()
-            .any(|segment| regex(segment, pattern, flags))
+            .find(|segment| regex(segment, pattern, flags))
         {
-            return Some(Evaluation::standard(id, reason, Effect::Ask, true));
+            return Some((
+                Evaluation::standard(id, reason, Effect::Ask, true),
+                Evidence {
+                    matched_segment: segment.clone(),
+                    resolved_targets: vec![],
+                },
+            ));
         }
     }
-    if regex(
-        &command,
-        r"\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)",
-        "i",
-    ) {
-        return Some(Evaluation::standard(
-            "standard.review.database-destructive",
-            "Destructive database operation",
-            Effect::Ask,
-            true,
+    if active("standard.review.database-destructive")
+        && regex(
+            &command,
+            r"\b(?:drop\s+(?:database|schema|table)|truncate\s+table|delete\s+from\s+[^\s;]+\s*;?\s*$)",
+            "i",
+        )
+    {
+        return Some((
+            Evaluation::standard(
+                "standard.review.database-destructive",
+                "Destructive database operation",
+                Effect::Ask,
+                true,
+            ),
+            Evidence {
+                matched_segment: resource.clone(),
+                resolved_targets: vec![],
+            },
         ));
     }
     outside()
+}
+
+fn joined(tokens: &[LosslessString]) -> LosslessString {
+    let mut command = vec![];
+    for (index, token) in tokens.iter().enumerate() {
+        if index != 0 {
+            command.push(32);
+        }
+        command.extend(token.code_units());
+    }
+    LosslessString::from_utf16(command)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

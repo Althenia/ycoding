@@ -18,9 +18,13 @@ const paged = new URLSearchParams(location.search).has("paged")
 const pageError = new URLSearchParams(location.search).has("page-error")
 const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
 const initialLoading = new URLSearchParams(location.search).has("initial-loading")
+const oldGroups = new URLSearchParams(location.search).has("old-groups")
+const forecastMode = new URLSearchParams(location.search).get("forecast")
 const largeValues = new URLSearchParams(location.search).has("large-values")
 const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
+const creditsMode = new URLSearchParams(location.search).get("credits")
+const credits = creditsMode !== null
 const providers: UsageProvider[] = [
   {
     providerID: "openai",
@@ -165,8 +169,32 @@ const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
   helpers: 0,
   continued: 0,
   fallback: 0,
-  cost: index % 6 === 0 ? undefined : (index + 1) * 0.18,
-  costProvenance: index % 6 === 0 ? undefined : index % 3 === 0 ? "current_catalog" : "recorded",
+  cost: credits
+    ? creditsMode === "tiny"
+      ? index === 5
+        ? 1000
+        : index === 10
+          ? -0.004
+          : 0
+      : creditsMode === "negative"
+        ? index % 2 === 0
+          ? 0
+          : -(index + 1) * 0.1
+        : index === 3
+          ? -0.004
+          : index % 2 === 0
+            ? (index + 1) * 0.5
+            : -(index + 1) * 0.25
+    : index % 6 === 0
+      ? undefined
+      : (index + 1) * 0.18,
+  costProvenance: credits ? "recorded" : index % 6 === 0 ? undefined : index % 3 === 0 ? "current_catalog" : "recorded",
+  costCoverage: credits
+    ? { pricedRequests: 1, unpricedRequests: 0 }
+    : {
+        pricedRequests: index % 6 === 0 ? 0 : index + 1,
+        unpricedRequests: index % 6 === 0 ? index + 1 : 0,
+      },
   tokens,
 }))
 const monthlyRows: UsageReportRow[] = [
@@ -188,7 +216,7 @@ const monthlyRows: UsageReportRow[] = [
     ...rows[3]!,
     key: "openrouter/deepseek-v4",
     label: "openrouter/deepseek-v4",
-    cost: longDistribution ? 5_000_000 : 5,
+    cost: longDistribution ? 5_000_000 : credits ? -2 : 5,
     costProvenance: "recorded",
   },
   {
@@ -227,9 +255,11 @@ const entries = (input: UsageReportInput): UsageReportRow[] =>
           input.group === "model"
             ? `${sample[index % sample.length]} ${index + 1}`
             : `${input.group === "session" ? "Session" : input.group === "project" ? "Project" : "Agent"} ${index + 1}`,
+        logical: 41 - index,
         physical: 41 - index,
         cost: (41 - index) * 0.45,
         costProvenance: index % 3 === 0 ? "current_catalog" : "recorded",
+        costCoverage: { pricedRequests: 41 - index, unpricedRequests: 0 },
       }))
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
 let releasePage: (() => void) | undefined
@@ -278,12 +308,13 @@ const report = (input: UsageReportInput) => {
         ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision }))
         : monthlyRows,
       total: {
-        logical: 4,
-        physical: 4,
+        logical: 10,
+        physical: 14,
         helpers: 0,
         continued: 0,
         fallback: 0,
-        cost: (longDistribution ? 20_000_000 : 15) + (refreshCycle ? 3 * revision : 0),
+        costCoverage: { pricedRequests: 9, unpricedRequests: 1 },
+        cost: (longDistribution ? 20_000_000 : credits ? 8 : 15) + (refreshCycle ? 3 * revision : 0),
         costProvenance: "current_catalog",
         tokens: {
           input: tokens.input * 4,
@@ -297,7 +328,11 @@ const report = (input: UsageReportInput) => {
   const all = entries(input).map((row, index) => ({
     ...row,
     ...(refreshCycle && revision > 0 && input.group === "day"
-      ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const }
+      ? {
+          cost: (row.cost ?? 0) + revision,
+          costProvenance: "current_catalog" as const,
+          costCoverage: { pricedRequests: row.logical, unpricedRequests: 0 },
+        }
       : {}),
     ...(largeValues && input.group === "day" && index === 29
       ? { physical: 7_720, tokens: { input: 2_267_963_225, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
@@ -330,22 +365,36 @@ const report = (input: UsageReportInput) => {
     group: input.group,
     rows: sorted.slice(offset, offset + (input.limit ?? 25)),
     total: {
-      logical: 980,
-      physical: 1084,
+      logical: all.reduce((sum, row) => sum + row.logical, 0),
+      physical: all.reduce((sum, row) => sum + row.physical, 0),
       helpers: 0,
       continued: 0,
       fallback: 0,
-      cost: 104.32,
+      cost: all.some((row) => row.cost !== undefined) ? all.reduce((sum, row) => sum + (row.cost ?? 0), 0) : undefined,
       costProvenance: "current_catalog" as const,
-      tokens,
+      costCoverage: {
+        pricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.pricedRequests ?? 0), 0),
+        unpricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.unpricedRequests ?? 0), 0),
+      },
+      tokens: {
+        input: all.reduce((sum, row) => sum + row.tokens.input, 0),
+        output: all.reduce((sum, row) => sum + row.tokens.output, 0),
+        reasoning: all.reduce((sum, row) => sum + row.tokens.reasoning, 0),
+        cache: {
+          read: all.reduce((sum, row) => sum + row.tokens.cache.read, 0),
+          write: all.reduce((sum, row) => sum + row.tokens.cache.write, 0),
+        },
+      },
     },
     rowCount: all.length,
     ...(offset + (input.limit ?? 25) < all.length ? { nextOffset: offset + (input.limit ?? 25) } : {}),
   }
 }
 
+let quotaSnapshots: readonly UsageProvider[] = providers
 const answer = async (operation: string, request?: RemoteTransportRequest): Promise<RemoteRequestOutcome> => {
-  if (!operation.startsWith("usage.") && operation !== "providerUsage.list") return ok([])
+  if (!operation.startsWith("usage.") && operation !== "providerUsage.list" && operation !== "providerUsage.forecast")
+    return ok([])
   const input = request?.input as UsageReportInput | undefined
   if (operation === "providerUsage.list" && refreshCycle && input && "refresh" in input && !pendingReload) beginReload()
   requests.push({ operation, ...(operation === "usage.get" || input === undefined ? {} : { input }) })
@@ -363,15 +412,59 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
     )
   if (operation === "usage.report" && oldZone && input?.timeZone !== undefined)
     return failure("invalid_message", "Unknown usage report field")
+  if (
+    operation === "usage.report" &&
+    oldGroups &&
+    input &&
+    !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group)
+  )
+    return failure("invalid_message", "Unknown usage report group")
   if (refreshCycle && pendingReload) await pendingReload
-  if (operation === "providerUsage.list")
+  if (operation === "providerUsage.list") {
+    quotaSnapshots = none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers
     return {
       status: "ok",
       value: {
         location: { directory: "/work", project: { id: "prj_fixture", directory: "/work" } },
-        data: none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers,
+        data: quotaSnapshots,
       },
     }
+  }
+  if (operation === "providerUsage.forecast") {
+    const asOf = Date.now()
+    const quotas = quotaSnapshots.flatMap((provider) =>
+      provider.windows.map((window) => ({
+        providerID: provider.providerID,
+        ...(provider.profile === undefined ? {} : { profile: provider.profile }),
+        windowID: window.id,
+        unit: window.unit,
+        source: provider.source,
+        stability: provider.stability,
+        updatedAt: provider.updatedAt,
+        ...(forecastMode === "past"
+          ? {
+              state: "estimated" as const,
+              evidence: "medium" as const,
+              method: "quota-delta-ema" as const,
+              ratePerHour: 10,
+              exhaustionAt: asOf - 60_000,
+            }
+          : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
+      })),
+    )
+    return {
+      status: "ok",
+      value: {
+        location: { directory: "/work", project: { id: "prj_fixture", directory: "/work" } },
+        data: {
+          asOf,
+          localScope: "backend",
+          ...(forecastMode === "rates-absent" ? {} : { localRates: [] }),
+          ...(forecastMode === "quotas-absent" ? {} : { quotas }),
+        },
+      },
+    }
+  }
   if (operation === "usage.get")
     return ok({ logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 })
   if (input === undefined) return failure("internal_error", "Missing report input")

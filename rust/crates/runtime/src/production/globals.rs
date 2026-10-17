@@ -1,5 +1,6 @@
 use super::{Production, composition::Composition, meeting::Meetings, unavailable};
 use crate::dispatch::Failure;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use ycoding_core::{
     event_feed::Feed,
@@ -44,12 +45,10 @@ impl Globals {
         events: Feed,
         git: Arc<git::Service>,
         reports: bool,
+        analytics: PathBuf,
     ) -> Result<Arc<Self>, Failure> {
         let composition = if reports {
-            Composition::start_reports(
-                client.clone(),
-                production.configuration.roots.data.join("analytics"),
-            )?
+            Composition::start_reports(client.clone(), analytics)?
         } else {
             Composition::start()?
         };

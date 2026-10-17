@@ -12,7 +12,7 @@ use tokio::{
 use ycoding_core::{
     meeting::{
         ask::Questions,
-        config::MeetingConfig,
+        config::{AnalysisModel, MeetingConfig},
         intelligence::{self, Intelligence, Mcp, ServiceMcp, Settings},
         runtime::{MeetingRuntime, RuntimeOptions, SessionFactory},
         service::{MeetingService, ServiceOptions},
@@ -304,7 +304,7 @@ async fn session_backed_ask_answers_from_transcript_in_a_registered_session() {
         let database = MeetingDatabase::open(&root.join("meetings.redb")).unwrap();
         let factory: SessionFactory = {
             let generator = seam.generator.clone();
-            Arc::new(move |parent: Option<String>| {
+            Arc::new(move |parent: Option<String>, _: AnalysisModel| {
                 let generator = generator.clone();
                 Box::pin(async move { generator.create_session(parent.as_deref()).await })
                     as ycoding_core::meeting::BoxFuture<'static, Result<String, String>>
@@ -372,7 +372,7 @@ async fn service_start_registers_persisted_analysis_sessions() {
         let mut options = ServiceOptions::new(
             root.clone(),
             MeetingConfig::parse(&json!({})).unwrap(),
-            Arc::new(|_| Box::pin(async { Ok("ses_runtime".to_owned()) })),
+            Arc::new(|_, _| Box::pin(async { Ok("ses_runtime".to_owned()) })),
         );
         options.analysis = Some(analysis.clone());
         let service = MeetingService::start(options).await.unwrap();

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+
 import {
   isGoalSteerAdmission,
   modelLabel,
@@ -23,6 +24,15 @@ import {
   mergeShellOutputSnapshot,
   previewText,
   readAutonomy,
+  readAutonomyState,
+  autonomyModeParts,
+  autonomyDeciders,
+  yoloLevelName,
+  readReviewItems,
+  readGuardrailRequests,
+  reviewItemsInScope,
+  changesReviewItems,
+  isSessionStateNotice,
   readCompactionHistory,
   readCapturedChangesPage,
   readMessageList,
@@ -34,6 +44,7 @@ import {
   sealedPartKeys,
   shellOutputFetchFor,
   shellOutputFor,
+  SHELL_OUTPUT_TAIL_LIMIT,
   shellOutputNotice,
   toolShellID,
   withShellOutputFetch,
@@ -41,6 +52,22 @@ import {
   type ShellOutputView,
   type SessionView,
 } from "./projection"
+
+test("guardrail grades survive review items, pending escalations, and live settlements without duplicate rows", () => {
+  const grades = [{ choice: "approve_all", confidence: 0.934567, evidence: "Verified all targets." }]
+  const escalation = { choice: "approve_all", confidence: 0.934567, grades }
+  expect(readGuardrailRequests({ data: [{ id: "grq_a", sessionID: "ses_a", action: "write", resources: ["x"], escalation }] }, 1)[0]).toMatchObject({ escalation })
+  expect(readReviewItems({ data: [{ itemID: "rvw_a", kind: "guardrail", sessionID: "ses_a", rootSessionID: "ses_a", sessionTitle: "Root", created: 1, reason: "escalated", ...escalation,
+    payload: { type: "guardrail", action: "write", resources: ["x"], ruleIDs: [], reason: "Outside", hardReview: false, directories: ["/fixture"] },
+  }] })?.[0]).toMatchObject(escalation)
+  const event = { type: "session.guardrail.decided", created: 3, data: { sessionID: "ses_root", reviewSessionID: "ses_a", requestID: "grq_a", reply: "always", ...escalation } }
+  const settled = applySessionEvent(createSessionView("ses_a"), event, 3)
+  expect(settled.guardrailDecisions).toEqual([{ sessionID: "ses_a", requestID: "grq_a", created: 3, reply: "always", ...escalation }])
+  expect(applySessionEvent(settled, event, 4).guardrailDecisions).toHaveLength(1)
+  expect(applySessionEvent(settled, { type: "guardrail.replied", created: 3, data: { sessionID: "ses_a", rootSessionID: "ses_root", requestID: "grq_a", reply: "always", decidedBy: "decision-model", ...escalation } }, 3).guardrailDecisions).toEqual(settled.guardrailDecisions)
+  expect(applySessionEvent(createSessionView("ses_other"), event, 3).guardrailDecisions).toEqual([])
+  expect(applySessionEvent(createSessionView("ses_a"), { id: "evt_escalation", type: "session.guardrail.escalated.1", created: 2, data: { sessionID: "ses_a", ...escalation } }, 2).messages[0]).toMatchObject({ kind: "system", guardrail: escalation })
+})
 
 test("model metadata preserves profile identity through remote projection", () => {
   const model = readModelRef({ providerID: "openai", id: "gpt", profile: "work" })
@@ -112,12 +139,12 @@ test("keeps a large canonical inline tool image", () => {
 })
 
 test("extracts only durable live subagent delegation and terminal notification identities", () => {
-  expect(readTeamCue({ id: "evt_1", type: "session.tool.progress", durable: { aggregateID: "ses_root", seq: 1 }, data: {
+  expect(readTeamCue({ id: "evt_1", type: "session.tool.success", durable: { aggregateID: "ses_root", seq: 1 }, data: {
     sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
   } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })
-  expect(readTeamCue({ id: "evt_success", type: "session.tool.success", durable: { aggregateID: "ses_root", seq: 2 }, data: {
-    sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_1", structured: { sessionID: "ses_child", status: "running" },
-  } })).toEqual({ id: "msg_1:call_1:ses_child", kind: "delegated", childID: "ses_child" })
+  expect(readTeamCue({ id: "evt_progress", type: "session.tool.progress", data: {
+    sessionID: "ses_root", assistantMessageID: "msg_1", callID: "call_2", structured: { sessionID: "ses_child", status: "running" },
+  } })).toBeUndefined()
   expect(readTeamCue({ id: "evt_2", type: "session.synthetic", durable: { aggregateID: "ses_root", seq: 2 }, data: {
     sessionID: "ses_root", metadata: { source: "subagent_notification", childID: "ses_child", type: "completed", revision: 3 },
   } })).toEqual({ id: "evt_2:3:ses_child", kind: "reported", childID: "ses_child", outcome: "completed" })
@@ -172,10 +199,11 @@ test("terminal step and run events use durable creation time for activity, not l
   expect(applySessionEvent(view, { type: "session.execution.succeeded", created: 400, data: { sessionID: "ses_a" } }, 10_000).activeAt).toBe(500)
 })
 
-test("live diagnostics replace selected-Session speed and context, then clear on compaction or unreported values", () => {
+test("live weighted speed retains model effort changes and compaction independently of context", () => {
   const selected = { id: "gpt-6", providerID: "openai", variant: "high" }
   const first = { model: selected, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000 }
   const second = { model: selected, tokens: 15, durationNs: 3_000_000, tokensPerSecond: 5_000 }
+  const aggregate = { model: selected, tokens: 27, durationNs: 5_000_000, tokensPerSecond: 5_400 }
   const diagnostics = (speed?: unknown, limit?: number) => ({
     model: selected, context: { total: 74_000, ...(limit === undefined ? {} : { limit }), remaining: 184_000, percent: 29 },
     tokens: { uncachedInput: 60_000, output: 10_000, reasoning: 2_000, cacheRead: 2_000, cacheWrite: 0 },
@@ -188,12 +216,12 @@ test("live diagnostics replace selected-Session speed and context, then clear on
   expect(generationSpeedDisplay(initial, selected)?.label).toBe("6,000 tok/s")
   expect(contextWindowDisplay(initial, selected)?.usedPercent).toBe(29)
   const updated = apply(initial, "session.diagnostics.updated", {
-    sessionID: "ses_a", diagnostics: diagnostics({ latest: second, recent: [first, second] }, 258_000),
+    sessionID: "ses_a", diagnostics: diagnostics({ latest: aggregate, recent: [first, second] }, 258_000),
   }, 2)
-  expect(generationSpeedDisplay(updated, selected)).toMatchObject({ label: "5,000 tok/s", trend: expect.any(String) })
+  expect(generationSpeedDisplay(updated, selected)).toMatchObject({ label: "5,400 tok/s", trend: expect.any(String) })
   expect(updated.generationSpeed?.recent).toHaveLength(2)
   const switched = apply(updated, "session.model.selected", { sessionID: "ses_a", model: { ...selected, variant: "low" } })
-  expect(generationSpeedDisplay(switched, switched.model)).toBeUndefined()
+  expect(generationSpeedDisplay(switched, switched.model)?.label).toBe("5,400 tok/s")
   expect(contextWindowDisplay(switched, switched.model)).toBeUndefined()
   const unreported = apply(updated, "session.diagnostics.updated", {
     sessionID: "ses_a", diagnostics: diagnostics(undefined, undefined),
@@ -202,8 +230,44 @@ test("live diagnostics replace selected-Session speed and context, then clear on
   expect(contextWindowDisplay(unreported, selected)).toBeUndefined()
   const compacted = apply(updated, "session.compaction.ended", { sessionID: "ses_a", jobID: "cmp_1",
     boundary: { messageID: "msg_before", seq: 1 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } }, 4)
-  expect(generationSpeedDisplay(compacted, selected)).toBeUndefined()
+  expect(generationSpeedDisplay(compacted, selected)?.label).toBe("5,400 tok/s")
   expect(contextWindowDisplay(compacted, selected)).toBeUndefined()
+})
+
+test("labels model-wide estimates across profiles and leaves empty populations blank", () => {
+  const selected = { providerID: "anthropic", id: "claude", profile: "work" }
+  const measured = { model: selected, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
+  const view = apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: { generationSpeed: { latest: { ...measured, estimated: true }, recent: [measured] } },
+  })
+  expect(generationSpeedDisplay(view, selected)).toMatchObject({ label: "≈ 80 tok/s", description: expect.stringContaining("Estimated") })
+  expect(generationSpeedDisplay(view, { ...selected, profile: "personal" })?.label).toBe("≈ 80 tok/s")
+  const unreported = apply(view, "session.diagnostics.updated", { sessionID: "ses_a",
+    diagnostics: { generationSpeed: { model: selected, recent: [] } } })
+  expect(generationSpeedDisplay(unreported, selected)).toBeUndefined()
+})
+
+test("terminal live diagnostics replace measured speed and restore an interrupted estimate without provider usage", () => {
+  const model = { providerID: "openai", id: "speed-model" }
+  const measured = { model, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }
+  const initial = apply(createSessionView("ses_a"), "session.diagnostics.updated", { sessionID: "ses_a",
+    diagnostics: { generationSpeed: { model, latest: measured, recent: [measured] } } })
+  expect(generationSpeedDisplay(initial, model)?.label).toBe("80 tok/s")
+  const failed = apply(initial, "session.step.failed", { sessionID: "ses_a", assistantMessageID: "msg_failed",
+    error: { type: "provider.invalid-request", message: "Invalid request" } })
+  const replaced = apply(failed, "session.diagnostics.updated", { sessionID: "ses_a", diagnostics: {
+    generationSpeed: { model, recent: [measured], unreportedReason: "No usable provider measurement or streamed output window of at least one second" } } })
+  expect(generationSpeedDisplay(replaced, model)?.label).toBeUndefined()
+  const interrupted = apply(replaced, "session.step.failed", { sessionID: "ses_a", assistantMessageID: "msg_interrupted",
+    error: { type: "aborted", message: "Step interrupted" } })
+  const history = { model, latest: { model, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1, estimated: true }, recent: [measured] }
+  const estimated = apply(interrupted, "session.diagnostics.updated", { sessionID: "ses_a", diagnostics: { generationSpeed: history } })
+  expect(generationSpeedDisplay(estimated, model)?.label).toBe("≈ 1 tok/s")
+  const snapshot = readSnapshot({ session: { model }, messages: [{ id: "msg_interrupted", type: "assistant", agent: "build", model,
+    content: [{ type: "text", text: "12345678" }], finish: "error", error: { type: "aborted", message: "Step interrupted" },
+    time: { created: 1, completed: 2001 } }], generationSpeed: history })
+  expect(snapshot?.generationSpeed).toEqual(history)
+  expect(snapshot?.contextWindow).toBeUndefined()
 })
 
 test("ends the elapsed clock on an idle status before the next execution starts", () => {
@@ -289,7 +353,8 @@ test("keeps short row durations precise without changing live one-decimal elapse
 test("derives operational status and elapsed from active work and retry state", () => {
   const base = { ...createSessionView("ses_a"), status: "running" as const, executionStarted: 1_000 }
   expect(sessionStatusLabel(base, 47_700)).toBe("cooking · 46.7s")
-  expect(sessionStatusLabel({ ...base, autonomy: { mode: "yolo", yolo: 3 } }, 47_700)).toBe("YOLO 3 · auto-approve · cooking · 46.7s")
+  expect(sessionStatusLabel({ ...base, autonomy: { mode: "yolo", yolo: 2 } }, 47_700)).toBe("Tools + reviews · cooking · 46.7s")
+  expect(sessionStatusLabel({ ...base, status: "idle", autonomy: { mode: "normal", yolo: 0, sleep: {} } }, 47_700)).toBe("Ask first · asleep · ready")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "reasoning", ordinal: 0, text: "…", started: 3_000 }] }] }, 49_700)).toBe("thinking · 48.7s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "tool", callID: "c", name: "shell", status: "running", content: [], started: 3_000 }] }] }, 135_000)).toBe("tool running · 2m14s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "msg_retry", created: 2_000, parts: [], retry: { attempt: 2, at: 6_000, code: "rate_limit" } }] }, 4_000)).toBe("1 failed · retry 2 · in 2s")
@@ -302,8 +367,11 @@ test("derives operational status and elapsed from active work and retry state", 
 })
 
 test("summarizes runtime observations without exposing raw JSON inline", () => {
-  const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"goal\",\"yolo\":2},\"todos\":[{}]}"
-  expect(noticeSummary("session-state", session)).toBe("Session state · goal · YOLO 2 · 1 task")
+  const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"goal\",\"yolo\":2,\"goal\":{\"text\":\"Ship\",\"status\":\"active\",\"iteration\":1,\"noProgress\":0,\"maxNoProgress\":3}},\"todos\":[{}]}"
+  expect(noticeSummary("session-state", session)).toBe("Session state · Tools + reviews · goal · 1 task")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"sleep\":{},\"yolo\":0},\"todos\":[]}")).toBe("Session state · Ask first · asleep · 0 tasks")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"yolo\":3},\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
   expect(noticeSummary("team-view", "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{\"children\":[{\"state\":\"running\"},{\"state\":\"running\"}]}" )).toBe("TeamView · 2 running")
   expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{" )).toBe("Session state · unavailable")
   expect(noticeSummary(undefined, session)).toBeUndefined()
@@ -511,6 +579,24 @@ describe("requests", () => {
     ])
   })
 
+  test("retains escalation in the human review and projects its durable chronological notice", () => {
+    let view = createSessionView("ses_a")
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_other", requestID: "grq_other" })
+    expect(view.messages).toHaveLength(0)
+    view = apply(view, "guardrail.asked", { id: "grq_escalated", sessionID: "ses_a", action: "shell", resources: ["command"], reason: "Review", escalation: { choice: "reject", confidence: 0.7 } })
+    expect(view.requests[0]).toMatchObject({ kind: "guardrail", escalation: { choice: "reject", confidence: 0.7 } })
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_a", requestID: "grq_escalated", choice: "reject", confidence: 0.7 })
+    const notice = view.messages.at(-1)
+    if (notice?.kind !== "system") throw new Error("Missing escalation notice")
+    expect(notice.text).toContain("Decision model escalated")
+    expect(notice.text).toContain("0.7")
+    view = apply(view, "session.guardrail.escalated", { sessionID: "ses_a", requestID: "grq_escalated", choice: "reject", confidence: 0.7 })
+    expect(view.messages).toHaveLength(1)
+    view = apply(view, "guardrail.replied", { requestID: "grq_escalated", reply: "once" })
+    expect(view.requests).toHaveLength(0)
+    expect(view.messages.at(-1)).toEqual(notice)
+  })
+
   test("tracks permission, guardrail, and native form asks and their replies", () => {
     let view = createSessionView("ses_a")
     view = apply(view, "permission.asked", { id: "per_1", action: "edit", resources: ["src/**"] })
@@ -638,7 +724,7 @@ describe("snapshot readers", () => {
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow }, selected))
       .toMatchObject({ usedPercent: 29, leftPercent: 71, tokens: "74K / 258K tokens", fraction: 74_000 / 258_000 })
     expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed },
-      { ...selected, variant: "low" })).toBeUndefined()
+      { ...selected, variant: "low" })?.label).toBe("6,000 tok/s")
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: snapshot?.contextWindow },
       { ...selected, variant: "low" })).toBeUndefined()
     expect(contextWindowDisplay({ ...createSessionView("ses_a"), contextWindow: { model: selected, used: 0, limit: 258_000 } }, selected)).toBeUndefined()
@@ -647,10 +733,28 @@ describe("snapshot readers", () => {
       generationSpeed: { latest: { ...sample, tokensPerSecond: 0 }, recent: [sample] } })?.generationSpeed).toBeUndefined()
 
     const compacted = readSnapshot({ session: { model: selected }, messages: [assistant,
-      completedCompaction("msg_compaction", "cmp_1", "msg_current", 4, 5)],
-      generationSpeed: { latest: sample, recent: [sample] } })
+      completedCompaction("msg_compaction", "cmp_1", "msg_current", 4, 5)] })
     expect(compacted?.contextWindow).toBeUndefined()
     expect(compacted?.generationSpeed).toBeUndefined()
+  })
+
+  test("restores backend-authoritative post-compaction speed independently of transcript message position", () => {
+    const model = { id: "recovered", providerID: "openai" }
+    const latest = { model, tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1, estimated: true }
+    const history = { model, latest, recent: [] }
+    const snapshot = readSnapshot({ session: { model }, messages: [
+      { id: "msg_recovered", type: "assistant", agent: "build", model, content: [{ type: "text", text: "12345678" }],
+        time: { created: 3, completed: 8 } },
+      completedCompaction("msg_compaction", "cmp_1", "msg_recovered", 4, 5),
+    ], generationSpeed: history })
+    expect(snapshot?.generationSpeed).toEqual(history)
+    expect(generationSpeedDisplay({ ...createSessionView("ses_a"), generationSpeed: snapshot?.generationSpeed }, model)?.label).toBe("≈ 1 tok/s")
+    const settledBefore = readSnapshot({ session: { model }, messages: [
+      { id: "msg_before", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Earlier" }],
+        time: { created: 1, completed: 3 } },
+      completedCompaction("msg_compaction", "cmp_1", "msg_before", 4, 5),
+    ] })
+    expect(settledBefore?.generationSpeed).toBeUndefined()
   })
 
   test("keeps only the latest compaction lifecycle without discarding uncompleted history", () => {
@@ -777,15 +881,182 @@ describe("snapshot readers", () => {
     expect(parts[3]).toMatchObject({ kind: "tool", callID: "call_2", status: "failed", error: "denied" })
   })
 
-  test("reads autonomy from a set response", () => {
-    expect(
-      readAutonomy({
-        data: { mode: "normal", yolo: 3, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 } },
-      }),
-    ).toEqual({ mode: "goal", yolo: 3, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 } })
-    expect(readAutonomy({ data: { mode: "normal", yolo: false } })).toEqual({ mode: "normal", yolo: 0 })
-    expect(readAutonomy({ data: {} })).toEqual({ mode: "normal", yolo: 0 })
+  const effective = { yolo: 2 as const, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false }
+
+  test("reads autonomy only from the required data and effective response", () => {
+    expect(readAutonomy({ data: { mode: "normal", yolo: 2, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 }, effective } }))
+      .toEqual({ mode: "goal", yolo: 2, autoAnswer: false, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 }, effective })
+    expect(readAutonomy({ data: { mode: "normal", yolo: false, autoAnswer: true, effective: { ...effective, yolo: 0 } } }))
+      .toEqual({ mode: "normal", yolo: 0, autoAnswer: true, effective: { ...effective, yolo: 0 } })
+    expect(readAutonomy({ data: { mode: "normal", yolo: true, effective } })).toMatchObject({ yolo: 2 })
+    expect(readAutonomy({ data: { mode: "normal", yolo: 1 } })).toBeUndefined()
+    expect(readAutonomy({ data: {} })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 0, effective: { ...effective, yolo: 3 } } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 3, effective: { ...effective, yolo: 0 } } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 0, effective: { ...effective, modelReviews: "yes" } } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 0, autoAnswer: "on", effective: { ...effective, yolo: 0 } } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 0 }, effective })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
     expect(readAutonomy(null)).toBeUndefined()
+  })
+
+  test("reads sleep presence without retaining removed autonomy fields", () => {
+    expect(readAutonomyState({ data: { mode: "normal", yolo: 1, sleep: {} } })).toEqual({ mode: "normal", yolo: 1, autoAnswer: false, sleep: {} })
+    expect(readAutonomyState({ data: { mode: "normal", yolo: 1, guardrailDecision: true, sleep: { priorGuardrailDecision: true } } }))
+      .toEqual({ mode: "normal", yolo: 1, autoAnswer: false, sleep: {} })
+    expect(readAutonomyState({ data: { mode: "normal", yolo: 0, guardrailDecision: true } })).toEqual({ mode: "normal", yolo: 0, autoAnswer: false })
+    for (const sleep of [null, false, "asleep", []]) expect(readAutonomyState({ data: { mode: "normal", yolo: 0, sleep } })).toEqual({ mode: "normal", yolo: 0, autoAnswer: false })
+    expect(readAutonomyState({ data: { mode: "normal", yolo: 3 } })).toBeUndefined()
+  })
+
+  test("names enabled autonomy modes in TUI heading order", () => {
+    const goal = { text: "Ship", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 }
+    expect(yoloLevelName(0)).toBe("Ask first")
+    expect(yoloLevelName(1)).toBe("Allow tools")
+    expect(yoloLevelName(2)).toBe("Tools + reviews")
+    expect(autonomyModeParts({ yolo: 0 })).toEqual(["Ask first"])
+    expect(autonomyModeParts({ yolo: 2, goal, sleep: {} })).toEqual(["Tools + reviews", "goal", "asleep"])
+    expect(autonomyModeParts({ yolo: 0, sleep: {}, autoAnswer: true })).toEqual(["Ask first", "asleep", "auto-answer"])
+    expect(autonomyModeParts({ yolo: 0, effective: { ...effective, yolo: 1, asleep: true } })).toEqual(["Allow tools", "asleep"])
+    expect(autonomyModeParts({ yolo: 1, goal: { ...goal, status: "completed" } })).toEqual(["Allow tools"])
+  })
+
+  test("derives actual deciders from effective values only, never from a goal", () => {
+    const goal = { text: "Ship", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 }
+    const views = [
+      { yolo: 0, goal, autoAnswer: true, effective: { yolo: 0, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { yolo: 0, effective: { yolo: 1, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: false } },
+      { yolo: 2, effective: { yolo: 2, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: true, hardModelReviews: true } },
+      { yolo: 2, effective: { yolo: 2, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { yolo: 2, autoAnswer: true, effective: { yolo: 2, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: true } },
+      { yolo: 2, effective: { yolo: 2, asleep: false, guardrailsEnabled: false, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { yolo: 2, effective: { yolo: 2, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { yolo: 2, effective: undefined },
+    ] as const
+    expect(autonomyDeciders(views[0]))
+      .toEqual([{ label: "Tools", value: "Ask you" }, { label: "Routine reviews", value: "Ask you" }, { label: "Hard reviews", value: "Ask you" }, { label: "Auto-answer", value: "On · this Session" }])
+    expect(autonomyDeciders(views[1]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Model or you", "Ask you", "Off"])
+    expect(autonomyDeciders(views[2]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Auto-approved", "Model or you", "Off"])
+    expect(autonomyDeciders(views[3]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Review box", "Review box", "Off"])
+    expect(autonomyDeciders(views[4]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Model or Review box", "Model or Review box", "On · this Session"])
+    expect(autonomyDeciders(views[5]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Off", "Ask you", "Off"])
+    expect(autonomyDeciders(views[6]).map((row) => row.value))
+      .toEqual(["Auto-approved", "Ask you", "Ask you", "Off"])
+    expect(autonomyDeciders(undefined).map((row) => row.value)).toEqual(["unreported", "unreported", "unreported", "unreported"])
+    expect(autonomyDeciders(views[7]).map((row) => row.value)).toEqual(["unreported", "unreported", "unreported", "Off"])
+  })
+
+  test("shows sleeping ask-permission tools in the review box at level zero", () => {
+    expect(autonomyDeciders({ effective: { yolo: 0, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } }).map((row) => row.value))
+      .toEqual(["Review box", "Review box", "Review box", "Off"])
+  })
+
+  test("hard reviews keep their own decider when ordinary guardrails are disabled", () => {
+    for (const asleep of [false, true]) for (const hardModelReviews of [false, true]) {
+      const rows = autonomyDeciders({ effective: { yolo: 0, asleep, guardrailsEnabled: false, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews } })
+      expect(rows[1]?.value).toBe("Off")
+      expect(rows[2]?.value).toBe(hardModelReviews ? asleep ? "Model or Review box" : "Model or you" : asleep ? "Review box" : "Ask you")
+    }
+  })
+
+  test("reads each review item kind from the frozen contract and drops malformed items", () => {
+    const base = { sessionID: "ses_child", rootSessionID: "ses_root", sessionTitle: "Child", created: 5, reason: "low_confidence", choice: "main", confidence: 0.4237, origin: { requestID: "grq_1" } }
+    const items = readReviewItems({ data: [
+      { ...base, itemID: "rvw_form", kind: "question", payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", options: [{ value: "a", label: "A" }] }] } },
+      { ...base, itemID: "rvw_ask", kind: "question", payload: { type: "question", questions: [{ question: "Which?", header: "Pick", options: [{ label: "A", description: "first" }], multiple: true }, { question: "Why?", header: "Reason", options: [] }] } },
+      { ...base, itemID: "rvw_child", kind: "subagent_question", child: { agent: "general", description: "Prepare" }, payload: { type: "subagent_question", text: "Which section?" } },
+      { ...base, itemID: "rvw_hard", kind: "guardrail", payload: { type: "guardrail", action: "shell", resources: ["rm -rf x"], ruleIDs: ["r"], reason: "delete", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
+      { ...base, itemID: "rvw_permission", kind: "permission", payload: { type: "permission", action: "edit", resources: ["a.ts"], fingerprint: "b".repeat(64), requestID: "per_1" } },
+      { ...base, itemID: "rvw_bad_reason", kind: "permission", reason: "guess", payload: { type: "permission", action: "edit", resources: [], fingerprint: "b".repeat(64), requestID: "per_2" } },
+      { ...base, itemID: "rvw_bad_kind", kind: "guardrail", payload: { type: "permission", action: "edit", resources: [], fingerprint: "b".repeat(64), requestID: "per_3" } },
+      { ...base, itemID: "grq_not_item", kind: "permission", payload: { type: "permission", action: "edit", resources: [], fingerprint: "b".repeat(64), requestID: "per_4" } },
+    ] })
+    expect(items?.map((item) => item.itemID)).toEqual(["rvw_form", "rvw_ask", "rvw_child", "rvw_hard", "rvw_permission"])
+    expect(items?.[0]).toMatchObject({ kind: "question", answers: "form", confidence: 0.4237, choice: "main", form: { id: "rvw_form", title: "Release", metadata: { kind: "question" } } })
+    expect(items?.[1]).toMatchObject({ kind: "question", answers: "questions", form: { fields: [
+      { key: "q0", type: "multiselect", title: "Pick", description: "Which?", options: [{ value: "A", label: "A", description: "first" }], custom: true },
+      { key: "q1", type: "string", title: "Reason", description: "Why?" },
+    ] } })
+    expect(items?.[2]).toMatchObject({ kind: "subagent_question", text: "Which section?", child: { agent: "general", description: "Prepare" } })
+    expect(items?.[3]).toMatchObject({ kind: "guardrail", hardReview: true, detail: "delete", directories: [] })
+    expect(readReviewItems({ data: "nope" })).toBeUndefined()
+  })
+
+  test("reads the disabled-automation reason on every deferrable item kind and still drops an unknown reason", () => {
+    const base = { sessionID: "ses_child", rootSessionID: "ses_root", sessionTitle: "Child", created: 5, reason: "disabled", origin: { requestID: "grq_1" } }
+    const items = readReviewItems({ data: [
+      { ...base, itemID: "rvw_guardrail", kind: "guardrail", payload: { type: "guardrail", action: "shell", resources: ["rm -rf x"], ruleIDs: ["r"], reason: "delete", hardReview: false, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
+      { ...base, itemID: "rvw_child", kind: "subagent_question", payload: { type: "subagent_question", text: "Which?" } },
+      { ...base, itemID: "rvw_form", kind: "question", payload: { type: "form", title: "Release", fields: [{ key: "q0", type: "string" }] } },
+      { ...base, itemID: "rvw_unknown", reason: "automatic", kind: "subagent_question", payload: { type: "subagent_question", text: "?" } },
+    ] })
+    expect(items?.map((item) => [item.itemID, item.reason])).toEqual([["rvw_guardrail", "disabled"], ["rvw_child", "disabled"], ["rvw_form", "disabled"]])
+  })
+
+  test("reads a restart recovery with its uncertain tools, owner, and child, and drops an empty, partial, or mistyped one", () => {
+    const base = { sessionID: "ses_child", rootSessionID: "ses_root", sessionTitle: "Child", created: 5, reason: "restart", origin: { messageID: "msg_1", callID: "call_1" }, child: { agent: "general", description: "Prepare" } }
+    const tools = [{ messageID: "msg_1", callID: "call_1", name: "shell" }, { messageID: "msg_1", callID: "call_2", name: "edit" }]
+    const items = readReviewItems({ data: [
+      { ...base, itemID: "rvw_recovery", kind: "recovery", payload: { type: "recovery", tools } },
+      { ...base, itemID: "rvw_empty", kind: "recovery", payload: { type: "recovery", tools: [] } },
+      { ...base, itemID: "rvw_partial", kind: "recovery", payload: { type: "recovery", tools: [{ messageID: "msg_1", name: "shell" }] } },
+      { ...base, itemID: "rvw_text", kind: "recovery", payload: { type: "recovery", tools: [{ messageID: "msg_1", callID: 2, name: "shell" }] } },
+      { ...base, itemID: "rvw_missing", kind: "recovery", payload: { type: "recovery" } },
+      { ...base, itemID: "rvw_kind", kind: "guardrail", payload: { type: "recovery", tools } },
+      { ...base, itemID: "rvw_reason", kind: "recovery", reason: "guess", payload: { type: "recovery", tools } },
+      { ...base, itemID: "grq_not_item", kind: "recovery", payload: { type: "recovery", tools } },
+    ] })
+    expect(items?.map((item) => item.itemID)).toEqual(["rvw_recovery"])
+    expect(items?.[0]).toEqual({ itemID: "rvw_recovery", sessionID: "ses_child", rootSessionID: "ses_root", sessionTitle: "Child", created: 5, reason: "restart",
+      child: { agent: "general", description: "Prepare" }, kind: "recovery", tools })
+    expect(reviewItemsInScope({ id: "ses_root", review: { status: "ready", items: items! } }).map((entry) => entry.itemID)).toEqual(["rvw_recovery"])
+    expect(reviewItemsInScope({ id: "ses_other", review: { status: "ready", items: items! } })).toEqual([])
+  })
+
+  test("reads a subagent's resumed notification as its own reported outcome", () => {
+    const resumed = { id: "evt_5", type: "session.synthetic", durable: { aggregateID: "ses_root", seq: 5 }, data: { sessionID: "ses_root", metadata: { source: "subagent_notification", childID: "ses_child", type: "resumed", revision: 6 } } }
+    expect(readTeamCue(resumed)).toEqual({ id: "evt_5:6:ses_child", kind: "reported", childID: "ses_child", outcome: "resumed" })
+    expect(readTeamCue({ ...resumed, data: { ...resumed.data, metadata: { ...resumed.data.metadata, type: "restarted" } } })).toBeUndefined()
+  })
+
+  test("scopes review items to the root's family or a member's own items and reads idle work as waiting for your review", () => {
+    const item = (itemID: string, sessionID: string) => readReviewItems({ data: [{ itemID, sessionID, rootSessionID: "ses_root", sessionTitle: "T", created: 1, reason: "free_text", kind: "subagent_question", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "?" } }] })![0]!
+    const review = { status: "ready" as const, items: [item("rvw_a", "ses_child"), item("rvw_b", "ses_other")] }
+    expect(reviewItemsInScope({ id: "ses_root", review }).map((entry) => entry.itemID)).toEqual(["rvw_a", "rvw_b"])
+    expect(reviewItemsInScope({ id: "ses_child", review }).map((entry) => entry.itemID)).toEqual(["rvw_a"])
+    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, autonomy: { mode: "normal", yolo: 0, sleep: {} } }, 1)).toBe("Ask first · asleep · waiting for your review")
+    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review }, 1, 2)).toBe("waiting for your review")
+    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, status: "running", executionStarted: 0 }, 1_000)).toBe("cooking · 1.0s")
+    expect(sessionStatusLabel({ ...createSessionView("ses_none"), review }, 1)).toBe("ready")
+  })
+
+  test("re-lists review items after item, deferral, task, and Session-state events only", () => {
+    for (const type of ["session.review.deferred", "session.review.decided", "session.review.withdrawn", "session.review.consumed", "form.deferred", "question.deferred", "guardrail.deferred", "permission.deferred", "session.task.updated"])
+      expect(changesReviewItems({ type, data: {} })).toBe(true)
+    expect(changesReviewItems({ type: "session.context.observed", data: { source: "session-state" } })).toBe(true)
+    expect(changesReviewItems({ type: "session.step.ended", data: {} })).toBe(false)
+    expect(changesReviewItems({ type: "guardrail.asked", data: {} })).toBe(false)
+  })
+
+  test("a deferred live request leaves the request area", () => {
+    const asked = applySessionEvent(createSessionView("ses_a"), { type: "permission.asked", data: { id: "per_1", sessionID: "ses_a", action: "edit", resources: [] } }, 1)
+    expect(asked.requests.map((request) => request.id)).toEqual(["per_1"])
+    expect(applySessionEvent(asked, { type: "permission.deferred", data: { sessionID: "ses_a", requestID: "per_1", itemID: "rvw_1" } }, 2).requests).toEqual([])
+    const guarded = applySessionEvent(createSessionView("ses_a"), { type: "guardrail.asked", data: { id: "grq_1", sessionID: "ses_a", action: "shell", resources: ["x"] } }, 1)
+    expect(applySessionEvent(guarded, { type: "guardrail.deferred", data: { rootSessionID: "ses_a", sessionID: "ses_a", requestID: "grq_1", itemID: "rvw_2" } }, 2).requests).toEqual([])
+    const form = applySessionEvent(createSessionView("ses_a"), { type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_a", title: "Q", fields: [{ key: "q0", type: "string" }] } } }, 1)
+    expect(applySessionEvent(form, { type: "form.deferred", data: { id: "frm_1", sessionID: "ses_a", itemID: "rvw_3" } }, 2).requests).toEqual([])
+  })
+
+  test("recognizes only Session-state context notices as autonomy changes", () => {
+    expect(isSessionStateNotice({ type: "session.context.observed", data: { sessionID: "ses_a", source: "session-state", text: "The user is back." } })).toBe(true)
+    expect(isSessionStateNotice({ type: "session.context.observed", data: { sessionID: "ses_a", source: "team-view", text: "{}" } })).toBe(false)
+    expect(isSessionStateNotice({ type: "session.step.ended", data: { source: "session-state" } })).toBe(false)
   })
 
   test("drops malformed Form.Info values", () => {
@@ -807,6 +1078,12 @@ describe("boundedText", () => {
 })
 
 describe("shell output contract", () => {
+  test("reads the complete command on demand without replacing the output page metadata", () => {
+    const command = `cat <<'EOF'\n${"long command line\n".repeat(500)}EOF`
+    expect(readShellOutputPage({ command, data: { output: "ok", cursor: 2, size: 10, truncated: false } })).toEqual({ command, text: "ok", cursor: 2, size: 10, truncated: false })
+    expect(readShellOutputPage({ command: 42, data: { output: "ok", cursor: 2, size: 2 } })).toEqual({ text: "ok", cursor: 2, size: 2, truncated: false })
+  })
+
   test("keeps the device's available page and its source cursor metadata", () => {
     const page = "line\n".repeat(1_500)
     let view = createSessionView("ses_a")
@@ -990,6 +1267,16 @@ describe("shell output paging", () => {
     expect(toolShellID(part)).toBeUndefined()
   })
 
+  test("keeps only the bounded tail when appended pages exceed the limit", () => {
+    const existing = page(`${"a".repeat(SHELL_OUTPUT_TAIL_LIMIT)}\n`, SHELL_OUTPUT_TAIL_LIMIT + 1, SHELL_OUTPUT_TAIL_LIMIT + 100)
+    const next = page("tail line\n", SHELL_OUTPUT_TAIL_LIMIT + 11, SHELL_OUTPUT_TAIL_LIMIT + 100)
+    const appended = appendShellOutputPage(existing, next, SHELL_OUTPUT_TAIL_LIMIT + 1)
+    expect(appended.text.length).toBeLessThanOrEqual(SHELL_OUTPUT_TAIL_LIMIT)
+    expect(appended.text.endsWith("tail line\n")).toBe(true)
+    expect(appended.cursor).toBe(SHELL_OUTPUT_TAIL_LIMIT + 11)
+    expect(appended.size).toBe(SHELL_OUTPUT_TAIL_LIMIT + 100)
+  })
+
   test("keeps the fetched text when a durable page arrives while it is held", () => {
     const paged = withShellOutputPage(shellView("sh_1"), "sh_1", page("firstsecond", 11, 20), 0, { state: "idle" })
     const durable = apply(paged, "session.shell.ended", {
@@ -1088,5 +1375,21 @@ describe("recorded file changes", () => {
     const before = createSessionView("ses_a")
     const view = apply(before, "session.file-change.recorded", { change: { path: "src/a.ts", patch: "@@", additions: 3, deletions: 1 } })
     expect(view).toEqual(before)
+  })
+})
+
+test("attributes a rerouted Step's answer to the model it switched to", () => {
+  let view = apply(createSessionView("ses_a"), "session.execution.started", {}, 1_000)
+  view = apply(view, "session.step.started", { assistantMessageID: "msg_a", agent: "build", model: { providerID: "anthropic", id: "claude-opus-5" } }, 1_100)
+  view = apply(view, "session.reasoning.started", { assistantMessageID: "msg_a", ordinal: 0 }, 1_150)
+  view = apply(view, "session.retry.scheduled", { assistantMessageID: "msg_a", attempt: 2, at: 6_000, error: { type: "provider.rate-limit", message: "Slow down" } }, 1_200)
+  view = apply(view, "session.step.rerouted", { assistantMessageID: "msg_a", model: { providerID: "openai", id: "gpt-6-sol" }, error: { type: "provider.quota", message: "Quota exhausted" } }, 1_300)
+  const rerouted = view.messages.find((message) => message.kind === "assistant")
+  expect(rerouted).toMatchObject({ kind: "assistant", model: { providerID: "openai", id: "gpt-6-sol" }, parts: [] })
+  expect(rerouted?.kind === "assistant" ? rerouted.retry : "missing").toBeUndefined()
+  view = apply(view, "session.step.ended", { assistantMessageID: "msg_a", finish: "stop" }, 2_000)
+  expect(view.messages.find((message) => message.kind === "assistant")).toMatchObject({
+    model: { providerID: "openai", id: "gpt-6-sol" },
+    completed: 2_000,
   })
 })

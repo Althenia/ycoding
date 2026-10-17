@@ -34,7 +34,10 @@ test("shell output uses the design header, metadata columns, and footer labels",
   ))
   const lines = frame(app)
 
-  expect(lines[1]).toContain("y. ycoding bun test provider · Main chat · pid 48213")
+  expect(lines[1]).toContain("y. ycoding · Main chat · pid 48213")
+  expect(lines[1]).not.toContain(shell.command)
+  expect(lines[3]?.trim()).toBe(shell.command)
+  expect(lines[3]?.indexOf(shell.command)).toBe(3)
   expect(lines[1]?.indexOf("y. ycoding")).toBe(3)
   expect(lines.join("\n")).toContain("Owner")
   expect(lines.join("\n")).not.toContain("Owner:")
@@ -42,6 +45,26 @@ test("shell output uses the design header, metadata columns, and footer labels",
   expect(lines.find((line) => line.includes("sh_0f21…"))?.indexOf("sh_0f21…")).toBe(3)
 
   app.renderer.destroy()
+})
+
+test("shell commands wrap intact below the separate label row", async () => {
+  const command = "printf '%s' alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+  const app = await render(() => (
+    <box width={60} flexDirection="column">
+      <ShellOutputHeader shell={{ ...shell, command }} owner="Main chat" now={now} />
+    </box>
+  ))
+  try {
+    const lines = frame(app)
+    expect(lines[1]).toContain("y. ycoding")
+    expect(lines[1]).not.toContain("printf")
+    const wrapped = lines.slice(3).filter((line) => line.trim().length > 0)
+    expect(wrapped.length).toBeGreaterThan(1)
+    expect(wrapped.map((line) => line.trim()).join(" ")).toBe(command)
+    expect(wrapped.every((line) => line.startsWith("   ") && line.length <= 57)).toBe(true)
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("blocked subagent keeps status, task, result, and question on their design rows", async () => {

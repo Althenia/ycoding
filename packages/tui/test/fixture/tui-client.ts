@@ -234,6 +234,21 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))
       return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (/^\/api\/session\/[^/]+\/(pending|skills)$/.test(url.pathname)) return json({ data: [] })
+    if (/^\/api\/session\/[^/]+\/review$/.test(url.pathname)) return json({ data: [] })
+    if (/^\/api\/session\/[^/]+\/guardrail$/.test(url.pathname))
+      return json({
+        data: {
+          rootSessionID: url.pathname.split("/")[3],
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+          decisions: [],
+          dismissals: [],
+        },
+      })
     if (url.pathname === "/api/remote") return json({ data: { state: "off" } })
     if (url.pathname === "/api/keep-awake") return json({ data: { state: "off" } })
     if (url.pathname === "/api/server/telemetry/consent")
@@ -257,10 +272,20 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         },
       })
+    if (/^\/api\/session\/[^/]+\/usage\/tasks$/.test(url.pathname)) {
+      const empty = { requests: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { pricedRequests: 0, unpricedRequests: 0 } }
+      return json({ data: { tasks: [], total: empty, history: "partial" } })
+    }
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
     // fixture returns no payload rather than zeroed quota values.
     if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
-    if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal", yolo: 0 } })
+    if (url.pathname === "/api/provider/usage/forecast")
+      return json({
+        location: { directory, project: { id: "proj_test", directory: worktree } },
+        data: { asOf: 0, localScope: "backend" },
+      })
+    if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname))
+      return json({ data: { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })
     if (
       ["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill"].includes(

@@ -726,3 +726,102 @@ async fn failures_follow_the_status_and_owner_rules_and_deterministic_ones_are_r
             .unwrap()
     );
 }
+
+async fn fail_claimed(
+    service: &Service,
+    message: &session_message::Id,
+    seq: i64,
+    code: session_compaction::FailureCode,
+    now: i64,
+) {
+    let job = service
+        .compaction_admit(
+            admission(message, seq, session_compaction::Trigger::Mandatory),
+            now,
+        )
+        .await
+        .unwrap();
+    service
+        .compaction_claim(Target::Session(id()), lease("owner-a", now + 1, now + 100))
+        .await
+        .unwrap()
+        .unwrap();
+    service
+        .compaction_fail(FailInput {
+            id: session_compaction::Id::decode(&JsonValue::String(job.id.clone())).unwrap(),
+            owner: Some("owner-a".into()),
+            code,
+            now: now + 2,
+        })
+        .await
+        .unwrap();
+}
+
+async fn remembered(service: &Service, input: AdmitInput) -> bool {
+    service
+        .compaction_has_unchanged_deterministic_failure(input)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn w48_r2_a_remembered_deterministic_failure_matches_only_its_boundary_revision_policy_and_target()
+ {
+    let (_store, service, message, seq) = prepared().await;
+    fail_claimed(
+        &service,
+        &message,
+        seq,
+        session_compaction::FailureCode::InvalidManifest,
+        10,
+    )
+    .await;
+    let unchanged = || admission(&message, seq, session_compaction::Trigger::Mandatory);
+    assert!(remembered(&service, unchanged()).await);
+    for changed in [
+        AdmitInput {
+            requested_through_seq: seq + 1,
+            ..unchanged()
+        },
+        AdmitInput {
+            requested_through_message: session_message::Id::new("msg_later").unwrap(),
+            ..unchanged()
+        },
+        AdmitInput {
+            base_context_revision: 1,
+            ..unchanged()
+        },
+        AdmitInput {
+            config_digest: "e".repeat(64),
+            ..unchanged()
+        },
+        AdmitInput {
+            target_max_input_tokens: 999,
+            ..unchanged()
+        },
+    ] {
+        assert!(!remembered(&service, changed).await);
+    }
+}
+
+#[tokio::test]
+async fn w48_r2_provider_protected_state_and_migration_failures_are_never_remembered() {
+    let (_store, service, message, seq) = prepared().await;
+    for (index, code) in [
+        session_compaction::FailureCode::ProviderFailed,
+        session_compaction::FailureCode::ProtectedStateChanged,
+        session_compaction::FailureCode::MigrationFailed,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fail_claimed(&service, &message, seq, code, 10 + 10 * index as i64).await;
+        assert!(
+            !remembered(
+                &service,
+                admission(&message, seq, session_compaction::Trigger::Mandatory)
+            )
+            .await
+        );
+    }
+}

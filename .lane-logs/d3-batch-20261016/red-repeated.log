@@ -1,0 +1,194 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/repeated-constraints.test.ts:
+56 | describe("array-level and item-level checks stay separate", () => {
+57 |   test("an array cardinality bound is a count bound, never a per-string length", () => {
+58 |     const field = repeatedField(Schema.NonEmptyArray(Schema.String).check(Schema.isMaxLength(100)))
+59 |     const constraints = resourceFieldConstraints(field)
+60 |     expect([constraints.countMin, constraints.countMax]).toEqual([1, 100])
+61 |     expect([constraints.utf16Min, constraints.utf16Max]).toEqual([undefined, undefined])
+                                                              ^
+error: expect(received).toEqual(expected)
+
+  [
+-   undefined,
+-   undefined,
++   1,
++   100,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:61:58)
+(fail) array-level and item-level checks stay separate > an array cardinality bound is a count bound, never a per-string length [3.96ms]
+66 |       Schema.NonEmptyArray(Schema.String.check(Schema.isMinLength(2), Schema.isMaxLength(32))).check(
+67 |         Schema.isMaxLength(5),
+68 |       ),
+69 |     )
+70 |     for (const constraints of [resourceFieldConstraints(field), platformFieldConstraints(field)]) {
+71 |       expect([constraints.utf16Min, constraints.utf16Max]).toEqual([2, 32])
+                                                                ^
+error: expect(received).toEqual(expected)
+
+  [
+-   2,
++   1,
+    32,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:71:60)
+(fail) array-level and item-level checks stay separate > an item bound stays a per-string length and never becomes a count [0.14ms]
+80 |       arbitrary: { constraint: { maxLength: 100 } },
+81 |     })
+82 |     const constraints = resourceFieldConstraints(
+83 |       repeatedField(Schema.NonEmptyArray(Schema.String).check(Schema.isMaxLength(100), unique)),
+84 |     )
+85 |     expect([constraints.utf16Min, constraints.utf16Max]).toEqual([undefined, undefined])
+                                                              ^
+error: expect(received).toEqual(expected)
+
+  [
+-   undefined,
+-   undefined,
++   1,
++   100,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:85:58)
+(fail) array-level and item-level checks stay separate > distinct-identity metadata on the array adds no string or count bound [0.08ms]
+117 |             ? []
+118 |             : [`${label} ${name}.${field.name} expected ${JSON.stringify(expected)} got ${JSON.stringify(observed)}`]
+119 |         }),
+120 |       ),
+121 |     )
+122 |     expect([...new Set(offenders)].sort()).toEqual([])
+                                                 ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "platform browser_action_Request_payload_actionValue6_tabIDs.items expected {"countMin":1,"countMax":8} got {"utf16Min":1,"utf16Max":8,"countMin":1,"countMax":8}",
++   "platform browser_action_Request_payload_actionValue7_tabIDs.items expected {"countMin":1,"countMax":8} got {"utf16Min":1,"utf16Max":8,"countMin":1,"countMax":8}",
++   "platform isolatedBrowser_action_Request_payload_actionValue6_tabIDs.items expected {"countMin":1,"countMax":8} got {"utf16Min":1,"utf16Max":8,"countMin":1,"countMax":8}",
++   "platform isolatedBrowser_action_Request_payload_actionValue7_tabIDs.items expected {"countMin":1,"countMax":8} got {"utf16Min":1,"utf16Max":8,"countMin":1,"countMax":8}",
++   "session SessionLogItemValue16_data_inputIDs.items expected {"countMin":1} got {"utf16Min":1,"countMin":1}",
++   "session UsageAccounting_PromptInput_inputIDs.items expected {"countMin":1,"countMax":100} got {"utf16Min":1,"utf16Max":100,"countMin":1,"countMax":100}",
++   "session UsageAccounting_TaskInput_sessionIDs.items expected {"countMin":1,"countMax":100} got {"utf16Min":1,"utf16Max":100,"countMin":1,"countMax":100}",
++ ]
+
+- Expected  - 1
++ Received  + 9
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:122:44)
+(fail) array-level and item-level checks stay separate > every projected repeated field derives string bounds only from its item and counts only from its array [32.73ms]
+139 |   test.each(["UsageAccounting_PromptInput_inputIDs", "UsageAccounting_TaskInput_sessionIDs"])(
+140 |     "%s bounds the distinct list at 1 to 100 entries and puts no length bound on each ID",
+141 |     (message) => {
+142 |       const rule = constraints(message)
+143 |       expect([rule.countMin, rule.countMax]).toEqual([1, 100])
+144 |       expect([rule.utf16Min, rule.utf16Max]).toEqual([undefined, undefined])
+                                                   ^
+error: expect(received).toEqual(expected)
+
+  [
+-   undefined,
+-   undefined,
++   1,
++   100,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:144:46)
+(fail) generated usage accounting input descriptors > UsageAccounting_PromptInput_inputIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID [0.06ms]
+139 |   test.each(["UsageAccounting_PromptInput_inputIDs", "UsageAccounting_TaskInput_sessionIDs"])(
+140 |     "%s bounds the distinct list at 1 to 100 entries and puts no length bound on each ID",
+141 |     (message) => {
+142 |       const rule = constraints(message)
+143 |       expect([rule.countMin, rule.countMax]).toEqual([1, 100])
+144 |       expect([rule.utf16Min, rule.utf16Max]).toEqual([undefined, undefined])
+                                                   ^
+error: expect(received).toEqual(expected)
+
+  [
+-   undefined,
+-   undefined,
++   1,
++   100,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:144:46)
+(fail) generated usage accounting input descriptors > UsageAccounting_TaskInput_sessionIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID [0.02ms]
+159 |     for (const units of [prefix.length + 1, 100, 101, 128])
+160 |       for (const count of [1, 100])
+161 |         expect(
+162 |           () => encodeStrict(schema, create(schema, { items: ids(prefix, units, count) })),
+163 |           `${count} IDs of ${units} units`,
+164 |         ).not.toThrow()
+                    ^
+error: 1 IDs of 101 units
+
+Error name: "Error"
+Error message: "text constraint"
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:164:15)
+(fail) generated wire boundary > msg_ IDs of 101 to 128 units are accepted within 1 to 100 entries [3.54ms]
+159 |     for (const units of [prefix.length + 1, 100, 101, 128])
+160 |       for (const count of [1, 100])
+161 |         expect(
+162 |           () => encodeStrict(schema, create(schema, { items: ids(prefix, units, count) })),
+163 |           `${count} IDs of ${units} units`,
+164 |         ).not.toThrow()
+                    ^
+error: 1 IDs of 101 units
+
+Error name: "Error"
+Error message: "text constraint"
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:164:15)
+(fail) generated wire boundary > ses_ IDs of 101 to 128 units are accepted within 1 to 100 entries [0.86ms]
+167 |   test.each([
+168 |     ["msg_", UsageAccounting_PromptInput_inputIDsSchema],
+169 |     ["ses_", UsageAccounting_TaskInput_sessionIDsSchema],
+170 |   ] as const)("%s lists outside 1 to 100 entries are rejected by cardinality", (prefix, schema) => {
+171 |     for (const units of [prefix.length + 1, 101, 128])
+172 |       expect(() => encodeStrict(schema, create(schema, { items: ids(prefix, units, 101) }))).toThrow("collection limit")
+                                                                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "collection limit"
+Received message: "text constraint"
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:172:94)
+(fail) generated wire boundary > msg_ lists outside 1 to 100 entries are rejected by cardinality [0.38ms]
+167 |   test.each([
+168 |     ["msg_", UsageAccounting_PromptInput_inputIDsSchema],
+169 |     ["ses_", UsageAccounting_TaskInput_sessionIDsSchema],
+170 |   ] as const)("%s lists outside 1 to 100 entries are rejected by cardinality", (prefix, schema) => {
+171 |     for (const units of [prefix.length + 1, 101, 128])
+172 |       expect(() => encodeStrict(schema, create(schema, { items: ids(prefix, units, 101) }))).toThrow("collection limit")
+                                                                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "collection limit"
+Received message: "text constraint"
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/repeated-constraints.test.ts:172:94)
+(fail) generated wire boundary > ses_ lists outside 1 to 100 entries are rejected by cardinality [0.30ms]
+(pass) generated wire boundary > connector family IDs keep their own 1 to 128 unit item bound beside the entry count [0.70ms]
+
+ 1 pass
+ 10 fail
+ 28 expect() calls
+Ran 11 tests across 1 file. [229.00ms]

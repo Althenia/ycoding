@@ -1,0 +1,357 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/telemetry.test.ts:
+(pass) declares machine-global bounded telemetry ingest and read routes [2.57ms]
+
+test/public-event-coverage.test.ts:
+(pass) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [16.34ms]
+(pass) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [12.71ms]
+(pass) REQ-WIRE-005 every public event field retains its source type, tag and presence [8.24ms]
+
+test/descriptor-goldens.test.ts:
+(pass) digest-bearing negative goldens retain their specific rejection reasons [0.92ms]
+(pass) Muse response-stream source appends ordinal six and preserves existing source ordinals [1.09ms]
+
+test/session-projection.test.ts:
+(pass) homogeneous nonempty arrays preserve their minimum and optional never has no wire field [0.16ms]
+(pass) UTC admission timestamps retain the finite millisecond JSON representation [0.22ms]
+
+test/platform-coverage.test.ts:
+(pass) platform slice exactly matches all 55 baseline and live endpoint declarations [6.51ms]
+(pass) every platform field, presence, enum and typed error matches the live Effect contract [12.59ms]
+(pass) canonical platform descriptors preserve IDs, associations, errors and delivery policies [2.16ms]
+(pass) wildcard asset path, native ticket headers and metadata retain their source boundaries [5.64ms]
+(pass) source ordering cannot change canonical tags, operation IDs or projected bytes [158.93ms]
+(pass) every platform domain obligation names a live source owner [7.10ms]
+(pass) result wrapper overrides are exactly the two verified prost collisions [3.73ms]
+
+test/session-usage-report.test.ts:
+(pass) decodes and validates usage report query bounds [1.56ms]
+(pass) publishes the additive location-owned usage report OpenAPI operation [8.88ms]
+
+test/canonical-remote.test.ts:
+(pass) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [0.23ms]
+(pass) REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds [0.07ms]
+(pass) REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result [0.06ms]
+
+test/phase-b-contract.test.ts:
+(pass) global Forms append one local-only Location selector without changing real-Session scopes [0.27ms]
+(pass) receipt-confirmation timeout after Ready handoff closes the unestablished producer with 1008 [1.23ms]
+(pass) asset MIME  cannot cross the metadata boundary [0.10ms]
+(pass) asset MIME text cannot cross the metadata boundary [0.02ms]
+(pass) asset MIME text/ cannot cross the metadata boundary [0.01ms]
+(pass) asset MIME text/plain
+X: injected cannot cross the metadata boundary [0.01ms]
+(pass) asset MIME text/😀 cannot cross the metadata boundary [0.03ms]
+(pass) asset MIME text/plain; charset="unterminated cannot cross the metadata boundary [0.02ms]
+(pass) both asset metadata consumers preserve valid MIME application/octet-stream and exact zero length [0.19ms]
+(pass) both asset metadata consumers preserve valid MIME image/svg+xml and exact zero length [0.08ms]
+(pass) both asset metadata consumers preserve valid MIME text/plain; charset=utf-8 and exact zero length [0.07ms]
+(pass) both asset metadata consumers preserve valid MIME  Text/Plain ; charset="utf-8;version=1"  and exact zero length [0.09ms]
+
+test/event.test.ts:
+(pass) decodes the ephemeral prediction on the public stream, not the Session log [0.43ms]
+(pass) refuses private profile binding and provenance on public event and Session log streams [0.17ms]
+(pass) classifies public events by type
+(pass) shares one source epoch across health, connection, session projection, and log contracts [0.39ms]
+(pass) decodes the current durable session creation event [0.10ms]
+(pass) public step events preserve provider cache telemetry and omit the legacy cache mechanism [0.15ms]
+
+test/session-coverage.test.ts:
+47 |   const endpoints = manifest.members.filter((member) => member.kind === "endpoint")
+48 |   const excluded = [...Object.keys(resourceIDs), ...Object.keys(platformIDs), ...Object.keys(platformExclusions)]
+49 |   expect(excluded).toHaveLength(116)
+50 |   expect(new Set(excluded).size).toBe(116)
+51 |   const remaining = endpoints.filter((member) => !excluded.includes(member.name))
+52 |   expect(remaining).toHaveLength(83)
+                         ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 83
+Received length: 85
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:52:21)
+(fail) session slice completes the 201 endpoints without overlap and adds only inventory unsubscribe [5.69ms]
+127 |         group: field.presence === "oneof" ? 0 : undefined,
+128 |       })),
+129 |     )
+130 |     for (const field of message.fields) {
+131 |       const metadata = value.fields.find((item) => item.name === field.name)?.constraints
+132 |       expect(metadata ?? {}, `${name}.${field.name}`).toEqual(
+                                                            ^
+error: ProviderRequest_ReportDimensionsValue2.profile
+
+  {
+    "domainObligations": [
+-     "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions",
++     "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue2",
+    ],
+    "utf16Min": 1,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:132:55)
+(fail) all session fields, tags, presence, enums and obligations match live source projection [9.18ms]
+(pass) session descriptors preserve IDs, typed associations, middleware errors and delivery policies [5.89ms]
+(pass) typed subscriptions preserve log items and finite StreamEnd without SSE or synchronous prompt execution [5.10ms]
+(pass) source reordering preserves canonical bytes and frozen materialization rejects overwrite [203.91ms]
+(pass) every session domain obligation names a live source owner [11.31ms]
+(pass) session result wrapper overrides cannot grow or become stale without a real collision [127.80ms]
+
+test/resources-coverage.test.ts:
+(pass) resource RPC membership equals the live 61-operation Protocol slice [8.79ms]
+(pass) enum literal names match live Effect literals, including single-member tagged fields [2.12ms]
+(pass) shared declarations are exactly those reached by live endpoints outside the resource slice [181.85ms]
+(pass) every request, result and typed error matches the live Effect field types and presence [3.59ms]
+149 |       const metadata = actual[`ycoding.v5.${name}`].fields.find((item) => item.name === field.name)?.constraints
+150 |       const expected = resourceFieldConstraints(field)
+151 |       const normalized = Object.fromEntries(
+152 |         Object.entries(expected).filter(([, value]) => value !== undefined && (!Array.isArray(value) || value.length)),
+153 |       )
+154 |       expect(metadata ?? {}, `${name}.${field.name}`).toEqual(normalized)
+                                                            ^
+error: ProviderRequest_ReportDimensionsValue2.profile
+
+  {
+    "domainObligations": [
+-     "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions",
++     "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue2",
+    ],
+    "utf16Min": 1,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:154:55)
+(fail) every checked live source field has exact structural metadata and an unenforced source obligation [3.15ms]
+169 |         name: operation.diagnosticName,
+170 |         request: operation.requestType,
+171 |         result: operation.resultType,
+172 |         errors: operation.errorTypes,
+173 |       })),
+174 |   ).toEqual(
+          ^
+error: expect(received).toEqual(expected)
+
+@@ -680,21 +680,10 @@
+      "errors": [
+        "ycoding.v5.ServiceUnavailableError",
+        "ycoding.v5.UnauthorizedError",
+        "ycoding.v5.InvalidRequestError",
+      ],
+-     "id": 2063,
+-     "name": "providerUsage.forecast",
+-     "request": "ycoding.v5.providerUsage_forecast_Request",
+-     "result": "ycoding.v5.providerUsage_forecast_Result",
+-   },
+-   {
+-     "errors": [
+-       "ycoding.v5.ServiceUnavailableError",
+-       "ycoding.v5.UnauthorizedError",
+-       "ycoding.v5.InvalidRequestError",
+-     ],
+      "id": 2054,
+      "name": "providerUsage.get",
+      "request": "ycoding.v5.providerUsage_get_Request",
+      "result": "ycoding.v5.providerUsage_get_Result",
+    },
+@@ -746,7 +735,18 @@
+      ],
+      "id": 2059,
+      "name": "usage.report",
+      "request": "ycoding.v5.usage_report_Request",
+      "result": "ycoding.v5.usage_report_Result",
++   },
++   {
++     "errors": [
++       "ycoding.v5.ServiceUnavailableError",
++       "ycoding.v5.UnauthorizedError",
++       "ycoding.v5.InvalidRequestError",
++     ],
++     "id": 2063,
++     "name": "providerUsage.forecast",
++     "request": "ycoding.v5.providerUsage_forecast_Request",
++     "result": "ycoding.v5.providerUsage_forecast_Result",
+    },
+  ]
+
+- Expected  - 11
++ Received  + 11
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/resources-coverage.test.ts:174:5)
+(fail) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [1.56ms]
+(pass) every domain obligation names a live source schema owner [2.42ms]
+(pass) named integer schemas retain 64-bit integer wire types rather than ref-shaped double fallthrough [1.51ms]
+(pass) numeric offset paging is distinct from opaque cursor paging [1.27ms]
+
+test/local-family.test.ts:
+(pass) M7 session.capturedChanges.list admits the canonical local read through the connection [1.08ms]
+(pass) M7 session.team.economics admits the canonical local read through the connection [0.40ms]
+(pass) M7 session.family.activity admits the canonical local read through the connection [0.27ms]
+(pass) M7 session.capturedChanges.list rejects an unrelated scope and server/agent request authority [0.22ms]
+(pass) M7 session.team.economics rejects an unrelated scope and server/agent request authority [0.19ms]
+(pass) M7 session.family.activity rejects an unrelated scope and server/agent request authority [0.22ms]
+(pass) M7 widens exactly three connector reads without adding remote operations [0.04ms]
+
+test/usage-accounting.test.ts:
+(pass) prompt and recursive task costs are bounded Session-owned GET reads [7.80ms]
+(pass) forecast is a read-only provider-usage endpoint with explicit local token scope [0.33ms]
+(pass) report query preserves selected effort and provider-qualified profile filters [0.17ms]
+
+test/public-event-connection.test.ts:
+(pass) REQ-WIRE-005 event.subscribe accepts typed ephemerals and rejects Session log sync markers [2.23ms]
+(pass) REQ-WIRE-006 canonical remote event requests accept Session scope and deny global feed authority [0.41ms]
+
+test/frontend-boundary.test.ts:
+(pass) custom endpoints reject the removed RunPod wire alternative [0.23ms]
+(pass) M3/M4/M5/M10 have closed local-only completed mutation descriptors [0.06ms]
+(pass) M3/M4/M5/M10 descriptors declare exact closed errors and secret inputs [0.06ms]
+(pass) M3 compatible endpoint, model overrides and optional empty lists round trip [0.63ms]
+(pass) M4 persistent requests reuse both existing ServerConfig branches without echoing secrets [0.37ms]
+(pass) M5 package identity, digests and same-host presentation assets round trip [0.46ms]
+(pass) M10 enrollment preserves optional replace and returns only redacted device status [0.41ms]
+(pass) M3/M4/M5/M10 all declared failure codes round trip and reject open enums [0.52ms]
+(pass) M3/M5/M10 reject missing presence, unknown credential fields and budget overflow [21.37ms]
+(pass) S2/M8 append optional metadata and retain absent projections [0.35ms]
+(pass) M3/M4/M5/M10 results and provider writes have no credential-shaped fields [0.53ms]
+(pass) M3/M4/M5/M10 remote and relay request admission rejects local-only descriptors [0.44ms]
+
+test/field-constraints.test.ts:
+(pass) integer constraints preserve signed and uint64 boundaries [0.05ms]
+(pass) text constraints distinguish UTF-16, codepoints, UTF-8 and lone units [0.04ms]
+(pass) count bounds do not claim to enforce domain obligations [0.03ms]
+(pass) live Effect checks require source-bound obligations without claiming enforcement [0.08ms]
+
+test/usage-wire-contract.test.ts:
+(pass) operations > prompt and task costs are Session-scoped reads for local, remote and relay peers [0.08ms]
+(pass) operations > the usage forecast is a Location read that remote and relay peers address at machine or Session scope [0.03ms]
+(pass) operations > the Session usage report becomes remote and relay readable [0.01ms]
+(pass) operations > operation IDs stay contiguous in the Session and resource ranges [0.07ms]
+(pass) operations > remote and relay allowlists grow by the four usage reads [0.04ms]
+(pass) operations > each new request type wraps its declared parameters [0.03ms]
+(pass) allocated tags and values > report queries keep their tags and append the four filters [0.02ms]
+(pass) allocated tags and values > report groups append seven values [0.30ms]
+(pass) allocated tags and values > timing, speed, report and diagnostics fields append after their existing tags [0.05ms]
+(pass) allocated tags and values > attribution fields are optional appended event fields [0.01ms]
+(pass) allocated tags and values > web latency operations append four values after the keep-awake values [0.16ms]
+(pass) tool progress > is a live-only public event in its original slot [0.01ms]
+(pass) tool progress > leaves its durable slot reserved without renumbering later events [3.44ms]
+
+test/usage.test.ts:
+(pass) declares local-runtime global usage summary and report operations [0.62ms]
+
+test/operation-generation.test.ts:
+(pass) operation generation rejects duplicate [77.73ms]
+(pass) operation generation rejects missing [51.05ms]
+(pass) operation generation rejects range [46.05ms]
+(pass) operation generation rejects unknown [44.71ms]
+(pass) canonical descriptor and structural metadata are extracted from protoc [26.79ms]
+(pass) metadata generation rejects inverted constraint bounds [46.20ms]
+(pass) metadata generation rejects constraint type mismatch [46.61ms]
+(pass) metadata generation rejects invalid domain obligation source [46.11ms]
+
+test/wire-allocation.test.ts:
+(pass) message field tags > a message without an allocation keeps declaration order [0.08ms]
+(pass) message field tags > reordering the declaration does not move an allocated tag [0.02ms]
+(pass) message field tags > a field appended to the declaration keeps every earlier tag only when it is allocated last [0.01ms]
+(pass) message field tags > a reserved slot keeps its number and later fields keep theirs [0.02ms]
+(pass) message field tags > a message with no reserved slot renders no reserved statement [0.01ms]
+(pass) message field tags > preset tags are used as given and must be unique [0.07ms]
+(pass) message field tags > a field missing from the allocation is rejected [0.03ms]
+(pass) message field tags > an allocated name that is neither declared nor reserved is rejected [0.02ms]
+(pass) message field tags > a duplicated allocation entry is rejected [0.04ms]
+(pass) enum numbers > an enum without an allocation keeps literal order
+(pass) enum numbers > reordering or appending literals does not move an allocated number
+(pass) enum numbers > a reserved slot keeps its number and later literals keep theirs
+(pass) enum numbers > non-string literals are allocated by value [0.02ms]
+(pass) enum numbers > unallocated, stale and duplicate entries are rejected [0.03ms]
+(pass) union members > members are numbered by position without an allocation [0.10ms]
+(pass) union members > a removed member leaves its slot reserved and later names and tags stay put [0.06ms]
+(pass) union members > reordering the declared members does not move an allocated slot [0.03ms]
+(pass) union members > a member appended to the declaration takes the next allocated slot [0.06ms]
+(pass) union members > unallocated, stale and duplicate members are rejected [0.06ms]
+(pass) union members > a member without a type identity cannot be allocated [0.03ms]
+192 |   const read = (file: string) => Bun.file(path.join(descriptors, file)).text()
+193 | 
+194 |   test("the current allocation renders every checked-in descriptor unchanged", async () => {
+195 |     expect(sessionProto()).toBe(await read("session.proto"))
+196 |     expect(resourceProto()).toBe(frontendBoundaryBaseline(await read("resources.proto")))
+197 |     expect(sharedProto()).toBe(frontendBoundaryBaseline(await read("shared.proto")))
+                                ^
+error: expect(received).toBe(expected)
+
+@@ -306,11 +306,11 @@
+  }
+  
+  message ProviderRequest_ReportDimensionsValue2 {
+    required ProviderRequest_ReportDimensionsValue2_group group = 1;
+    required LosslessString providerID = 2;
+-   optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue2" utf16_min: 1 }];
++   optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+    required ProviderRequest_ReportDimensionsValue2_profileState profileState = 4;
+    required LosslessString modelID = 5;
+  }
+  
+  message ProviderRequest_ReportDimensionsValue3 {
+@@ -325,11 +325,11 @@
+  }
+  
+  message ProviderRequest_ReportDimensionsValue5 {
+    required ProviderRequest_ReportDimensionsValue5_group group = 1;
+    required LosslessString providerID = 2;
+-   optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue5" utf16_min: 1 }];
++   optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+    required ProviderRequest_ReportDimensionsValue5_profileState profileState = 4;
+  }
+  
+  message ProviderRequest_ReportDimensionsValue6 {
+    required ProviderRequest_ReportDimensionsValue6_group group = 1;
+@@ -342,11 +342,11 @@
+    required LosslessString inputID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-anchor.ts#UsageAnchor.Ref" }];
+  }
+  
+  message ProviderRequest_ReportDimensionsValue7 {
+    required ProviderRequest_ReportDimensionsValue7_group group = 1;
+-   optional LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensionsValue7" }];
++   optional LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+    required ProviderRequest_ReportDimensionsValue7_attribution attribution = 3;
+  }
+  
+  message ProviderRequest_Speed {
+    required uint64 generationSamples = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+
+- Expected  - 3
++ Received  + 3
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/wire-allocation.test.ts:197:27)
+(fail) projection > the current allocation renders every checked-in descriptor unchanged [108.59ms]
+(pass) projection > session descriptor honors message and enum allocations [37.64ms]
+(pass) projection > resources descriptor honors message and enum allocations [9.71ms]
+(pass) projection > shared descriptor honors message and enum allocations [174.09ms]
+(pass) projection > platform descriptor honors message and enum allocations [21.41ms]
+(pass) projection > events descriptor honors the PublicEvent allocation [14.44ms]
+(pass) projection > an incomplete allocation fails the descriptor render [15.74ms]
+
+test/connector-coverage.test.ts:
+(pass) 74 live source names resolve to 70 canonical connector and four relay notice operations [0.24ms]
+(pass) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.08ms]
+(pass) descriptor role-scope and event payload metadata append fresh fields
+(pass) all connector fields, presence, associations and constraints match the bounded remote source projection [5.16ms]
+(pass) spec admission table matches the connector inventory, descriptor roles and mutation classes [0.68ms]
+(pass) relay forwards exactly the connector set; agents and servers send no operation requests [0.12ms]
+(pass) no local-only operation gains remote authority and all shared IDs retain local authority [0.06ms]
+
+5 tests failed:
+(fail) session slice completes the 201 endpoints without overlap and adds only inventory unsubscribe [5.69ms]
+(fail) all session fields, tags, presence, enums and obligations match live source projection [9.18ms]
+(fail) every checked live source field has exact structural metadata and an unenforced source obligation [3.15ms]
+(fail) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [1.56ms]
+(fail) projection > the current allocation renders every checked-in descriptor unchanged [108.59ms]
+
+ 133 pass
+ 5 fail
+ 17304 expect() calls
+Ran 138 tests across 21 files. [1.85s]

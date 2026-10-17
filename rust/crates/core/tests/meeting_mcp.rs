@@ -7,7 +7,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::{JoinHandle, JoinSet};
 use ycoding_core::meeting::config::KnowledgeBinding;
-use ycoding_core::meeting::intelligence::{Generate, Intelligence, Mcp, ServiceMcp, Settings};
+use ycoding_core::meeting::intelligence::{
+    Generate, Intelligence, Mcp, McpServer, ServiceMcp, Settings,
+};
 use ycoding_core::meeting::store::MeetingDatabase;
 use ycoding_core::resources::mcp::{Service, client::Hooks};
 use ycoding_schema::{DomainDecode, mcp::ServerConfig, parse_json};
@@ -177,6 +179,7 @@ fn binding() -> KnowledgeBinding {
         search: "search".into(),
         read: "read".into(),
         write: Some("write".into()),
+        enabled: true,
     }
 }
 
@@ -196,6 +199,10 @@ async fn the_core_mcp_service_drives_retrieval_review_and_revision_aware_writes_
         let mcp = Arc::new(ServiceMcp::new(service));
 
         let tools = mcp.tools().await.unwrap();
+        assert_eq!(
+            mcp.servers().await.unwrap(),
+            vec![McpServer { name: "wiki".into(), status: Some("connected".into()) }]
+        );
         let write = tools.iter().find(|tool| tool.name == "write").unwrap();
         assert_eq!(write.server, "wiki");
         assert_eq!(write.input_schema.as_ref().unwrap()["required"], json!(["id", "content", "expectedRevision"]));

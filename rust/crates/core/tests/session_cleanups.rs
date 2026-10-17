@@ -12,6 +12,7 @@ use ycoding_core::{
     resources::{config::Roots, tool_output_store},
     session::{
         cleanups::{Cleanups, Error, Maintenance},
+        retention::Settings,
         runner::Clock,
     },
 };
@@ -26,6 +27,15 @@ mod report_support;
 mod support;
 
 const DAY: i64 = 86_400_000;
+
+fn settings() -> Arc<dyn Fn() -> Settings + Send + Sync> {
+    Arc::new(|| Settings {
+        records_days: 30,
+        usage_days: 30,
+        latency_days: 30,
+        incident_days: 30,
+    })
+}
 const NOW: i64 = 100 * DAY;
 const OLD: i64 = NOW - 30 * DAY - 1;
 const BOUNDARY: i64 = NOW - 30 * DAY;
@@ -246,6 +256,7 @@ fn request(id: &str, suffix: &str, number: i64) -> resources::Request {
         )
         .unwrap(),
         time_created: OLD,
+        usage_anchor: None,
     }
 }
 
@@ -280,6 +291,7 @@ impl Fixture {
             self.outputs.clone(),
             self.clock.clone(),
             Arc::new(move || active.lock().unwrap().clone()),
+            settings(),
         )
     }
 }
@@ -415,6 +427,7 @@ async fn batches_preserve_interleaved_writes() {
         fixture.outputs.clone(),
         fixture.clock.clone(),
         active,
+        settings(),
     );
     assert_eq!(cleanup.file_changes().await.unwrap(), 203);
     assert_eq!(count::<tables::FileChangeTable>(&store), 3);
@@ -503,6 +516,7 @@ async fn usage_batches_preserve_new_requests_and_updated_aggregates() {
             }
             vec![session::Id::new("ses_000").unwrap()]
         }),
+        settings(),
     );
     assert_eq!(cleanup.usage().await.unwrap(), 204);
     assert_eq!(count::<resources::RequestTable>(&store), 2);
@@ -548,6 +562,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
             }
             Vec::new()
         }),
+        settings(),
     );
     let mut owner = Maintenance::start(cleanup).await.unwrap();
     assert_eq!(owner.startup().file_changes, 1);
@@ -561,7 +576,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
     fixture
         .clock
         .sleeping
-        .acquire_many(4)
+        .acquire_many(6)
         .await
         .unwrap()
         .forget();
@@ -571,7 +586,7 @@ async fn startup_hourly_single_owner_failures_and_close_drain() {
     fixture
         .clock
         .sleeping
-        .acquire_many(4)
+        .acquire_many(6)
         .await
         .unwrap()
         .forget();

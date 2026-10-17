@@ -417,6 +417,26 @@ test("a 300-message transcript mounts a bounded window and holds the reader thro
   }
 }, 40_000)
 
+test("older history loads when measuring rows above the reader moves it past the scroll trigger", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/transcript.html?long=1`)
+    await wait(page, `document.querySelector('[data-message-id="long_answer_149"]') !== null`)
+    await page.evaluate(
+      `(() => { const style=document.createElement('style'); style.textContent='[data-message-id^="long_user_"] { padding-block-end: 32px }'; document.head.append(style); const root=document.querySelector('.workspace__scroll'); window.boundary=[]; window.sampling=true; const tick=()=>{ if(!window.sampling) return; const first=document.querySelector('[data-message-id="long_user_0"]'); if(document.querySelector('[data-message-id^="older_"]')===null && first!==null) window.boundary.push({ scrollTop: root.scrollTop, above: root.getBoundingClientRect().top-first.getBoundingClientRect().top }); requestAnimationFrame(tick) }; requestAnimationFrame(tick); root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-300})); root.scrollTop=100 })()`,
+    )
+    await wait(page, `document.querySelector('.transcript-navigation__beginning') !== null`)
+    const boundary = await page.evaluate<readonly { readonly scrollTop: number; readonly above: number }[]>(
+      `(() => { window.sampling=false; return window.boundary })()`,
+    )
+    expect(boundary.some((sample) => sample.scrollTop >= 120 && sample.above <= 120)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('[data-message-id^="older_"]') !== null`)).toBe(true)
+  } finally {
+    await page.close()
+  }
+}, 60_000)
+
 test("a 150-Session window mounts bounded rows and keeps the reader anchored while paging both ways", async () => {
   const page = await browser!.openPage()
   try {

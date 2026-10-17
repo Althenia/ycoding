@@ -49,7 +49,8 @@ test("preserves explicit default model selection alongside model metadata", asyn
 test("R7 sends explicit goal resume and preserves the returned objective", async () => {
   const requests: Request[] = []
   const state = {
-    mode: "normal", yolo: 1,
+    mode: "normal",
+    yolo: 1,
     goal: { text: "Verify the release", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 3 },
   }
   const client = YCoding.make({
@@ -59,7 +60,9 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
       return Response.json({ data: state })
     },
   })
-  expect(await client.session.autonomy.set({ sessionID: "ses_goal_client", payload: { goal: true, yolo: 1 } })).toEqual(state)
+  expect(await client.session.autonomy.set({ sessionID: "ses_goal_client", payload: { goal: true, yolo: 1 } })).toEqual(
+    state,
+  )
   expect(requests).toHaveLength(1)
   expect(requests[0]!.method).toBe("PUT")
   expect(new URL(requests[0]!.url).pathname).toBe("/api/session/ses_goal_client/autonomy")
@@ -69,10 +72,13 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
 test("outstanding reports lost shell notices through the generated Session client", async () => {
   const requests: Request[] = []
   const result = { data: [], running: [], failed: [], lost: ["ses_lost_shell"] }
-  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
-    requests.push(input instanceof Request ? input : new Request(input, init))
-    return Response.json(result)
-  } })
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      requests.push(input instanceof Request ? input : new Request(input, init))
+      return Response.json(result)
+    },
+  })
   expect(await client.session.outstanding()).toEqual(result)
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", "/api/session/outstanding"],
@@ -86,10 +92,18 @@ test("keep-awake methods use the local-runtime HTTP contract without a Session o
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ data: request.method === "PUT" ? { state: "on" } : { state: "unsupported", message: "Keep machine awake is available on macOS only." } })
+      return Response.json({
+        data:
+          request.method === "PUT"
+            ? { state: "on" }
+            : { state: "unsupported", message: "Keep machine awake is available on macOS only." },
+      })
     },
   })
-  expect(await client.keepAwake.get()).toEqual({ state: "unsupported", message: "Keep machine awake is available on macOS only." })
+  expect(await client.keepAwake.get()).toEqual({
+    state: "unsupported",
+    message: "Keep machine awake is available on macOS only.",
+  })
   expect(await client.keepAwake.set({ enabled: true })).toEqual({ state: "on" })
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", "/api/keep-awake"],
@@ -101,18 +115,30 @@ test("keep-awake methods use the local-runtime HTTP contract without a Session o
 
 test("generated telemetry methods address one local machine without Session or Location input", async () => {
   const requests: Request[] = []
-  const sample = { kind: "request" as const, at: "2026-10-04T12:00:00.000Z", operation: "session.list" as const,
-    outcome: "ok" as const, queueMs: 1, settlementMs: 2, totalMs: 3 }
-  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init)
-    requests.push(request)
-    return Response.json(request.method === "POST" ? { accepted: 1 } :
-      { data: [{ receivedAt: 100, sample }], cursor: {} })
-  } })
+  const sample = {
+    kind: "request" as const,
+    at: "2026-10-04T12:00:00.000Z",
+    operation: "session.list" as const,
+    outcome: "ok" as const,
+    queueMs: 1,
+    settlementMs: 2,
+    totalMs: 3,
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json(
+        request.method === "POST" ? { accepted: 1 } : { data: [{ receivedAt: 100, sample }], cursor: {} },
+      )
+    },
+  })
   expect(await client.server.telemetry.append({ samples: [sample] })).toEqual({ accepted: 1 })
   expect(await client.server.telemetry.list({ limit: 1 })).toEqual({ data: [{ receivedAt: 100, sample }], cursor: {} })
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
-    ["POST", "/api/server/web-latency"], ["GET", "/api/server/web-latency"],
+    ["POST", "/api/server/web-latency"],
+    ["GET", "/api/server/web-latency"],
   ])
   expect(await requests[0].json()).toEqual({ samples: [sample] })
   expect(new URL(requests[1].url).searchParams.get("limit")).toBe("1")
@@ -156,11 +182,15 @@ test("exposes every standard HTTP API group", () => {
     "browser",
     "isolatedBrowser",
     "usage",
+    "incident",
     "remote",
     "keepAwake",
     "config",
+    "review",
   ])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
+  expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
+  expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
   expect(Object.keys(client.message)).toEqual(["list", "capturedInputs"])
@@ -178,7 +208,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
-  expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+  expect(Object.keys(client.providerUsage)).toEqual(["forecast", "list", "get"])
   expect(Object.keys(client.browser)).toEqual([
     "status",
     "tabs",
@@ -1089,3 +1119,48 @@ const modelSwitchedEvent = {
     model: { id: "claude", providerID: "anthropic" },
   },
 }
+
+test("generated incident methods address the machine for reads and the Location for guidance", async () => {
+  const requests: Request[] = []
+  const report = {
+    rows: [{ providerID: "openai", modelID: "gpt-5.6", fallbacks: 3, escalated: 2, rejected: 1, last: 5 }],
+    groups: 1,
+  }
+  const recent = {
+    items: [{ id: "inc_a", time: 10, kind: "fallback" as const, category: "rate_limit", ruleIDs: [], agent: "build" }],
+  }
+  const guidance = { text: "Prefer a smaller model.", enabled: true }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      const path = new URL(request.url).pathname
+      return Response.json({ data: path.endsWith("/report") ? report : path.endsWith("/recent") ? recent : guidance })
+    },
+  })
+
+  expect(await client.incident.report({ group: "model", from: 1, to: 9, offset: 0, limit: 2 })).toEqual(report)
+  expect(await client.incident.recent({ provider: "openai", model: "gpt-5.6", agent: "build", limit: 20 })).toEqual(
+    recent,
+  )
+  const target = { provider: "openai", model: "gpt-5.6", location: { directory: "/work" } }
+  expect(await client.incident.guidance.get(target)).toEqual(guidance)
+  expect(await client.incident.guidance.clear(target)).toEqual(guidance)
+
+  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", "/api/incident/report"],
+    ["GET", "/api/incident/recent"],
+    ["GET", "/api/incident/guidance"],
+    ["DELETE", "/api/incident/guidance"],
+  ])
+  const [reported, listed, read, cleared] = requests.map((request) => new URL(request.url).searchParams)
+  expect(Object.fromEntries(reported)).toEqual({ group: "model", from: "1", to: "9", offset: "0", limit: "2" })
+  expect(Object.fromEntries(listed)).toEqual({ provider: "openai", model: "gpt-5.6", agent: "build", limit: "20" })
+  for (const params of [read, cleared]) {
+    expect(params.get("provider")).toBe("openai")
+    expect(params.get("model")).toBe("gpt-5.6")
+    expect(params.get("location[directory]")).toBe("/work")
+  }
+  expect(requests.slice(0, 2).every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
+})

@@ -17,6 +17,8 @@ fn settings() -> Settings {
         custom: std::sync::Arc::new(Vec::new),
         enabled: true,
         limits: Limits::default(),
+        decide_reviews: false,
+        decide_hard_reviews: true,
     }
 }
 #[test]
@@ -40,13 +42,15 @@ fn input(session: &ycoding_schema::session_id::SessionId, command: &str) -> Inpu
         metadata: None,
         skip_review: false,
         holder: None,
+        defer_shell: false,
+        source: None,
     }
 }
 
 #[tokio::test]
 async fn hard_reviews_never_use_yolo_goal_always_or_exemptions() {
     let fixture = Fixture::default();
-    let root = fixture.session("ses_root", None, 3, true, None);
+    let root = fixture.session("ses_root", None, 2, true, None);
     fixture.rules.lock().unwrap().push(permission::Rule {
         action: "external_directory".into(),
         resource: "*".into(),
@@ -560,7 +564,7 @@ fn exemptions_only_remove_ordinary_outside_review_and_never_hide_mixed_paths() {
 #[tokio::test]
 async fn review_and_shell_reservations_are_family_scoped_and_release_once() {
     let fixture = Fixture::default();
-    let root = fixture.session("ses_root", None, 1, false, None);
+    let root = fixture.session("ses_root", None, 2, false, None);
     let child = fixture.session("ses_child", Some("ses_root"), 0, false, None);
     let mut config = settings();
     config.limits.shells = 1;
@@ -1032,4 +1036,56 @@ async fn an_approved_shell_review_waits_for_a_slot_and_cancelling_it_leaves_no_w
     assert_eq!(shells(&service, &root), 1);
     granted.release();
     assert_eq!(shells(&service, &root), 0);
+}
+
+#[tokio::test]
+async fn ordinary_reviews_carry_no_model_escalation_decision_attribution_or_status_history() {
+    use ycoding_schema::DomainDecode;
+    let fixture = Fixture::default();
+    let root = fixture.session("ses_root", None, 0, false, None);
+    let service = Guardrails::new(
+        fixture.authority(),
+        fixture.permissions(),
+        settings(),
+        fixture.publisher(),
+    );
+    let admission = service
+        .assert(at(input(&root, "touch /outside/file"), "/repo"))
+        .unwrap();
+    let request = admission.request.clone().unwrap();
+    assert_eq!(request.escalation, None);
+    service
+        .reply(&root, &request.id, guardrail::Reply::Once)
+        .unwrap();
+    admission.wait.unwrap().await.unwrap().unwrap().release();
+
+    let events = fixture.events.lock().unwrap().clone();
+    let asked = events
+        .iter()
+        .find(|event| event.type_ == "guardrail.asked")
+        .unwrap();
+    assert_eq!(
+        guardrail::Request::decode(&asked.data).unwrap().escalation,
+        None
+    );
+    let replied = guardrail::RepliedData::decode(
+        &events
+            .iter()
+            .find(|event| event.type_ == "guardrail.replied")
+            .unwrap()
+            .data,
+    )
+    .unwrap();
+    assert_eq!(replied.reply, guardrail::Reply::Once);
+    assert_eq!(
+        (
+            replied.decided_by,
+            replied.choice,
+            replied.confidence,
+            replied.grades
+        ),
+        (None, None, None, None)
+    );
+    let status = service.status(&root).unwrap();
+    assert_eq!((status.dismissals, status.decisions), (None, None));
 }

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { enumNumbers, messageTags } from "./wire-allocation.js"
 import path from "node:path"
 import { Schema, SchemaAST } from "effect"
 import { generateManifest } from "../../../script/rust-parity/manifest.js"
@@ -40,7 +41,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
   expect(live).toHaveLength(55)
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.counts).toEqual({ endpoint: 198, connector: 66, notice: 4 })
+  expect(manifest.counts).toEqual({ endpoint: 207, connector: 75, notice: 4 })
   const baseline = manifest.members.filter((member) => member.kind === "endpoint" && platformGroups.has(member.group))
   expect(baseline.map((member) => member.name).sort()).toEqual([...live].sort())
   expect(
@@ -148,7 +149,7 @@ test("every platform field, presence, enum and typed error matches the live Effe
     expect(
       enums.get(name)?.map((value) => value.number),
       name,
-    ).toEqual(values.map((_, index) => index + 1))
+    ).toEqual(enumNumbers(name, values))
   }
   const platform = set.file.find((file) => file.name === "ycoding/v5/platform.proto")!
   const shared = sharedSet()

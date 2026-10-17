@@ -11,7 +11,7 @@ The helper returns typed judgments and self-reported, uncalibrated confidence, n
 The tool accepts `{ "provider": "agent", "request": { "state": ..., "questions": [...] } }`. State is JSON. Questions are ordered, uniquely named, and bounded to 1–32 per call. Every question has a nonempty `name` of at most 64 characters and nonempty `instructions` of at most 8,192 characters:
 
 - `predicate` asks for a Boolean;
-- `choice` supplies 1–255 unique string or Boolean `value` options with optional nonempty descriptions;
+- `choice` supplies 1–255 unique string or Boolean `value` options with optional nonempty descriptions and an optional Boolean `grade` (default `false`; any non-Boolean value is invalid);
 - `score` supplies 2–10 levels with nonempty labels and optional nonempty descriptions; results use zero-based integer indexes.
 
 String and Boolean choices retain distinct types. Inputs select neither credentials nor the helper model. Send self-contained authorized evidence and observable criteria. Use neutral wording, distinct options including a keep-current/other alternative, and distinguish adjacent score levels. Batch independent questions; separate dependent judgments. Use tests, grep, typechecks, and inventory for facts those checks can settle. Skip trivial choices, routine per-step classification, and repeated unchanged judgments.
@@ -45,7 +45,9 @@ Model resolution prefers `agents.decision.model`, then `efficiency.helper_models
 
 The helper returns exactly one TOON document with root `decisions`, version `1`, and one answer for each requested name. Uniform columns are `name,type,answer,choice,score,confidence`. Validated answers retain request order. Only the matching answer field is populated; other fields are `null`. Confidence is finite in `[0, 1]`. Choices must match supplied values with their original type; scores must index supplied levels. Unknown fields, duplicate/missing names, wrong types, out-of-range scores, malformed TOON, and JSON substitution fail validation. No JSON fallback or fabricated default answer exists.
 
-Every question type can abstain with the same existing refusal representation: `type: refusal`, `answer: null`, `choice: null`, `score: null`, and `confidence: 0`. The prompt explicitly requires abstention for insufficient evidence and forbids forcing a value or substituting a low-confidence pick. Refusal is distinct from any real option, including keep-current. Calling agents treat it as uncertainty and gather missing evidence, decide from evidence, or ask the user.
+For a choice question with `grade: true`, the answer is `{ name, type: "choice", answer: null, choice: null, score: null, confidence: 0, grades: [{ choice, confidence, evidence }] }`. Graded mode makes no single pick. `grades` covers every listed choice exactly once, matching each value with its original string or Boolean type. Each `confidence` is finite in `[0, 1]`, and each `evidence` is nonempty, not entirely whitespace, and at most 500 UTF-16 code units. Missing, duplicate, extra, or unlisted grades, out-of-range or non-finite confidence, empty or over-long evidence, a populated `choice`, and nonzero answer-level confidence fail validation. Canonical grades are returned in the helper's order. A single-pick choice, predicate, or score answer must omit `grades`; supplying them is invalid.
+
+Every question type can abstain with the same existing refusal representation: `type: refusal`, `answer: null`, `choice: null`, `score: null`, and `confidence: 0`. A graded choice may abstain the same way; a refusal carries no `grades`. The prompt explicitly requires abstention for insufficient evidence and forbids forcing a value or substituting a low-confidence pick. Refusal is distinct from any real option, including keep-current. Calling agents treat it as uncertainty and gather missing evidence, decide from evidence, or ask the user.
 
 ```toon
 decisions:

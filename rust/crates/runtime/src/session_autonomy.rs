@@ -24,7 +24,7 @@ pub async fn get(
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
     Ok(v5::SessionAutonomyGetResult {
-        data: convert::autonomy_state(&core.autonomy.get(&id).map_err(failure)?),
+        data: view(core, &id)?,
     })
 }
 
@@ -35,7 +35,7 @@ pub async fn set(
     use v5::{session_autonomy_set::Kind, session_autonomy_set_value1_goal::Kind as Goal};
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
-    let state = match request.payload.kind {
+    match request.payload.kind {
         Some(Kind::Value2(only)) => {
             core.autonomy
                 .set_yolo(&id, convert::yolo_level(&only.yolo)?)
@@ -138,22 +138,23 @@ pub async fn set(
                     )
                     .map_err(|_| Failure::Unavailable("goal steer is not representable".into()))?;
                     core.execution
-                        .prompt(
+                        .prompt_with_origin(
                             pending::Request {
                                 id: input_id,
-                                session_id: id,
+                                session_id: id.clone(),
                                 input,
                                 event_id,
                                 created: ids::now_millis(),
                             },
                             None,
+                            autonomy::Origin::Runtime,
                         )
                         .await
                         .map_err(|_| {
                             Failure::Unavailable("Session input admission unavailable".into())
                         })?;
                     return Ok(v5::SessionAutonomySetResult {
-                        data: convert::autonomy_state(&applied.state),
+                        data: view(core, &id)?,
                     });
                 }
                 Some(Goal::Value2(false)) | None => {
@@ -165,12 +166,48 @@ pub async fn set(
             };
             core.autonomy.change(&id, yolo, Some(goal)).await
         }
+        Some(Kind::Value3(change)) => {
+            let state = core.autonomy.set_sleep(&id, change.sleep).await;
+            if change.sleep && state.is_ok() {
+                crate::session_review::convert_family(core, &id).await?;
+            }
+            state
+        }
+        Some(Kind::Value4(change)) => core.autonomy.set_auto_answer(&id, change.auto_answer).await,
         None => return Err(Failure::Invalid("missing autonomy change".into())),
     }
     .map_err(failure)?;
     Ok(v5::SessionAutonomySetResult {
-        data: convert::autonomy_state(&state),
+        data: view(core, &id)?,
     })
+}
+
+fn view(
+    core: &crate::Core,
+    id: &ycoding_core::ycoding_schema::session::Id,
+) -> Result<v5::SessionAutonomyView, Failure> {
+    let state = core.autonomy.get(id).map_err(failure)?;
+    let effective = core.autonomy.effective(id).map_err(failure)?;
+    let root = core.autonomy.root(id).map_err(failure)?;
+    let ordinary = core
+        .autonomy
+        .effective(&root)
+        .map_err(failure)?
+        .can_auto_guardrail()
+        && !effective.asleep;
+    let (_, services) = core.locations.session(id)?;
+    let policy = services.guardrails.review_policy();
+    Ok(convert::autonomy_view(
+        &state,
+        v5::SessionAutonomyEffective {
+            yolo: convert::yolo(effective.yolo),
+            asleep: effective.asleep,
+            guardrails_enabled: policy.enabled,
+            ordinary_reviews_auto: ordinary,
+            model_reviews: policy.enabled && policy.decide_reviews,
+            hard_model_reviews: policy.decide_reviews && policy.decide_hard_reviews,
+        },
+    ))
 }
 
 fn failure(error: Error) -> Failure {
@@ -197,4 +234,19 @@ fn goal_failure(error: goal::Error) -> Failure {
         }.into(),
         reference,
     }
+}
+
+pub(crate) async fn wake_root(
+    core: &crate::Core,
+    id: &ycoding_core::ycoding_schema::session::Id,
+) -> Result<(), Failure> {
+    let root = core
+        .sessions
+        .get(id)
+        .map_err(|_| Failure::Unavailable("Session store unavailable".into()))?
+        .is_some_and(|session| session.parent_id.is_none());
+    if root {
+        core.autonomy.set_sleep(id, false).await.map_err(failure)?;
+    }
+    Ok(())
 }

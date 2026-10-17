@@ -151,7 +151,7 @@ message Connector_AuthInfo {
 }
 
 message Connector_AuthInfo_providers {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message Connector_AuthInfo_profiles {
@@ -589,19 +589,19 @@ message session_status_Result {
 }
 
 message session_status_Result_running {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message session_status_Result_attention {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message session_status_Result_outstanding {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message session_status_Result_failed {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message catalog_get_Request {
@@ -646,7 +646,7 @@ message Connector_Catalog_modelsItem {
 }
 
 message Connector_Catalog_modelsItem_variants {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message Connector_Catalog_modelsItem_profiles {
@@ -660,7 +660,7 @@ message Connector_Catalog_modelsItem_profilesItem {
 }
 
 message Connector_Catalog_modelsItem_profilesItem_variants {
-  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 count_min: 0 count_max: 9007199254740991 }];
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 
 message Connector_Catalog_commands {

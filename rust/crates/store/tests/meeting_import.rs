@@ -64,7 +64,10 @@ fn literal_sqlite_generator_is_byte_identical_and_import_preserves_all_reopened_
             .iter()
             .all(|table| table.rows == 1 && table.digest.len() == 64)
     );
-    assert_eq!(report.importer_version, 1);
+    assert_eq!(
+        report.importer_version,
+        ycoding_store::import::IMPORTER_VERSION
+    );
     assert!(fixture::MEETING.contains(fixture::NOW));
     assert_eq!(report.latency_high_water, None);
     let store = meeting::open(test.candidate()).unwrap();

@@ -14,6 +14,8 @@ function isolatedEnv(root: string) {
     XDG_STATE_HOME: path.join(root, "state"),
   }
   delete env.YCODING_DB
+  delete env.YCODING_SQLITE_IMPORT_SOURCE
+  delete env.YCODING_DISABLE_CHANNEL_DB
   delete env.YCODING_PASSWORD
   delete env.YCODING_CONFIG_DIR
   delete env.YCODING_CONFIG

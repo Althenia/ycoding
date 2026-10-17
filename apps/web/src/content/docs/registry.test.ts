@@ -45,6 +45,31 @@ const INTERNAL_DOC_SLUGS = [
 ] as const
 
 describe("public docs allowlist", () => {
+  test("usage guidance distinguishes measured rates, causal costs, retained coverage and quota warm-up", () => {
+    const section = findDocPage("usage/sessions")?.sections.find(
+      (section) => section.heading === "Usage, prompt costs, and forecasts",
+    )
+    const text =
+      section?.blocks
+        .flatMap((block) => (block.kind === "paragraph" || block.kind === "callout" ? [block.text] : []))
+        .join(" ") ?? ""
+    for (const required of [
+      "provider default at request time",
+      "selected effort",
+      "median and p90",
+      "Weighted throughput",
+      "≈",
+      "already-started requests keep their owner",
+      "inclusive rows overlap",
+      "Missing prices",
+      "one-hour horizon",
+      "15-minute half-life",
+      "No increase observed does not mean unlimited",
+    ])
+      expect(text).toContain(required)
+    expect(text).not.toMatch(/usage_anchor|usageAnchor|session_provider_request|credential IDs|CREATE TABLE/)
+  })
+
   test("installation documents beta selection, isolated data and the stable return command", () => {
     const page = findDocPage("installation")!
     const text = JSON.stringify(page)
@@ -148,7 +173,14 @@ describe("structured decision documentation", () => {
   test("documents explicit judgments, valid requests and abstention without automation", () => {
     const tools = findDocPage("configuration/tools")
     const text = JSON.stringify(tools?.sections)
-    expect(text).toContain("only when an agent calls")
+    expect(text).toContain("Agent judgments use `decision`")
+    expect(text).toContain("during /sleep")
+    expect(text).not.toContain("/guardrail-decision")
+    expect(text).toContain("confidence 0.8 or higher")
+    expect(text).toContain("auto-answer on (default off)")
+    expect(text).not.toContain("auto_answer")
+    expect(text).toContain("guardrails.decide_reviews: true (default false)")
+    expect(text).not.toContain("automatic fallback")
     expect(text).toContain("permission ceilings")
     expect(text).toContain("owner choices")
     expect(text).toContain("insufficient evidence")
@@ -166,7 +198,6 @@ describe("structured decision documentation", () => {
       ],
     } })
     expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("explicit goal")
-    expect(JSON.stringify(findDocPage("configuration/guardrails")?.sections)).toContain("without helper classification")
     const rejected = findDocPage("configuration")?.sections.flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Rejected keys")
     expect(rejected?.kind === "code" ? rejected.code : "").toContain("decisions")
@@ -184,10 +215,48 @@ describe("structured decision documentation", () => {
     ]) expect(guardrails).toContain(rule)
     expect(guardrails).not.toContain("standard.review.broad-deletion")
     expect(guardrails).not.toContain("standard.review.publish")
-    expect(guardrails).toContain("without helper classification")
     expect(guardrails).toContain("case-sensitive")
-    expect(guardrails).toContain("YOLO 1–3")
-    expect(guardrails).toContain("A fresh human `Allow once` or `Deny` only")
+    expect(guardrails).toContain("YOLO 2")
+    expect(guardrails).not.toContain("YOLO 3")
+    expect(guardrails).toContain("human handoff")
+    expect(guardrails).toContain("decision model")
+    expect(guardrails).toContain("one graded call")
+  })
+
+  test("guardrail documentation pins per-choice thresholds and the hard-review delegation setting", () => {
+    const blocks = findDocPage("configuration/guardrails")?.sections.flatMap((section) => section.blocks) ?? []
+    const thresholds = blocks.find((block) => block.kind === "table" && block.head[0] === "Choice")
+    expect(thresholds?.kind === "table" ? thresholds.rows : undefined).toEqual([
+      ["Approve all", "Ordinary reviews offering Always", "`0.9`", "Grant the offered Always approval."],
+      ["Approve", "Ordinary reviews", "`0.8`", "Approve once."],
+      ["Approve", "Hard reviews", "`0.95`", "Approve once."],
+      ["Reject", "Ordinary and hard reviews", "`0.8`", "Reject the action."],
+    ])
+    const settings = blocks.find((block) => block.kind === "table" && block.head[0] === "Field")
+    const hard = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_hard_reviews`") : undefined
+    expect(hard?.slice(0, 3)).toEqual(["`guardrails.decide_hard_reviews`", "boolean", "`true`"])
+    expect(hard?.[3]).toContain("humans while awake")
+    expect(hard?.[3]).toContain("review box while asleep")
+    const master = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_reviews`") : undefined
+    expect(master?.slice(0, 3)).toEqual(["`guardrails.decide_reviews`", "boolean", "`false`"])
+    expect(master?.[3]).toContain("review box while asleep")
+    const options = findDocPage("configuration")?.sections.flatMap((section) => section.blocks) ?? []
+    const answer = options.flatMap((block) => (block.kind === "table" ? block.rows : [])).find((row) => row[0] === "`auto_answer`")
+    expect(answer).toBeUndefined()
+  })
+
+  test("current usage docs name levels Ask first, Allow tools, and Tools + reviews and distinguish hard reviews from YOLO automation", () => {
+    const remote = findDocPage("usage/remote")
+    const control = remote?.sections.flatMap((section) => section.blocks).find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
+    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual(["Ask first", "Allow tools", "Tools + reviews", "Goal"])
+    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/yolo", "configuration/guardrails", "configuration/tools"]) {
+      const text = JSON.stringify(findDocPage(slug)?.sections)
+      expect(text).not.toMatch(/hard reviews (?:always |still )?require a (?:fresh )?human/i)
+      expect(text).not.toContain("unless /sleep delegates")
+      expect(text).not.toContain("when /sleep is on")
+      expect(text).not.toContain("YOLO 3")
+      expect(text).not.toContain("auto_answer")
+    }
   })
 })
 
@@ -219,7 +288,7 @@ describe("page structure", () => {
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[1]) : [])).toEqual([
       "Get notified after the agent declares its requested work finished and verified, its final reply settles, and no input, subagent, shell or goal work remains pending. An ordinary reply or idle status alone does not trigger an alert. Reconnecting does not repeat an accepted completion.",
-      "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
+      "Get notified when a Session needs your decision, a guardrail blocks an action, a run fails, or a background-work result is lost. Lost results are identified separately from requests for your input. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
       "Get notified when a paired machine stays disconnected from the relay for 40 seconds, so a routine reconnect raises no alert. An open workspace alerts for its selected machine, and Push to this device alerts a closed browser or app; each browser shows one System alert per outage. A browser-only relay disconnect does not establish that the machine is offline.",
     ])
     expect(text).toContain("System switch also decides whether Push to this device")

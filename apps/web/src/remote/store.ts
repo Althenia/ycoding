@@ -1,3 +1,4 @@
+import { replaceEqualDeep } from "@tanstack/solid-query"
 import {
   noticeSequence,
   type CreateEnrollmentResponse,
@@ -7,6 +8,7 @@ import {
 import {
   WebLimits,
   validLatencySample,
+  validReviewItemID,
   telemetryOperation,
   type FamilyActivityView,
   type TelemetryConsentView,
@@ -16,8 +18,11 @@ import {
   type NoticeFrame,
   type NoticePageView,
   type OperationName,
+  type UsagePromptCostView,
+  type UsageTaskCostView,
   type WorkspaceView,
 } from "./wire-views"
+import { readPromptCosts, readTaskCosts } from "./usage-read"
 import {
   catalogKey,
   readCatalog,
@@ -28,6 +33,7 @@ import {
   type FileAttachmentInput,
   type FileFindResult,
 } from "./catalog"
+import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
   createNotificationDelivery,
@@ -47,6 +53,9 @@ import {
   ephemeralPartKey,
   hasCompactionCheckpoint,
   isGoalSteerAdmission,
+  isSessionStateNotice,
+  readReviewItems,
+  changesReviewItems,
   modelLabel,
   openedPartKey,
   readAggregateID,
@@ -73,6 +82,7 @@ import {
   withShellOutputFetch,
   withShellOutputPage,
   visibleTranscript,
+  type FormAnswerView,
   type PendingRequestView,
   type RemoteMessageView,
   type SessionAutonomyView,
@@ -84,7 +94,12 @@ import type { ModelRefView } from "./projection"
 import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
 import type { RemoteRequestOutcome, RemoteTransport, RemoteTransportHandlers, RemoteTransportStatus } from "./transport"
 import { createLatencyDiagnostics } from "./latency"
-import type { RemoteConnectionState } from "./view-model"
+import {
+  hasWaitingSession,
+  sessionActivityGroup,
+  sessionListRefreshNotice,
+  type RemoteConnectionState,
+} from "./view-model"
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
 import { describeOutcome } from "./outcome"
@@ -155,9 +170,12 @@ export type SessionInfoView = {
   readonly running?: boolean
   readonly attention?: boolean
   readonly failed?: boolean
+  readonly lost?: boolean
 }
 
 export type TeamTaskView = {
+  readonly accounting?: UsageTaskCostView
+  readonly accountingUnavailable?: boolean
   readonly sessionID: string
   readonly parentID: string
   readonly description: string
@@ -168,7 +186,8 @@ export type TeamTaskView = {
   readonly updatedAt: number
   readonly pinnedAt?: number
   readonly startedAt?: number
-  readonly question?: { readonly id: string; readonly text: string }
+  readonly question?: { readonly id: string; readonly text: string; readonly deferred?: true }
+  readonly stoppedRecovery?: { readonly itemID: string }
   readonly cacheHitRatio?: number
   readonly cacheRead?: number
   readonly cacheWrite?: number
@@ -192,8 +211,11 @@ type TeamView = {
   readonly shells: readonly {
     readonly id: string
     readonly ownerID: string
+    readonly ownerAgent?: string
+    readonly ownerTitle?: string
     readonly command: string
-    readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+    readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
+    readonly queuePosition?: number
     readonly startedAt: number
     readonly completedAt?: number
   }[]
@@ -219,6 +241,13 @@ function emptyTeam(rootID: string, status: TeamView["status"]): TeamView {
   }
 }
 
+export type ReviewDecision =
+  | { readonly kind: "question"; readonly answers: FormAnswerView | readonly (readonly string[])[] }
+  | { readonly kind: "subagent_question"; readonly text: string }
+  | { readonly kind: "guardrail" | "permission"; readonly reply: "once" | "always" | "reject" }
+  | { readonly kind: "question" | "subagent_question"; readonly dismissed: true }
+  | { readonly kind: "recovery"; readonly choice: "continue" | "stop" }
+
 export type PendingMutation = {
   readonly id: string
   readonly kind:
@@ -236,6 +265,7 @@ export type PendingMutation = {
     | "goal"
     | "prediction"
     | "promptGenerate"
+    | "review"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly phase?: "preparing" | "admitting"
@@ -291,13 +321,15 @@ export type RemoteStoreState = {
     readonly attention: ReadonlySet<string>
     readonly outstanding: ReadonlySet<string>
     readonly failed: ReadonlySet<string>
+    readonly lost: ReadonlySet<string>
   }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly sessionGroups: readonly WorkspaceView[]
   readonly selectedWorkspaceID?: string
   readonly sessionQuery: string
-  readonly sessionFilter: "all" | "running" | "idle"
+  readonly sessionFilter: "all" | "waiting" | "running" | "idle"
   readonly sessionListStatus: "idle" | "loading" | "ready" | "error"
+  readonly sessionListNotice?: string
   readonly sessionRowsStale?: boolean
   readonly sessionPageLoading: boolean
   readonly sessionHasNext: boolean
@@ -433,6 +465,9 @@ export type RemoteStore = {
     childID: string,
     pinned: boolean,
   ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
+  readonly continueRecovery: (
+    childID: string,
+  ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
   readonly killTeamShell: (
     shellID: string,
   ) => Promise<{ readonly status: "ok" | "failed" | "unknown"; readonly message: string }>
@@ -440,15 +475,23 @@ export type RemoteStore = {
     ownerID: string,
     shellID: string,
     cursor?: number,
-  ) => Promise<{ readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }>
+  ) => Promise<{
+    readonly command?: string
+    readonly status?: string
+    readonly text: string
+    readonly cursor: number
+    readonly size: number
+    readonly truncated: boolean
+  }>
   readonly createSideChat: () => Promise<
     | { readonly status: "ok"; readonly sessionID: string }
     | { readonly status: "failed" | "unknown"; readonly message: string }
   >
   readonly selectWorkspace: (workspaceID: string) => void
-  readonly searchSessions: (query: string, filter?: "all" | "running" | "idle") => void
+  readonly searchSessions: (query: string, filter?: "all" | "waiting" | "running" | "idle") => void
   readonly nextSessionsPage: () => Promise<void>
   readonly previousSessionsPage: () => Promise<void>
+  readonly setSessionListAnchor: (sessionID: string | undefined) => void
   readonly setDraft: (sessionID: string, text: string) => void
   readonly loadCatalog: (target: CatalogTarget, options?: { readonly refresh?: boolean }) => Promise<void>
   readonly findFiles: (target: CatalogTarget, query: string, limit?: number) => Promise<FileFindResult>
@@ -522,7 +565,11 @@ export type RemoteStore = {
     answer: Readonly<Record<string, string | number | boolean | readonly string[]>>,
   ) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
-  readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<boolean>
+  readonly setYolo: (level: 0 | 1 | 2) => Promise<boolean>
+  readonly setAutoAnswer: (enabled: boolean) => Promise<boolean>
+  readonly setSleep: (sleep: boolean) => Promise<boolean>
+  readonly decideReview: (itemID: string, decision: ReviewDecision) => Promise<boolean>
+  readonly reloadReview: () => Promise<void>
   readonly setGoal: (text: string) => Promise<boolean>
   readonly stopGoal: () => Promise<void>
   readonly setAutonomy: (autonomy: SessionAutonomyView) => void
@@ -530,6 +577,7 @@ export type RemoteStore = {
 }
 
 const defaultBatchMs = 24
+const sessionsFrameWindowMs = 750
 const sessionPageSize = 25
 const carouselLimit = 10
 const retainedSessionPages = 3
@@ -645,8 +693,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let selectionFailedToken: number | undefined
   let teamWatching = false
   const childAnswers = new Set<string>()
+  const recoveryContinues = new Set<string>()
   let teamWatchToken = 0
   let teamShellRead = 0
+  let openedTeamShell:
+    | { readonly rootID: string; readonly ownerID: string; readonly shellID: string; readonly token: number }
+    | undefined
   let activityWatching = false
   let activityWatchToken = 0
   let teamRead:
@@ -677,6 +729,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     readonly previous?: string
     readonly next?: string
   }[] = []
+  let sessionListAnchor: string | undefined
   let openRootInfo: SessionInfoView | undefined
   let loadingPageToken: number | undefined
   let statusReadOwner: RemoteTransport | undefined
@@ -1067,7 +1120,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const applyNotices = (owner: RemoteTransport, frame: NoticeFrame, ownerDeviceID: string) => {
     if (frame.type === "notice.present" && ownerDeviceID === container.state.activeDeviceID) {
-      delivery.present(frame.items, ownerDeviceID)
+      delivery.present(
+        frame.items.map((item) =>
+          item.kind === "notice" &&
+          item.detail?.need === undefined &&
+          container.state.sessionStatus?.lost.has(item.notice.sessionID) === true
+            ? { ...item, detail: { ...item.detail, need: "lost" as const } }
+            : item,
+        ),
+        ownerDeviceID,
+      )
       return
     }
     if (!isCurrentConnection(owner)) return
@@ -1357,7 +1419,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           type === "guardrail.replied" ||
           type === "form.created" ||
           type === "form.replied" ||
-          type === "form.cancelled"
+          type === "form.cancelled" ||
+          type === "form.timed_out" ||
+          type === "permission.deferred" ||
+          type === "guardrail.deferred" ||
+          type === "form.deferred"
         ) {
           for (const read of requestReads) {
             if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })
@@ -1432,6 +1498,22 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
     )
       scheduleCapturedRefresh()
+    const accountingChanged = items.some(
+      (item) =>
+        typeof item.event === "object" &&
+        item.event !== null &&
+        accountingEvents.includes(String(Reflect.get(item.event, "type"))),
+    )
+    if (accountingChanged && transport && container.state.activeSessionID)
+      void loadPromptCosts(transport, container.state.activeSessionID, selectionToken)
+    if (accountingChanged && !refreshTeam && teamWatching && transport && container.state.team?.status === "ready")
+      void loadTeamEconomics(
+        transport,
+        selectionToken,
+        container.state.team.rootID,
+        container.state.team.tasks.map((task) => task.sessionID),
+        "accounting",
+      )
     if (
       items.some(
         (item) =>
@@ -1450,6 +1532,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       goalRequests(container.state.activeSessionID).some((mutation) => mutation.state !== "failed")
     )
       void refreshAutonomy(transport, container.state.activeSessionID, selectionToken)
+    if (
+      transport !== undefined &&
+      container.state.activeSessionID !== undefined &&
+      items.some((item) => item.sessionID === container.state.activeSessionID && isSessionStateNotice(item.event))
+    )
+      void refreshAutonomy(transport, container.state.activeSessionID, selectionToken)
+    if (
+      transport !== undefined &&
+      container.state.activeSessionID !== undefined &&
+      items.some((item) => item.sessionID === container.state.activeSessionID && changesReviewItems(item.event))
+    )
+      void loadReview(transport, container.state.activeSessionID, selectionToken)
     if (
       refreshTeam &&
       container.state.team?.status !== "unsupported" &&
@@ -1646,6 +1740,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     ) {
       if (refresh && currentTeam.status === "ready" && outcome.status !== "ok") {
         setState({ team: { ...currentTeam, pageLoading: false, refreshing: false } })
+        void loadTeamEconomics(
+          owner,
+          token,
+          rootID,
+          currentTeam.tasks.map((task) => task.sessionID),
+          "accounting",
+        )
       } else if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
         setState({ team: { ...currentTeam, status: "unsupported", tasks: [], pageLoading: false, refreshing: false } })
       } else if (outcome.status !== "ok") {
@@ -1688,6 +1789,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           })
           if (activityWatching && container.state.familyActivity?.status !== "unsupported")
             void loadFamilyActivity(owner, rootID)
+          void loadTeamEconomics(
+            owner,
+            token,
+            rootID,
+            tasks.map((task) => task.sessionID),
+            "accounting",
+          )
           if (currentTeam.shellStatus === "loading" || (refresh && currentTeam.shellStatus !== "unsupported"))
             void loadTeamShells(owner, token, rootID)
         }
@@ -1715,15 +1823,131 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     token: number,
     rootID: string,
     sessionIDs: readonly string[],
+    read: "diagnostics" | "accounting" | "both",
   ) => {
     economicsReads += 1
     if (container.state.team?.rootID === rootID) setState({ team: { ...container.state.team, economicsLoading: true } })
     try {
-      await readTeamEconomicsRows(owner, token, rootID, sessionIDs)
+      await Promise.all([
+        ...(read === "accounting" ? [] : [readTeamEconomicsRows(owner, token, rootID, sessionIDs)]),
+        ...(read === "diagnostics" ? [] : [readTeamTaskCosts(owner, token, rootID, sessionIDs)]),
+      ])
     } finally {
       economicsReads -= 1
       if (economicsReads === 0 && container.state.team?.economicsLoading === true)
         setState({ team: { ...container.state.team, economicsLoading: false } })
+    }
+  }
+
+  const taskCostIntervalMs = 5_000
+  let taskCosts:
+    | {
+        readonly owner: RemoteTransport
+        readonly rootID: string
+        readonly token: number
+        readonly ids: Set<string>
+        running?: Promise<void>
+        queued: boolean
+        cancel?: () => void
+        settledAt: number
+      }
+    | undefined
+  const resetTaskCosts = () => {
+    taskCosts?.cancel?.()
+    taskCosts = undefined
+  }
+
+  const readTeamTaskCosts = (
+    owner: RemoteTransport,
+    token: number,
+    rootID: string,
+    sessionIDs: readonly string[],
+  ): Promise<void> => {
+    if (taskCosts?.owner !== owner || taskCosts.rootID !== rootID || taskCosts.token !== token) {
+      taskCosts?.cancel?.()
+      taskCosts = { owner, rootID, token, ids: new Set(), queued: false, settledAt: -Infinity }
+    }
+    const state = taskCosts
+    sessionIDs.forEach((id) => state.ids.add(id))
+    if (state.running) {
+      state.queued = true
+      return state.running
+    }
+    if (state.cancel) return Promise.resolve()
+    const wait = Math.max(0, taskCostIntervalMs - (monotonicNow() - state.settledAt))
+    if (wait > 0) {
+      state.cancel = schedule(() => {
+        state.cancel = undefined
+        if (taskCosts === state) void startTaskCostRead(state)
+      }, wait)
+      return Promise.resolve()
+    }
+    return startTaskCostRead(state)
+  }
+
+  const startTaskCostRead = (state: NonNullable<typeof taskCosts>) => {
+    state.queued = false
+    const ids = [
+      ...new Set([
+        ...state.ids,
+        ...(container.state.team?.rootID === state.rootID ? container.state.team.tasks.map((task) => task.sessionID) : []),
+      ]),
+    ]
+    state.ids.clear()
+    const running = readTaskCostPages(state, ids).finally(() => {
+      if (taskCosts !== state) return
+      state.running = undefined
+      state.settledAt = monotonicNow()
+      if (state.queued) void readTeamTaskCosts(state.owner, state.token, state.rootID, [])
+    })
+    state.running = running
+    return running
+  }
+
+  const readTaskCostPages = async (state: NonNullable<typeof taskCosts>, sessionIDs: readonly string[]) => {
+    const { owner, rootID, token } = state
+    const current = () =>
+      taskCosts === state &&
+      teamWatching &&
+      token === selectionToken &&
+      isCurrentConnection(owner) &&
+      container.state.team?.rootID === rootID
+    for (let offset = 0; offset < sessionIDs.length; offset += 100) {
+      if (!current()) return
+      const ids = sessionIDs.slice(offset, offset + 100)
+      const outcome = await owner.request("session.taskCosts", {
+        sessionID: rootID,
+        input: { sessionIDs: ids },
+        timeoutMs: 30_000,
+      })
+      if (!current() || !container.state.team) return
+      const data =
+        outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null
+          ? readTaskCosts(Reflect.get(outcome.value, "data"))
+          : undefined
+      if (!data) {
+        const unread = new Set(sessionIDs.slice(offset))
+        setState({
+          team: {
+            ...container.state.team,
+            tasks: container.state.team.tasks.map((task) =>
+              unread.has(task.sessionID) ? { ...task, accountingUnavailable: true } : task,
+            ),
+          },
+        })
+        return
+      }
+      const tasks = new Map(data.tasks.filter((task) => ids.includes(task.sessionID)).map((task) => [task.sessionID, task]))
+      setState({
+        team: {
+          ...container.state.team,
+          tasks: container.state.team.tasks.map((task) =>
+            ids.includes(task.sessionID)
+              ? { ...task, accounting: tasks.get(task.sessionID), accountingUnavailable: !tasks.has(task.sessionID) }
+              : task,
+          ),
+        },
+      })
     }
   }
 
@@ -2051,6 +2275,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionGroups: [],
         selectedWorkspaceID: undefined,
         sessionListStatus: "idle",
+        sessionListNotice: undefined,
         sessionPageLoading: false,
         sessionHasNext: false,
         sessionHasPrevious: false,
@@ -2502,11 +2727,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     requestReads.add(requestsDuringRead)
     void loadTodos(active, sessionID, token, admitted)
     try {
-      const [autonomy, permissions, guardrails, forms] = await Promise.all([
+      const [autonomy, permissions, guardrails, forms, guardrailStatus] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
         active.request("session.permission.list", { sessionID }),
         active.request("session.guardrail.request.list", { sessionID }),
         active.request("session.form.list", { sessionID }),
+        active.request("session.guardrail.status", { sessionID }),
       ])
       if (admitted !== undefined && !(await admitted)) return
       if (token !== selectionToken || container.state.activeSessionID !== sessionID) return
@@ -2533,12 +2759,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           requests,
         ),
       )
+      const decisions =
+        guardrailStatus.status === "ok" ? readGuardrailDecisions(guardrailStatus.value, sessionID) : undefined
+      const withDecisions =
+        decisions === undefined
+          ? withRequests
+          : {
+              ...withRequests,
+              guardrailDecisions: mergeGuardrailDecisions(decisions, withRequests.guardrailDecisions ?? []),
+            }
       const failure = [autonomy, permissions, guardrails, forms].find((outcome) => outcome.status !== "ok")
       setState({
-        view:
-          autonomy.status === "ok"
-            ? { ...withRequests, autonomy: readAutonomy(autonomy.value) ?? withRequests.autonomy }
-            : withRequests,
+        view: autonomy.status === "ok" ? { ...withDecisions, autonomy: readAutonomy(autonomy.value) } : withDecisions,
         ...(notice === undefined
           ? failure === undefined
             ? {}
@@ -2547,6 +2779,113 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
     } finally {
       requestReads.delete(requestsDuringRead)
+    }
+  }
+
+  let promptRead: { owner: RemoteTransport; sessionID: string; token: number; again: boolean } | undefined
+  const loadPromptCosts = async (owner: RemoteTransport, sessionID: string, token: number) => {
+    if (promptRead?.owner === owner && promptRead.sessionID === sessionID && promptRead.token === token) {
+      promptRead.again = true
+      return
+    }
+    const ids =
+      container.state.view?.id === sessionID
+        ? container.state.view.messages
+            .filter((message) => message.kind === "user" && message.state !== "pending")
+            .map((message) => message.id)
+        : []
+    if (ids.length === 0) return
+    const read = { owner, sessionID, token, again: false }
+    promptRead = read
+    if (container.state.view?.id === sessionID)
+      setState({ view: { ...container.state.view, promptCostState: "loading" } })
+    const units: UsagePromptCostView[] = []
+    try {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const inputIDs = ids.slice(offset, offset + 100)
+        const outcome = await owner.request("session.promptCosts", {
+          sessionID,
+          input: { inputIDs },
+          timeoutMs: 30_000,
+        })
+        if (
+          promptRead !== read ||
+          token !== selectionToken ||
+          !isCurrentConnection(owner) ||
+          container.state.activeSessionID !== sessionID ||
+          container.state.view?.id !== sessionID
+        )
+          return
+        const data =
+          outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null
+            ? readPromptCosts(Reflect.get(outcome.value, "data"))
+            : undefined
+        if (!data) {
+          setState({ view: { ...container.state.view, promptCostState: "unavailable" } })
+          return
+        }
+        units.push(...data.units.filter((unit) => unit.anchor.sessionID === sessionID && inputIDs.includes(unit.anchor.inputID)))
+      }
+      if (container.state.view?.id !== sessionID) return
+      const resident = new Set(
+        container.state.view.messages.filter((message) => message.kind === "user").map((message) => message.id),
+      )
+      setState({
+        view: {
+          ...container.state.view,
+          promptCosts: units.filter((unit) => resident.has(unit.anchor.inputID)),
+          promptCostState: "ready",
+        },
+      })
+    } finally {
+      if (promptRead === read) {
+        promptRead = undefined
+        if (read.again && token === selectionToken && isCurrentConnection(owner))
+          void loadPromptCosts(owner, sessionID, token)
+      }
+    }
+  }
+
+
+  let reviewRead:
+    | { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number; again: boolean }
+    | undefined
+  const loadReview = async (owner: RemoteTransport, sessionID: string, token: number): Promise<void> => {
+    if (reviewRead?.owner === owner && reviewRead.sessionID === sessionID && reviewRead.token === token) {
+      reviewRead.again = true
+      return
+    }
+    const read = { owner, sessionID, token, again: false }
+    reviewRead = read
+    try {
+      const outcome = await owner.request("session.review.list", { sessionID })
+      if (
+        reviewRead !== read ||
+        token !== selectionToken ||
+        !isCurrentConnection(owner) ||
+        container.state.view?.id !== sessionID
+      )
+        return
+      if (outcome.status === "failed" && outcome.error.code === "unknown_operation") {
+        setState({ view: { ...container.state.view, review: { status: "unsupported", items: [] } } })
+        return
+      }
+      const items = outcome.status === "ok" ? readReviewItems(outcome.value) : undefined
+      setState({
+        view: {
+          ...container.state.view,
+          review:
+            items === undefined
+              ? { status: "error", items: container.state.view.review?.items ?? [] }
+              : { status: "ready", items },
+        },
+      })
+    } finally {
+      if (reviewRead === read) {
+        reviewRead = undefined
+        if (read.again && token === selectionToken && isCurrentConnection(owner))
+          void loadReview(owner, sessionID, token)
+      }
     }
   }
 
@@ -2641,9 +2980,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   /**
    * Reads one explicit page of a shell's captured output for the session that owns it.
-   * One user request reads one page: there is no automatic paging loop, so a running
-   * command whose tail is an incomplete character is reported as stalled for the user to
-   * retry rather than polled. A page is applied only while the selection that opened the
+   * One call reads one page; a mounted live shell section re-polls on its interval, so a
+   * running command whose tail is an incomplete character is reported as stalled until a
+   * later poll can advance. A page is applied only while the selection that opened the
    * read still owns the view, so a late page cannot land on another session or connection.
    */
   const loadShellOutputPage = async (shellID: string) => {
@@ -2791,6 +3130,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       },
     })
     void loadCompactionHistory(sessionID, token)
+    void loadPromptCosts(owner, sessionID, token)
   }
 
   const reloadSnapshot = async (
@@ -2848,6 +3188,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           }),
         )
       void loadCompactionHistory(sessionID, token)
+      if (transport) void loadPromptCosts(transport, sessionID, token)
       const owner = transport
       if (teamWatching && owner !== undefined && container.state.team !== undefined)
         void loadTeam(owner, token, container.state.team.rootID, undefined, true)
@@ -2877,13 +3218,21 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const sortSessions = <T extends SessionInfoView>(rows: readonly T[]) =>
     [...new Map(rows.map((row) => [row.id, row])).values()].sort((left, right) => {
-      if (!!left.running !== !!right.running) return left.running ? -1 : 1
+      const groups = ["waiting", "running", "idle"]
+      const group = groups.indexOf(sessionActivityGroup(left)) - groups.indexOf(sessionActivityGroup(right))
+      if (group !== 0) return group
       const activity = (right.activeAt ?? right.updatedAt) - (left.activeAt ?? left.updatedAt)
       return activity || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
     })
 
-  const withOpenRoot = (rows: readonly SessionInfoView[]) => {
-    if (container.state.sessionQuery.trim() !== "" || container.state.sessionFilter !== "all") return rows
+  const withOpenRoot = (rows: readonly SessionInfoView[], status = container.state.sessionStatus) => {
+    if (container.state.sessionFilter !== "all")
+      return rows.filter(
+        (row) =>
+          sessionActivityGroup(row) === container.state.sessionFilter &&
+          (container.state.sessionFilter !== "idle" || !row.archived),
+      )
+    if (container.state.sessionQuery.trim() !== "") return rows
     const root = openRootInfo
     const workspace = container.state.sessionGroups.find((group) => group.id === container.state.selectedWorkspaceID)
     if (
@@ -2896,16 +3245,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       rows.some((row) => row.id === root.id)
     )
       return rows
-    return sortSessions([
-      { ...root, ...(container.state.sessionStatus ? rowStatus(container.state.sessionStatus, root.id) : {}) },
-      ...rows,
-    ])
+    return sortSessions([{ ...root, ...(status ? rowStatus(status, root.id) : {}) }, ...rows])
   }
 
-  const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string) => ({
+  const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string, failures = true) => ({
     running: status.running.has(id),
-    attention: status.attention.has(id) && !status.failed.has(id),
-    failed: status.failed.has(id),
+    attention: status.attention.has(id) && !status.failed.has(id) && !status.lost.has(id),
+    lost: status.lost.has(id),
+    ...(failures ? { failed: status.failed.has(id) } : {}),
   })
 
   const publishSessionStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>) => {
@@ -2916,7 +3263,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sessionPages = rows
     setState({
       sessionStatus: status,
-      sessions: withOpenRoot(sortSessions(rows.flatMap((page) => page.rows))),
+      sessions: withOpenRoot(sortSessions(rows.flatMap((page) => page.rows)), status),
       ...(container.state.view === undefined
         ? {}
         : {
@@ -2929,7 +3276,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             ),
           }),
       carouselSessions: sortSessions(
-        container.state.carouselSessions?.map((row) => ({ ...row, running: status.running.has(row.id) })) ?? [],
+        container.state.carouselSessions?.map((row) => ({ ...row, ...rowStatus(status, row.id) })) ?? [],
       ),
     })
   }
@@ -2969,6 +3316,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       readonly attention: readonly string[]
       readonly outstanding?: readonly string[]
       readonly failed?: readonly string[]
+      readonly lost?: readonly string[]
     },
   ) => {
     if (!isCurrentConnection(owner)) return
@@ -2979,6 +3327,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       attention: new Set(frame.attention),
       outstanding: new Set(frame.outstanding ?? []),
       failed: new Set(frame.failed ?? []),
+      lost: new Set(frame.lost ?? []),
     }
     const previous = container.state.sessionStatus
     const runningChanged =
@@ -2991,23 +3340,26 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       previous.attention.size !== status.attention.size ||
       previous.outstanding.size !== status.outstanding.size ||
       [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
+      previous.failed.size !== status.failed.size ||
+      [...status.failed].some((id) => !previous.failed.has(id)) ||
+      previous.lost.size !== status.lost.size ||
+      [...status.lost].some((id) => !previous.lost.has(id)) ||
       [...status.running].some((id) => !previous.running.has(id)) ||
       [...status.attention].some((id) => !previous.attention.has(id))
     statusBaseline = true
     publishSessionStatus(status)
-    if (runningChanged) {
+    if (changed) {
       carouselRevision += 1
       carouselRefreshPending = true
-      if (teamWatching && container.state.team !== undefined && container.state.team.shellStatus !== "unsupported")
-        void loadTeamShells(owner, selectionToken, container.state.team.rootID)
     }
     if (
-      changed &&
-      [...status.running, ...status.attention, ...status.outstanding].some(
-        (id) => !container.state.sessions.some((row) => row.id === id),
-      )
+      runningChanged &&
+      teamWatching &&
+      container.state.team !== undefined &&
+      container.state.team.shellStatus !== "unsupported"
     )
-      statusReloadLocal = true
+      void loadTeamShells(owner, selectionToken, container.state.team.rootID)
+    if (changed) statusReloadLocal = true
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
   }
 
@@ -3071,13 +3423,26 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       container.state.carouselStatus !== "ready"
     )
       setState({ carouselStatus: "loading" })
-    const rows = (value: unknown, running: boolean) =>
-      readSessionInfoList(typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined).flatMap(
-        (entry) => {
-          const session = readSessionInfo(entry)
-          return session !== undefined && session.parentID === undefined ? [{ ...session, running }] : []
-        },
-      )
+    const rows = (value: unknown, group: "waiting" | "running" | "idle") => {
+      const status =
+        container.state.sessionStatus ??
+        (typeof value === "object" && value !== null ? parseSessionStatus(Reflect.get(Reflect.get(value, "data") ?? {}, "status")) : undefined)
+      return readSessionInfoList(typeof value === "object" && value !== null ? Reflect.get(value, "data") : undefined).flatMap((entry) => {
+        const session = readSessionInfo(entry)
+        return session !== undefined && session.parentID === undefined
+          ? [
+              {
+                ...session,
+                running: group === "running",
+                attention: group === "waiting",
+                ...(status === undefined
+                  ? {}
+                  : rowStatus(status, session.id, container.state.sessionStatus !== undefined)),
+              },
+            ]
+          : []
+      })
+    }
     const withWorkspaceNames = (sessions: readonly (SessionInfoView & { readonly running: boolean })[]) =>
       sessions.map((row) => ({
         ...row,
@@ -3092,15 +3457,31 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           row.projectID ??
           "Workspace",
       }))
-    const current = await owner.request("session.list", {
-      input: { limit: carouselLimit, order: "active", status: "running", parentID: null },
-    })
+    const waiting =
+      container.state.sessionStatus !== undefined && !hasWaitingSession(container.state.sessionStatus)
+        ? undefined
+        : await owner.request("session.list", {
+            input: { limit: carouselLimit, order: "active", status: "waiting", parentID: null },
+          })
     if (!isCurrentConnection(owner) || revision !== carouselRevision) return
-    if (current.status !== "ok") {
+    const waitingUnavailable = waiting !== undefined && waiting.status !== "ok"
+    if (waitingUnavailable) setState({ notice: describeOutcome(waiting, "Waiting Sessions") })
+    const waitingRows = waiting?.status === "ok" ? rows(waiting.value, "waiting") : []
+    const current =
+      waitingRows.length >= carouselLimit
+        ? undefined
+        : await owner.request("session.list", {
+            input: { limit: carouselLimit, order: "active", status: "running", parentID: null },
+          })
+    if (!isCurrentConnection(owner) || revision !== carouselRevision) return
+    if (current !== undefined && current.status !== "ok") {
       setState({ notice: describeOutcome(current, "Running Sessions"), carouselStatus: "error" })
       return
     }
-    const running = sortSessions(rows(current.value, true)).slice(0, carouselLimit)
+    const running = sortSessions([
+      ...waitingRows,
+      ...(current === undefined ? [] : rows(current.value, "running")),
+    ]).slice(0, carouselLimit)
     const recent =
       running.length === carouselLimit
         ? undefined
@@ -3116,82 +3497,153 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       return
     }
-    const combined = sortSessions([...running, ...(recent === undefined ? [] : rows(recent.value, false))]).slice(
+    const combined = sortSessions([...running, ...(recent === undefined ? [] : rows(recent.value, "idle"))]).slice(
       0,
       carouselLimit,
     )
-    setState({ carouselSessions: withWorkspaceNames(combined), carouselStatus: "ready" })
+    setState({ carouselSessions: withWorkspaceNames(combined), carouselStatus: waitingUnavailable ? "error" : "ready" })
   }
 
-  const loadSessions = async (token: number, cursor?: string, direction: "next" | "previous" = "next") => {
+  const loadSessions = async (
+    token: number,
+    cursor?: string,
+    direction: "next" | "previous" = "next",
+    rebase = cursor === undefined && sessionPages.length > 0 && !container.state.sessionRowsStale,
+  ) => {
     const active = transport
     const workspace = container.state.selectedWorkspaceID
     if (!active || workspace === undefined || loadingPageToken === token) return
     loadingPageToken = token
-    setState({
-      sessionPageLoading: cursor !== undefined,
-      ...(cursor === undefined && container.state.sessions.length === 0
-        ? { sessionListStatus: "loading" as const }
-        : {}),
-    })
-    const listed = await active.request("session.list", {
-      input: {
-        workspace,
-        limit: sessionPageSize,
-        order: "active",
-        parentID: null,
-        searchFields: "summary",
-        ...(container.state.sessionQuery.trim() === "" ? {} : { search: container.state.sessionQuery.trim() }),
-        ...(container.state.sessionFilter === "all" ? {} : { status: container.state.sessionFilter }),
-        ...(cursor === undefined ? {} : { cursor }),
-      },
-    })
-    if (loadingPageToken === token) loadingPageToken = undefined
-    if (token !== sessionsToken || !isCurrentConnection(active) || workspace !== container.state.selectedWorkspaceID)
-      return
-    if (listed.status !== "ok") {
-      setState({ ...listFailure(listed, "Session list"), sessionListStatus: "error", sessionPageLoading: false })
-      return
+    setState({ sessionPageLoading: cursor !== undefined || rebase })
+    const current = () =>
+      token === sessionsToken && isCurrentConnection(active) && workspace === container.state.selectedWorkspaceID
+    const query = {
+      workspace,
+      limit: sessionPageSize,
+      order: "active",
+      parentID: null,
+      searchFields: "summary",
+      ...(container.state.sessionQuery.trim() === "" ? {} : { search: container.state.sessionQuery.trim() }),
+      ...(container.state.sessionFilter === "all" ? {} : { status: container.state.sessionFilter }),
     }
-    const rows = readSessionInfoList(
-      typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined,
-    ).flatMap((entry) => {
-      const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
-      const info = readSessionInfo(
-        entry,
-        container.state.sessionStatus === undefined || typeof id !== "string"
-          ? {}
-          : rowStatus(container.state.sessionStatus, id),
-      )
-      return info ? [info] : []
-    })
-    const value =
-      typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined
-    const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
-    const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
-    const previous = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "previous") : undefined
-    if (cursor !== undefined && (direction === "next" ? next === cursor : previous === cursor)) {
-      setState({
-        sessionListStatus: "error",
-        sessionPageLoading: false,
-        connection: { kind: "error", message: "The device repeated a Session list cursor." },
+    const anchorIndex = rebase
+      ? sessionPages.flatMap((page) => page.rows).findIndex((row) => row.id === sessionListAnchor)
+      : -1
+    let failed = false
+    const read = async (input: Readonly<Record<string, unknown>>) => {
+      const listed = await active.request("session.list", { input })
+      if (!current()) return undefined
+      if (listed.status !== "ok") {
+        failed = true
+        if (anchorIndex >= 0) {
+          setState({ sessionListNotice: sessionListRefreshNotice(listed) })
+          return undefined
+        }
+        setState({ ...listFailure(listed, "Session list"), sessionListStatus: "error" })
+        return undefined
+      }
+      const response = typeof listed.value === "object" && listed.value !== null ? Reflect.get(listed.value, "data") : undefined
+      if (typeof response === "object" && response !== null && Reflect.get(response, "stale") === true)
+        return "stale" as const
+      const pageStatus =
+        typeof response === "object" && response !== null ? parseSessionStatus(Reflect.get(response, "status")) : undefined
+      const rows = readSessionInfoList(response).flatMap((entry) => {
+        const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
+        const info = readSessionInfo(
+          entry,
+          typeof id !== "string"
+            ? {}
+            : container.state.sessionStatus !== undefined
+              ? rowStatus(container.state.sessionStatus, id)
+              : pageStatus === undefined
+                ? {}
+                : rowStatus(pageStatus, id, false),
+        )
+        return info ? [info] : []
       })
+      const cursors = typeof response === "object" && response !== null ? Reflect.get(response, "cursor") : undefined
+      const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
+      const previous = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "previous") : undefined
+      if (typeof input.cursor === "string" && (input.cursor === next || input.cursor === previous)) {
+        failed = true
+        if (anchorIndex >= 0) {
+          setState({
+            sessionListNotice:
+              "The device repeated a Session list cursor while refreshing. Existing Sessions remain available.",
+          })
+          return undefined
+        }
+        setState({
+          sessionListStatus: "error",
+          connection: { kind: "error", message: "The device repeated a Session list cursor." },
+        })
+        return undefined
+      }
+      return {
+        rows,
+        ...(typeof next === "string" && next.length > 0 ? { next } : {}),
+        ...(typeof previous === "string" && previous.length > 0 ? { previous } : {}),
+      }
+    }
+    const first = await read({
+      ...query,
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(anchorIndex < 0 ? {} : { around: sessionListAnchor, before: anchorIndex % sessionPageSize }),
+    })
+    if (first === "stale") {
+      loadingPageToken = undefined
+      setState({ sessionPageLoading: false })
+      if (!rebase) await loadSessions(token, undefined, "next", true)
       return
     }
-    const page = {
-      rows,
-      ...(typeof next === "string" && next.length > 0 ? { next } : {}),
-      ...(typeof previous === "string" && previous.length > 0 ? { previous } : {}),
+    const pages = first === undefined ? [] : [first]
+    const target = rebase ? sessionPages.length : 1
+    let stale = false
+    const extend = async (side: "next" | "previous") => {
+      const cursor = side === "next" ? pages.at(-1)?.next : pages[0]?.previous
+      if (cursor === undefined) return false
+      const page = await read({ ...query, cursor })
+      if (page === "stale") {
+        stale = true
+        return false
+      }
+      if (page === undefined) return false
+      if (side === "next") pages.push(page)
+      if (side === "previous") pages.unshift(page)
+      return true
     }
+    if (first !== undefined && rebase) {
+      for (let index = 0; index < Math.floor(Math.max(0, anchorIndex) / sessionPageSize); index += 1)
+        if (!(await extend("previous"))) break
+      while (pages.length < target) if (stale || failed || !(await extend("next"))) break
+      while (pages.length < target) if (stale || failed || !(await extend("previous"))) break
+    }
+    if (loadingPageToken === token) loadingPageToken = undefined
+    if (!current()) return
+    setState({ sessionPageLoading: false })
+    if (first === undefined || stale || failed) {
+      if (stale) {
+        statusReloadLocal = true
+        void reloadStatusFirstPage(active)
+      }
+      return
+    }
+    const settled = pages.map((page) => ({
+      ...page,
+      rows: page.rows.map((row) => ({
+        ...row,
+        ...(container.state.sessionStatus === undefined ? {} : rowStatus(container.state.sessionStatus, row.id)),
+      })),
+    }))
     sessionPages =
       cursor === undefined
-        ? [page]
+        ? settled
         : direction === "next"
-          ? [...sessionPages, page].slice(-retainedSessionPages)
-          : [page, ...sessionPages].slice(0, retainedSessionPages)
+          ? [...sessionPages, ...settled].slice(-retainedSessionPages)
+          : [...settled, ...sessionPages].slice(0, retainedSessionPages)
     const sessions = withOpenRoot(sortSessions(sessionPages.flatMap((item) => item.rows))).map((item) => {
       const previous = container.state.sessions.find((row) => row.id === item.id)
-      return previous !== undefined && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
+      return replaceEqualDeep(previous, item)
     })
     setState({
       ...recoveredConnection(active),
@@ -3201,6 +3653,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessions.find((session) => session.id === container.state.activeSessionID) ??
         container.state.selectedSessionInfo,
       sessionListStatus: "ready",
+      sessionListNotice: undefined,
       sessionRowsStale: false,
       sessionPageLoading: false,
       sessionHasPrevious: sessionPages[0]?.previous !== undefined,
@@ -3247,7 +3700,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })),
       ...(sameWorkspace
         ? {}
-        : { sessions: [], advertised: [], sessionRowsStale: false, sessionHasNext: false, sessionHasPrevious: false }),
+        : {
+            sessions: [],
+            advertised: [],
+            sessionListNotice: undefined,
+            sessionRowsStale: false,
+            sessionHasNext: false,
+            sessionHasPrevious: false,
+          }),
       sessionListStatus:
         selectedWorkspaceID === undefined || (sameWorkspace && container.state.sessions.length > 0)
           ? "ready"
@@ -3255,6 +3715,43 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })
     if (selectedWorkspaceID !== undefined) await loadSessions(token)
     if (statusReloadLocal || carouselRefreshPending) void reloadStatusFirstPage(owner)
+  }
+
+  /**
+   * A Session-list invalidation carries no Session identity. It refreshes the list, workspaces, and
+   * carousel behind the visible rows, and reloads the selected Session's history only when that Session
+   * is already past its applied watermark, as after a connector reconnect. Frames inside one window
+   * share one trailing refresh once the list is ready; a list that is not ready refreshes at once.
+   */
+  const applySessionsFrame = (owner: RemoteTransport) => {
+    if (!isCurrentConnection(owner)) return
+    signalRecovery()
+    if (cancelSessionsFrameWindow && container.state.sessionListStatus === "ready") {
+      sessionsFrameQueued = true
+      return
+    }
+    cancelSessionsFrameWindow?.()
+    cancelSessionsFrameWindow = schedule(() => {
+      cancelSessionsFrameWindow = undefined
+      if (!sessionsFrameQueued) return
+      sessionsFrameQueued = false
+      applySessionsFrame(owner)
+    }, sessionsFrameWindowMs)
+    if (teamWatching && container.state.team !== undefined && container.state.team.shellStatus !== "unsupported")
+      void loadTeamShells(owner, selectionToken, container.state.team.rootID)
+    if (container.state.sessionListStatus === "ready" || (container.state.carouselSessions?.length ?? 0) > 0) {
+      carouselRevision += 1
+      carouselRefreshPending = true
+    }
+    cancelSearch?.()
+    cancelSearch = undefined
+    sessionsToken += 1
+    void refreshSessionGroups(owner)
+    const sessionID = container.state.activeSessionID
+    if (sessionID !== undefined && selectionReadyToken === selectionToken && subscribedSessionID === sessionID) {
+      void confirmWatermark(owner, sessionID, selectionToken)
+      void loadReview(owner, sessionID, selectionToken)
+    }
   }
 
   const refreshSessionGroups = async (owner: RemoteTransport) => {
@@ -3291,6 +3788,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessions: [],
         advertised: [],
         sessionListStatus: "loading",
+        sessionListNotice: undefined,
         sessionRowsStale: false,
         sessionHasNext: false,
         sessionHasPrevious: false,
@@ -3390,6 +3888,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessions: [],
         advertised: [],
         sessionListStatus: "loading",
+        sessionListNotice: undefined,
         sessionHasNext: false,
         sessionHasPrevious: false,
       })
@@ -3453,6 +3952,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
+      void loadPromptCosts(active, sessionID, token)
+      void loadReview(active, sessionID, token)
       snapshotStage.resolve(true)
       await Promise.all([sessionReads, pendingInputs])
     }
@@ -3503,6 +4004,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
+      void loadPromptCosts(active, sessionID, token)
+      void loadReview(active, sessionID, token)
       void confirmWatermark(active, sessionID, token)
       if (teamWatching && (!retained || container.state.team?.status !== "ready"))
         void loadTeam(active, token, teamRootID)
@@ -3537,32 +4040,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       void resyncSelected()
     } finally {
       if (watermarkRead === read) watermarkRead = undefined
-    }
-  }
-
-  const applySessionsFrame = (owner: RemoteTransport) => {
-    if (!isCurrentConnection(owner)) return
-    if (cancelSessionsFrameWindow !== undefined) {
-      sessionsFrameQueued = true
-      return
-    }
-    cancelSessionsFrameWindow = schedule(() => {
-      cancelSessionsFrameWindow = undefined
-      if (!sessionsFrameQueued) return
-      sessionsFrameQueued = false
-      applySessionsFrame(owner)
-    }, 750)
-    signalRecovery()
-    if (container.state.sessionListStatus === "ready" || (container.state.carouselSessions?.length ?? 0) > 0) {
-      carouselRevision += 1
-      carouselRefreshPending = true
-    }
-    cancelSearch?.()
-    cancelSearch = undefined
-    sessionsToken += 1
-    void refreshSessionGroups(owner)
-    if (selectionReadyToken === selectionToken && subscribedSessionID === container.state.activeSessionID) {
-      void confirmWatermark(owner, container.state.activeSessionID!, selectionToken)
     }
   }
 
@@ -3983,6 +4460,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const disconnectDevice = (retainMachineOffline = false) => {
     resetCapturedRefresh()
+    resetTaskCosts()
     cancelSessionsFrameWindow?.()
     cancelSessionsFrameWindow = undefined
     sessionsFrameQueued = false
@@ -3998,6 +4476,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     clearCatalogs()
     cancelStatusReload?.()
     cancelStatusReload = undefined
+    cancelSessionsFrameWindow?.()
+    cancelSessionsFrameWindow = undefined
+    sessionsFrameQueued = false
+    resetCapturedRefresh()
+    resetTaskCosts()
     statusReloadLocal = false
     carouselRefreshPending = false
     carouselRevision += 1
@@ -4026,6 +4509,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       selectedWorkspaceID: undefined,
       selectedSessionInfo: undefined,
       sessionListStatus: "idle",
+      sessionListNotice: undefined,
       sessionPageLoading: false,
       sessionHasNext: false,
       sessionHasPrevious: false,
@@ -4380,6 +4864,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       goalsInFlight.clear()
       capturedUnsupported = false
       resetCapturedRefresh()
+      resetTaskCosts()
+      cancelSessionsFrameWindow?.()
+      cancelSessionsFrameWindow = undefined
+      sessionsFrameQueued = false
       const switching = container.state.activeDeviceID !== deviceID
       if (switching && container.state.activeDeviceID !== undefined) {
         clearPendingLatency()
@@ -4454,6 +4942,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionQuery: "",
         sessionFilter: "all",
         sessionListStatus: "idle",
+        sessionListNotice: undefined,
         sessionRowsStale: false,
         sessionPageLoading: false,
         sessionHasNext: false,
@@ -4583,6 +5072,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
                   .filter((task) => task.tokens === undefined)
                   .slice(0, 15)
                   .map((task) => task.sessionID),
+                "diagnostics",
               ),
             ]
           : []),
@@ -4611,7 +5101,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       )
         return
       selectedEconomicsRead = { owner, token, rootID: team.rootID, childID }
-      await loadTeamEconomics(owner, token, team.rootID, [childID])
+      await loadTeamEconomics(owner, token, team.rootID, [childID], "both")
     },
     loadMoreSideChats: async () => {
       const owner = transport
@@ -4739,6 +5229,42 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return { status: "unknown", message: "Pin state could not be refreshed; check the task before retrying." }
       return { status: "ok", message: "" }
     },
+    continueRecovery: async (childID) => {
+      const owner = transport
+      const team = container.state.team
+      const itemID = team?.tasks.find((task) => task.sessionID === childID)?.stoppedRecovery?.itemID
+      if (!teamWatching || owner === undefined || team?.status !== "ready" || itemID === undefined)
+        return { status: "failed", message: "This subagent has no stopped recovery to continue." }
+      const rootID = team.rootID
+      const token = selectionToken
+      const key = `${rootID}:${itemID}`
+      if (recoveryContinues.has(key))
+        return { status: "failed", message: "A Continue for this subagent is already being sent." }
+      recoveryContinues.add(key)
+      const outcome = await owner
+        .request("session.review.decide", {
+          sessionID: childID,
+          input: { itemID, decision: { kind: "recovery", choice: "continue" } },
+          timeoutMs: 10_000,
+        })
+        .finally(() => recoveryContinues.delete(key))
+      if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
+        return { status: "unknown", message: "The family changed; check this subagent before retrying." }
+      await loadTeam(owner, token, rootID, undefined, true)
+      if (container.state.activeSessionID !== undefined) await loadReview(owner, container.state.activeSessionID, token)
+      if (outcome.status !== "ok") {
+        const failure = teamActionFailure(outcome, "Continue subagent")
+        return outcome.status === "failed" && outcome.error.code === "outcome_unknown"
+          ? { ...failure, status: "unknown" }
+          : failure
+      }
+      if (container.state.team?.tasks.find((task) => task.sessionID === childID)?.stoppedRecovery?.itemID === itemID)
+        return {
+          status: "unknown",
+          message: "The Continue could not be confirmed; check the subagent before retrying.",
+        }
+      return { status: "ok", message: "" }
+    },
     killTeamShell: async (shellID) => {
       const owner = transport
       const team = container.state.team
@@ -4746,9 +5272,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         !teamWatching ||
         owner === undefined ||
         team?.shellStatus !== "ready" ||
-        !team.shells.some((shell) => shell.id === shellID && shell.status === "running")
+        !team.shells.some((shell) => shell.id === shellID && (shell.status === "running" || shell.status === "queued"))
       )
-        return { status: "failed", message: "Shell is not running in this family." }
+        return { status: "failed", message: "Shell is not running or queued in this family." }
       const rootID = team.rootID
       const token = selectionToken
       const outcome = await owner.request("session.team.shell.kill", {
@@ -4759,13 +5285,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (token !== selectionToken || !isCurrentConnection(owner) || container.state.team?.rootID !== rootID)
         return { status: "unknown", message: "The family changed; check this shell before retrying." }
       if (outcome.status !== "ok") return teamActionFailure(outcome, "Kill shell")
+      teamShellRead++
       setState({
-        team: {
-          ...container.state.team,
-          shells: container.state.team.shells.map((shell) =>
-            shell.id === shellID ? { ...shell, status: "killed" as const, completedAt: now() } : shell,
-          ),
-        },
+        team: { ...container.state.team, shells: container.state.team.shells.filter((shell) => shell.id !== shellID) },
       })
       return { status: "ok", message: "" }
     },
@@ -4776,10 +5298,17 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         !teamWatching ||
         owner === undefined ||
         team?.shellStatus !== "ready" ||
-        !team.shells.some((shell) => shell.id === shellID && shell.ownerID === ownerID)
+        (!team.shells.some((shell) => shell.id === shellID && shell.ownerID === ownerID) &&
+          !(
+            openedTeamShell?.token === selectionToken &&
+            openedTeamShell.rootID === team.rootID &&
+            openedTeamShell.shellID === shellID &&
+            openedTeamShell.ownerID === ownerID
+          ))
       )
         throw new Error("Shell is not in this family.")
       const token = selectionToken
+      openedTeamShell = { rootID: team.rootID, ownerID, shellID, token }
       const outcome = await owner.request("shell.output", {
         sessionID: ownerID,
         input: { id: shellID, cursor: cursor ?? 0, limit: shellOutputPageLimit },
@@ -4839,6 +5368,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessions: [],
         advertised: [],
         sessionListStatus: "loading",
+        sessionListNotice: undefined,
         sessionRowsStale: false,
         sessionHasNext: false,
         sessionHasPrevious: false,
@@ -4854,6 +5384,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionQuery: query,
         sessionFilter: filter,
         sessionListStatus: "loading",
+        sessionListNotice: undefined,
         sessionRowsStale: container.state.sessions.length > 0,
         sessionHasNext: false,
         sessionHasPrevious: false,
@@ -4880,6 +5411,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         container.state.transport.kind === "open"
       )
         await loadSessions(sessionsToken, cursor, "previous")
+    },
+    setSessionListAnchor: (sessionID) => {
+      sessionListAnchor = sessionID
     },
     setDraft: (sessionID, text) => {
       if (sessionID !== container.state.activeSessionID) return
@@ -5589,7 +6123,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         {
           id: `autonomy_${level}_${now()}`,
           kind: "autonomy",
-          label: level === 0 ? "Standard mode" : `YOLO ${level}`,
+          label: level === 0 ? "Ask first" : level === 1 ? "Allow tools" : "Tools + reviews",
           state: "sending",
           sessionID,
           operation: "session.autonomy.set",
@@ -5599,6 +6133,81 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       )
       applyAutonomyResponse(outcome, sessionID)
       return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+    },
+    setAutoAnswer: async (enabled) => {
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined) return false
+      const outcome = await request(
+        {
+          id: `autonomy_auto_answer_${now()}`,
+          kind: "autonomy",
+          label: enabled ? "Auto-answer on" : "Auto-answer off",
+          state: "sending",
+          sessionID,
+          operation: "session.autonomy.set",
+          input: { autoAnswer: enabled },
+        },
+        { sessionID },
+      )
+      applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+    },
+    decideReview: async (itemID, decision) => {
+      const sessionID = container.state.activeSessionID
+      const owner = transport
+      const token = selectionToken
+      const item =
+        container.state.view?.id === sessionID
+          ? container.state.view?.review?.items.find((entry) => entry.itemID === itemID)
+          : undefined
+      if (sessionID === undefined || owner === undefined || item === undefined || item.kind !== decision.kind)
+        return false
+      const id = `review_${itemID}`
+      if (container.state.mutations.some((mutation) => mutation.id === id && mutation.state === "sending")) return false
+      const outcome = await request(
+        {
+          id,
+          kind: "review",
+          label: "Review decision",
+          state: "sending",
+          sessionID,
+          operation: "session.review.decide",
+          input: { itemID, decision },
+        },
+        { sessionID },
+      )
+      if (token === selectionToken && isCurrentConnection(owner) && container.state.activeSessionID === sessionID)
+        void loadReview(owner, sessionID, token)
+      return outcome.status === "ok"
+    },
+    reloadReview: async () => {
+      const sessionID = container.state.activeSessionID
+      if (sessionID !== undefined && transport !== undefined) await loadReview(transport, sessionID, selectionToken)
+    },
+    setSleep: async (sleep) => {
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined) return false
+      const outcome = await request(
+        {
+          id: `autonomy_sleep_${now()}`,
+          kind: "autonomy",
+          label: sleep ? "Sleep" : "Wake",
+          state: "sending",
+          sessionID,
+          operation: "session.autonomy.set",
+          input: { sleep },
+        },
+        { sessionID },
+      )
+      applyAutonomyResponse(outcome, sessionID)
+      const changed =
+        outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+      const scope = currentScope()
+      if (changed && scope !== undefined)
+        void queryClient.invalidateQueries({ queryKey: remoteKeys.keepAwake(scope) }, { cancelRefetch: false })
+      return changed
     },
     setGoal: async (text) => {
       const sessionID = container.state.activeSessionID
@@ -5635,9 +6244,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
     dispose: () => {
       resetCapturedRefresh()
+      resetTaskCosts()
       cancelSessionsFrameWindow?.()
       cancelSessionsFrameWindow = undefined
       sessionsFrameQueued = false
+      resetCapturedRefresh()
+      resetTaskCosts()
       clearPendingLatency()
       latency.dispose()
       goalsInFlight.clear()
@@ -5817,7 +6429,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
     await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
-    if (isCurrentConnection(owner)) void loadCapturedChanges(owner, sessionID, token)
+    if (isCurrentConnection(owner)) {
+      void loadCapturedChanges(owner, sessionID, token)
+      void loadPromptCosts(owner, sessionID, token)
+      void loadReview(owner, sessionID, token)
+    }
     if (!isCurrentConnection(owner)) return
     if (reloaded === "applied") {
       setState({ notice: "Reconnected. Session history reloaded read-only." })
@@ -5847,7 +6463,12 @@ export function notificationSessionTitle(
 
 export function readSessionInfo(
   value: unknown,
-  options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean } = {},
+  options: {
+    readonly running?: boolean
+    readonly attention?: boolean
+    readonly failed?: boolean
+    readonly lost?: boolean
+  } = {},
 ): SessionInfoView | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
@@ -5877,6 +6498,7 @@ export function readSessionInfo(
     ...(options.running === undefined ? {} : { running: options.running }),
     ...(options.attention === undefined ? {} : { attention: options.attention }),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
+    ...(options.lost === undefined ? {} : { lost: options.lost }),
   }
 }
 
@@ -5895,6 +6517,11 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
   const startedAt = typeof time === "object" && time !== null ? Reflect.get(time, "created") : undefined
   const updatedAt = typeof time === "object" && time !== null ? Reflect.get(time, "updated") : undefined
   const pinnedAt = Reflect.get(value, "pinnedAt")
+  const stoppedRecovery = Reflect.get(value, "stoppedRecovery")
+  const stoppedItemID =
+    typeof stoppedRecovery === "object" && stoppedRecovery !== null ? Reflect.get(stoppedRecovery, "itemID") : undefined
+  const questionDeferred =
+    typeof question === "object" && question !== null && Reflect.get(question, "deferred") === true
   if (
     typeof sessionID !== "string" ||
     sessionID.length === 0 ||
@@ -5929,8 +6556,9 @@ function readTeamTask(value: unknown): TeamTaskView | undefined {
     updatedAt,
     ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
     ...(typeof pinnedAt === "number" && Number.isFinite(pinnedAt) ? { pinnedAt } : {}),
+    ...(validReviewItemID(stoppedItemID) ? { stoppedRecovery: { itemID: stoppedItemID } } : {}),
     ...(typeof questionID === "string" && typeof questionText === "string" && state === "waiting"
-      ? { question: { id: questionID, text: questionText } }
+      ? { question: { id: questionID, text: questionText, ...(questionDeferred ? { deferred: true as const } : {}) } }
       : {}),
   }
 }
@@ -5975,14 +6603,36 @@ function readTeamEconomics(
   }
 }
 
+const accountingEvents = [
+  "session.input.promoted",
+  "session.usage.updated",
+  "session.step.failed",
+  "session.task.updated",
+  "session.compaction.ended",
+  "session.compaction.failed",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
+]
+
 function retainedEconomics(
   task: TeamTaskView | undefined,
 ): Pick<
   TeamTaskView,
-  "cacheHitRatio" | "cacheRead" | "cacheWrite" | "contextTotal" | "contextLimit" | "cost" | "tokens"
+  | "cacheHitRatio"
+  | "cacheRead"
+  | "cacheWrite"
+  | "contextTotal"
+  | "contextLimit"
+  | "cost"
+  | "tokens"
+  | "accounting"
+  | "accountingUnavailable"
 > {
   if (task === undefined) return {}
   return {
+    ...(task.accounting === undefined ? {} : { accounting: task.accounting }),
+    ...(task.accountingUnavailable === undefined ? {} : { accountingUnavailable: task.accountingUnavailable }),
     ...(task.cacheHitRatio === undefined ? {} : { cacheHitRatio: task.cacheHitRatio }),
     ...(task.cacheRead === undefined ? {} : { cacheRead: task.cacheRead }),
     ...(task.cacheWrite === undefined ? {} : { cacheWrite: task.cacheWrite }),
@@ -5997,15 +6647,18 @@ function readTeamShell(value: unknown): TeamView["shells"][number] | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const id = Reflect.get(value, "id")
   const ownerID = Reflect.get(value, "ownerID")
+  const ownerAgent = Reflect.get(value, "ownerAgent")
+  const ownerTitle = Reflect.get(value, "ownerTitle")
   const command = Reflect.get(value, "command")
   const status = Reflect.get(value, "status")
   const startedAt = Reflect.get(value, "startedAt")
   const completedAt = Reflect.get(value, "completedAt")
+  const queuePosition = Reflect.get(value, "queuePosition")
   if (
     typeof id !== "string" ||
     typeof ownerID !== "string" ||
     typeof command !== "string" ||
-    !["running", "exited", "timeout", "memory-limit", "killed"].includes(status) ||
+    !["queued", "running", "exited", "timeout", "memory-limit", "killed"].includes(status) ||
     typeof startedAt !== "number" ||
     !Number.isFinite(startedAt)
   )
@@ -6013,8 +6666,13 @@ function readTeamShell(value: unknown): TeamView["shells"][number] | undefined {
   return {
     id,
     ownerID,
+    ...(typeof ownerAgent === "string" ? { ownerAgent } : {}),
+    ...(typeof ownerTitle === "string" ? { ownerTitle } : {}),
     command,
     status,
+    ...(status === "queued" && typeof queuePosition === "number" && Number.isInteger(queuePosition) && queuePosition > 0
+      ? { queuePosition }
+      : {}),
     startedAt,
     ...(typeof completedAt === "number" && Number.isFinite(completedAt) ? { completedAt } : {}),
   } as TeamView["shells"][number]
@@ -6043,6 +6701,7 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   const attention = Reflect.get(body, "attention")
   const outstanding = Reflect.get(body, "outstanding")
   const failed = Reflect.get(body, "failed")
+  const lost = Reflect.get(body, "lost")
   if (
     !Array.isArray(running) ||
     !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
@@ -6051,7 +6710,9 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
     (outstanding !== undefined &&
       (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
     (failed !== undefined &&
-      (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))
+      (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
+    (lost !== undefined &&
+      (!Array.isArray(lost) || !lost.every((id) => typeof id === "string" && id.startsWith("ses_"))))
   )
     return undefined
   return {
@@ -6059,6 +6720,7 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
     attention: new Set(attention),
     outstanding: new Set(outstanding ?? []),
     failed: new Set(failed ?? []),
+    lost: new Set(lost ?? []),
   }
 }
 

@@ -4,15 +4,20 @@ import { useTheme } from "../../context/theme"
 import { useConfig } from "../../config"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { PluginSlot } from "../../plugin/context"
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 
 import { useTerminalDimensions } from "@opentui/solid"
 import { getScrollAcceleration } from "../../util/scroll"
-import { autonomyDecision, autonomyDecisionLabel, autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
+import {
+  autoAnswerOn,
+  autonomyDecisionKind,
+  autonomyDecisionLabel,
+  autonomyModeLabel,
+} from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
-export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomyState; overlay?: boolean }) {
+export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyView; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
   const data = useData()
   const { theme } = useTheme().contextual("elevated")
@@ -20,7 +25,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
   const dimensions = useTerminalDimensions()
   const session = createMemo(() => data.session.get(props.sessionID))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
-  const allExpanded = () => props.autonomy.goal?.status === "active"
+  const allExpanded = () => props.autonomy?.goal?.status === "active"
 
   return (
     <Show when={session()}>
@@ -49,8 +54,8 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
         >
           <box flexShrink={0}>
             <RailProvider
-              goal={props.autonomy.goal?.status === "active"}
-              autonomy={yoloLevel(props.autonomy) > 0 || props.autonomy.goal?.status === "active"}
+              goal={props.autonomy?.goal?.status === "active"}
+              autonomy={(props.autonomy?.effective?.yolo ?? 0) > 0 || props.autonomy?.goal?.status === "active"}
               allExpanded={allExpanded()}
               leftRule
             >
@@ -64,7 +69,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
                   <SessionRailIdentity title={session().title} />
                 </pluginRuntime.Slot>
               </SessionRailContent>
-              <AutonomyRailContent autonomy={props.autonomy} />
+              <AutonomyRailContent autonomy={props.autonomy} reviewCount={data.session.review.list(props.sessionID).length} />
               <PluginSlot
                 name="sidebar.content"
                 input={{ sessionID: props.sessionID }}
@@ -125,13 +130,13 @@ function SessionRailIdentity(props: { title: string }) {
   )
 }
 
-export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
+export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; reviewCount?: number }) {
   const { theme } = useTheme().contextual("elevated")
-  const level = createMemo(() => yoloLevel(props.autonomy))
+  const level = createMemo(() => props.autonomy?.effective?.yolo)
 
   return (
     <>
-      <Show when={props.autonomy.goal?.status === "active" ? props.autonomy.goal : undefined}>
+      <Show when={props.autonomy?.goal?.status === "active" ? props.autonomy.goal : undefined}>
         {(goal) => (
           <RailSection section="goal" title="GOAL" summary={goal().status}>
             <text fg={theme.text.default}>{goal().text}</text>
@@ -145,23 +150,46 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
         )}
       </Show>
       <Show when={true}>
-        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={level() > 0 || props.autonomy.goal?.status === "active"}>
+        <RailSection
+          section="autonomy"
+          title="AUTONOMY"
+          summary={autonomyModeLabel(props.autonomy)}
+          attention={
+            (level() ?? 0) > 0 || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
+          }
+        >
           <For each={[
             ["Permissions", "permissions"],
             ["Guardrails", "guardrails"],
             ["Questions", "questions"],
+            ["Auto-answer", "auto-answer"],
           ] as const}>
             {([label, action]) => {
-              const decision = autonomyDecision(props.autonomy, action)
+              const decision = () => autonomyDecisionKind(props.autonomy, action)
               return (
                 <RailRow
                   label={label}
                   value={autonomyDecisionLabel(props.autonomy, action)}
-                  valueColor={decision === "you" ? theme.text.feedback.success.default : theme.text.feedback.warning.default}
+                  valueColor={
+                    decision() === "you"
+                      ? theme.text.feedback.success.default
+                      : decision() === "unknown"
+                        ? theme.text.subdued
+                        : theme.text.feedback.warning.default
+                  }
                 />
               )
             }}
           </For>
+          <Show when={props.reviewCount}>
+            {(count) => (
+              <RailRow
+                label="Review"
+                value={`${count()} waiting`}
+                valueColor={theme.text.feedback.warning.default}
+              />
+            )}
+          </Show>
         </RailSection>
       </Show>
     </>

@@ -10,6 +10,8 @@ test("standalone server exits when its owner is killed", async () => {
     env: {
       ...process.env,
       YCODING_DB: path.join(directory, "ycoding.db"),
+      YCODING_SQLITE_IMPORT_SOURCE: undefined,
+      YCODING_DISABLE_CHANNEL_DB: undefined,
       YCODING_SERVER_USERNAME: "custom",
       YCODING_DISABLE_MODELS_FETCH: "1",
       YCODING_CONFIG_PROJECT_DISABLE: "1",

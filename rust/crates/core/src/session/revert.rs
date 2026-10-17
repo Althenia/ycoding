@@ -413,17 +413,31 @@ pub async fn commit(
     let Some(revert) = &session.revert else {
         return Ok(());
     };
-    publish(
-        service,
-        &session.id,
-        now,
-        "session.revert.committed.1",
-        ObjectEncoder::new()
+    let snapshot = service.client.snapshot()?;
+    let boundary = snapshot
+        .get::<MessageTable>(&key(revert.message_id.as_lossless()))?
+        .filter(|row| &row.session_id == session.id.as_lossless())
+        .ok_or(StoreError::Rejected("Revert boundary message not found"))?;
+    let withdrawals =
+        super::review_fold::withdrawals(&snapshot, &session.id, boundary.seq, true, now)?;
+    let event = NewEvent {
+        id: projector::random_event_id()?.as_lossless().clone(),
+        aggregate_id: session.id.as_lossless().clone(),
+        created: now,
+        type_: "session.revert.committed.1".into(),
+        data: ObjectEncoder::new()
             .field("sessionID", &session.id)
             .field("to", &revert.message_id)
             .finish(),
-    )
-    .await
+    };
+    service
+        .client
+        .submit(move |tx| {
+            projector::append(tx, &event)?;
+            withdrawals.append(tx)?;
+            Ok(())
+        })?
+        .await
 }
 
 pub(crate) fn apply_staged(

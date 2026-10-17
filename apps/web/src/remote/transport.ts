@@ -63,6 +63,7 @@ export type RemoteTransportHandlers = {
     readonly attention: readonly string[]
     readonly outstanding?: readonly string[]
     readonly failed?: readonly string[]
+    readonly lost?: readonly string[]
   }) => void
   readonly onEvents?: (sessionID: string, events: readonly unknown[]) => void
   readonly onNotices?: (frame: NoticeFrame) => void
@@ -123,6 +124,7 @@ type Owner = {
   readonly pending: Map<string, Pending>
   readonly logs: Map<string, { readonly requestID: string; readonly entry: Pending }>
   readonly snapshots: Map<string, string>
+  readonly sessionEpochs: Map<string, string>
   readonly subscriptions: Map<string, { readonly id: string; hydration: "active" | "idle" | "invalidated" }>
   readonly sentAt: number[]
   readonly assets: ReservationBudget
@@ -274,6 +276,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             attention: control.value.attention,
             ...(control.value.outstanding ? { outstanding: control.value.outstanding.items } : {}),
             ...(control.value.failed ? { failed: control.value.failed.items } : {}),
+            ...(control.value.lost ? { lost: control.value.lost.items } : {}),
           })
         if (control?.case === "notice") handlers.onNotices?.(noticeView(control.value))
         continue
@@ -358,7 +361,17 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
             })
             pump(value)
           }, entry.timeout)
-          process(value, value.connection.acceptSubscription(decision.requestID, subscriptionID, entry.scope, now()))
+          process(
+            value,
+            value.connection.acceptSubscription(
+              decision.requestID,
+              subscriptionID,
+              entry.scope,
+              now(),
+              "receive",
+              entry.scope.target.case === "session" ? value.sessionEpochs.get(entry.scope.target.value) : undefined,
+            ),
+          )
           continue
         }
         if (entry.operation === "event.subscribe") {
@@ -381,6 +394,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
         if (entry.operation === "session.snapshot" && entry.scope.target.case === "session") {
           const subscription = value.subscriptions.get(entry.scope.target.value)
           const projection = fields.data as { sourceEpoch?: string }
+          if (projection.sourceEpoch) value.sessionEpochs.set(entry.scope.target.value, projection.sourceEpoch)
           if (subscription && projection.sourceEpoch) {
             subscription.hydration = "idle"
             process(value, value.connection.completeHydration(subscription.id, projection.sourceEpoch, now()))
@@ -506,6 +520,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       pending: new Map(),
       logs: new Map(),
       snapshots: new Map(),
+      sessionEpochs: new Map(),
       subscriptions: new Map(),
       sentAt: [],
       assets: new ReservationBudget(32 * 1024 * 1024),

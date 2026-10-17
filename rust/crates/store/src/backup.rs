@@ -1,5 +1,9 @@
-use crate::{Catalog, Error, Metadata, Snapshot, catalog::definition, metadata::bootstrap};
-use redb::{Database, ReadableDatabase, ReadableTable};
+use crate::{
+    Catalog, Error, Metadata, Snapshot,
+    catalog::definition,
+    metadata::{bootstrap, inspect},
+};
+use redb::{Database, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable};
 use std::{
     fs::{File, OpenOptions},
     io::Write,
@@ -29,6 +33,99 @@ pub fn path(database: &Path) -> PathBuf {
 
 pub fn marker(database: &Path) -> PathBuf {
     suffix(&path(database), ".complete")
+}
+
+pub fn upgrade_path(database: &Path) -> PathBuf {
+    suffix(database, ".pre-upgrade-backup")
+}
+
+pub(crate) fn preserve(
+    source: &ReadTransaction,
+    database: &Path,
+    catalog: Catalog,
+    metadata: &Metadata,
+    free_bytes: &dyn Fn(&Path) -> Result<u64, Error>,
+) -> Result<(), Error> {
+    let target = upgrade_path(database);
+    if target.try_exists()? {
+        return proven(source, &target, catalog, metadata);
+    }
+    let required = std::fs::metadata(database)?
+        .len()
+        .saturating_add(HEADROOM_BYTES);
+    let available = free_bytes(
+        database
+            .parent()
+            .ok_or(Error::Rejected("database directory missing"))?,
+    )?;
+    if available < required {
+        return Err(Error::Domain {
+            kind: "backup_space",
+            message: "pre-upgrade copy requires database size plus 1 GiB of free space",
+        });
+    }
+    let temporary = temporary(&target);
+    let result = (|| {
+        copy(source, &temporary, catalog, metadata)?;
+        File::open(&temporary)?.sync_all()?;
+        std::fs::hard_link(&temporary, &target)?;
+        std::fs::remove_file(&temporary)?;
+        sync_parent(&target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+pub(crate) fn proven(
+    source: &ReadTransaction,
+    copy: &Path,
+    catalog: Catalog,
+    metadata: &Metadata,
+) -> Result<(), Error> {
+    let database = open_copy(copy)?;
+    let read = database.begin_read()?;
+    if inspect(&read, catalog)? != *metadata {
+        return Err(Error::Rejected("pre-upgrade copy identity mismatch"));
+    }
+    same_rows(source, &read, catalog)
+}
+
+pub(crate) fn open_copy(copy: &Path) -> Result<ReadOnlyDatabase, Error> {
+    if !std::fs::symlink_metadata(copy)?.is_file() {
+        return Err(Error::Rejected("pre-upgrade copy is not a regular file"));
+    }
+    Ok(ReadOnlyDatabase::open(copy)?)
+}
+
+pub(crate) fn sealed(database: &Path, metadata: &Metadata) -> Result<Option<bool>, Error> {
+    let completion = marker(database);
+    if !completion.try_exists()? {
+        return Ok(None);
+    }
+    if !std::fs::symlink_metadata(&completion)?.is_file() {
+        return Ok(Some(false));
+    }
+    let expected = seal(metadata, std::fs::metadata(path(database))?.len());
+    Ok(Some(std::fs::read(&completion)? == expected))
+}
+
+pub(crate) fn reseal(database: &Path, metadata: &Metadata) -> Result<(), Error> {
+    let completion = marker(database);
+    let expected = seal(metadata, std::fs::metadata(path(database))?.len());
+    let temporary = temporary(&completion);
+    let result = (|| {
+        let mut file = private_file(&temporary)?;
+        file.write_all(&expected)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &completion)?;
+        sync_parent(&completion)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -102,7 +199,7 @@ impl State {
             let temporary = temporary(&target);
             let result = (|| {
                 let snapshot = snapshot()?;
-                copy(&snapshot, &temporary, catalog, metadata)?;
+                copy(&snapshot.read, &temporary, catalog, metadata)?;
                 File::open(&temporary)?.sync_all()?;
                 std::fs::hard_link(&temporary, &target)?;
                 std::fs::remove_file(&temporary)?;
@@ -196,7 +293,11 @@ fn sync_parent(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn verify(path: &Path, catalog: Catalog, metadata: &Metadata) -> Result<Database, Error> {
+pub(crate) fn verify(
+    path: &Path,
+    catalog: Catalog,
+    metadata: &Metadata,
+) -> Result<Database, Error> {
     let mut database = Database::builder()
         .set_cache_size(8 * 1024 * 1024)
         .open(path)?;
@@ -208,8 +309,12 @@ fn verify(path: &Path, catalog: Catalog, metadata: &Metadata) -> Result<Database
     Ok(database)
 }
 
+fn exceeds_byte_budget(count: usize, bytes: usize, size: usize) -> bool {
+    count > 0 && bytes + size > BYTE_BUDGET
+}
+
 fn copy(
-    snapshot: &Snapshot,
+    source: &ReadTransaction,
     path: &Path,
     catalog: Catalog,
     metadata: &Metadata,
@@ -218,8 +323,8 @@ fn copy(
         .set_cache_size(8 * 1024 * 1024)
         .create_file(private_file(path)?)?;
     for name in catalog.names() {
-        let source = snapshot.read.open_table(definition(name))?;
-        let mut rows = source.iter()?;
+        let table = source.open_table(definition(name))?;
+        let mut rows = table.iter()?;
         let mut pending = rows.next().transpose()?;
         loop {
             let transaction = database.begin_write()?;
@@ -229,7 +334,7 @@ fn copy(
                 let mut count = 0;
                 while let Some((key, value)) = pending.take() {
                     let size = key.value().len().saturating_add(value.value().len());
-                    if count > 0 && bytes + size > BYTE_BUDGET {
+                    if exceeds_byte_budget(count, bytes, size) {
                         pending = Some((key, value));
                         break;
                     }
@@ -253,10 +358,17 @@ fn copy(
     }
     drop(database);
     let database = verify(path, catalog, metadata)?;
-    let read = database.begin_read()?;
+    same_rows(source, &database.begin_read()?, catalog)
+}
+
+pub(crate) fn same_rows(
+    source: &ReadTransaction,
+    target: &ReadTransaction,
+    catalog: Catalog,
+) -> Result<(), Error> {
     for name in catalog.names() {
-        let source = snapshot.read.open_table(definition(name))?;
-        let target = read.open_table(definition(name))?;
+        let source = source.open_table(definition(name))?;
+        let target = target.open_table(definition(name))?;
         let mut source = source.iter()?;
         let mut target = target.iter()?;
         loop {
@@ -273,7 +385,7 @@ fn copy(
 
 #[cfg(test)]
 mod tests {
-    use super::copy;
+    use super::{BYTE_BUDGET, copy, exceeds_byte_budget};
     use crate::{
         Catalog, Metadata, Options, Store, TableDeclaration,
         resources::{Kv, KvTable},
@@ -284,6 +396,24 @@ mod tests {
         sync::{Arc, Barrier},
     };
     use ycoding_schema::JsonValue;
+
+    #[test]
+    fn byte_budget_admits_a_row_that_reaches_exactly_the_limit() {
+        assert!(!exceeds_byte_budget(1, BYTE_BUDGET - 10, 10));
+        assert!(!exceeds_byte_budget(99, 0, BYTE_BUDGET));
+    }
+
+    #[test]
+    fn byte_budget_defers_a_row_one_byte_past_the_limit() {
+        assert!(exceeds_byte_budget(1, BYTE_BUDGET - 10, 11));
+        assert!(exceeds_byte_budget(99, BYTE_BUDGET, 1));
+    }
+
+    #[test]
+    fn byte_budget_always_admits_the_first_row_even_when_oversized() {
+        assert!(!exceeds_byte_budget(0, 0, BYTE_BUDGET + 1));
+        assert!(!exceeds_byte_budget(0, 0, usize::MAX));
+    }
 
     #[test]
     fn snapshot_copy_preserves_rows_across_concurrent_writer_commits() {
@@ -321,7 +451,7 @@ mod tests {
         let started = start.clone();
         let worker = std::thread::spawn(move || {
             started.wait();
-            copy(&snapshot, &candidate, CATALOG, &metadata).unwrap();
+            copy(&snapshot.read, &candidate, CATALOG, &metadata).unwrap();
         });
         start.wait();
         store

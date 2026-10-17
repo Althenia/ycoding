@@ -50,6 +50,10 @@ These exceptions do not approve arbitrary HTTP/SSE application RPC, broaden remo
 
 ## Typed platform delivery
 
+### Queued shell status
+
+`Shell_Info.status` includes `queued` at enum value 6. Optional `queuePosition` uses tag 12 and accepts positive safe integers. `Shell_Info_time.queued` uses tag 3 and carries the admission timestamp separately from `started` and `completed`. Existing field tags and status values retain their allocations. `shell.updated` carries the complete `Shell_Info` in the ephemeral PublicEvent branch at tag 116; it has no durable position.
+
 ### Keep-awake status
 
 `keepAwake.get` (3025) and `keepAwake.set` (3026) return the same backend-owned `KeepAwake_Status`. Existing `state` and `message` retain tags 1 and 2. Optional `manual` uses tag 3, `lid` tag 4, and `sleepHold` tag 5. Lid values are off=1, on=2, held=3, unsupported=4 and error=5. Absent fields remain absent rather than becoming false or off. `manual` is reported while family holds distinguish the manual preference from effective state; `sleepHold` reports whether any root-family hold remains. Idle state and lid state are independent.

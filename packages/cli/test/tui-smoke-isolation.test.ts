@@ -30,7 +30,7 @@ if (args.includes("--help")) {
   console.log("YCoding TUI\\n  run\\n  update\\n  remote\\n  service\\nRun YCoding with a message --model\\nUpdate ycoding to a release --version\\nControl this machine's YCoding agent enroll\\nManage the background server restart")
   process.exit(0)
 }
-const env = Object.fromEntries(["HOME", "YCODING_TEST_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR", "TMP", "TEMP", "YCODING_DB", "YCODING_CONFIG_DIR", "YCODING_CONFIG", "YCODING_PASSWORD", "YCODING_REMOTE_URL"].map((key) => [key, process.env[key]]))
+const env = Object.fromEntries(["HOME", "YCODING_TEST_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR", "TMP", "TEMP", "YCODING_DB", "YCODING_SQLITE_IMPORT_SOURCE", "YCODING_DISABLE_CHANNEL_DB", "YCODING_CONFIG_DIR", "YCODING_CONFIG", "YCODING_PASSWORD", "YCODING_REMOTE_URL"].map((key) => [key, process.env[key]]))
 appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, env }) + "\\n")
 if (args[0] === "remote") {
   console.log("Not enrolled")
@@ -64,6 +64,8 @@ Bun.spawnSync = (args, options) => spawnSync([process.execPath, ${JSON.stringify
         TMP: directory,
         TEMP: directory,
         YCODING_DB: path.join(directory, "parent.db"),
+        YCODING_SQLITE_IMPORT_SOURCE: path.join(directory, "parent-source.db"),
+        YCODING_DISABLE_CHANNEL_DB: "1",
         YCODING_CONFIG_DIR: path.join(directory, "parent-config-dir"),
         YCODING_CONFIG: path.join(directory, "parent.json"),
         YCODING_PASSWORD: "parent-password",
@@ -113,8 +115,11 @@ Bun.spawnSync = (args, options) => spawnSync([process.execPath, ${JSON.stringify
       ]) {
         expect(server[key]).toBe(path.join(server.HOME, suffix))
       }
-      for (const key of ["YCODING_DB", "YCODING_CONFIG_DIR", "YCODING_CONFIG", "YCODING_REMOTE_URL"])
+      for (const key of ["YCODING_CONFIG_DIR", "YCODING_CONFIG", "YCODING_REMOTE_URL"])
         expect(server[key]).toBeUndefined()
+      for (const call of [remote, server])
+        for (const key of ["YCODING_DB", "YCODING_SQLITE_IMPORT_SOURCE", "YCODING_DISABLE_CHANNEL_DB"])
+          expect(call[key], key).toBeUndefined()
       expect(server.YCODING_PASSWORD).toBe("tui-artifact-smoke")
       expect(remote.YCODING_PASSWORD).toBeUndefined()
       expect(existsSync(server.HOME)).toBe(false)

@@ -27,6 +27,20 @@ function fakeServer(initial: KeepAwakeStatus = { state: "off" }) {
   }
 }
 
+test("labels a foreign lid owner without claiming this process armed it", async () => {
+  const view = await renderKeepAwake(fakeServer({ state: "on", lid: "held", sleepHold: true }))
+  try {
+    view.dispatch("command.palette.show")
+    await view.app.waitForFrame((frame) => frame.includes("Keep machine awake"))
+    await view.app.mockInput.typeText("Keep machine awake")
+    await awaitFrame(view.app, (frame) => frame.includes("lid held elsewhere"))
+    expect(view.app.captureCharFrame()).toContain("Keep machine awake")
+    expect(view.app.captureCharFrame()).toContain("sleep-held")
+  } finally {
+    view.app.renderer.destroy()
+  }
+})
+
 async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: (frame: string) => boolean) {
   const deadline = Date.now() + 8_000
   while (Date.now() < deadline) {
@@ -119,8 +133,11 @@ test("palette selection turns the backend switch on and off and explains what it
     }
     await select("off")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: on"))
-    await until(() => view.toast()?.includes("closing the lid may still sleep") === true)
-    expect(view.toast()).toMatch(/battery.*heat/)
+    await until(
+      () =>
+        view.toast() ===
+        "Idle sleep held off; closing the lid may still sleep this machine. On battery keep-awake drains the battery and a closed lid traps heat.",
+    )
     await select("on")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: off"))
     expect(server.writes).toEqual([true, false])

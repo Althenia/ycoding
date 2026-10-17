@@ -41,7 +41,7 @@ fn test_001_006_063_baseline_checkpoint_to_client_history_and_escaped_export() {
     assert!(import::sealed(&candidate, import::DatabaseKind::Core).is_err());
     assert_eq!(import::resume_metadata(&candidate).unwrap(), metadata());
     let report = import::stage(request(), |_| ControlFlow::Continue(())).unwrap();
-    assert_eq!(report.tables.len(), 49);
+    assert_eq!(report.tables.len(), 52);
     assert_eq!(
         import::sealed(&candidate, import::DatabaseKind::Core)
             .unwrap()
@@ -436,6 +436,7 @@ fn flow_session() -> ycoding_store::session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 

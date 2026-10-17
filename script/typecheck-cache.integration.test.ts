@@ -49,12 +49,12 @@ function task(plan: unknown, id: string) {
   }
 }
 
-function plan(cwd: string) {
+function plan(cwd: string, script = "typecheck") {
   const result = run(
     [
       turbo,
       "run",
-      "typecheck",
+      script,
       "--filter=@ycoding-ai/cli",
       "--filter=@ycoding-ai/web",
       "--filter=@ycoding-ai/remote",
@@ -101,7 +101,7 @@ async function fixture() {
           type: "module",
           exports: "./src/index.ts",
           dependencies,
-          scripts: { typecheck: `${bun} check -p tsconfig.json` },
+          scripts: { typecheck: `${bun} check -p tsconfig.json`, test: `${bun} --version` },
         }),
       )
       await write(
@@ -270,3 +270,38 @@ test("live Worker-importing typechecks declare their external inputs without cha
   expect(task(live, "@ycoding-ai/tui#typecheck-inputs").inputs).toContain("src/image.d.ts")
   expect(task(live, "@ycoding-ai/ai#typecheck-inputs").inputs).toContain("test/lib/openai-chunks.ts")
 })
+
+test("native runtime sources invalidate only the CLI test hash", async () => {
+  const f = await fixture()
+  try {
+    const cliTest = "@ycoding-ai/cli#test"
+    const files = {
+      "rust/Cargo.toml": "[workspace]\nmembers = []\n",
+      "rust/Cargo.lock": "version = 4\n",
+      "rust/crates/protocol/src/lib.rs": "pub const REVISION: u32 = 5;\n",
+      "protocol/ycoding/v5/foundation.proto": 'syntax = "proto2";\npackage ycoding.v5;\n',
+      "packages/cli/script/models-dev.snapshot.json": "{}\n",
+      ".github/actions/setup-rust/action.yml": "name: Setup Rust\n",
+    }
+    for (const [file, content] of Object.entries(files)) await f.write(file, content)
+    await f.write("rust/target/debug/ycoding-runtime", "binary 1")
+    const before = plan(f.directory, "test")
+    const typecheck = plan(f.directory)
+    for (const file of Object.keys(files)) {
+      const input = file.replace("packages/cli/", "")
+      expect(task(before, cliTest).inputs.some((value) => value.endsWith(input)), file).toBe(true)
+    }
+    expect(task(before, cliTest).inputs.some((input) => input.includes("rust/target"))).toBe(false)
+    for (const [file, content] of Object.entries(files)) {
+      await f.write(file, `${content}\n`)
+      expect(task(plan(f.directory, "test"), cliTest).hash, file).not.toBe(task(before, cliTest).hash)
+      if (!file.startsWith("packages/cli/"))
+        expect(task(plan(f.directory), cli).hash, file).toBe(task(typecheck, cli).hash)
+      await f.write(file, content)
+    }
+    await f.write("rust/target/debug/ycoding-runtime", "binary 2")
+    expect(task(plan(f.directory, "test"), cliTest).hash).toBe(task(before, cliTest).hash)
+  } finally {
+    await f.close()
+  }
+}, 90_000)

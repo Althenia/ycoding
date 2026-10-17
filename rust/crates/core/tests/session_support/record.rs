@@ -33,5 +33,6 @@ pub fn record(id: &str) -> session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }

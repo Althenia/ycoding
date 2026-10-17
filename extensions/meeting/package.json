@@ -10,12 +10,13 @@
   },
   "scripts": {
     "test": "bun run test:unit && bun run test:integration",
-    "test:unit": "bun test test/bridge.test.ts test/discovery.test.ts test/tui.test.tsx test/view.test.ts test/view-design.test.ts --timeout 30000",
+    "test:unit": "bun test test/bridge.test.ts test/discovery.test.ts test/owner-settings.test.ts test/tui.test.tsx test/view.test.ts test/view-design.test.ts --timeout 30000",
     "typecheck": "bun check",
     "build": "bun run typecheck",
     "dev": "bun script/dev.ts",
-    "test:integration": "bun test test/launcher.integration.test.ts test/mcp.integration.test.ts --timeout 60000 && cargo test --manifest-path ../../rust/Cargo.toml --locked -p ycoding-runtime --test meeting_clients",
-    "test:integration:chrome": "bun test test/view.integration.test.ts --timeout 240000"
+    "test:integration": "bun test test/launcher.integration.test.ts test/mcp.integration.test.ts test/owner-settings.integration.test.ts --timeout 60000 && cargo test --manifest-path ../../rust/Cargo.toml --locked -p ycoding-runtime --test meeting_clients",
+    "test:integration:chrome": "bun test test/view.integration.test.ts --timeout 240000",
+    "test:integration:chrome:owner": "bun test test/owner-settings-browser.integration.test.ts --timeout 240000"
   },
   "dependencies": {
     "@ycoding-ai/plugin": "workspace:*",

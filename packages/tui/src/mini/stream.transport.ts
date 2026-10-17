@@ -743,7 +743,10 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     const source = sessionID(event)
     if (
       source === "global" &&
-      (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled")
+      (event.type === "form.created" ||
+        event.type === "form.replied" ||
+        event.type === "form.cancelled" ||
+        event.type === "form.timed_out")
     ) {
       if (!sameLocation(event.location, input.location)) return
       if (event.type === "form.created") {
@@ -1006,7 +1009,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       syncBlockers()
       return
     }
-    if (event.type === "form.replied" || event.type === "form.cancelled") {
+    if (event.type === "form.replied" || event.type === "form.cancelled" || event.type === "form.timed_out") {
       state.forms = state.forms.filter((item) => item.id !== event.data.id)
       syncBlockers()
       return

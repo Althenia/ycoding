@@ -26,6 +26,62 @@ fn recover(input: &str, expected: &str, paths: &[&str]) {
 }
 
 #[test]
+fn shell_queue_limits_preserve_valid_boundaries_and_reject_invalid_leaves() {
+    for input in [
+        r#"{"shell_queue":{"max_running":1,"max_running_per_session":1,"max_queued_per_session":1,"memory_reserve_mb":0,"max_load":0.01}}"#,
+        r#"{"shell_queue":{"max_running":64,"max_running_per_session":64,"max_queued_per_session":1000,"memory_reserve_mb":1048576,"max_load":64}}"#,
+    ] {
+        recover(input, input, &[]);
+    }
+    for (key, values) in [
+        ("max_running", vec!["0", "65", "1.5"]),
+        ("max_running_per_session", vec!["0", "65", "1.5"]),
+        ("max_queued_per_session", vec!["0", "1001", "1.5"]),
+        ("memory_reserve_mb", vec!["-1", "1048577", "1.5"]),
+        ("max_load", vec!["0", "-1", "64.01"]),
+    ] {
+        for value in values {
+            recover(
+                &format!(r#"{{"shell":"kept","shell_queue":{{"{key}":{value}}}}}"#),
+                r#"{"shell":"kept","shell_queue":{}}"#,
+                &[&format!("$.shell_queue.{key}")],
+            );
+        }
+    }
+}
+
+#[test]
+fn fallback_maps_normalize_selectors_and_allow_empty_chains() {
+    recover(
+        r#"{"model_fallbacks":{"p/primary":[],"p/team/model":["other/backup", "work#p/team/model#high",{"providerID":"p","model":"team/model","profile":"second"}]}}"#,
+        r#"{"model_fallbacks":{"p/primary":[],"p/team/model":[{"providerID":"other","model":"backup"},{"providerID":"p","model":"team/model","variant":"high","profile":"work"},{"providerID":"p","model":"team/model","profile":"second"}]}}"#,
+        &[],
+    );
+}
+
+#[test]
+fn fallback_maps_reject_invalid_keys_self_references_and_duplicate_or_long_chains() {
+    for map in [
+        r#"{"missing-slash":[]}"#,
+        r#"{"/model":[]}"#,
+        r#"{"p/":[]}"#,
+        r#"{"p/model#high":[]}"#,
+        r#"{"work#p/model":[]}"#,
+        r#"{"p/model":["p/model"]}"#,
+        r#"{"p/model":["q/backup",{"providerID":"q","model":"backup"}]}"#,
+        r#"{"p/model":["q/one","q/two","q/three","q/four"]}"#,
+        r#"{"p/model":["not-a-selector"]}"#,
+        r#"{"p/model":false}"#,
+    ] {
+        recover(
+            &format!(r#"{{"shell":"kept","model_fallbacks":{map}}}"#),
+            r#"{"shell":"kept"}"#,
+            &["$.model_fallbacks"],
+        );
+    }
+}
+
+#[test]
 fn capability_schema_accepts_every_selector_and_retired_plugin_selection() {
     let input = r#"{"capabilities":{"instructions":{"global":false,"project":true,"exclude":["*/AGENTS.md",""]},"builtin_instructions":{"enabled":true,"allow":["environment","date","subagent-reuse","shell-memory","project-artifact-authoring","git-worktree","git-attribution","human-input","decision-use","task-completion","memory"],"deny":[]},"skills":{"enabled":false,"allow":[],"deny":["secret-*"]},"tools":{"enabled":true,"allow":["read"],"deny":["shell"]},"mcp":{"allow":["docs"],"deny":["private"]},"plugins":{"enabled":false,"allow":["plugin.*"],"deny":[]},"project_artifacts":false,"home_roots":false,"websearch_provider":"parallel"},"extensions":[]}"#;
     recover(input, input, &[]);
@@ -640,4 +696,97 @@ fn lossless_unknown_names_cannot_supply_inherited_configuration() {
         r#"{"shell":"explicit"}"#,
         &["$.__proto__", "$.constructor", r#"$["\ud800"]"#],
     );
+}
+
+#[test]
+fn retention_settings_accept_only_positive_integers_at_their_exact_paths() {
+    for (section, key) in [
+        ("session_retention", "records_days"),
+        ("analytics_retention", "usage_days"),
+        ("analytics_retention", "latency_days"),
+    ] {
+        for valid in ["1", "7", "30", "9007199254740991"] {
+            let input = format!(r#"{{"{section}":{{"{key}":{valid}}}}}"#);
+            recover(&input, &input, &[]);
+        }
+        for invalid in ["0", "-1", "1.5", "9007199254740992", r#""7""#, "true"] {
+            recover(
+                &format!(r#"{{"{section}":{{"{key}":{invalid}}}}}"#),
+                &format!(r#"{{"{section}":{{}}}}"#),
+                &[&format!("$.{section}.{key}")],
+            );
+        }
+    }
+}
+
+#[test]
+fn retention_settings_keep_valid_siblings_and_reject_unknown_keys() {
+    recover(
+        r#"{"session_retention":{"days":3,"records_days":0},"analytics_retention":{"usage_days":5,"latency_days":2.5,"other":1}}"#,
+        r#"{"session_retention":{"days":3},"analytics_retention":{"usage_days":5}}"#,
+        &[
+            "$.session_retention.records_days",
+            "$.analytics_retention.latency_days",
+            "$.analytics_retention.other",
+        ],
+    );
+    let all = r#"{"session_retention":{"days":3,"records_days":7},"analytics_retention":{"usage_days":30,"latency_days":30}}"#;
+    recover(all, all, &[]);
+    recover(
+        r#"{"analytics_retention":false,"session_retention":[]}"#,
+        "{}",
+        &["$.analytics_retention", "$.session_retention"],
+    );
+}
+
+#[test]
+fn review_switches_accept_booleans_at_their_exact_paths() {
+    for document in [
+        r#"{"guardrails":{"enabled":true,"decide_reviews":true,"decide_hard_reviews":false}}"#,
+        r#"{"guardrails":{"decide_reviews":false,"decide_hard_reviews":true}}"#,
+        r#"{"guardrails":{"decide_hard_reviews":false}}"#,
+    ] {
+        recover(document, document, &[]);
+    }
+}
+
+#[test]
+fn a_leftover_auto_answer_key_is_removed_like_any_unknown_key() {
+    for value in ["true", "false", r#""true""#, "null"] {
+        let document = format!(r#"{{"shell":"/bin/zsh","auto_answer":{value}}}"#);
+        recover(&document, r#"{"shell":"/bin/zsh"}"#, &["$.auto_answer"]);
+        let decoded = decode_document(&document, "fixture.json");
+        assert_eq!(decoded.diagnostics.len(), 1, "{value}");
+        assert_eq!(
+            decoded.diagnostics[0].reason.0.as_str(),
+            Some("removed-keys"),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn malformed_review_switches_fail_closed_without_enabling_model_reviews() {
+    for guardrails in [
+        r#"{"decide_reviews":"yes"}"#,
+        r#"{"decide_reviews":1,"enabled":false}"#,
+        r#"{"decide_hard_reviews":null}"#,
+        r#"{"decide_reviews":true,"decide_hard_review":false}"#,
+    ] {
+        let decoded = decode_document(
+            &format!(r#"{{"shell":"/bin/zsh","guardrails":{guardrails}}}"#),
+            "fixture.json",
+        );
+        assert_eq!(
+            decoded.info,
+            Some(parse_json(r#"{"shell":"/bin/zsh","guardrails":{"enabled":true}}"#).unwrap()),
+            "{guardrails}"
+        );
+        assert_eq!(decoded.diagnostics.len(), 1, "{guardrails}");
+        assert_eq!(
+            decoded.diagnostics[0].json_path.as_ref().unwrap().as_str(),
+            Some("$.guardrails")
+        );
+        assert_eq!(decoded.diagnostics[0].fail_closed, Some(true));
+    }
 }

@@ -47,8 +47,10 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageUser,
   SessionInfo,
-  SessionAutonomyState,
+  SessionAutonomyView,
   SessionOrchestrationTask,
+  SessionReviewDecision,
+  SessionReviewItem,
 } from "@ycoding-ai/client"
 import type { V5Client } from "@ycoding-ai/client/v5"
 import { capturedPartPatches, capturedPatch, groupCapturedPatches } from "@ycoding-ai/client/file-change-summary"
@@ -90,6 +92,7 @@ import { SubagentTodos } from "./subagent-todos"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
+import { generationSpeedLabel } from "../../util/cache-diagnostics"
 import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -100,6 +103,7 @@ import { PermissionPrompt } from "./permission"
 import { GuardrailPrompt, activeGuardrail } from "./guardrail"
 import { FormPrompt } from "./form"
 import { formKey } from "../../util/form"
+import { ReviewBox, ReviewItemEditor } from "./review-box"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
 import { sessionEpilogue } from "../../util/presentation"
@@ -129,18 +133,24 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
+  approvalLevelLabel,
+  autoAnswerOn,
   autonomyLevelDescription,
   autonomyModeLabel,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
+  nextApprovalLevel,
+  parseApprovalLevel,
+  parseAutoAnswerArg,
   type SessionAutonomyResponse,
-  yoloLevel,
 } from "../../util/session-autonomy"
+import { useKeepAwake } from "../../keep-awake"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { isCompactionCheckpoint } from "../../util/session"
+import { shellStatusLabel } from "../shell-output/util"
 import {
   Header,
   headerModelRef,
@@ -264,6 +274,35 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       .flatMap((sessionID) => data.session.form.list(sessionID) ?? [])
       .concat(global)
   })
+  const reviewItems = createMemo(() => data.session.review.list(route.sessionID))
+  const [reviewFocused, setReviewFocused] = createSignal(false)
+  const [reviewActiveID, setReviewActiveID] = createSignal<string>()
+  const [reviewPendingID, setReviewPendingID] = createSignal<string>()
+  const [reviewFailed, setReviewFailed] = createStore<Record<string, string>>({})
+  const reviewActive = createMemo(() => reviewItems().find((item) => item.itemID === reviewActiveID()))
+  createEffect(() => {
+    if (reviewActiveID() && !reviewActive()) setReviewActiveID(undefined)
+  })
+  async function decideReview(item: SessionReviewItem, decision: SessionReviewDecision) {
+    if (reviewPendingID() !== undefined || reviewFailed[item.itemID] !== undefined)
+      throw new Error(reviewFailed[item.itemID] ?? "Decision already in flight")
+    setReviewPendingID(item.itemID)
+    try {
+      await client.api.review.decide({ sessionID: item.sessionID, itemID: item.itemID, decision })
+    } catch (error) {
+      setReviewFailed(item.itemID, errorMessage(error))
+      throw error
+    } finally {
+      setReviewPendingID(undefined)
+    }
+    if (reviewActiveID() === item.itemID) setReviewActiveID(undefined)
+    data.session.review.invalidate(route.sessionID)
+    void data.session.review.sync(route.sessionID).catch(() => undefined)
+  }
+  const dismissReview = (item: SessionReviewItem) => {
+    if (item.kind !== "question" && item.kind !== "subagent_question") return
+    void decideReview(item, { kind: item.kind, dismissed: true }).catch(() => undefined)
+  }
   const [composer, setComposer] = createStore({
     open: false,
     tab: undefined as string | undefined,
@@ -451,15 +490,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const autonomy = createMemo(() =>
     currentSessionAutonomy(route.sessionID, client.connection.status() === "connected", autonomyResponse()),
   )
-  const acceptAutonomy = (sessionID: string, state: SessionAutonomyState) => {
+  const acceptAutonomy = (sessionID: string, state: SessionAutonomyView) => {
     if (route.sessionID !== sessionID || client.connection.status() !== "connected") return false
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: { yolo?: number; goal?: string | null; maxNoProgress?: number }) => {
+  const updateAutonomy = (input: { yolo?: 0 | 1 | 2; goal?: string | null; maxNoProgress?: number; autoAnswer?: boolean }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
     const payload = (() => {
+      if (input.autoAnswer !== undefined) return { autoAnswer: input.autoAnswer } as const
       if (input.yolo !== undefined && input.goal !== undefined)
         return {
           yolo: input.yolo,
@@ -479,7 +519,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       .set({ sessionID, payload } as never)
       .then((state) => {
         if (!acceptAutonomy(sessionID, state)) return
-        toast.show({ message: `${autonomyModeLabel(state)} mode activated`, variant: "success", duration: 3000 })
+        toast.show({
+          message:
+            input.autoAnswer !== undefined
+              ? `Auto-answer ${autoAnswerOn(state) ? "on" : "off"} for this Session`
+              : `${autonomyModeLabel(state)} mode activated`,
+          variant: "success",
+          duration: 3000,
+        })
         dialog.clear()
       })
       .catch((error) =>
@@ -521,8 +568,25 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     data.on("session.execution.succeeded", settledAutonomy),
     data.on("session.execution.failed", settledAutonomy),
     data.on("session.execution.interrupted", settledAutonomy),
+    data.on("session.context.observed", (event) => {
+      if (event.data.source === "session-state") settledAutonomy(event)
+    }),
   ]
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
+  createEffect(
+    on(
+      () => autonomy()?.effective?.asleep ?? false,
+      (asleep, previous) => {
+        if (previous !== true || asleep || reviewItems().length === 0) return
+        const count = reviewItems().length
+        toast.show({
+          message: `${count} item${count === 1 ? "" : "s"} waiting for your review`,
+          variant: "info",
+          duration: 5000,
+        })
+      },
+    ),
+  )
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
     const lastAssistant = messages().findLast((item): item is SessionMessageAssistant => item.type === "assistant")
     const retry = sessionRetryHeaderState(lastAssistant)
@@ -562,13 +626,20 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (waiting) return { type: "waiting", count: waiting } as const
     return { type: "ready" } as const
   })
+  const keepAwake = useKeepAwake()
   const headerState = createMemo<SessionHeaderState>(() => {
     const state = operationalHeaderState()
-    const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
-    const level = typeof raw === "number" ? raw : raw === true ? 2 : 0
-    const goalActive = autonomy().goal?.status === "active"
-    if (level === 0 && !goalActive) return state
-    return { type: "autonomy", yolo: level, goalActive, state }
+    const current = autonomy()
+    return {
+      type: "autonomy",
+      yolo: current?.effective?.yolo,
+      goalActive: current?.goal?.status === "active",
+      answersAuto: autoAnswerOn(current),
+      asleep: current?.effective?.asleep ?? false,
+      machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
+      review: reviewItems().length,
+      state,
+    }
   })
   const headerMessage = createMemo(() => {
     const message = messages().findLast((item) => item.type === "assistant")
@@ -694,7 +765,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     ),
   )
-  const economics = createMemo(() => subagentEconomics(memberEconomics(), parent()?.title))
+  const economics = createMemo(() =>
+    subagentEconomics(
+      memberEconomics(),
+      parent()?.title,
+      generationSpeedLabel(data.session.diagnostics.get(route.sessionID)?.generationSpeed, session()?.model),
+    ),
+  )
   const blockedQuestion = createMemo(() =>
     currentTask()?.state === "waiting" ? currentTask()?.question?.text : undefined,
   )
@@ -814,6 +891,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         data.session.message.sync(sessionID),
         data.session.permission.sync(sessionID),
         data.session.guardrail.sync(sessionID),
+        data.session.review.sync(sessionID),
         data.session.form.sync(sessionID),
       ])
       const info = data.session.get(sessionID)
@@ -867,7 +945,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (!props.viewports || !scroll || scroll.isDestroyed) return
     props.viewports.set(mountedSessionID, {
       scrollTop: scroll.scrollTop,
-      follow: !navigationMessage() && scroll.scrollTop >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1,
+      follow: !navigationMessage() && following(),
       navigationMessage: navigationMessage(),
       navigationSlack: navigationSlack(),
     })
@@ -1359,22 +1437,59 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     },
     {
       title: (() => {
-        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        return `YOLO ${lvl}: ${autonomyLevelDescription(lvl)} (cycle 0→1→2→3, /yolo 0|1|2|3)`
+        const lvl = autonomy()?.effective?.yolo
+        if (lvl === undefined) return "Approval level: unknown (/yolo 0|1|2)"
+        return `${approvalLevelLabel(lvl)} (${lvl}): ${autonomyLevelDescription(lvl)} (cycle 0→1→2, /yolo 0|1|2)`
       })(),
       id: "session.autonomy.yolo.toggle",
       group: "Session",
       slash: { name: "yolo" },
       run: (input?: string) => {
         const token = input?.trim().split(/\s+/)[0]
-        const parsed = token !== undefined && token !== "" ? Number.parseInt(token, 10) : Number.NaN
-        if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 3) {
-          updateAutonomy({ yolo: parsed as 0 | 1 | 2 | 3 })
+        const explicit = parseApprovalLevel(token)
+        if (explicit !== undefined) {
+          updateAutonomy({ yolo: explicit })
           return
         }
-        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        const next = ((lvl + 1) % 4) as 0 | 1 | 2 | 3
-        updateAutonomy({ yolo: next })
+        if (token !== undefined && token !== "") {
+          toast.show({ message: "Use /yolo with a level from 0 to 2", variant: "error", duration: 3000 })
+          return
+        }
+        const lvl = autonomy()?.effective?.yolo
+        if (lvl === undefined) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Approval level unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        updateAutonomy({ yolo: nextApprovalLevel(lvl) })
+      },
+    },
+    {
+      title: (() => {
+        const current = autonomy()
+        if (!current) return "Auto-answer: unknown (this Session)"
+        return `Auto-answer: ${autoAnswerOn(current) ? "on" : "off"} (this Session)`
+      })(),
+      id: "session.autonomy.auto-answer.toggle",
+      group: "Session",
+      slash: { name: "auto-answer" },
+      run: (input?: string) => {
+        const parsed = parseAutoAnswerArg(input?.trim().split(/\s+/)[0])
+        if (parsed === null) {
+          toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
+          return
+        }
+        if (parsed !== undefined) {
+          updateAutonomy({ autoAnswer: parsed })
+          return
+        }
+        const current = autonomy()
+        if (!current) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Auto-answer state unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        updateAutonomy({ autoAnswer: !autoAnswerOn(current) })
       },
     },
     {
@@ -1399,11 +1514,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
-      title: autonomy().goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
+      title: !autonomy() ? "Goal: unknown" : autonomy()?.goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
       id: "session.autonomy.goal.toggle",
       group: "Session",
       run: () => {
-        const action = goalToggleAction(autonomy())
+        const current = autonomy()
+        if (!current) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Goal state unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        const action = goalToggleAction(current)
         if (action.type === "stop") {
           updateAutonomy({ goal: null })
           return
@@ -1868,6 +1989,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
+                contentOptions={{ overflow: "scroll" }}
                 verticalScrollbarOptions={{
                   paddingLeft: 1,
                   visible: showScrollbar(),
@@ -2042,16 +2164,26 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   </box>
                 )}
               </Show>
-              <Show when={!btw()}>
-                <Composer
-                  sessionID={route.sessionID}
-                  open={composer.open}
-                  defaultTab={composer.tab}
-                  onClose={() => setComposer("open", false)}
-                  onSubagentAnswer={!subagent() ? answerChild : undefined}
-                  prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
-                />
-              </Show>
+              <Show when={!btw()}><Composer
+                sessionID={route.sessionID}
+                open={composer.open}
+                defaultTab={composer.tab}
+                onClose={() => setComposer("open", false)}
+                onSubagentAnswer={!subagent() ? answerChild : undefined}
+                prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
+              /></Show>
+              <ReviewBox
+                items={reviewItems()}
+                currentSessionID={route.sessionID}
+                asleep={autonomy()?.effective?.asleep ?? false}
+                activeItemID={reviewActiveID()}
+                pendingItemID={reviewPendingID()}
+                failed={reviewFailed}
+                onOpen={(item) => setReviewActiveID(item.itemID)}
+                onJump={(sessionID) => navigate({ type: "session", sessionID })}
+                onDismiss={dismissReview}
+                onFocusChange={setReviewFocused}
+              />
               <Switch>
                 <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
                 <Match when={permissions().length > 0}>
@@ -2076,6 +2208,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   <Show when={currentTask()?.question?.id} keyed>
                     {(_) => <SubagentAnswerComposer task={currentTask()!} />}
                   </Show>
+                </Match>
+                <Match when={reviewActive()}>
+                  {(item) => (
+                    <ReviewItemEditor
+                      item={item()}
+                      disabled={reviewPendingID() !== undefined || reviewFailed[item().itemID] !== undefined}
+                      error={reviewFailed[item().itemID]}
+                      onDecide={decideReview}
+                      onClose={() => setReviewActiveID(undefined)}
+                    />
+                  )}
                 </Match>
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
                 <Match when={!disabled() && !composer.open}>
@@ -2151,6 +2294,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       >
         <Prompt
           visible={props.visible !== false}
+          focusBlocked={reviewFocused()}
           ref={bind}
           disabled={props.visible === false}
           submitDisabled={!sessionReady()}
@@ -2158,7 +2302,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           sessionID={route.sessionID}
           branch={branch()}
           autonomy={autonomy()}
-          onAutonomyUpdated={acceptAutonomy}
+          onAutonomyUpdated={(sessionID, state) => {
+            if (sessionID !== route.sessionID) return
+            autonomyRefresh.invalidate()
+            acceptAutonomy(sessionID, state)
+          }}
           inset={{ left: 3, right: 4 }}
           placeholders={btw() ? { normal: ["Message BTW…"] } : undefined}
           right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
@@ -2693,13 +2841,10 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme().contextual("elevated")
-  const model = createMemo(
-    () =>
-      ctx
-        .models()
-        .find((model) => model.providerID === props.message.model.providerID && model.id === props.message.model.id)
-        ?.name ?? `${props.message.model.providerID}/${props.message.model.id}`,
-  )
+  const modelName = (ref: SessionMessageAssistant["model"]) =>
+    ctx.models().find((model) => model.providerID === ref.providerID && model.id === ref.id)?.name ??
+    `${ref.providerID}/${ref.id}`
+  const model = createMemo(() => modelName(props.message.model))
   const duration = createMemo(() =>
     props.message.time.completed ? props.message.time.completed - props.message.time.created : 0,
   )
@@ -2713,6 +2858,16 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
           <text fg={theme.text.feedback.error.default}>{safeProviderErrorMessage(props.message.error)}</text>
         </box>
       </Show>
+      <For each={props.message.reroutes ?? []}>
+        {(reroute) => (
+          <box paddingLeft={3} marginTop={1}>
+            <text fg={theme.text.feedback.warning.default}>
+              ↪ Switched from {modelName(reroute.from)} to {modelName(reroute.model)}:{" "}
+              {safeProviderErrorMessage(reroute.error)}
+            </text>
+          </box>
+        )}
+      </For>
       <AssistantRetry retry={props.message.retry} />
       <box paddingLeft={3} marginTop={providerError() ? 1 : 0}>
         <text>
@@ -2784,7 +2939,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   }
   const notificationStatus = () => {
     const type = stringValue(metadata()?.type)
-    if (type === "completed" || type === "failed" || type === "waiting") return type
+    if (type === "completed" || type === "failed" || type === "waiting" || type === "resumed") return type
     return "updated"
   }
   const heading = () => `${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`
@@ -3627,9 +3782,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
     const commandFailed =
       command !== undefined && ("errors" in command.result ? command.result.errors > 0 : command.result.fail > 0)
     const shellID = stringValue(toolprops.metadata.shellID)
+    const liveShell = display() === "shell" && shellID !== undefined ? data.shell.get(shellID) : undefined
     const background =
-      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) ||
-      (display() === "shell" && shellID !== undefined && data.shell.get(shellID) !== undefined)
+      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) || liveShell !== undefined
     const tool =
       display() === "shell"
         ? (command?.command ?? safeToolDetailText(stringValue(input.command) ?? "shell"))
@@ -3665,7 +3820,14 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
       lifecycle: toolLifecycle(props.part, {
         status: background ? "running" : state.status,
         failed: commandFailed,
-        summary: background ? "background" : command ? commandStatus(command.result) : undefined,
+        queued: liveShell?.status === "queued",
+        summary: background
+          ? liveShell?.status === "queued"
+            ? shellStatusLabel(liveShell)
+            : "background"
+          : command
+            ? commandStatus(command.result)
+            : undefined,
       }),
       details: {
         request: boundedToolDetailLines(state.input),
@@ -3940,6 +4102,7 @@ function toolLifecycle(
     status?: ToolLifecycleInput["status"]
     failed?: boolean
     cancelled?: boolean
+    queued?: boolean
     summary?: string
   } = {},
 ): ToolLifecycleInput {
@@ -3949,6 +4112,7 @@ function toolLifecycle(
     ...(part.state.status === "error" ? { error: part.state.error } : {}),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
     ...(options.cancelled === undefined ? {} : { cancelled: options.cancelled }),
+    ...(options.queued ? { queued: true } : {}),
     ...(options.summary === undefined ? {} : { summary: options.summary }),
   }
 }
@@ -4411,6 +4575,10 @@ export function InlineToolRow(props: {
     if (props.failed && !props.complete) return props.failure ?? props.children
     return props.children
   }
+  const labelHeight = () => {
+    const value = label()
+    return typeof value === "string" ? value.split("\n").length : 1
+  }
   return (
     <box
       width={ctx?.width}
@@ -4432,6 +4600,7 @@ export function InlineToolRow(props: {
         <SessionActivitySpacer running={running()} color={markerColor()} />
         <text
           minWidth={0}
+          minHeight={labelHeight()}
           flexShrink={1}
           wrapMode="none"
           truncate={true}
@@ -4571,9 +4740,14 @@ function Shell(props: ToolProps) {
   })
   const color = createMemo(() => (permission() ? theme.text.feedback.warning.default : theme.text.default))
   const shellID = createMemo(() => stringValue(props.metadata.shellID))
-  const backgroundRunning = createMemo(() => {
+  const liveShell = createMemo(() => {
     const id = shellID()
-    return Boolean(id && data.shell.get(id))
+    return id ? data.shell.get(id) : undefined
+  })
+  const backgroundRunning = createMemo(() => Boolean(liveShell()))
+  const badge = createMemo(() => {
+    const shell = liveShell()
+    return shell?.status === "queued" ? shellStatusLabel(shell) : "Background"
   })
   const isRunning = createMemo(() => props.part.state.status === "running" || backgroundRunning())
   const command = createMemo(() => stringValue(props.input.command))
@@ -4651,7 +4825,9 @@ function Shell(props: ToolProps) {
           </Show>
         </Show>
         <Show when={shellID()}>
-          <StatusBadge>Background</StatusBadge>
+          <StatusBadge color={liveShell()?.status === "queued" ? theme.text.feedback.info.default : undefined}>
+            {badge()}
+          </StatusBadge>
         </Show>
       </box>
     </BlockTool>
@@ -5051,9 +5227,11 @@ function Question(props: ToolProps) {
   const { theme } = useTheme()
   const questions = createMemo(() => parseQuestions(props.input.questions))
   const answers = createMemo(() => parseQuestionAnswers(props.metadata.answers))
+  const timedOut = createMemo(() => finiteNumber(props.metadata.timedOutAfterSeconds) !== undefined)
   const count = createMemo(() => questions().length)
 
   function format(answer?: ReadonlyArray<string>) {
+    if (timedOut()) return "(timed out)"
     if (!answer?.length) return "(no answer)"
     return answer.join(", ")
   }
@@ -5067,7 +5245,9 @@ function Question(props: ToolProps) {
               {(q, i) => (
                 <box flexDirection="column">
                   <text fg={theme.text.subdued}>{q.question}</text>
-                  <text fg={theme.text.default}>{format(answers()?.[i()])}</text>
+                  <text fg={timedOut() ? theme.text.feedback.warning.default : theme.text.default}>
+                    {format(answers()?.[i()])}
+                  </text>
                 </box>
               )}
             </For>

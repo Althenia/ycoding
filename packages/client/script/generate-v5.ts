@@ -193,6 +193,8 @@ function operationName(method: string) {
       "guardrail.status",
       "guardrail.request.list",
       "guardrail.request.reply",
+      "review.list",
+      "review.decide",
     ].includes(method)
   )
     return "session." + method
@@ -387,6 +389,8 @@ const boundarySurface = boundaryMethods.map(([group, method, input, output, quer
 associate(messages.get("ycoding.v5.remote_get_Result_data")!, aliases.get("RemoteStatusOutput")!)
 associate(messages.get("ycoding.v5.Location_Info")!, aliases.get("BackendLocationOutput")!)
 associate(messages.get("ycoding.v5.skill_list_Result")!, aliases.get("BackendSkillListOutput")!)
+associate(messages.get("ycoding.v5.SessionsQuery")!, aliases.get("BackendSessionsQuery")!)
+associate(messages.get("ycoding.v5.SessionsResponse")!, aliases.get("BackendSessionsResponse")!)
 const boundaryImports = [
   ...boundaryMethods.flatMap(([, , input, output]) => [input, output]),
   "FrontendBoundaryClient",

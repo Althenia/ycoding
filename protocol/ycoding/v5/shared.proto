@@ -58,6 +58,63 @@ enum ProviderRequest_Report_group {
   PROVIDERREQUEST_REPORT_GROUP_SESSION = 5;
   PROVIDERREQUEST_REPORT_GROUP_PROJECT = 6;
   PROVIDERREQUEST_REPORT_GROUP_AGENT = 7;
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER = 8;
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER_PROFILE_MODEL = 9;
+  PROVIDERREQUEST_REPORT_GROUP_PROVIDER_MODEL = 10;
+  PROVIDERREQUEST_REPORT_GROUP_MODEL_ID = 11;
+  PROVIDERREQUEST_REPORT_GROUP_PROFILE = 12;
+  PROVIDERREQUEST_REPORT_GROUP_PROMPT = 13;
+  PROVIDERREQUEST_REPORT_GROUP_TASK = 14;
+}
+
+enum ProviderRequest_ReportDimensionsValue1_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE1_GROUP_PROVIDER = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue2_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_GROUP_PROVIDER_PROFILE_MODEL = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue2_profileState {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_PROFILESTATE_RECORDED = 1;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE2_PROFILESTATE_PROVIDER_DEFAULT = 2;
+}
+
+enum ProviderRequest_ReportDimensionsValue3_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE3_GROUP_PROVIDER_MODEL = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue4_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE4_GROUP_MODEL_ID = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue5_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_GROUP_PROFILE = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue5_profileState {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_PROFILESTATE_RECORDED = 1;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE5_PROFILESTATE_PROVIDER_DEFAULT = 2;
+}
+
+enum ProviderRequest_ReportDimensionsValue6_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_GROUP_PROMPT = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue6_attribution {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_COMPLETE = 1;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_PARTIAL = 2;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE6_ATTRIBUTION_UNATTRIBUTED = 3;
+}
+
+enum ProviderRequest_ReportDimensionsValue7_group {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_GROUP_TASK = 1;
+}
+
+enum ProviderRequest_ReportDimensionsValue7_attribution {
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_COMPLETE = 1;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_PARTIAL = 2;
+  PROVIDERREQUEST_REPORTDIMENSIONSVALUE7_ATTRIBUTION_UNATTRIBUTED = 3;
 }
 
 enum ProviderRequest_Report_rowsItem_costProvenance {
@@ -131,6 +188,11 @@ message InvalidCursorError {
   required LosslessString message = 2;
 }
 
+message ProviderRequest_CostCoverage {
+  required uint64 pricedRequests = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.CostCoverage" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 unpricedRequests = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.CostCoverage" integer_min: "0" integer_max: "9007199254740991" }];
+}
+
 message Skill_Conflicts {
   required Skill_Conflicts_skills skills = 1;
   required Skill_Conflicts_instructions instructions = 2;
@@ -192,6 +254,8 @@ message ProviderRequest_Timing {
   optional uint64 generationDurationNs = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 observedGenerationDurationNs = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
   optional uint64 generatedTokens = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 estimatedTokens = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
+  optional uint64 estimatedGenerationDurationNs = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "1" integer_max: "9007199254740991" }];
   optional uint64 loadDurationNs = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Timing" integer_min: "0" integer_max: "9007199254740991" }];
 }
 
@@ -210,11 +274,14 @@ message ProviderRequest_Report_rows {
 message ProviderRequest_Report_rowsItem {
   required LosslessString key = 1;
   required LosslessString label = 2;
+  optional Model_Ref model = 13;
+  optional ProviderRequest_ReportDimensions dimensions = 14;
   required uint64 logical = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 physical = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 helpers = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 continued = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 fallback = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
+  optional ProviderRequest_CostCoverage costCoverage = 15;
   required TokenUsage_Info tokens = 8;
   optional double cost = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" }];
   optional ProviderRequest_Report_rowsItem_costProvenance costProvenance = 10;
@@ -222,7 +289,72 @@ message ProviderRequest_Report_rowsItem {
   optional ProviderRequest_Speed speed = 12;
 }
 
+message ProviderRequest_ReportDimensions {
+  oneof kind {
+    ProviderRequest_ReportDimensionsValue1 value_1 = 1;
+    ProviderRequest_ReportDimensionsValue2 value_2 = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+    ProviderRequest_ReportDimensionsValue3 value_3 = 3;
+    ProviderRequest_ReportDimensionsValue4 value_4 = 4;
+    ProviderRequest_ReportDimensionsValue5 value_5 = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+    ProviderRequest_ReportDimensionsValue6 value_6 = 6;
+    ProviderRequest_ReportDimensionsValue7 value_7 = 7;
+  }
+}
+
+message ProviderRequest_ReportDimensionsValue1 {
+  required ProviderRequest_ReportDimensionsValue1_group group = 1;
+  required LosslessString providerID = 2;
+}
+
+message ProviderRequest_ReportDimensionsValue2 {
+  required ProviderRequest_ReportDimensionsValue2_group group = 1;
+  required LosslessString providerID = 2;
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+  required ProviderRequest_ReportDimensionsValue2_profileState profileState = 4;
+  required LosslessString modelID = 5;
+}
+
+message ProviderRequest_ReportDimensionsValue3 {
+  required ProviderRequest_ReportDimensionsValue3_group group = 1;
+  required LosslessString providerID = 2;
+  required LosslessString modelID = 3;
+}
+
+message ProviderRequest_ReportDimensionsValue4 {
+  required ProviderRequest_ReportDimensionsValue4_group group = 1;
+  required LosslessString modelID = 2;
+}
+
+message ProviderRequest_ReportDimensionsValue5 {
+  required ProviderRequest_ReportDimensionsValue5_group group = 1;
+  required LosslessString providerID = 2;
+  optional LosslessString profile = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" utf16_min: 1 }];
+  required ProviderRequest_ReportDimensionsValue5_profileState profileState = 4;
+}
+
+message ProviderRequest_ReportDimensionsValue6 {
+  required ProviderRequest_ReportDimensionsValue6_group group = 1;
+  optional UsageAnchor_Ref anchor = 2;
+  required ProviderRequest_ReportDimensionsValue6_attribution attribution = 3;
+}
+
+message UsageAnchor_Ref {
+  required LosslessString sessionID = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-anchor.ts#UsageAnchor.Ref" }];
+  required LosslessString inputID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-anchor.ts#UsageAnchor.Ref" }];
+}
+
+message ProviderRequest_ReportDimensionsValue7 {
+  required ProviderRequest_ReportDimensionsValue7_group group = 1;
+  optional LosslessString sessionID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.ReportDimensions" }];
+  required ProviderRequest_ReportDimensionsValue7_attribution attribution = 3;
+}
+
 message ProviderRequest_Speed {
+  required uint64 generationSamples = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  optional double generationP50TokensPerSecond = 8 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  optional double generationP90TokensPerSecond = 9 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" }];
+  required uint64 providerTimedSamples = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
+  required uint64 observedSamples = 11 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 firstOutputP50Ms = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 firstOutputP95Ms = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
   optional uint64 totalP50Ms = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Speed" integer_min: "0" integer_max: "9007199254740991" }];
@@ -237,6 +369,7 @@ message ProviderRequest_Report_total {
   required uint64 helpers = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 continued = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
   required uint64 fallback = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" integer_min: "0" integer_max: "9007199254740991" }];
+  optional ProviderRequest_CostCoverage costCoverage = 10;
   required TokenUsage_Info tokens = 6;
   optional double cost = 7 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/provider-request.ts#ProviderRequest.Report" }];
   optional ProviderRequest_Report_total_costProvenance costProvenance = 8;
@@ -278,6 +411,7 @@ enum Shell_Info_status {
   SHELL_INFO_STATUS_TIMEOUT = 3;
   SHELL_INFO_STATUS_MEMORY_LIMIT = 4;
   SHELL_INFO_STATUS_KILLED = 5;
+  SHELL_INFO_STATUS_QUEUED = 6;
 }
 
 enum FileDiff_Info_status {
@@ -364,6 +498,7 @@ message Shell_Info {
   required Shell_Info_metadata metadata = 9;
   optional LosslessString toolCallID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" utf16_min: 1 }];
   required Shell_Info_time time = 11;
+  optional uint64 queuePosition = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" integer_min: "1" integer_max: "9007199254740991" }];
 }
 
 message Shell_Info_metadata {
@@ -378,6 +513,7 @@ message Shell_Info_metadataEntry {
 message Shell_Info_time {
   required double started = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
   optional double completed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  optional double queued = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
 }
 
 message FileDiff_Info {

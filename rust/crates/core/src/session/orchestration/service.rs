@@ -7,11 +7,14 @@ use crate::{
     platform::shell::ledger,
     process::guardrails::{Guardrails, Reservation},
     session::{
-        autonomy, key,
-        projector::random_event_id,
+        autonomy, key, pending,
+        projector::{self, random_event_id},
         prompt_cache::sha256,
+        review::{ChildAnswer, Claim, DeliveryError},
+        review_fold::{self, WithdrawReason, Withdrawals},
         run_coordinator::{self, RunFuture},
         store,
+        usage_attribution::{self, Attribution},
     },
 };
 use std::{
@@ -23,16 +26,19 @@ use ycoding_schema::{
     DomainDecode, JsonValue, LosslessString, ObjectEncoder, agent, domain, model, permission,
     session, session_message,
     session_orchestration::{Answer, Change, Question, QuestionId, Task},
-    session_pending, stringify_json,
+    session_pending,
+    session_review::{Kind, Origin},
+    stringify_json, usage_anchor,
 };
 use ycoding_store::{
     IndexOrder, IndexQuery,
-    session::{NewEvent, TaskTable},
+    session::{NewEvent, SessionTable, TaskTable},
 };
 
 const PROGRESS_BYTES: usize = 4 * 1024;
 const QUESTION_BYTES: usize = 8 * 1024;
 const EXCERPT_BYTES: usize = 16 * 1024;
+const ATTEMPTS: usize = 16;
 const RESTART_LOST: &str =
     "The service restarted while the child task was active. Provider execution was not resumed.";
 
@@ -61,6 +67,7 @@ fn reconciliation_state(client: &ycoding_store::Client) -> Arc<tokio::sync::Mute
 
 pub trait Execution: Send + Sync + 'static {
     fn wake(&self, id: &session::Id) -> run_coordinator::Outcome;
+    fn resume(&self, id: &session::Id) -> RunFuture;
     fn interrupt(&self, id: &session::Id) -> RunFuture;
 }
 
@@ -164,6 +171,7 @@ pub struct Service {
     locks: Arc<Mutex<BTreeMap<LosslessString, Arc<tokio::sync::Mutex<()>>>>>,
     held: Arc<Mutex<BTreeMap<LosslessString, Reservation>>>,
     reconciled: Arc<tokio::sync::Mutex<bool>>,
+    reviews: Option<crate::tools::policy::Reviews>,
 }
 
 impl Service {
@@ -177,7 +185,20 @@ impl Service {
             locks: Arc::default(),
             held: Arc::default(),
             reconciled,
+            reviews: None,
         }
+    }
+
+    pub fn with_reviews(mut self, reviews: crate::tools::policy::Reviews) -> Self {
+        self.reviews = Some(reviews);
+        self
+    }
+
+    pub fn with_review_limit(mut self, limit: usize) -> Self {
+        if let Some(reviews) = &mut self.reviews {
+            reviews.limit = limit;
+        }
+        self
     }
 
     pub fn get(&self, parent_id: &session::Id, child_id: &session::Id) -> Result<Task, Error> {
@@ -247,6 +268,16 @@ impl Service {
         input: LaunchInput,
         cancellation: &crate::tools::code_mode::Cancellation,
     ) -> Result<Task, Error> {
+        self.launch_attributed(input, cancellation, &Attribution::Unset)
+            .await
+    }
+
+    pub async fn launch_attributed(
+        &self,
+        input: LaunchInput,
+        cancellation: &crate::tools::code_mode::Cancellation,
+        attribution: &Attribution,
+    ) -> Result<Task, Error> {
         let ids = Launch::new(
             &input.parent_id,
             &input.parent_assistant_message_id,
@@ -264,6 +295,9 @@ impl Service {
         if self.depth(&input.parent_id)? >= input.depth_limit {
             return Err(Error::DepthLimit(input.depth_limit));
         }
+        let anchor = self
+            .dispatch_anchor(input.parent_id.as_lossless(), attribution)
+            .await?;
         let prompt_digest = sha256(&input.prompt);
         if let Some(existing) = self.task(&ids.child_id)? {
             let model = existing.model.domain()?;
@@ -281,7 +315,11 @@ impl Service {
             }
             if existing.state.as_str() == Some("starting") {
                 let reservation = self.reserve(&input, cancellation).await?;
-                let task = self.start(&ids, &input.prompt).await?;
+                let stored = existing
+                    .usage_anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.domain().ok());
+                let task = self.start(&ids, &input.prompt, stored).await?;
                 self.hold(&ids, reservation);
                 return Ok(task);
             }
@@ -345,11 +383,12 @@ impl Service {
                 prompt_digest: prompt_digest.as_str().into(),
                 background: true,
                 delivery: ycoding_schema::session_delivery::Delivery::Steer,
+                usage_anchor: anchor.clone(),
             },
             Some(ids.launch_event_id.as_lossless().clone()),
         )
         .await?;
-        let task = self.start(&ids, &input.prompt).await?;
+        let task = self.start(&ids, &input.prompt, anchor).await?;
         self.hold(&ids, reservation);
         Ok(task)
     }
@@ -362,35 +401,60 @@ impl Service {
         text: &str,
         delivery: &str,
     ) -> Result<Task, Error> {
+        self.send_attributed(
+            parent_id,
+            child_id,
+            message_id,
+            text,
+            delivery,
+            &Attribution::Unset,
+        )
+        .await
+    }
+
+    pub async fn send_attributed(
+        &self,
+        parent_id: &session::Id,
+        child_id: &session::Id,
+        message_id: &session_message::Id,
+        text: &str,
+        delivery: &str,
+        attribution: &Attribution,
+    ) -> Result<Task, Error> {
         let _guard = self.lock(child_id.as_lossless()).await;
         let row = self.owned(parent_id, child_id)?;
+        if review_fold::stopped_recovery(&self.sessions.client.snapshot()?, child_id)?.is_some() {
+            return Err(Error::Conflict(
+                "A stopped recovery requires a human Continue decision".into(),
+            ));
+        }
         let state = state_of(&row);
         if state != "running" && !TERMINAL.contains(&state.as_str()) {
             return Err(Error::Conflict(format!("Cannot send to task in {state}")));
         }
-        let wake = self
-            .admit_synthetic(
-                child_id,
-                message_id,
-                format!(
-                    "Parent message:\n{}",
-                    json_text(
-                        &ObjectEncoder::new()
-                            .field("text", text)
-                            .field("delivery", delivery)
-                            .finish()
-                    )
-                ),
-                "Parent subagent message",
-                ObjectEncoder::new()
-                    .field("source", "subagent_parent")
-                    .field("parentID", parent_id)
-                    .field("childID", child_id)
-                    .field("kind", "message")
-                    .finish(),
-                delivery,
-            )
+        let caused_by = self
+            .dispatch_anchor(parent_id.as_lossless(), attribution)
             .await?;
+        let input = synthetic(
+            format!(
+                "Parent message:\n{}",
+                json_text(
+                    &ObjectEncoder::new()
+                        .field("text", text)
+                        .field("delivery", delivery)
+                        .finish()
+                )
+            ),
+            "Parent subagent message",
+            ObjectEncoder::new()
+                .field("source", "subagent_parent")
+                .field("parentID", parent_id)
+                .field("childID", child_id)
+                .field("kind", "message")
+                .finish(),
+            delivery,
+        )?;
+        let wake = self.admit(child_id, message_id, input, caused_by).await?;
         if TERMINAL.contains(&state.as_str()) {
             if self.sessions.pending(message_id)?.is_none() {
                 return Ok(task_from_row(&row)?);
@@ -411,7 +475,112 @@ impl Service {
         text: Option<&str>,
         data: Option<domain::Json>,
     ) -> Result<Task, Error> {
+        self.answer_attributed(
+            parent_id,
+            child_id,
+            question_id,
+            text,
+            data,
+            &Attribution::Unset,
+        )
+        .await
+    }
+
+    pub async fn answer_attributed(
+        &self,
+        parent_id: &session::Id,
+        child_id: &session::Id,
+        question_id: &QuestionId,
+        text: Option<&str>,
+        data: Option<domain::Json>,
+        attribution: &Attribution,
+    ) -> Result<Task, Error> {
         let _guard = self.lock(child_id.as_lossless()).await;
+        let row = self.open_question(parent_id, child_id, question_id)?;
+        if text.is_none() && data.is_none() {
+            return Err(Error::InvalidRequest(
+                "An answer requires text or data".into(),
+            ));
+        }
+        let caused_by = self
+            .dispatch_anchor(parent_id.as_lossless(), attribution)
+            .await?;
+        let text = text.map(LosslessString::from);
+        for _ in 0..ATTEMPTS {
+            let fence = {
+                let snapshot = self.sessions.client.snapshot()?;
+                if review_fold::owns_question(&snapshot, child_id, question_id)? {
+                    return Err(Error::Conflict(format!(
+                        "Question {} awaits the user's review",
+                        text_of(&question_id.0)
+                    )));
+                }
+                review_fold::latest_at(&snapshot, child_id.as_lossless())?
+            };
+            match self
+                .commit_answer(
+                    &row,
+                    parent_id,
+                    question_id,
+                    text.clone(),
+                    data.clone(),
+                    caused_by.clone(),
+                    Gate::Fence(fence),
+                )
+                .await
+            {
+                Err(error) if review_fold::is_changed(&error) => continue,
+                Err(error) => return Err(answer_error(child_id, error)),
+                Ok(wake) => {
+                    if wake {
+                        self.execution.wake(child_id)?;
+                    }
+                    return self.current(child_id);
+                }
+            }
+        }
+        Err(Error::Conflict(format!(
+            "Question {} changed during answer delivery",
+            text_of(&question_id.0)
+        )))
+    }
+
+    pub async fn answer_review(&self, answer: ChildAnswer) -> Result<(), DeliveryError> {
+        let child_id = answer.child_id.clone();
+        let _guard = self.lock(child_id.as_lossless()).await;
+        let row = self
+            .open_question(&answer.parent_id, &child_id, &answer.question_id)
+            .map_err(delivery_error)?;
+        let caused_by = self
+            .dispatch_anchor(answer.parent_id.as_lossless(), &Attribution::Unset)
+            .await
+            .map_err(delivery_error)?;
+        let wake = self
+            .commit_answer(
+                &row,
+                &answer.parent_id,
+                &answer.question_id,
+                Some(answer.text.clone()),
+                answer.data.clone(),
+                caused_by,
+                Gate::Claim(answer.claim.clone()),
+            )
+            .await
+            .map_err(|error| delivery_error(answer_error(&child_id, error)))?;
+        if wake {
+            self.execution
+                .wake(&child_id)
+                .map_err(|error| delivery_error(error.into()))?;
+        }
+        Ok(())
+    }
+
+    fn open_question(
+        &self,
+        parent_id: &session::Id,
+        child_id: &session::Id,
+        question_id: &QuestionId,
+    ) -> Result<ycoding_store::session::Task, Error> {
         let row = self.owned(parent_id, child_id)?;
         if row.question_id.as_ref() != Some(&question_id.0) {
             return Err(Error::QuestionNotFound {
@@ -425,49 +594,102 @@ impl Service {
                 text_of(&question_id.0)
             )));
         }
-        if text.is_none() && data.is_none() {
-            return Err(Error::InvalidRequest(
-                "An answer requires text or data".into(),
-            ));
-        }
-        let ids = launch_ids(&row)?;
+        Ok(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_answer(
+        &self,
+        row: &ycoding_store::session::Task,
+        parent_id: &session::Id,
+        question_id: &QuestionId,
+        text: Option<LosslessString>,
+        data: Option<domain::Json>,
+        caused_by: Option<usage_anchor::Ref>,
+        gate: Gate,
+    ) -> Result<bool, ycoding_store::Error> {
+        let child_id = session::Id::new(row.session_id.clone())
+            .map_err(|error| ycoding_store::Error::Record(Box::new(error)))?;
+        let ids =
+            launch_ids(row).map_err(|_| ycoding_store::Error::Rejected("invalid task identity"))?;
         let body = ObjectEncoder::new()
             .field("questionID", &question_id.0)
-            .optional("text", &text.map(LosslessString::from))
+            .optional("text", &text)
             .optional("data", &data)
             .finish();
-        let wake = self
-            .admit_synthetic(
-                child_id,
-                &ids.answer(text_of(&question_id.0)),
-                format!("Parent answer:\n{}", json_text(&body)),
-                "Parent subagent answer",
-                ObjectEncoder::new()
-                    .field("source", "subagent_parent")
-                    .field("parentID", parent_id)
-                    .field("childID", child_id)
-                    .field("kind", "answer")
-                    .field("questionID", &question_id.0)
-                    .finish(),
-                "steer",
-            )
-            .await?;
-        self.publish(
-            child_id,
-            Change::QuestionAnswered {
-                answer: Answer {
-                    question_id: question_id.clone(),
-                    text: text.map(Into::into),
-                    data,
-                },
-            },
-            None,
+        let input = synthetic(
+            format!("Parent answer:\n{}", json_text(&body)),
+            "Parent subagent answer",
+            ObjectEncoder::new()
+                .field("source", "subagent_parent")
+                .field("parentID", parent_id)
+                .field("childID", &child_id)
+                .field("kind", "answer")
+                .field("questionID", &question_id.0)
+                .finish(),
+            "steer",
         )
-        .await?;
-        if wake {
-            self.execution.wake(child_id)?;
-        }
-        self.current(child_id)
+        .map_err(|_| ycoding_store::Error::Rejected("invalid answer input"))?;
+        let created = now();
+        let request = pending::Request {
+            id: ids.answer(text_of(&question_id.0)),
+            session_id: child_id.clone(),
+            input,
+            event_id: random_event_id()?,
+            created,
+        };
+        let change = Change::QuestionAnswered {
+            answer: Answer {
+                question_id: question_id.clone(),
+                text,
+                data,
+            },
+        };
+        let event_id = random_event_id()?.as_lossless().clone();
+        let question = question_id.0.clone();
+        self.sessions
+            .client
+            .submit(move |tx| {
+                let child = child_id.as_lossless();
+                match &gate {
+                    Gate::Fence(fence) => {
+                        if review_fold::latest_in(tx, child)? != *fence {
+                            return Err(review_fold::changed(tx));
+                        }
+                    }
+                    Gate::Claim(claim) => {
+                        claim.commit(tx, created)?;
+                    }
+                }
+                let open = tx.get::<TaskTable>(&key(child))?.is_some_and(|task| {
+                    task.state.as_str() == Some("waiting")
+                        && task.question_id.as_ref() == Some(&question)
+                });
+                if !open {
+                    return Err(tx.reject(ycoding_store::Error::Domain {
+                        kind: "question_closed",
+                        message: "The question is no longer open",
+                    }));
+                }
+                pending::admit_in(tx, &request, &caused_by)?;
+                projector::append(
+                    tx,
+                    &NewEvent {
+                        id: event_id,
+                        aggregate_id: child.clone(),
+                        created,
+                        type_: "session.task.updated.1".into(),
+                        data: ObjectEncoder::new()
+                            .field("sessionID", &child_id)
+                            .field("change", &change)
+                            .finish(),
+                    },
+                )?;
+                Ok(tx
+                    .get::<SessionTable>(&key(child))?
+                    .is_some_and(|session| session.revert.is_none()))
+            })?
+            .await
     }
 
     pub async fn cancel(
@@ -484,8 +706,7 @@ impl Service {
         if !["starting", "running", "waiting"].contains(&state.as_str()) {
             return Err(Error::Conflict(format!("Cannot cancel task in {state}")));
         }
-        self.publish(child_id, Change::CancelRequested, None)
-            .await?;
+        self.request_cancel(child_id).await?;
         match self.execution.interrupt(child_id).await {
             Ok(()) | Err(run_coordinator::Error::Interrupted(_)) => {}
             Err(error) => return Err(error.into()),
@@ -546,6 +767,17 @@ impl Service {
         text: &str,
         data: Option<domain::Json>,
     ) -> Result<Asked, Error> {
+        self.question_attributed(child_id, text, data, &Attribution::Unset)
+            .await
+    }
+
+    pub async fn question_attributed(
+        &self,
+        child_id: &session::Id,
+        text: &str,
+        data: Option<domain::Json>,
+        attribution: &Attribution,
+    ) -> Result<Asked, Error> {
         let _guard = self.lock(child_id.as_lossless()).await;
         let row = self
             .task(child_id)?
@@ -561,20 +793,21 @@ impl Service {
             text_of(child_id.as_lossless()),
             row.revision
         ));
-        let question = Question {
+        let mut question = Question {
             id: QuestionId(format!("qst_{}", &hash[..24]).into()),
             text: truncate_utf8(text, QUESTION_BYTES).into(),
             data,
             time: non_negative(now())?,
+            deferred: None,
         };
-        let automatic = self
+        let effective = self
             .autonomy
             .effective(child_id)
             .map_err(|error| match error {
                 autonomy::Error::NotFound(_) => Error::TaskNotFound(child_id.clone()),
                 autonomy::Error::Store(error) => Error::Store(error),
-            })?
-            .can_auto_answer();
+            })?;
+        let automatic = effective.can_auto_answer() && !effective.asleep;
         if !automatic {
             self.publish(
                 child_id,
@@ -584,6 +817,39 @@ impl Service {
                 None,
             )
             .await?;
+            if effective.asleep
+                && let Some(reviews) = &self.reviews
+            {
+                reviews
+                    .service
+                    .open(crate::session::review::OpenInput {
+                        session_id: child_id.clone(),
+                        kind: Kind::SubagentQuestion,
+                        reason: if effective.can_auto_answer() {
+                            ycoding_schema::session_review::Reason::FreeText
+                        } else {
+                            ycoding_schema::session_review::Reason::Disabled
+                        },
+                        choice: None,
+                        confidence: None,
+                        grades: None,
+                        origin: Origin::Question {
+                            question_id: question.id.clone(),
+                        },
+                        payload: ycoding_schema::session_review::Payload::SubagentQuestion(
+                            ycoding_schema::session_review::SubagentQuestionPayload {
+                                text: question.text.clone(),
+                                data: question.data.clone(),
+                            },
+                        ),
+                        limit: reviews.limit,
+                        conversion: false,
+                        created: now(),
+                    })
+                    .await
+                    .map_err(|error| Error::Conflict(error.to_string()))?;
+                question.deferred = Some(true);
+            }
             return Ok(Asked {
                 question,
                 auto_answered: false,
@@ -594,20 +860,27 @@ impl Service {
             .field("questionID", &question.id.0)
             .field("text", autonomy::AUTOMATIC_ANSWER)
             .finish();
+        let caused_by = self
+            .dispatch_anchor(child_id.as_lossless(), attribution)
+            .await?;
+        let input = synthetic(
+            format!("Parent answer:\n{}", json_text(&body)),
+            "Autonomous subagent answer",
+            ObjectEncoder::new()
+                .field("source", "subagent_parent")
+                .field("parentID", &row.parent_id)
+                .field("childID", child_id)
+                .field("kind", "answer")
+                .field("questionID", &question.id.0)
+                .finish(),
+            "steer",
+        )?;
         let wake = self
-            .admit_synthetic(
+            .admit(
                 child_id,
                 &ids.answer(text_of(&question.id.0)),
-                format!("Parent answer:\n{}", json_text(&body)),
-                "Autonomous subagent answer",
-                ObjectEncoder::new()
-                    .field("source", "subagent_parent")
-                    .field("parentID", &row.parent_id)
-                    .field("childID", child_id)
-                    .field("kind", "answer")
-                    .field("questionID", &question.id.0)
-                    .finish(),
-                "steer",
+                input,
+                caused_by,
             )
             .await?;
         if wake {
@@ -733,47 +1006,82 @@ impl Service {
         lock.lock_owned().await
     }
 
-    pub(super) async fn admit_synthetic(
-        &self,
-        session_id: &session::Id,
-        id: &session_message::Id,
-        text: String,
-        description: &str,
-        metadata: JsonValue,
-        delivery: &str,
-    ) -> Result<bool, Error> {
-        let input = session_pending::Message::decode(
-            &ObjectEncoder::new()
-                .field("type", "synthetic")
-                .field(
-                    "data",
-                    &ObjectEncoder::new()
-                        .field("text", text.as_str())
-                        .field("description", description)
-                        .field("metadata", &metadata)
-                        .finish(),
-                )
-                .field("delivery", delivery)
-                .finish(),
-        )
-        .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-        self.admit(session_id, id, input).await
+    async fn request_cancel(&self, child_id: &session::Id) -> Result<(), Error> {
+        for _ in 0..ATTEMPTS {
+            let withdrawals = {
+                let snapshot = self.sessions.client.snapshot()?;
+                let items = review_fold::fold(&snapshot, &[child_id.as_lossless().clone()])?
+                    .into_iter()
+                    .filter(|item| {
+                        item.is_open()
+                            && item.deferral.kind == Kind::SubagentQuestion
+                            && matches!(item.deferral.origin, Origin::Question { .. })
+                    })
+                    .map(|item| item.item_id)
+                    .collect();
+                Withdrawals::new(
+                    &snapshot,
+                    child_id,
+                    items,
+                    WithdrawReason::TaskClosed,
+                    now(),
+                )?
+            };
+            let event = NewEvent {
+                id: random_event_id()?.as_lossless().clone(),
+                aggregate_id: child_id.as_lossless().clone(),
+                created: now(),
+                type_: "session.task.updated.1".into(),
+                data: ObjectEncoder::new()
+                    .field("sessionID", child_id)
+                    .field("change", &Change::CancelRequested)
+                    .finish(),
+            };
+            match self
+                .sessions
+                .client
+                .submit(move |tx| {
+                    withdrawals.append(tx)?;
+                    projector::append(tx, &event).map(|_| ())
+                })?
+                .await
+            {
+                Err(error) if review_fold::is_changed(&error) => continue,
+                result => return Ok(result?),
+            }
+        }
+        Err(Error::Conflict(format!(
+            "Review state for {} kept changing during cancellation",
+            text(child_id.as_lossless())
+        )))
     }
 
-    async fn admit(
+    async fn dispatch_anchor(
+        &self,
+        session: &LosslessString,
+        attribution: &Attribution,
+    ) -> Result<Option<usage_anchor::Ref>, Error> {
+        Ok(usage_attribution::dispatch(&self.sessions.client, session, attribution).await?)
+    }
+
+    pub(super) async fn admit(
         &self,
         session_id: &session::Id,
         id: &session_message::Id,
         input: session_pending::Message,
+        caused_by: Option<usage_anchor::Ref>,
     ) -> Result<bool, Error> {
         self.sessions
-            .admit_input(crate::session::pending::Request {
-                id: id.clone(),
-                session_id: session_id.clone(),
-                input,
-                event_id: random_event_id()?,
-                created: now(),
-            })
+            .admit_input_attributed(
+                crate::session::pending::Request {
+                    id: id.clone(),
+                    session_id: session_id.clone(),
+                    input,
+                    event_id: random_event_id()?,
+                    created: now(),
+                },
+                caused_by,
+            )
             .await
             .map(|admitted| admitted.wake)
             .map_err(|error| match error {
@@ -860,7 +1168,12 @@ impl Service {
             .or_insert(reservation);
     }
 
-    async fn start(&self, ids: &Launch, prompt: &str) -> Result<Task, Error> {
+    async fn start(
+        &self,
+        ids: &Launch,
+        prompt: &str,
+        caused_by: Option<usage_anchor::Ref>,
+    ) -> Result<Task, Error> {
         let input = session_pending::Message::decode(
             &ObjectEncoder::new()
                 .field("type", "user")
@@ -869,7 +1182,8 @@ impl Service {
                 .finish(),
         )
         .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-        self.admit(&ids.child_id, &ids.input_id, input).await?;
+        self.admit(&ids.child_id, &ids.input_id, input, caused_by)
+            .await?;
         self.publish(
             &ids.child_id,
             Change::Started,
@@ -1000,4 +1314,56 @@ fn text(value: &LosslessString) -> &str {
 
 fn json_text(value: &JsonValue) -> String {
     stringify_json(value)
+}
+
+enum Gate {
+    Fence(i64),
+    Claim(Claim),
+}
+
+pub(super) fn synthetic(
+    text: String,
+    description: &str,
+    metadata: JsonValue,
+    delivery: &str,
+) -> Result<session_pending::Message, Error> {
+    session_pending::Message::decode(
+        &ObjectEncoder::new()
+            .field("type", "synthetic")
+            .field(
+                "data",
+                &ObjectEncoder::new()
+                    .field("text", text.as_str())
+                    .field("description", description)
+                    .field("metadata", &metadata)
+                    .finish(),
+            )
+            .field("delivery", delivery)
+            .finish(),
+    )
+    .map_err(|error| Error::InvalidRequest(error.to_string()))
+}
+
+fn answer_error(child_id: &session::Id, error: ycoding_store::Error) -> Error {
+    match error {
+        ycoding_store::Error::Domain {
+            kind: "input_identity",
+            ..
+        } => Error::Conflict(format!(
+            "Conflicting input for {}",
+            text(child_id.as_lossless())
+        )),
+        ycoding_store::Error::Domain {
+            kind: "question_closed",
+            message,
+        } => Error::Conflict(message.into()),
+        error => Error::Store(error),
+    }
+}
+
+fn delivery_error(error: Error) -> DeliveryError {
+    match error {
+        Error::Store(error) => DeliveryError::Store(error),
+        error => DeliveryError::Conflict(error.to_string()),
+    }
 }

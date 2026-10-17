@@ -22,6 +22,49 @@ const session = {
   time: { created: 1, updated: 9 },
 }
 
+test.each([60, 100, 140])("user messages mount no cost block and never read prompt costs at width %i", async (width) => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_cost", type: "user", text: "Pricing scope", files: [], agents: [], time: { created: 1 } },
+    { id: "msg_cost_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Cost anchor verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ]
+  const paths: string[] = []
+  const screen = await renderScreen({ width, height: 44, args: { sessionID }, route: (url) => { paths.push(url.pathname); return routeFor(messages)(url) }, settle: "Cost anchor verified" })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("Pricing scope")
+    for (const hidden of ["Prompt cost", "Main $", "Children", "priced"]) expect(frame).not.toContain(hidden)
+    expect(paths.filter((path) => path.includes("/usage/prompts"))).toEqual([])
+    const lines = screen.lines().map((line) => transcriptSlice(line, width))
+    const bubble = bubbleBounds(lines, "Pricing scope")
+    expect(lines[bubble.bottom + 1]).toContain("✓")
+    expect(lines[bubble.bottom + 2]?.trim() ?? "").toBe("")
+  } finally { await screen.dispose() }
+})
+
+test("a user message with a file mounts no cost line and keeps the file chip", async () => {
+  const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_file_cost", type: "user", text: "Attached scope", files: [{ name: "notes.md", mime: "text/markdown", content: { type: "managed", digest, bytes: 0, path: `attachments/sha256/e3/${digest}` } }], agents: [], time: { created: 1 } },
+    { id: "msg_file_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "File prompt verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ]
+  const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "File prompt verified" })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("notes.md")
+    expect(frame).not.toContain("Prompt cost")
+  } finally { await screen.dispose() }
+})
+
+test("a user message without text or files mounts no line", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_empty_cost", type: "user", text: "", files: [], agents: [], time: { created: 1 } },
+    { id: "msg_empty_reply", type: "assistant", agent: "build", model, content: [{ type: "text", text: "Empty prompt boundary verified" }], finish: "stop", time: { created: 2, completed: 3 } },
+  ]
+  const screen = await renderScreen({ width: 100, height: 36, args: { sessionID }, route: routeFor(messages), settle: "Empty prompt boundary verified" })
+  try { expect(screen.frame()).not.toContain("Prompt cost") } finally { await screen.dispose() }
+})
+
+
 const usagePatch = [
   "--- a/packages/core/src/provider/usage.ts",
   "+++ b/packages/core/src/provider/usage.ts",
@@ -118,6 +161,45 @@ const toolOnlyTranscript = [
     ],
     finish: "tool-calls",
     time: { created: 2_000, completed: 3_000 },
+  },
+] as SessionMessageInfo[]
+
+const reroutedTranscript = [
+  { id: "msg_user_rerouted", type: "user", text: "Answer even if the quota runs out", time: { created: 1 } },
+  {
+    id: "msg_assistant_rerouted",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-6-sol" },
+    reroutes: [
+      {
+        from: model,
+        model: { providerID: "openai", id: "gpt-6-sol" },
+        error: { type: "provider.quota", message: "Quota exhausted for this billing period" },
+      },
+    ],
+    content: [{ type: "text", text: "Answered after the switch." }],
+    finish: "stop",
+    time: { created: 2_000, completed: 4_000 },
+  },
+] as SessionMessageInfo[]
+
+const runningReroutedTranscript = [
+  { id: "msg_user_running_rerouted", type: "user", text: "Keep going after the switch", time: { created: 1 } },
+  {
+    id: "msg_assistant_running_rerouted",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openai", id: "gpt-6-sol" },
+    reroutes: [
+      {
+        from: model,
+        model: { providerID: "openai", id: "gpt-6-sol" },
+        error: { type: "provider.quota", message: "Quota exhausted while running" },
+      },
+    ],
+    content: [],
+    time: { created: 2_000 },
   },
 ] as SessionMessageInfo[]
 
@@ -227,8 +309,9 @@ const editTranscript = [
   },
 ] as SessionMessageInfo[]
 
-function routeFor(messages: SessionMessageInfo[]) {
+function routeFor(messages: SessionMessageInfo[], active = false) {
   return (url: URL) => {
+    if (active && url.pathname === "/api/session/active") return json({ data: { [sessionID]: {} } })
     if (url.pathname === `/api/session/${sessionID}/captured-changes`)
       return json({
         data:
@@ -569,6 +652,39 @@ test("collapses a segment's file edits into one summary block that expands to th
     expect(removed.slice(0, 12)).toMatch(/\b8\b/)
     expect(removed.slice(12 + "- Old cache note".length, added.indexOf("+ Current cache note"))).toMatch(/\b8\b/)
     expect(removed).not.toContain("│")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("names the model a Step switched from, the model it switched to, and why", async () => {
+  const screen = await transcriptScreen(reroutedTranscript, "Answered after the switch.")
+
+  try {
+    const lines = transcriptLines(screen.lines())
+    const notice = lines.findIndex((line) => line.includes("↪ Switched from"))
+    expect(lines[notice]?.trim()).toMatch(
+      /^↪ Switched from (Claude Opus 5|anthropic\/claude-opus-5) to openai\/gpt-6-sol: Quota exhausted for this billing period$/,
+    )
+    expect(lastTranscriptRow(screen.lines()).trim()).toMatch(/^Build · openai\/gpt-6-sol · 2s$/)
+    expect(notice).toBeLessThan(lines.findIndex((line) => line.includes("Build · openai/gpt-6-sol")))
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps a running Step's switch notice after reconnecting before any answer text", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(runningReroutedTranscript, true),
+    settle: "Keep going after the switch",
+  })
+
+  try {
+    expect(screen.frame()).toMatch(
+      /↪ Switched from (Claude Opus 5|anthropic\/claude-opus-5) to openai\/gpt-6-sol: Quota exhausted while running/,
+    )
   } finally {
     await screen.dispose()
   }

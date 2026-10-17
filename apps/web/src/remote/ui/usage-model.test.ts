@@ -1,18 +1,27 @@
 import { expect, test } from "bun:test"
 import {
   compactUsageTotal,
+  dailyBars,
   dailySpend,
   donutGeometry,
+  matchingQuotaForecast,
   modelIdentity,
   money,
   providerDistribution,
   providerHeading,
   quotaWindow,
   relativeFreshness,
+  reportCostText,
+  reportIdentity,
   reportKey,
+  reportLabel,
+  reportNeedsNewerConnector,
+  spendCostText,
   spendMetrics,
+  sparklinePoints,
   tooltipPosition,
   usageBounds,
+  unsupportedReportMessage,
   usageReportInputs,
   visibleProviders,
   type UsageProvider,
@@ -30,7 +39,7 @@ test("donut compact formatting preserves exact small values and carries rounding
   expect(compactUsageTotal(1_000_000_000, "tokens")).toBe("1.0b")
   expect(compactUsageTotal(1_234_567_890, "spend")).toBe("$1.2b")
   expect(compactUsageTotal(0.0001, "spend")).toBe(money(0.0001))
-  expect(compactUsageTotal(-1_234, "spend")).toBe("$-1.2k")
+  expect(compactUsageTotal(-1_234, "spend")).toBe("-$1.2k")
   expect(compactUsageTotal(-1_234, "tokens")).toBe("-1.2k")
 })
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -225,7 +234,8 @@ test("usage surface uses rounded tokens and disables entrance motion when reduce
   expect(css).toContain(
     ".usage-meter > span, .usage-donut__arc, .usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }",
   )
-  expect(css).toContain(".usage-tabs button, .usage-toggle::before { transition: none; }")
+  expect(css).toContain(".usage-toggle::before { transition: none; }")
+  expect(css).toContain(".usage-breakdown__head .custom-select")
   expect(css).toContain(".usage-chart__tooltip, .usage-distribution__tooltip { animation: none; }")
 })
 
@@ -247,13 +257,25 @@ test("model breakdown uses the encoded provider and model rather than guessing f
   expect(modelIdentity("open%2Frouter/deepseek%2Fv4/high", providers)).toEqual({
     providerID: "open/router",
     provider: "OpenRouter",
-    model: "deepseek/v4 · high",
+    model: "deepseek/v4 · selected effort high",
   })
   expect(modelIdentity("openai/gpt-6-sol", [])).toEqual({
     providerID: "openai",
     provider: "openai",
     model: "gpt-6-sol",
   })
+  expect(
+    modelIdentity("openai/gpt-6-sol/high/work", [], {
+      providerID: "openai",
+      id: "gpt-6-sol",
+      variant: "high",
+      profile: "work",
+    })?.model,
+  ).toBe("gpt-6-sol · selected effort high · profile work")
+  expect(modelIdentity("openai/gpt-6-sol/high/work", [])?.model).toBe("gpt-6-sol · selected effort high · profile work")
+  expect(
+    modelIdentity("openai/gpt-6-sol/work", [], { providerID: "openai", id: "gpt-6-sol", profile: "work" })?.model,
+  ).toBe("gpt-6-sol · profile work")
   expect(modelIdentity("model_without_separator", providers)).toBeUndefined()
 })
 
@@ -350,4 +372,221 @@ test("usage report inputs stay identical within one day so revisits and preloads
     sort: "tokens",
     order: "asc",
   })
+})
+
+test("a quota forecast belongs only to the matching provider, profile, window, native unit and observation", () => {
+  const window = { id: "week", label: "Weekly", unit: "percent" as const, used: 50 }
+  const provider: UsageProvider = {
+    providerID: "openai",
+    profile: "Work",
+    label: "OpenAI",
+    status: "available",
+    source: "provider_api",
+    stability: "stable",
+    updatedAt: 600_000,
+    windows: [window],
+  }
+  const quota = {
+    providerID: "openai",
+    profile: "Work",
+    windowID: "week",
+    unit: "percent" as const,
+    source: "provider_api" as const,
+    stability: "stable" as const,
+    updatedAt: 600_000,
+    state: "estimated" as const,
+    evidence: "medium" as const,
+    method: "quota-delta-ema" as const,
+    observedFrom: 0,
+    observedTo: 600_000,
+    ratePerHour: 10,
+  }
+  expect(matchingQuotaForecast(provider, window, [quota])).toBe(quota)
+  expect(matchingQuotaForecast({ ...provider, providerID: "anthropic" }, window, [quota])).toBeUndefined()
+  expect(matchingQuotaForecast({ ...provider, profile: "Personal" }, window, [quota])).toBeUndefined()
+  expect(matchingQuotaForecast(provider, { ...window, id: "month" }, [quota])).toBeUndefined()
+  expect(matchingQuotaForecast(provider, { ...window, unit: "usd" }, [quota])).toBeUndefined()
+  expect(matchingQuotaForecast({ ...provider, updatedAt: 600_001 }, window, [quota])).toBeUndefined()
+  expect(matchingQuotaForecast(provider, window, undefined)).toBeUndefined()
+})
+
+test("provider token distributions preserve free, unpriced, partial and unpaged price coverage", () => {
+  const rows = [
+    { ...row("free/model", 0, "recorded"), costCoverage: { pricedRequests: 2, unpricedRequests: 0 } },
+    { ...row("unknown/model"), costCoverage: { pricedRequests: 0, unpricedRequests: 2 } },
+    { ...row("partial/model", 1, "recorded"), costCoverage: { pricedRequests: 1, unpricedRequests: 1 } },
+  ] as const
+  const total = {
+    ...row("total", 1, "recorded"),
+    logical: 6,
+    physical: 9,
+    tokens: { input: 2700, output: 300, reasoning: 60, cache: { read: 900, write: 120 } },
+    costCoverage: { pricedRequests: 3, unpricedRequests: 3 },
+  }
+  const report = { group: "model" as const, rows, total, rowCount: 3 }
+  const labels = new Map(providerDistribution(report, [], "tokens").segments.map((item) => [item.providerID, item.costLabel]))
+  expect(labels.get("free")).toBe("$0.00")
+  expect(labels.get("unknown")).toBe("unreported")
+  expect(labels.get("partial")).toBe("Known $1.00 + unreported")
+  const paged = providerDistribution({ ...report, rows: [rows[0], rows[2]], nextOffset: 2 }, [], "tokens")
+  expect(paged.segments.find((item) => item.providerID === "other")?.costLabel).toBe("unreported")
+  expect(paged.total).toBe(4080)
+})
+
+test("frozen report dimensions and filters preserve provider/profile identity and retained Session labels", () => {
+  const base = row("mixed", 0)
+  expect(
+    reportIdentity(
+      { ...base, dimensions: { group: "provider-profile-model", providerID: "openai", modelID: "shared", profileState: "provider-default" } },
+      [],
+    ),
+  ).toMatchObject({ providerID: "openai", model: "shared · provider default at request time" })
+  expect(
+    reportIdentity({ ...base, dimensions: { group: "profile", providerID: "other", profile: "Work", profileState: "recorded" } }, []),
+  ).toMatchObject({ providerID: "other", model: "profile Work" })
+  expect(reportLabel({ key: "ses_deleted", label: "" }, "session")).toBe("Session ses_deleted · title unreported")
+  expect(reportLabel({ key: "ses_deleted", label: "ses_deleted" }, "session")).toBe("Session ses_deleted · title unreported")
+  expect(reportLabel({ key: "ses_live", label: "Named session" }, "session")).toBe("Named session")
+  const now = Date.UTC(2026, 9, 15)
+  expect(
+    usageReportInputs(now, undefined, {
+      group: "prompt",
+      range: "all",
+      selectedEffort: "high",
+      providerID: "openai",
+      profile: "Work",
+      modelID: "shared",
+    }).breakdown,
+  ).toEqual({
+    group: "prompt",
+    selectedEffort: "high",
+    providerID: "openai",
+    profile: "Work",
+    modelID: "shared",
+    limit: 25,
+    offset: undefined,
+    sort: undefined,
+    order: undefined,
+  })
+  expect(reportKey({ group: "profile", providerID: "openai", profile: "Work" })).not.toBe(
+    reportKey({ group: "profile", providerID: "other", profile: "Work" }),
+  )
+  expect(reportKey({ group: "model", selectedEffort: "high" })).not.toBe(reportKey({ group: "model", selectedEffort: "low" }))
+})
+
+test("report ranges choose the requested window and keep empty filters out of the request", () => {
+  const now = Date.UTC(2026, 9, 15, 12)
+  const last30 = usageBounds(now)
+  expect(usageReportInputs(now, undefined, { group: "model", range: "last7" }).breakdown).toMatchObject({
+    from: usageBounds(now, undefined, 7).from,
+    to: last30.to,
+  })
+  expect(usageReportInputs(now, undefined, { group: "model", range: "custom", from: 10, to: 20 }).breakdown).toMatchObject({ from: 10, to: 20 })
+  const empty = usageReportInputs(now, undefined, { group: "model", providerID: "", profile: "", modelID: "", selectedEffort: "" }).breakdown
+  for (const key of ["providerID", "profile", "modelID", "selectedEffort"]) expect(key in empty).toBe(false)
+})
+
+test("report, daily and summary costs keep unknown prices qualified instead of showing complete zero", () => {
+  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 0 } })).toBe("$0.00")
+  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe("Known $0.00 + unreported")
+  expect(reportCostText({ costCoverage: { pricedRequests: 0, unpricedRequests: 1 } })).toBe("unreported")
+  const days = dailySpend(
+    {
+      group: "day",
+      rows: [{ ...row("2026-10-15"), costCoverage: { pricedRequests: 0, unpricedRequests: 3 } }],
+      rowCount: 1,
+      total: row("total"),
+    },
+    Date.UTC(2026, 9, 15),
+  )
+  expect(spendCostText(days.at(-1)!)).toBe("unreported")
+  expect(spendCostText(spendMetrics(days))).toBe("unreported")
+  expect(spendCostText({ cost: 0, tokens: 0, requests: 0 })).toBe("No retained requests")
+})
+
+test("older connectors reject new report groups and filters, which the page answers with an update prompt", () => {
+  expect(reportNeedsNewerConnector({ group: "day", limit: 30 })).toBe(false)
+  expect(reportNeedsNewerConnector({ group: "model", limit: 25 })).toBe(false)
+  for (const input of [
+    { group: "prompt" as const },
+    { group: "task" as const },
+    { group: "provider-profile-model" as const },
+    { group: "model" as const, providerID: "openai" },
+    { group: "model" as const, profile: "work" },
+    { group: "model" as const, modelID: "gpt" },
+    { group: "model" as const, selectedEffort: "high" },
+    { group: "day" as const, timeZone: "UTC" },
+  ])
+    expect(reportNeedsNewerConnector(input)).toBe(true)
+  expect(unsupportedReportMessage({ group: "task" })).toBe("Update YCoding on this machine to use this grouping or filter.")
+  expect(unsupportedReportMessage({ group: "model", providerID: "openai", timeZone: "UTC" })).toBe(
+    "Update YCoding on this machine to use this grouping or filter.",
+  )
+  expect(unsupportedReportMessage({ group: "day", timeZone: "UTC" })).toBe(
+    "Update YCoding on this machine to see Local usage. Switch to UTC to continue.",
+  )
+  expect(unsupportedReportMessage({ group: "day" })).toBe("Update YCoding on this machine to see usage.")
+})
+
+test("charts without credits keep their baseline and scale", () => {
+  const bars = dailyBars([0, 1, 4, 2])
+  expect(bars.axis).toBe(156)
+  expect(bars.bars.map((bar) => [bar.y + bar.height, bar.height])).toEqual([
+    [156, 2],
+    [156, 138 / 4],
+    [156, 138],
+    [156, 138 / 2],
+  ])
+  expect(sparklinePoints([0, 4]).split(" ").map((point) => point.split(",")[1])).toEqual(["28.0", "4.0"])
+  expect(dailyBars([0, 0.2]).bars[1]!.height).toBeCloseTo(138 * 0.2)
+})
+
+test("charges rise and credits fall from one zero line that stays inside the plot", () => {
+  const { axis, bars } = dailyBars([14.5, -7.5, 0, -0.004])
+  expect(axis).toBeCloseTo(18 + (138 * 14.5) / 22)
+  expect(bars[0]!.y + bars[0]!.height).toBeCloseTo(axis)
+  expect(bars[1]!.y).toBeCloseTo(axis)
+  expect(bars[1]!.height).toBeCloseTo((138 * 7.5) / 22)
+  expect(bars[3]!.y).toBeCloseTo(axis)
+  expect(bars[3]!.height).toBeGreaterThanOrEqual(4)
+  for (const bar of bars) {
+    expect(bar.y).toBeGreaterThanOrEqual(18)
+    expect(bar.y + bar.height).toBeLessThanOrEqual(156.0000001)
+  }
+  const ys = sparklinePoints([14.5, -7.5, 0]).split(" ").map((point) => Number(point.split(",")[1]))
+  expect(ys[0]).toBeCloseTo(4, 1)
+  expect(ys[1]).toBeCloseTo(28, 1)
+  expect(ys[2]).toBeGreaterThan(ys[0]!)
+  expect(ys[2]).toBeLessThan(ys[1]!)
+})
+
+test("a tiny credit beside a large charge is bounded by its sign-side space rather than the minimum height", () => {
+  const { axis, bars } = dailyBars([1000, -0.004, 0])
+  expect(axis).toBeGreaterThan(155.99)
+  expect(axis).toBeLessThan(156)
+  expect(bars[0]!.height).toBeCloseTo(axis - 18)
+  expect(bars[1]!.y).toBeCloseTo(axis)
+  expect(bars[1]!.height).toBeGreaterThan(0)
+  expect(bars[1]!.height).toBeLessThan(4)
+  expect(bars[1]!.y + bars[1]!.height).toBeLessThanOrEqual(156.0000001)
+  expect(bars[2]!.y).toBeGreaterThanOrEqual(18)
+  expect(bars[2]!.y + bars[2]!.height).toBeLessThanOrEqual(156.0000001)
+})
+
+test("all-negative days hang from the top of the plot and zero days stay inside it", () => {
+  const { axis, bars } = dailyBars([0, -1, -3, 0])
+  expect(axis).toBe(18)
+  expect(bars[2]!.y).toBe(18)
+  expect(bars[2]!.height).toBeCloseTo(138)
+  expect(bars[1]!.height).toBeCloseTo(46)
+  for (const index of [0, 3]) {
+    expect(bars[index]!.y).toBeGreaterThanOrEqual(18)
+    expect(bars[index]!.y + bars[index]!.height).toBeLessThanOrEqual(156)
+    expect(bars[index]!.height).toBe(2)
+  }
+  const ys = sparklinePoints([0, -1, -3]).split(" ").map((point) => Number(point.split(",")[1]))
+  expect(ys[0]).toBeCloseTo(4, 1)
+  expect(ys[2]).toBeCloseTo(28, 1)
+  expect(Math.min(...ys)).toBeGreaterThanOrEqual(3.95)
+  expect(Math.max(...ys)).toBeLessThanOrEqual(28.05)
 })

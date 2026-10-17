@@ -1,7 +1,7 @@
 import type { ShellInfo } from "@ycoding-ai/client"
 import { useTheme } from "../../context/theme"
 import { formatShellElapsed } from "../session/composer/shell-tab"
-import { statusColor } from "./util"
+import { shellStatusLabel, statusColor } from "./util"
 
 export function ShellOutputMetadata(props: { shell: ShellInfo; owner: string; now: number }) {
   const { theme } = useTheme()
@@ -22,7 +22,7 @@ export function ShellOutputMetadata(props: { shell: ShellInfo; owner: string; no
         </box>
         <box width={47} flexDirection="column" gap={1}>
           <text wrapMode="none" fg={theme.text.subdued}>Status</text>
-          <text wrapMode="none" fg={statusColor(props.shell.status, theme)}>{props.shell.status}</text>
+          <text wrapMode="none" fg={statusColor(props.shell.status, theme)}>{shellStatusLabel(props.shell)}</text>
         </box>
         <box width={47} flexDirection="column" gap={1}>
           <text wrapMode="none" fg={theme.text.subdued}>Started</text>

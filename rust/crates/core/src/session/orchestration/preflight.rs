@@ -209,6 +209,14 @@ pub async fn reserve(
             metadata: Some(metadata),
             skip_review: false,
             holder: Some(call.call_id.clone()),
+            defer_shell: false,
+            source: ycoding_schema::DomainDecode::decode(
+                &ycoding_schema::ObjectEncoder::new()
+                    .field("messageID", &call.message_id)
+                    .field("callID", &call.call_id)
+                    .finish(),
+            )
+            .ok(),
         })
         .map_err(rejected)?;
     if let Some(wait) = admission.wait {

@@ -232,6 +232,10 @@ pub fn record(
             Value15,
             SessionLogItemValue15,
             v5::SessionLogItemValue15Data {
+                caused_by: data
+                    .opt("causedBy")
+                    .map(payload::usage_anchor)
+                    .transpose()?,
                 session_id: text(data, "sessionID")?,
                 input_id: text(data, "inputID")?,
                 input: payload::pending(data.field("input")?)?
@@ -524,23 +528,6 @@ pub fn record(
                 state: data.opt("state").map(message::provider_state).transpose()?
             }
         ),
-        Some("session.tool.progress") => item!(
-            Value40,
-            SessionLogItemValue40,
-            v5::SessionLogItemValue40Data {
-                session_id: text(data, "sessionID")?,
-                assistant_message_id: text(data, "assistantMessageID")?,
-                call_id: text(data, "callID")?,
-                structured: object!(
-                    data.field("structured")?,
-                    SessionLogItemValue40DataStructured,
-                    SessionLogItemValue40DataStructuredEntry
-                ),
-                content: v5::SessionLogItemValue40DataContent {
-                    items: message::tool_contents(data.field("content")?)?
-                }
-            }
-        ),
         Some("session.tool.success") => item!(
             Value41,
             SessionLogItemValue41,
@@ -615,6 +602,10 @@ pub fn record(
             Value45,
             SessionLogItemValue45,
             v5::SessionLogItemValue45Data {
+                usage_anchor: data
+                    .opt("usageAnchor")
+                    .map(payload::usage_anchor)
+                    .transpose()?,
                 session_id: text(data, "sessionID")?,
                 job_id: text(data, "jobID")?,
                 pressure: data.opt("pressure").map(payload::pressure).transpose()?
@@ -673,6 +664,116 @@ pub fn record(
                 to: text(data, "to")?
             }
         ),
+        Some("session.guardrail.dismissed") => item!(
+            Value53,
+            SessionLogItemValue53,
+            v5::SessionLogItemValue53Data {
+                session_id: text(data, "sessionID")?,
+                review_session_id: text(data, "reviewSessionID")?,
+                rule_id: text(data, "ruleID")?,
+                confidence: number(data, "confidence")?,
+                source: data.opt("source").map(payload::source).transpose()?
+            }
+        ),
+        Some("session.guardrail.escalated") => item!(
+            Value54,
+            SessionLogItemValue54,
+            v5::SessionLogItemValue54Data {
+                session_id: text(data, "sessionID")?,
+                request_id: text(data, "requestID")?,
+                choice: opt_literal(data, "choice", payload::CHOICE)?,
+                confidence: opt_number(data, "confidence")?,
+                grades: data
+                    .opt("grades")
+                    .map(|grades| payload::grades(grades)
+                        .map(|items| v5::SessionLogItemValue54DataGrades { items }))
+                    .transpose()?,
+                rule_i_ds: data
+                    .opt("ruleIDs")
+                    .map(|rules| payload::strings(rules)
+                        .map(|items| v5::SessionLogItemValue54DataRuleIDs { items }))
+                    .transpose()?,
+                source: data.opt("source").map(payload::source).transpose()?
+            }
+        ),
+        Some("session.guardrail.decided") => item!(
+            Value55,
+            SessionLogItemValue55,
+            v5::SessionLogItemValue55Data {
+                session_id: text(data, "sessionID")?,
+                review_session_id: text(data, "reviewSessionID")?,
+                request_id: text(data, "requestID")?,
+                reply: literal(data, "reply", payload::REPLY)?,
+                choice: opt_literal(data, "choice", payload::CHOICE)?,
+                grades: data
+                    .opt("grades")
+                    .map(|grades| payload::grades(grades)
+                        .map(|items| v5::SessionLogItemValue55DataGrades { items }))
+                    .transpose()?,
+                confidence: opt_number(data, "confidence")?,
+                rule_i_ds: data
+                    .opt("ruleIDs")
+                    .map(|rules| payload::strings(rules)
+                        .map(|items| v5::SessionLogItemValue55DataRuleIDs { items }))
+                    .transpose()?,
+                source: data.opt("source").map(payload::source).transpose()?
+            }
+        ),
+        Some("session.review.deferred") => item!(
+            Value56,
+            SessionLogItemValue56,
+            v5::SessionLogItemValue56Data {
+                session_id: text(data, "sessionID")?,
+                item_id: text(data, "itemID")?,
+                kind: literal(data, "kind", payload::REVIEW_KIND)?,
+                reason: literal(data, "reason", payload::REVIEW_REASON)?,
+                choice: opt_text(data, "choice")?,
+                confidence: opt_number(data, "confidence")?,
+                grades: data
+                    .opt("grades")
+                    .map(|grades| payload::grades(grades)
+                        .map(|items| v5::SessionLogItemValue56DataGrades { items }))
+                    .transpose()?,
+                origin: payload::origin(data.field("origin")?)?,
+                payload: payload::review_payload(data.field("payload")?)?
+            }
+        ),
+        Some("session.review.decided") => item!(
+            Value57,
+            SessionLogItemValue57,
+            v5::SessionLogItemValue57Data {
+                session_id: text(data, "sessionID")?,
+                item_id: text(data, "itemID")?,
+                decision: payload::review_decision(data.field("decision")?)?
+            }
+        ),
+        Some("session.review.withdrawn") => item!(
+            Value58,
+            SessionLogItemValue58,
+            v5::SessionLogItemValue58Data {
+                session_id: text(data, "sessionID")?,
+                item_id: text(data, "itemID")?,
+                reason: literal(data, "reason", payload::WITHDRAWN)?
+            }
+        ),
+        Some("session.review.consumed") => item!(
+            Value59,
+            SessionLogItemValue59,
+            v5::SessionLogItemValue59Data {
+                session_id: text(data, "sessionID")?,
+                item_id: text(data, "itemID")?
+            }
+        ),
+        Some("session.step.rerouted") => item!(
+            Value60,
+            SessionLogItemValue60,
+            v5::SessionLogItemValue60Data {
+                session_id: text(data, "sessionID")?,
+                assistant_message_id: text(data, "assistantMessageID")?,
+                model: message::model_ref(data.field("model")?)?,
+                error: message::structured_error(data.field("error")?)?
+            }
+        ),
         _ => return Err(Unrepresentable("session log event")),
     };
     Ok(Record {
@@ -692,6 +793,7 @@ pub fn excluded(type_: &str) -> bool {
     matches!(
         type_,
         "session.profile.bound.1"
+            | "session.tool.progress.1"
             | "session.guardrail.approved.1"
             | "session.usage.recorded.1"
             | "session.provider.request.recorded.1"

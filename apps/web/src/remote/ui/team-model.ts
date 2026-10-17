@@ -1,18 +1,49 @@
 import type { SessionInfoView, TeamTaskView } from "../store"
+import { accountingPresentation, costText } from "./usage-accounting"
+import { tokenCount } from "./usage-model"
 
 export type TeamSubagent = TeamTaskView & {
   readonly startedAt?: number
-  readonly question?: { readonly id: string; readonly text: string }
+  readonly question?: { readonly id: string; readonly text: string; readonly deferred?: true }
   readonly cacheHitRatio?: number
 }
 
 export type TeamShell = {
   readonly id: string
   readonly ownerID: string
+  readonly ownerAgent?: string
+  readonly ownerTitle?: string
   readonly command: string
-  readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
+  readonly queuePosition?: number
   readonly startedAt: number
   readonly completedAt?: number
+}
+
+export const TEAM_SHELL_OUTPUT_TAIL_LIMIT = 256 * 1024
+
+export function appendTeamShellOutput(current: string, page: string, limit: number = TEAM_SHELL_OUTPUT_TAIL_LIMIT): string {
+  const text = current + page
+  if (text.length <= limit) return text
+  const tail = text.slice(-limit)
+  const newline = tail.indexOf("\n")
+  return newline > 0 && newline < limit / 2 ? tail.slice(newline + 1) : tail
+}
+
+export function shellOwnerLabel(
+  shell: TeamShell,
+  family: {
+    readonly rootID: string
+    readonly tasks: readonly TeamSubagent[]
+    readonly sideChats: readonly TeamSideChat[]
+  },
+): string {
+  if (shell.ownerID === family.rootID) return "Main session"
+  const owner = family.tasks.find((task) => task.sessionID === shell.ownerID)
+  if (owner) return `${owner.agent ?? "Subagent"} · ${owner.description}`
+  const chat = family.sideChats.find((item) => item.id === shell.ownerID)
+  if (chat) return `Side chat · ${chat.title}`
+  return shell.ownerTitle ? `${shell.ownerAgent ?? "Subagent"} · ${shell.ownerTitle}` : shell.ownerAgent ?? "Subagent"
 }
 
 type TeamSideChat = {
@@ -43,7 +74,11 @@ export type TeamPanelData = {
 
 export type TeamActionOutcome = { readonly status: "ok" } | { readonly status: "failed" | "unknown"; readonly message: string }
 
-export type TeamShellOutput = { readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }
+export type TeamShellOutput = { readonly command?: string; readonly status?: string; readonly text: string; readonly cursor: number; readonly size: number; readonly truncated: boolean }
+
+export function teamShellCommand(shell: Pick<TeamShell, "command">, output?: Pick<TeamShellOutput, "command">): string {
+  return output?.command ?? shell.command
+}
 
 const rank: Readonly<Record<TeamSubagent["state"], number>> = {
   waiting: 0, starting: 1, running: 1, cancelling: 2, completed: 3, cancelled: 4, failed: 5, lost: 6,
@@ -52,6 +87,14 @@ const rank: Readonly<Record<TeamSubagent["state"], number>> = {
 export function isManagedSubagent(session: Pick<SessionInfoView, "parentID" | "agent"> | undefined): boolean {
   return session?.parentID !== undefined && session.agent !== "btw"
 }
+
+export const taskStateLabel = (task: Pick<TeamSubagent, "state" | "stoppedRecovery">) => task.stoppedRecovery === undefined ? task.state : "stopped"
+
+export const canContinueRecovery = (task: Pick<TeamSubagent, "stoppedRecovery">) => task.stoppedRecovery !== undefined
+
+export const isDeferredQuestion = (task: Pick<TeamSubagent, "question">) => task.question?.deferred === true
+
+export const canAnswerSubagent = (task: Pick<TeamSubagent, "state" | "question">) => task.question !== undefined && task.state === "waiting" && !isDeferredQuestion(task)
 
 export function canCancelSubagent(state: TeamSubagent["state"]): boolean {
   return state === "starting" || state === "running" || state === "waiting"
@@ -107,6 +150,11 @@ export function siblingTargets(tasks: readonly TeamSubagent[], currentID: string
   return { previous: index > 0 ? rows[index - 1] : undefined, next: index >= 0 ? rows[index + 1] : undefined }
 }
 
+export function shellStatusLabel(shell: Pick<TeamShell, "status" | "queuePosition">): string {
+  if (shell.status !== "queued") return shell.status
+  return shell.queuePosition === undefined ? "queued" : `queued #${shell.queuePosition}`
+}
+
 export function shellRows(shells: readonly TeamShell[]): readonly string[] {
   return [...new Set(shells.map((shell) => shell.ownerID))].flatMap((ownerID) => [
     `owner:${ownerID}`, ...shells.filter((shell) => shell.ownerID === ownerID).map((shell) => shell.id),
@@ -128,24 +176,33 @@ export function formatElapsed(startedAt: number | undefined, endedAt: number): s
 export type UsageSlot = {
   readonly key: "tokens" | "cost" | "context" | "cache"
   readonly label: string
-  readonly state: "value" | "loading" | "unreported"
+  readonly state: "value" | "loading" | "unreported" | "unsupported"
   readonly value: string
   readonly meter?: number
 }
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
-
 export function usageSlots(task: TeamSubagent, economics: { readonly loading?: boolean }): readonly UsageSlot[] {
   const slot = (key: UsageSlot["key"], label: string, value: string | undefined, meter?: number): UsageSlot =>
-    value !== undefined ? { key, label, state: "value", value, ...(meter === undefined ? {} : { meter }) }
+    value !== undefined
+      ? { key, label, state: "value", value, ...(meter === undefined ? {} : { meter }) }
       : { key, label, state: economics.loading === true ? "loading" : "unreported", value: "—" }
   const context = task.contextTotal === undefined ? undefined
     : `${task.contextTotal.toLocaleString("en-US")} / ${task.contextLimit === undefined ? "unreported" : task.contextLimit.toLocaleString("en-US")}`
   const meter = task.contextTotal === undefined || task.contextLimit === undefined || task.contextLimit <= 0 ? undefined : Math.min(1, task.contextTotal / task.contextLimit)
   const cache = formatCacheHit(task.cacheHitRatio)
   return [
-    slot("tokens", "Tokens", task.tokens?.toLocaleString("en-US")),
-    slot("cost", "Cost", task.cost === undefined ? undefined : money.format(task.cost)),
+    slot(
+      "tokens",
+      "Tokens (inclusive)",
+      task.accounting === undefined ? undefined : tokenCount(task.accounting.total.tokens).toLocaleString("en-US"),
+    ),
+    slot(
+      "cost",
+      "Cost (inclusive)",
+      task.accounting?.total.cost.known === undefined
+        ? undefined
+        : `${costText(task.accounting.total.cost)}${task.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(task.accounting, task.accountingUnavailable).complete ? "" : " · incomplete"}`,
+    ),
     slot("context", "Context", context, meter),
     slot("cache", "Cache", task.cacheHitRatio === undefined || cache === "—" ? undefined : cache),
   ]

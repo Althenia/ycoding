@@ -70,6 +70,156 @@ async function setup(
 }
 
 describe("remote team facts", () => {
+  test("an inventory invalidation reconciles family shell deletions without a running-status transition", async () => {
+    let live = true
+    const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation === "session.team.shell.list") return { ok: true, value: { data: live ? [
+        { id: "sh_external_running", ownerID: "ses_a", command: "bun test", status: "running", startedAt: 1 },
+        { id: "sh_external_queued", ownerID: "ses_a", command: "bun check", status: "queued", queuePosition: 2, startedAt: 2 },
+      ] : [], truncated: false } }
+      return "default"
+    })
+    try {
+      h.store.watchTeam(true); await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.shells.length === 2)
+      live = false
+      h.relay.pushSessions([])
+      await waitFor(() => h.store.state().team?.shells.length === 0)
+      const reads = h.relay.requests.filter((request) => request.operation === "session.team.shell.list")
+      expect(reads.length).toBeGreaterThanOrEqual(2)
+      expect(reads.every((request) => request.sessionID === "ses_a" && request.input === undefined)).toBe(true)
+    } finally { await h.stop() }
+  })
+
+  test("a stopped recovery and a deferred question stay on their tasks, and a human Continue sends one review decision for the stopped item", async () => {
+    let stopped = true
+    const gate = Promise.withResolvers<RelayHandlerOutcome>()
+    const h = await setup(
+      () => ({
+        ok: true,
+        value: {
+          data: [
+            {
+              ...task("ses_stopped", "ses_a", "cancelled"),
+              ...(stopped ? { stoppedRecovery: { itemID: "rvw_stopped" } } : {}),
+            },
+            { ...task("ses_waiting", "ses_a", "waiting"), question: { id: "qst_1", text: "Which?", time: 2, deferred: true } },
+            { ...task("ses_bad", "ses_a", "cancelled"), stoppedRecovery: { itemID: "grq_not_a_review" } },
+          ],
+          summary: { total: 3, active: 1, running: 0, waiting: 1 },
+          cursor: {},
+        },
+      }),
+      undefined,
+      (request) => {
+        if (request.operation !== "session.review.decide") return "default"
+        return gate.promise.then((outcome) => {
+          if (outcome !== "default" && outcome !== "silent" && outcome !== "close" && outcome.ok) stopped = false
+          return outcome
+        })
+      },
+    )
+    const decisions = () => h.relay.requests.filter((request) => request.operation === "session.review.decide")
+    try {
+      h.store.watchTeam(true)
+      await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.tasks.length === 3)
+      const tasks = h.store.state().team!.tasks
+      expect(tasks.find((item) => item.sessionID === "ses_stopped")?.stoppedRecovery).toEqual({ itemID: "rvw_stopped" })
+      expect(tasks.find((item) => item.sessionID === "ses_waiting")?.question).toEqual({
+        id: "qst_1",
+        text: "Which?",
+        deferred: true,
+      })
+      expect(tasks.find((item) => item.sessionID === "ses_bad")?.stoppedRecovery).toBeUndefined()
+      for (const childID of ["ses_waiting", "ses_bad", "ses_unknown"])
+        expect(await h.store.continueRecovery(childID)).toMatchObject({ status: "failed" })
+      expect(decisions()).toHaveLength(0)
+
+      const first = h.store.continueRecovery("ses_stopped")
+      await waitFor(() => decisions().length === 1)
+      expect(await h.store.continueRecovery("ses_stopped")).toMatchObject({
+        status: "failed",
+        message: expect.stringContaining("already being sent"),
+      })
+      expect(decisions()).toHaveLength(1)
+      gate.resolve({ ok: true, value: null })
+      expect(await first).toEqual({ status: "ok", message: "" })
+      expect(decisions()[0]).toMatchObject({
+        sessionID: "ses_stopped",
+        input: { itemID: "rvw_stopped", decision: { kind: "recovery", choice: "continue" } },
+      })
+      expect(
+        h.store.state().team?.tasks.find((item) => item.sessionID === "ses_stopped")?.stoppedRecovery,
+      ).toBeUndefined()
+      expect(await h.store.continueRecovery("ses_stopped")).toMatchObject({ status: "failed" })
+      expect(decisions()).toHaveLength(1)
+    } finally {
+      await h.stop()
+    }
+  })
+
+  test("a refused or unconfirmed Continue is reported once and never replayed on its own", async () => {
+    for (const [outcome, status] of [
+      [
+        {
+          ok: false,
+          code: "invalid_message",
+          message: "The local server refused a conflicting request; do not replay it automatically",
+        },
+        "failed",
+      ],
+      ["close", "unknown"],
+    ] as const) {
+      const h = await setup(
+        () => ({
+          ok: true,
+          value: {
+            data: [{ ...task("ses_stopped", "ses_a", "cancelled"), stoppedRecovery: { itemID: "rvw_stopped" } }],
+            summary: { total: 1, active: 0, running: 0, waiting: 0 },
+            cursor: {},
+          },
+        }),
+        undefined,
+        (request) => (request.operation === "session.review.decide" ? outcome : "default"),
+      )
+      try {
+        h.store.watchTeam(true)
+        await h.store.selectSession("ses_a")
+        await waitFor(() => h.store.state().team?.tasks.length === 1)
+        expect(await h.store.continueRecovery("ses_stopped")).toMatchObject({ status })
+        await Bun.sleep(100)
+        expect(h.relay.requests.filter((request) => request.operation === "session.review.decide")).toHaveLength(1)
+      } finally {
+        await h.stop()
+      }
+    }
+  })
+
+  test("an opened shell retains its verified owner for the final read after leaving the live list", async () => {
+    let live = true
+    const command = "bun test --watch"
+    const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation === "session.team.shell.list") return { ok: true, value: { data: live ? [{ id: "sh_final", ownerID: "ses_a", command, status: "running", startedAt: 1 }] : [], truncated: false } }
+      if (request.operation === "shell.output") return { ok: true, value: { command, status: live ? "running" : "exited", data: { output: live ? "first" : "final", cursor: live ? 5 : 10, size: live ? 5 : 10, truncated: false } } }
+      return "default"
+    })
+    try {
+      h.store.watchTeam(true); await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.shellStatus === "ready")
+      expect(await h.store.teamShellOutput("ses_a", "sh_final")).toMatchObject({ text: "first" })
+      live = false
+      h.relay.pushEvent("ses_a", { type: "session.execution.succeeded", created: 10, data: {} })
+      await waitFor(() => h.store.state().team?.shells.length === 0)
+      expect(await h.store.teamShellOutput("ses_a", "sh_final", 5)).toMatchObject({ command, status: "exited", text: "final", cursor: 10 })
+      const reads = h.relay.requests.filter((request) => request.operation === "shell.output").length
+      await expect(h.store.teamShellOutput("ses_foreign", "sh_final")).rejects.toThrow("not in this family")
+      expect(h.relay.requests.filter((request) => request.operation === "shell.output")).toHaveLength(reads)
+      await h.store.selectSession("ses_b")
+      await expect(h.store.teamShellOutput("ses_a", "sh_final")).rejects.toThrow("not in this family")
+    } finally { await h.stop() }
+  })
+
   test("a background shell counts without an active subagent, stays resident during refresh and updates on terminal work", async () => {
     let exited = false
     let hold = false
@@ -148,7 +298,17 @@ describe("remote team facts", () => {
           return {
             ok: true,
             value: {
-              data: [{ id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 }],
+              data: [
+                { id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 },
+                {
+                  id: "sh_queued",
+                  ownerID: "ses_child",
+                  command: "bun typecheck",
+                  status: "queued",
+                  queuePosition: 2,
+                  startedAt: 2,
+                },
+              ],
               truncated: false,
             },
           }
@@ -191,7 +351,10 @@ describe("remote team facts", () => {
       expect(test.store.state().team).toMatchObject({
         shellStatus: "ready",
         sideChatStatus: "ready",
-        shells: [{ id: "sh_child", ownerID: "ses_child" }],
+        shells: [
+          { id: "sh_child", ownerID: "ses_child" },
+          { id: "sh_queued", status: "queued", queuePosition: 2 },
+        ],
         sideChats: [{ id: "ses_btw" }],
       })
       expect(await test.store.answerSubagent("ses_child", "qst_1", "staging")).toMatchObject({ status: "ok" })
@@ -199,7 +362,14 @@ describe("remote team facts", () => {
       expect(await test.store.cancelSubagent("ses_child")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.tasks[0]?.state).toBe("cancelling")
       expect(await test.store.killTeamShell("sh_child")).toMatchObject({ status: "ok" })
-      expect(test.store.state().team?.shells[0]?.status).toBe("killed")
+      expect(test.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_queued"])
+      expect(await test.store.killTeamShell("sh_queued")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.shells).toEqual([])
+      expect(
+        test.relay.requests
+          .filter((request) => request.operation === "session.team.shell.kill")
+          .map((request) => request.input),
+      ).toEqual([{ shellID: "sh_child" }, { shellID: "sh_queued" }])
       expect(await test.store.createSideChat()).toMatchObject({ status: "ok" })
       expect(test.relay.requests.filter((request) => request.operation === "session.side-chat.create")).toHaveLength(1)
       expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
@@ -253,13 +423,14 @@ describe("remote team facts", () => {
       test.store.subscribe(() => loading.push(test.store.state().team?.pageLoading === true))
       test.relay.pushEvent("ses_a", {
         id: "evt_team_refresh",
-        type: "session.tool.progress",
+        type: "session.tool.success",
         durable: { aggregateID: "ses_a", seq: 1, version: 1 },
         data: {
           sessionID: "ses_a",
           assistantMessageID: "msg_1",
           callID: "call_1",
           structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
           content: [],
         },
       })
@@ -778,13 +949,14 @@ describe("remote team facts", () => {
       await waitFor(() => test.store.state().team?.status === "ready")
       test.relay.pushEvent("ses_a", {
         id: "evt_team_refresh",
-        type: "session.tool.progress",
+        type: "session.tool.success",
         durable: { aggregateID: "ses_a", seq: 1, version: 1 },
         data: {
           sessionID: "ses_a",
           assistantMessageID: "msg_1",
           callID: "call_1",
           structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
           content: [],
         },
       })
@@ -815,13 +987,14 @@ describe("remote team facts", () => {
     const cue = (seq: number) =>
       test.relay.pushEvent("ses_a", {
         id: `evt_team_refresh_${seq}`,
-        type: "session.tool.progress",
+        type: "session.tool.success",
         durable: { aggregateID: "ses_a", seq, version: 1 },
         data: {
           sessionID: "ses_a",
           assistantMessageID: "msg_1",
           callID: `call_${seq}`,
           structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
           content: [],
         },
       })
@@ -967,6 +1140,47 @@ describe("remote team facts", () => {
     expect(readSessionInfo({ id: "ses_child", parentID: 42 })?.parentID).toBeUndefined()
   })
 
+  test("a live-only tool progress event never records a delegation cue", async () => {
+    const test = await setup(() => ({
+      ok: true,
+      value: { data: [task("ses_child")], summary: { total: 1, active: 1, running: 1, waiting: 0 }, cursor: {} },
+    }))
+    try {
+      test.store.watchTeam(true)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().team?.status === "ready")
+      test.relay.pushEvent("ses_a", {
+        id: "evt_progress",
+        type: "session.tool.progress",
+        data: {
+          sessionID: "ses_a",
+          assistantMessageID: "msg_1",
+          callID: "call_progress",
+          structured: { sessionID: "ses_child", status: "running" },
+          content: [],
+        },
+      })
+      test.relay.pushEvent("ses_a", {
+        id: "evt_settled",
+        type: "session.tool.success",
+        data: {
+          sessionID: "ses_a",
+          assistantMessageID: "msg_1",
+          callID: "call_settled",
+          structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
+          content: [],
+        },
+      })
+      await waitFor(() => test.store.state().teamCues.length > 0)
+      expect(test.store.state().teamCues).toEqual([
+        { id: "msg_1:call_settled:ses_child", kind: "delegated", childID: "ses_child" },
+      ])
+    } finally {
+      await test.stop()
+    }
+  })
+
   test("does not animate an event observed inside the initial snapshot hydration window", async () => {
     const held = Promise.withResolvers<RelayHandlerOutcome>()
     const test = await setup(
@@ -983,13 +1197,14 @@ describe("remote team facts", () => {
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.snapshot"))
       test.relay.pushEvent("ses_a", {
         id: "evt_during",
-        type: "session.tool.progress",
+        type: "session.tool.success",
         durable: { aggregateID: "ses_a", seq: 1, version: 1 },
         data: {
           sessionID: "ses_a",
           assistantMessageID: "msg_1",
           callID: "call_1",
           structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
           content: [],
         },
       })
@@ -1147,13 +1362,14 @@ describe("remote team facts", () => {
       expect(test.store.state().teamCues).toEqual([])
       const delegated = {
         id: "evt_delegate",
-        type: "session.tool.progress",
+        type: "session.tool.success",
         durable: { aggregateID: "ses_a", seq: 1, version: 1 },
         data: {
           sessionID: "ses_a",
           assistantMessageID: "msg_assistant",
           callID: "call_1",
           structured: { sessionID: "ses_child", status: "running" },
+          executed: true,
           content: [],
         },
       }
@@ -1182,13 +1398,14 @@ describe("remote team facts", () => {
       for (let index = 3; index <= 12; index += 1)
         test.relay.pushEvent("ses_a", {
           id: `evt_${index}`,
-          type: "session.tool.progress",
+          type: "session.tool.success",
           durable: { aggregateID: "ses_a", seq: index, version: 1 },
           data: {
             sessionID: "ses_a",
             assistantMessageID: "msg_assistant",
             callID: `call_${index}`,
             structured: { sessionID: `ses_child_${index}`, status: "running" },
+            executed: true,
             content: [],
           },
         })

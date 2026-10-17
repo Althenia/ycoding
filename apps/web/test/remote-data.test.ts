@@ -72,8 +72,8 @@ describe("remote data", () => {
           test.store.state().notifications.length === 2,
       )
       expect(rows()).toEqual([
-        ["ses_a", false, true],
         ["ses_b", true, false],
+        ["ses_a", false, true],
       ])
       expect(test.store.state().notifications).toHaveLength(2)
       expect(test.store.state().notifications.map((notice) => [notice.category, notice.sessionID])).toEqual(
@@ -1025,14 +1025,14 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessionStatus !== undefined)
       test.relay.pushStatus(["ses_b"], ["ses_a"])
       await waitFor(() => test.store.state().sessionStatus?.attention.has("ses_a") === true)
-      expect(test.store.state().sessions.map((row) => row.id)).toEqual(["ses_b", "ses_a"])
+      expect(test.store.state().sessions.map((row) => row.id)).toEqual(["ses_a", "ses_b"])
       expect(test.store.state().notifications).toEqual([])
 
       test.relay.pushStatus(["ses_a"], ["ses_b"])
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_a") === true)
       expect(test.store.state().sessions.map((row) => [row.id, row.running, row.attention])).toEqual([
-        ["ses_a", true, false],
         ["ses_b", false, true],
+        ["ses_a", true, false],
       ])
       expect(test.store.state().notifications).toEqual([])
     } finally {
@@ -1050,8 +1050,8 @@ describe("remote data", () => {
       await waitFor(() => test.store.state().sessions.length === 2)
       await waitFor(() => test.store.state().sessionStatus?.running.has("ses_b") === true)
       expect(test.store.state().sessions.map((row) => [row.id, row.running, row.attention])).toEqual([
-        ["ses_b", true, false],
         ["ses_a", false, true],
+        ["ses_b", true, false],
       ])
       expect(test.relay.requests.filter((request) => request.operation === "session.status")).toHaveLength(1)
       expect(test.relay.requests.filter((request) => request.operation === "session.active")).toHaveLength(0)

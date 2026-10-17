@@ -161,6 +161,12 @@ struct Execution {
     interrupted: Arc<Mutex<Vec<session::Id>>>,
 }
 impl orchestration::Execution for Execution {
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        let coordinator = self.coordinator.clone();
+        let id = id.clone();
+        Box::pin(async move { coordinator.request_resume(&id).await })
+    }
+
     fn wake(&self, id: &session::Id) -> Outcome {
         self.coordinator.wake(id)
     }
@@ -663,6 +669,69 @@ async fn todo_registry_denial_has_zero_effect_and_replacement_persists_order_dig
 }
 
 #[tokio::test]
+async fn a_goal_report_with_open_review_items_is_not_counted() {
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    let autonomy = autonomy::Service::new(h.fixture.authority.store.client());
+    let session = h.context().session_id;
+    autonomy
+        .set_goal(&session, Goal::new("User objective", None, Some(2)))
+        .await
+        .unwrap();
+    let before = autonomy.get(&session).unwrap();
+    let aggregate = session.as_lossless().clone();
+    h.fixture
+        .authority
+        .store
+        .client()
+        .submit(move |tx| {
+            ycoding_store::session::append(
+                tx,
+                &ycoding_store::session::NewEvent {
+                    id: "evt_goal_report_gate".into(),
+                    aggregate_id: aggregate.clone(),
+                    created: 40,
+                    type_: "session.review.deferred.1".into(),
+                    data: ycoding_schema::ObjectEncoder::new()
+                        .field("sessionID", &aggregate)
+                        .field("itemID", "rvw_goal_report")
+                        .field("kind", "question")
+                        .field("reason", "free_text")
+                        .field(
+                            "origin",
+                            &ycoding_schema::parse_json(r#"{"requestID":"frm_goal_report"}"#).unwrap(),
+                        )
+                        .field(
+                            "payload",
+                            &ycoding_schema::parse_json(
+                                r#"{"type":"form","title":"Plan","fields":[{"key":"plan","type":"string","required":true}]}"#,
+                            )
+                            .unwrap(),
+                        )
+                        .finish(),
+                },
+                None,
+            )
+            .map(|_| ())
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let reported = h.call("goal", r#"{"action":"report"}"#).await;
+    let text = format!(
+        "{:?}",
+        reported
+            .output
+            .expect("the report succeeds without counting")
+    );
+    assert!(
+        text.contains("Not counted: 1 item(s) in this Session family await the user's review."),
+        "{text}"
+    );
+    assert_eq!(autonomy.get(&session).unwrap(), before);
+    h.close().await;
+}
+
+#[tokio::test]
 async fn goal_tool_preserves_user_objective_denial_budget_and_terminal_rules() {
     let h = Harness::new(TitleMode::Local, "{}").await;
     let autonomy = autonomy::Service::new(h.fixture.authority.store.client());
@@ -782,11 +851,15 @@ async fn question_permission_denial_creates_no_form_or_model_request() {
 }
 
 #[tokio::test]
-async fn questions_use_real_forms_tool_ownership_and_first_options_for_yolo_and_goal() {
+async fn questions_use_real_forms_tool_ownership_and_first_options_with_the_session_toggle() {
     let h = Harness::new(TitleMode::Local, "{}").await;
     let autonomy = autonomy::Service::new(h.fixture.authority.store.client());
     let input = r#"{"questions":[{"header":"Plan","question":"Which plan?","options":[{"label":"Fast (Recommended)","description":"Deploy together"},{"label":"Careful","description":"Roll out gradually"}]},{"header":"Env","question":"Which environment?","multiple":true,"options":[{"label":"Dev","description":"Development"}]}]}"#;
-    for level in [2, 3] {
+    autonomy
+        .set_auto_answer(&h.context().session_id, true)
+        .await
+        .unwrap();
+    for level in [0, 2] {
         autonomy
             .set_yolo(&h.context().session_id, YoloLevel::new(level).unwrap())
             .await
@@ -1142,7 +1215,7 @@ async fn subagent_denial_invalid_variant_depth_and_ownership_reject_before_effec
     assert_eq!(h.events(), before);
     h.fixture
         .authority
-        .session("ses_foreign", None, 1, false, None);
+        .session("ses_foreign", None, 2, false, None);
     let mut context = h.context();
     context.session_id = session::Id::new("ses_foreign").unwrap();
     assert!(
@@ -1240,10 +1313,6 @@ async fn parent_send_reactivates_terminal_child_retries_idempotently_and_control
 #[tokio::test]
 async fn child_reports_are_durable_parent_owned_and_autonomous_questions_admit_literal_default() {
     let h = Harness::new(TitleMode::Local, "{}").await;
-    autonomy::Service::new(h.fixture.authority.store.client())
-        .set_yolo(&h.context().session_id, YoloLevel::ANSWERS)
-        .await
-        .unwrap();
     h.server.hold();
     let id = child(
         &h.call(
@@ -1253,6 +1322,10 @@ async fn child_reports_are_durable_parent_owned_and_autonomous_questions_admit_l
         .await,
     );
     h.server.entered().await;
+    autonomy::Service::new(h.fixture.authority.store.client())
+        .set_auto_answer(&id, true)
+        .await
+        .unwrap();
     let mut context = h.context();
     context.session_id = id.clone();
     context.call_id = "call_progress".into();
@@ -1283,7 +1356,7 @@ async fn child_reports_are_durable_parent_owned_and_autonomous_questions_admit_l
             .contains("Continue with the safest reasonable default.")
     }));
     autonomy::Service::new(h.fixture.authority.store.client())
-        .set_yolo(&h.context().session_id, YoloLevel::OFF)
+        .set_auto_answer(&id, false)
         .await
         .unwrap();
     let result = h
@@ -2632,6 +2705,8 @@ fn guarded(
                     subagents: limit,
                     ..Default::default()
                 },
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             publish,
         ),
@@ -2907,6 +2982,7 @@ async fn helper_model_resolution_cancels_decision_title_image_and_generate_befor
                                 decision::Invocation {
                                     session_id: &h.context().session_id,
                                     input_id: None,
+                                    attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
                                     cancellation: &cancellation
                                 }
                             )
@@ -3056,6 +3132,7 @@ async fn helper_stream_keeps_catalog_priced_zero_separate_from_unreported_price(
             cancellation: &Cancellation::default(),
             byte_limit: Some(decision::judgment::BYTE_LIMIT),
             require_stop: true,
+            attribution: ycoding_core::session::usage_attribution::Attribution::Unset,
         },
     )
     .await
@@ -3212,5 +3289,129 @@ async fn transient_generation_reads_session_instruction_entries_fresh_and_fences
     assert_eq!(h.server.seen.lock().unwrap().len(), 2);
     assert_eq!(h.events(), before);
     assert!(h.ledger().is_empty());
+    h.close().await;
+}
+
+async fn w40_decide(
+    attribution: ycoding_core::session::usage_attribution::Attribution,
+) -> Option<JsonValue> {
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    h.prompt("First input", "first").await;
+    h.server.set(Reply::Text(answer().into()));
+    let context = Context {
+        attribution,
+        ..h.context()
+    };
+    let result = within(h.registry.materialize(&[]).invoke(
+        "decision",
+        parse_json(request()).unwrap(),
+        context,
+    ))
+    .await
+    .unwrap();
+    assert!(result.output.is_some());
+    let ledger = h.ledger();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].source.as_str(), Some("decision"));
+    let anchor = ledger[0]
+        .usage_anchor
+        .as_ref()
+        .map(|anchor| anchor.value().clone());
+    h.close().await;
+    anchor
+}
+
+#[tokio::test]
+async fn w40_a_nested_decision_inherits_the_in_flight_request_anchor_not_the_current_prompt() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    let ambient = ycoding_schema::usage_anchor::Ref::decode(
+        &parse_json(r#"{"sessionID":"ses_other","inputID":"msg_other"}"#).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        w40_decide(Attribution::Anchored(ambient)).await,
+        Some(parse_json(r#"{"sessionID":"ses_other","inputID":"msg_other"}"#).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn w40_a_nested_decision_preserves_a_resolved_none_ambient_despite_a_current_prompt() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    assert_eq!(w40_decide(Attribution::Unanchored).await, None);
+}
+
+#[tokio::test]
+async fn w40_a_decision_without_an_ambient_anchor_takes_the_current_prompt() {
+    use ycoding_core::session::usage_attribution::Attribution;
+    assert_eq!(
+        w40_decide(Attribution::Unset).await,
+        Some(parse_json(r#"{"sessionID":"ses_tool","inputID":"msg_first"}"#).unwrap())
+    );
+}
+
+fn graded_route_request() -> &'static str {
+    r#"{"provider":"agent","request":{"state":{"action":"read"},"questions":[{"type":"choice","name":"route","instructions":"Grade every option","grade":true,"choices":[{"value":"keep-current"},{"value":"review"}]}]}}"#
+}
+
+fn graded_route_answer() -> String {
+    decision::toon::encode(&parse_json(r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"keep-current","confidence":0.2,"evidence":"No mutation planned"},{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#).unwrap())
+}
+
+#[tokio::test]
+async fn decision_graded_choice_returns_grades_without_a_pick_from_one_helper_call_with_usage_accounting()
+ {
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    h.server.set(Reply::Text(graded_route_answer()));
+    let result = h.call("decision", graded_route_request()).await;
+    let response = get(output(&result), "response");
+    assert_eq!(get(response, "answers"), &parse_json(r#"[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"keep-current","confidence":0.2,"evidence":"No mutation planned"},{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]"#).unwrap());
+    let ledger = h.ledger();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].source.as_str(), Some("decision"));
+    assert_eq!(
+        ledger[0].tokens.value(),
+        &parse_json(r#"{"input":8,"output":5,"reasoning":2,"cache":{"read":4,"write":0}}"#)
+            .unwrap()
+    );
+    {
+        let seen = h.server.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let serialized = ycoding_schema::stringify_json(&seen[0]);
+        assert!(serialized.contains("grade: true"), "{serialized}");
+        assert!(
+            serialized.contains("do not select a winner"),
+            "{serialized}"
+        );
+        assert!(!serialized.contains("\"tools\":[{"));
+    }
+    assert!(!result.output.as_ref().unwrap().content.iter().any(|content| matches!(content, ycoding_schema::llm::ToolContent::Text(text) if text.text.to_utf8().unwrap().contains("Treat refusal as uncertainty"))));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn decision_graded_choice_with_a_pick_or_missing_grades_fails_closed_after_one_provider_call()
+{
+    for reply in [
+        answer().to_string(),
+        decision::toon::encode(&parse_json(r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#).unwrap()),
+    ] {
+        let h = Harness::new(TitleMode::Local, "{}").await;
+        h.server.set(Reply::Text(reply));
+        assert!(h.call("decision", graded_route_request()).await.output.is_none());
+        assert_eq!(h.server.seen.lock().unwrap().len(), 1);
+        assert_eq!(h.ledger().len(), 1);
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn decision_graded_refusal_remains_uncertainty() {
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    h.server.set(Reply::Text(
+        answer().replace("choice,null,review,null,0.8", "refusal,null,null,null,0"),
+    ));
+    let result = h.call("decision", graded_route_request()).await;
+    assert!(result.output.as_ref().unwrap().content.iter().any(|content| matches!(content, ycoding_schema::llm::ToolContent::Text(text) if text.text.to_utf8().unwrap().contains("Treat refusal as uncertainty"))));
+    assert_eq!(h.server.seen.lock().unwrap().len(), 1);
     h.close().await;
 }

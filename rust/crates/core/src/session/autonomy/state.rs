@@ -10,10 +10,10 @@ pub struct YoloLevel(u8);
 impl YoloLevel {
     pub const OFF: Self = Self(0);
     pub const APPROVALS: Self = Self(1);
-    pub const ANSWERS: Self = Self(2);
+    pub const GUARDRAILS: Self = Self(2);
 
     pub fn new(level: u8) -> Option<Self> {
-        (level <= 3).then_some(Self(level))
+        (level <= 2).then_some(Self(level))
     }
 
     pub fn get(self) -> u8 {
@@ -101,6 +101,8 @@ pub enum GoalChange {
 pub struct State {
     pub yolo: YoloLevel,
     pub goal: Option<Goal>,
+    pub sleep: bool,
+    pub auto_answer: Option<bool>,
 }
 
 impl Default for State {
@@ -108,6 +110,8 @@ impl Default for State {
         Self {
             yolo: YoloLevel::OFF,
             goal: None,
+            sleep: false,
+            auto_answer: None,
         }
     }
 }
@@ -122,19 +126,21 @@ pub enum ReviewKind {
 pub struct Effective {
     pub yolo: YoloLevel,
     pub goal_active: bool,
+    pub asleep: bool,
+    pub auto_answer: bool,
 }
 
 impl Effective {
     pub fn can_auto_answer(self) -> bool {
-        self.yolo >= YoloLevel::ANSWERS || self.goal_active
+        self.auto_answer
     }
 
     pub fn can_auto_permission(self) -> bool {
-        self.yolo >= YoloLevel::APPROVALS || self.goal_active
+        self.yolo >= YoloLevel::APPROVALS
     }
 
     pub fn can_auto_guardrail(self) -> bool {
-        self.yolo >= YoloLevel::APPROVALS
+        self.yolo >= YoloLevel::GUARDRAILS && !self.asleep
     }
 
     pub fn can_auto_review(self, kind: ReviewKind) -> bool {
@@ -149,6 +155,8 @@ impl Effective {
         Self {
             yolo: self.yolo.max(ancestor.yolo),
             goal_active: self.goal_active || ancestor.goal_active,
+            asleep: self.asleep || ancestor.asleep,
+            auto_answer: self.auto_answer,
         }
     }
 }
@@ -158,6 +166,8 @@ impl State {
         Effective {
             yolo: self.yolo,
             goal_active: self.goal.as_ref().is_some_and(Goal::is_active),
+            asleep: self.sleep,
+            auto_answer: self.auto_answer == Some(true),
         }
     }
 
@@ -172,6 +182,12 @@ impl State {
         if let Some(goal) = &self.goal {
             object.insert("goal".into(), encode_goal(goal));
         }
+        if self.sleep {
+            object.insert("sleep".into(), JsonValue::Object(JsonObject::new()));
+        }
+        if let Some(enabled) = self.auto_answer {
+            object.insert("autoAnswer".into(), JsonValue::Bool(enabled));
+        }
         JsonValue::Object(object)
     }
 
@@ -179,17 +195,35 @@ impl State {
         sha256(&canonical_json(&self.encode()))
     }
 
+    pub fn is_asleep(&self) -> bool {
+        self.sleep
+    }
+
+    pub fn set_sleep(&self, asleep: bool) -> Option<Self> {
+        (self.sleep != asleep).then(|| Self {
+            sleep: asleep,
+            ..self.clone()
+        })
+    }
+
+    pub fn set_auto_answer(&self, enabled: bool) -> Option<Self> {
+        (self.auto_answer != Some(enabled)).then(|| Self {
+            auto_answer: Some(enabled),
+            ..self.clone()
+        })
+    }
+
     pub fn set_yolo(&self, level: YoloLevel) -> Option<Self> {
         (self.yolo != level).then(|| Self {
             yolo: level,
-            goal: self.goal.clone(),
+            ..self.clone()
         })
     }
 
     pub fn replace_goal(&self, goal: Goal) -> Self {
         Self {
-            yolo: self.yolo,
             goal: Some(goal),
+            ..self.clone()
         }
     }
 
@@ -198,14 +232,15 @@ impl State {
         Some(Self {
             yolo: yolo.unwrap_or(self.yolo),
             goal: Some(goal.with_status(GoalStatus::Active)),
+            ..self.clone()
         })
     }
 
     pub fn stop_goal(&self) -> Self {
         match &self.goal {
             Some(goal) if goal.status != GoalStatus::Stopped => Self {
-                yolo: self.yolo,
                 goal: Some(goal.with_status(GoalStatus::Stopped)),
+                ..self.clone()
             },
             _ => self.clone(),
         }
@@ -319,8 +354,8 @@ impl State {
 
     fn with_goal(&self, goal: Goal) -> Self {
         Self {
-            yolo: self.yolo,
             goal: Some(goal),
+            ..self.clone()
         }
     }
 }
@@ -360,12 +395,37 @@ fn decode(value: &JsonValue) -> Option<State> {
     if object.get(&"mode".into()) != Some(&JsonValue::String("normal".into())) {
         return None;
     }
-    let yolo = YoloLevel::new(u8::try_from(integer(object.get(&"yolo".into())?)?).ok()?)?;
+    let yolo = stored_level(object.get(&"yolo".into()));
     let goal = match object.get(&"goal".into()) {
         None => None,
         Some(value) => Some(decode_goal(value)?),
     };
-    Some(State { yolo, goal })
+    let sleep = matches!(object.get(&"sleep".into()), Some(JsonValue::Object(_)));
+    let auto_answer = match object.get(&"autoAnswer".into()) {
+        Some(JsonValue::Bool(enabled)) => Some(*enabled),
+        _ => None,
+    };
+    Some(State {
+        yolo,
+        goal,
+        sleep,
+        auto_answer,
+    })
+}
+
+fn stored_level(value: Option<&JsonValue>) -> YoloLevel {
+    match value {
+        Some(JsonValue::Bool(true)) => YoloLevel::GUARDRAILS,
+        Some(JsonValue::Number(number)) if number.is_finite() => {
+            let level = number.trunc();
+            if (0.0..=2.0).contains(&level) {
+                YoloLevel(level as u8)
+            } else {
+                YoloLevel::OFF
+            }
+        }
+        _ => YoloLevel::OFF,
+    }
 }
 
 fn decode_goal(value: &JsonValue) -> Option<Goal> {

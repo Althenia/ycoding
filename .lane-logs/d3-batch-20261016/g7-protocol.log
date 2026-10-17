@@ -1,0 +1,247 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/public-event-coverage.test.ts:
+(pass) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [23.21ms]
+(pass) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [13.90ms]
+(pass) REQ-WIRE-005 every public event field retains its source type, tag and presence [10.26ms]
+
+test/descriptor-goldens.test.ts:
+(pass) digest-bearing negative goldens retain their specific rejection reasons [1.09ms]
+(pass) Muse response-stream source appends ordinal six and preserves existing source ordinals [1.14ms]
+
+test/session-projection.test.ts:
+(pass) homogeneous nonempty arrays preserve their minimum and optional never has no wire field [0.16ms]
+(pass) UTC admission timestamps retain the finite millisecond JSON representation [0.22ms]
+
+test/session-review.test.ts:
+(pass) review routes belong to the addressed Session and declare validation, lookup and conflict failures [2.31ms]
+(pass) decide accepts only a kind-tagged human decision and exposes no internal delivery origin [0.44ms]
+
+test/platform-coverage.test.ts:
+(pass) platform slice exactly matches all 55 baseline and live endpoint declarations [10.67ms]
+(pass) every platform field, presence, enum and typed error matches the live Effect contract [15.73ms]
+(pass) canonical platform descriptors preserve IDs, associations, errors and delivery policies [2.45ms]
+(pass) wildcard asset path, native ticket headers and metadata retain their source boundaries [2.15ms]
+(pass) source ordering cannot change canonical tags, operation IDs or projected bytes [165.96ms]
+(pass) every platform domain obligation names a live source owner [6.83ms]
+(pass) result wrapper overrides are exactly the two verified prost collisions [3.98ms]
+
+test/canonical-remote.test.ts:
+(pass) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [0.26ms]
+(pass) REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds [0.06ms]
+(pass) REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result [0.07ms]
+
+test/phase-b-contract.test.ts:
+(pass) global Forms append one local-only Location selector without changing real-Session scopes [0.28ms]
+(pass) receipt-confirmation timeout after Ready handoff closes the unestablished producer with 1008 [1.23ms]
+(pass) asset MIME  cannot cross the metadata boundary [0.10ms]
+(pass) asset MIME text cannot cross the metadata boundary [0.04ms]
+(pass) asset MIME text/ cannot cross the metadata boundary [0.02ms]
+(pass) asset MIME text/plain
+X: injected cannot cross the metadata boundary [0.02ms]
+(pass) asset MIME text/😀 cannot cross the metadata boundary [0.04ms]
+(pass) asset MIME text/plain; charset="unterminated cannot cross the metadata boundary [0.03ms]
+(pass) both asset metadata consumers preserve valid MIME application/octet-stream and exact zero length [0.18ms]
+(pass) both asset metadata consumers preserve valid MIME image/svg+xml and exact zero length [0.07ms]
+(pass) both asset metadata consumers preserve valid MIME text/plain; charset=utf-8 and exact zero length [0.07ms]
+(pass) both asset metadata consumers preserve valid MIME  Text/Plain ; charset="utf-8;version=1"  and exact zero length [0.07ms]
+
+test/repeated-constraints.test.ts:
+(pass) array-level and item-level checks stay separate > an array cardinality bound is a count bound, never a per-string length [0.10ms]
+(pass) array-level and item-level checks stay separate > an item bound stays a per-string length and never becomes a count [0.05ms]
+(pass) array-level and item-level checks stay separate > distinct-identity metadata on the array adds no string or count bound [0.03ms]
+(pass) array-level and item-level checks stay separate > every projected repeated field derives string bounds only from its item and counts only from its array [23.50ms]
+(pass) connector family member lists > session_team_economics_Request_payload_sessionIDs declares a structural count of 1 to 128 and 1 to 128 units per ID [0.89ms]
+(pass) connector family member lists > session_family_activity_Request_payload_sessionIDs declares a structural count of 0 to 128 and 1 to 128 units per ID [0.48ms]
+(pass) connector family member lists > a root-only activity read accepts an empty list and 128 entries but not 129 [0.80ms]
+(pass) generated usage accounting input descriptors > UsageAccounting_PromptInput_inputIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID [0.02ms]
+(pass) generated usage accounting input descriptors > UsageAccounting_TaskInput_sessionIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID
+(pass) generated wire boundary > msg_ IDs of 101 to 128 units are accepted within 1 to 100 entries [1.97ms]
+(pass) generated wire boundary > ses_ IDs of 101 to 128 units are accepted within 1 to 100 entries [1.65ms]
+(pass) generated wire boundary > msg_ lists outside 1 to 100 entries are rejected by cardinality [1.24ms]
+(pass) generated wire boundary > ses_ lists outside 1 to 100 entries are rejected by cardinality [1.14ms]
+(pass) generated wire boundary > connector family IDs keep their own 1 to 128 unit item bound beside the entry count [0.41ms]
+(pass) generated wire boundary > browser group tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.11ms]
+(pass) generated wire boundary > browser ungroup tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.07ms]
+(pass) generated wire boundary > isolated browser group tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.06ms]
+(pass) generated wire boundary > isolated browser ungroup tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.05ms]
+
+test/session-autonomy.test.ts:
+(pass) session autonomy state preserves active goal progress [0.26ms]
+(pass) session autonomy state maps legacy boolean yolo [0.14ms]
+(pass) session autonomy set accepts modes and rejects empty goals [0.47ms]
+(pass) R7 accepts explicit goal resume without replacing objective text [0.34ms]
+(pass) R7 documents typed goal resume, stale calculation, and provider failures [13.06ms]
+(pass) family autonomy accepts explicit switches without accepting empty or invalid requests [0.49ms]
+
+test/event.test.ts:
+(pass) decodes the ephemeral prediction on the public stream, not the Session log [0.41ms]
+(pass) refuses private profile binding and provenance on public event and Session log streams [0.19ms]
+(pass) classifies public events by type
+(pass) shares one source epoch across health, connection, session projection, and log contracts [0.41ms]
+(pass) decodes the current durable session creation event [0.08ms]
+(pass) public step events preserve provider cache telemetry and omit the legacy cache mechanism [0.11ms]
+
+test/wire-numbers-baseline.test.ts:
+(pass) every operation ID in the before-map is unchanged [0.09ms]
+(pass) every public event tag, durability and envelope type in the before-map is unchanged [0.05ms]
+(pass) every enum value in the before-map is unchanged [0.34ms]
+(pass) every message field tag in the before-map is unchanged and no later field reuses one [2.40ms]
+(pass) retired slots stay reserved and unused [0.04ms]
+
+test/session-coverage.test.ts:
+(pass) session slice completes the 203 endpoints without overlap and adds only inventory unsubscribe [5.83ms]
+(pass) all session fields, tags, presence, enums and obligations match live source projection [27.62ms]
+(pass) session descriptors preserve IDs, typed associations, middleware errors and delivery policies [6.95ms]
+(pass) typed subscriptions preserve log items and finite StreamEnd without SSE or synchronous prompt execution [8.76ms]
+(pass) source reordering preserves canonical bytes and frozen materialization rejects overwrite [210.23ms]
+(pass) every session domain obligation names a live source owner [13.29ms]
+(pass) session result wrapper overrides cannot grow or become stale without a real collision [171.43ms]
+
+test/resources-coverage.test.ts:
+(pass) resource RPC membership equals the live 61-operation Protocol slice [13.97ms]
+(pass) enum literal names match live Effect literals, including single-member tagged fields [3.69ms]
+(pass) shared declarations are exactly those reached by live endpoints outside the resource slice [228.68ms]
+(pass) every request, result and typed error matches the live Effect field types and presence [2.29ms]
+(pass) every checked live source field has exact structural metadata and an unenforced source obligation [3.02ms]
+(pass) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [1.55ms]
+(pass) every domain obligation names a live source schema owner [5.80ms]
+(pass) named integer schemas retain 64-bit integer wire types rather than ref-shaped double fallthrough [2.13ms]
+(pass) numeric offset paging is distinct from opaque cursor paging [1.46ms]
+
+test/local-family.test.ts:
+(pass) M7 session.capturedChanges.list admits the canonical local read through the connection [1.13ms]
+(pass) M7 session.team.economics admits the canonical local read through the connection [0.41ms]
+(pass) M7 session.family.activity admits the canonical local read through the connection [0.25ms]
+(pass) M7 session.capturedChanges.list rejects an unrelated scope and server/agent request authority [0.20ms]
+(pass) M7 session.team.economics rejects an unrelated scope and server/agent request authority [0.15ms]
+(pass) M7 session.family.activity rejects an unrelated scope and server/agent request authority [0.12ms]
+(pass) M7 widens exactly three connector reads without adding remote operations [0.07ms]
+
+test/autonomy-review-wire-contract.test.ts:
+(pass) review operations > session.review.list is Session-scoped for local, remote and relay peers [0.06ms]
+(pass) review operations > session.review.decide is Session-scoped for local, remote and relay peers
+(pass) review operations > declared errors are closed and include the review lookup failure [0.05ms]
+(pass) review operations > request and result wrappers carry the Session and item identity [0.03ms]
+(pass) review operations > the Session operation range stays contiguous through 4087 and keeps the usage allocations [0.05ms]
+(pass) review operations > the current inventory grows by exactly the two review operations [0.02ms]
+(pass) review operations > web latency values append the two review operations after the usage values [0.24ms]
+(pass) public events > the inventory is 115 branches, 58 durable, with the old numbering intact [0.06ms]
+(pass) public events > deadline and deferral branches are live-only and follow the frozen order [0.04ms]
+(pass) public events > guardrail, review and reroute events are durable and reuse the appended log slots [0.02ms]
+(pass) public events > the log union keeps log.synced and the reserved slot and appends eight members [0.19ms]
+(pass) public events > SessionLogItemValue53 carries its data fields in declaration order [0.05ms]
+(pass) public events > SessionLogItemValue54 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue55 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue56 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue57 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue58 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue59 carries its data fields in declaration order
+(pass) public events > SessionLogItemValue60 carries its data fields in declaration order
+(pass) public events > question.timed_out carries its data fields in declaration order [0.01ms]
+(pass) public events > form.timed_out carries its data fields in declaration order
+(pass) public events > permission.deferred carries its data fields in declaration order
+(pass) public events > guardrail.deferred carries its data fields in declaration order
+(pass) public events > question.deferred carries its data fields in declaration order
+(pass) public events > form.deferred carries its data fields in declaration order
+(pass) appended additions to existing declarations > task changes append the timed-out question at 12 and the restart resume at 13 [0.17ms]
+(pass) appended additions to existing declarations > form states append the timed-out and deferred states [0.01ms]
+(pass) appended additions to existing declarations > autonomy gains the empty sleep marker and its setter alternative [0.02ms]
+(pass) appended additions to existing declarations > guardrail requests append the escalation after their metadata [0.02ms]
+(pass) appended additions to existing declarations > guardrail replies and status append their decision provenance [0.01ms]
+(pass) appended additions to existing declarations > managed-task, question and assistant messages append their review and reroute fields [0.02ms]
+
+test/public-event-connection.test.ts:
+(pass) REQ-WIRE-005 event.subscribe accepts typed ephemerals and rejects Session log sync markers [2.10ms]
+(pass) REQ-WIRE-006 canonical remote event requests accept Session scope and deny global feed authority [0.41ms]
+
+test/frontend-boundary.test.ts:
+(pass) custom endpoints reject the removed RunPod wire alternative [0.25ms]
+(pass) M3/M4/M5/M10 have closed local-only completed mutation descriptors [0.07ms]
+(pass) M3/M4/M5/M10 descriptors declare exact closed errors and secret inputs [0.07ms]
+(pass) M3 compatible endpoint, model overrides and optional empty lists round trip [0.57ms]
+(pass) M4 persistent requests reuse both existing ServerConfig branches without echoing secrets [0.33ms]
+(pass) M5 package identity, digests and same-host presentation assets round trip [0.45ms]
+(pass) M10 enrollment preserves optional replace and returns only redacted device status [0.40ms]
+(pass) M3/M4/M5/M10 all declared failure codes round trip and reject open enums [0.69ms]
+(pass) M3/M5/M10 reject missing presence, unknown credential fields and budget overflow [19.23ms]
+(pass) S2/M8 append optional metadata and retain absent projections [0.41ms]
+(pass) M3/M4/M5/M10 results and provider writes have no credential-shaped fields [0.58ms]
+(pass) M3/M4/M5/M10 remote and relay request admission rejects local-only descriptors [0.39ms]
+
+test/field-constraints.test.ts:
+(pass) integer constraints preserve signed and uint64 boundaries [0.04ms]
+(pass) text constraints distinguish UTF-16, codepoints, UTF-8 and lone units [0.04ms]
+(pass) count bounds do not claim to enforce domain obligations [0.02ms]
+(pass) live Effect checks require source-bound obligations without claiming enforcement [0.07ms]
+
+test/usage-wire-contract.test.ts:
+(pass) operations > prompt and task costs are Session-scoped reads for local, remote and relay peers [0.09ms]
+(pass) operations > the usage forecast is a Location read that remote and relay peers address at machine or Session scope [0.03ms]
+(pass) operations > the Session usage report becomes remote and relay readable
+(pass) operations > operation IDs stay contiguous in the Session and resource ranges [0.07ms]
+(pass) operations > remote and relay allowlists grow by the four usage reads [0.09ms]
+(pass) operations > each new request type wraps its declared parameters [0.03ms]
+(pass) allocated tags and values > report queries keep their tags and append the four filters [0.02ms]
+(pass) allocated tags and values > report groups append seven values [0.34ms]
+(pass) allocated tags and values > timing, speed, report and diagnostics fields append after their existing tags [0.06ms]
+(pass) allocated tags and values > attribution fields are optional appended event fields [0.01ms]
+(pass) allocated tags and values > web latency operations append four values after the keep-awake values [0.14ms]
+(pass) tool progress > is a live-only public event in its original slot [0.01ms]
+(pass) tool progress > leaves its durable slot reserved without renumbering later events [0.19ms]
+
+test/operation-generation.test.ts:
+(pass) operation generation rejects duplicate [76.71ms]
+(pass) operation generation rejects missing [46.07ms]
+(pass) operation generation rejects range [44.60ms]
+(pass) operation generation rejects unknown [45.99ms]
+(pass) canonical descriptor and structural metadata are extracted from protoc [27.39ms]
+(pass) metadata generation rejects inverted constraint bounds [45.91ms]
+(pass) metadata generation rejects constraint type mismatch [46.81ms]
+(pass) metadata generation rejects invalid domain obligation source [45.43ms]
+
+test/wire-allocation.test.ts:
+(pass) message field tags > a message without an allocation keeps declaration order [0.11ms]
+(pass) message field tags > reordering the declaration does not move an allocated tag [0.02ms]
+(pass) message field tags > a field appended to the declaration keeps every earlier tag only when it is allocated last [0.01ms]
+(pass) message field tags > a reserved slot keeps its number and later fields keep theirs [0.02ms]
+(pass) message field tags > a message with no reserved slot renders no reserved statement [0.01ms]
+(pass) message field tags > preset tags are used as given and must be unique [0.07ms]
+(pass) message field tags > a field missing from the allocation is rejected [0.03ms]
+(pass) message field tags > an allocated name that is neither declared nor reserved is rejected [0.03ms]
+(pass) message field tags > a duplicated allocation entry is rejected [0.04ms]
+(pass) enum numbers > an enum without an allocation keeps literal order
+(pass) enum numbers > reordering or appending literals does not move an allocated number
+(pass) enum numbers > a reserved slot keeps its number and later literals keep theirs [0.01ms]
+(pass) enum numbers > non-string literals are allocated by value [0.02ms]
+(pass) enum numbers > unallocated, stale and duplicate entries are rejected [0.04ms]
+(pass) union members > members are numbered by position without an allocation [0.10ms]
+(pass) union members > a removed member leaves its slot reserved and later names and tags stay put [0.04ms]
+(pass) union members > reordering the declared members does not move an allocated slot [0.02ms]
+(pass) union members > a member appended to the declaration takes the next allocated slot [0.05ms]
+(pass) union members > unallocated, stale and duplicate members are rejected [0.06ms]
+(pass) union members > a member without a type identity cannot be allocated [0.04ms]
+(pass) projection > the current allocation renders every checked-in descriptor unchanged [131.50ms]
+(pass) projection > session descriptor honors message and enum allocations [37.87ms]
+(pass) projection > resources descriptor honors message and enum allocations [12.92ms]
+(pass) projection > shared descriptor honors message and enum allocations [178.19ms]
+(pass) projection > platform descriptor honors message and enum allocations [21.24ms]
+(pass) projection > events descriptor honors the PublicEvent allocation [18.75ms]
+(pass) projection > an incomplete allocation fails the descriptor render [15.31ms]
+
+test/form-contract.test.ts:
+(pass) form outputs share one field identity with numeric bounds for input controls [2.59ms]
+
+test/connector-coverage.test.ts:
+(pass) 76 live source names resolve to 72 canonical connector and four relay notice operations [0.24ms]
+(pass) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.08ms]
+(pass) descriptor role-scope and event payload metadata append fresh fields [0.01ms]
+(pass) all connector fields, presence, associations and constraints match the bounded remote source projection [4.37ms]
+(pass) spec admission table matches the connector inventory, descriptor roles and mutation classes [0.65ms]
+(pass) relay forwards exactly the connector set; agents and servers send no operation requests [0.11ms]
+(pass) no local-only operation gains remote authority and all shared IDs retain local authority [0.07ms]
+
+ 194 pass
+ 0 fail
+ 23130 expect() calls
+Ran 194 tests across 23 files. [2.06s]

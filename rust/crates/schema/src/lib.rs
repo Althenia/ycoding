@@ -16,6 +16,7 @@ pub mod llm;
 pub mod location;
 mod lossless_string;
 pub mod model;
+pub mod model_incident;
 pub mod models_dev;
 pub mod money;
 pub mod permission;
@@ -38,11 +39,15 @@ pub mod session_message_id;
 pub mod session_orchestration;
 pub mod session_pending;
 pub mod session_revert;
+pub mod session_review;
 pub mod session_skill_status;
 pub mod session_work_completion;
 pub mod snapshot;
 pub mod source_epoch;
 pub mod token_usage;
+pub mod usage_accounting;
+pub mod usage_anchor;
+pub mod usage_forecast;
 pub mod workspace_id;
 
 pub use domain::{

@@ -68,7 +68,11 @@ function application<E = never>(
   const services = Layer.mergeAll(
     Layer.mock(Session.Service, {
       messages: read,
-      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
+      autonomy: {
+        get: () => Effect.die("unused"),
+        set: () => Effect.die("unused"),
+        effective: () => Effect.die("unused"),
+      },
       daybreak: { set: () => Effect.die("unused") },
       revert: {
         stage: () => Effect.die("unused"),

@@ -1,134 +1,236 @@
-#[cfg(unix)]
-use std::time::Duration;
-use std::{io, process::ExitStatus};
+use super::{KillOptions, KillSignal};
+use std::{future::Future, io, pin::Pin, process::ExitStatus, sync::Arc, time::Duration};
 
 #[cfg(unix)]
-fn signal(pid: u32, signal: i32, detached: bool) -> io::Result<()> {
-    if unsafe { libc::kill(if detached { -(pid as i32) } else { pid as i32 }, signal) } == 0 {
-        return Ok(());
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(error)
+const TERMINATE_GRACE: Duration = Duration::from_secs(3);
+#[cfg(unix)]
+const KILL_CONFIRMATION: Duration = Duration::from_secs(1);
+#[cfg(unix)]
+const MEMBERSHIP_POLL: Duration = Duration::from_millis(25);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub pid: u32,
+    pub pgid: u32,
+    pub started: String,
 }
 
-pub(crate) async fn terminate(
-    child: &mut tokio::process::Child,
-    pid: u32,
-    options: super::KillOptions,
-    detached: bool,
-) -> io::Result<ExitStatus> {
-    #[cfg(unix)]
-    {
-        if let Some(status) = child.try_wait()?
-            && (!detached || !group_alive(pid).await?)
+pub type Members<'a> = Pin<Box<dyn Future<Output = io::Result<Vec<Member>>> + Send + 'a>>;
+
+pub trait GroupSystem: std::fmt::Debug + Send + Sync {
+    fn read(&self) -> Members<'_>;
+    fn signal(&self, target: i32, signal: KillSignal) -> io::Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NativeGroupSystem;
+
+impl GroupSystem for NativeGroupSystem {
+    fn read(&self) -> Members<'_> {
+        Box::pin(read_members())
+    }
+
+    fn signal(&self, target: i32, signal: KillSignal) -> io::Result<()> {
+        #[cfg(unix)]
         {
-            return Ok(status);
-        }
-        signal(
-            pid,
-            if options.signal == super::KillSignal::Kill {
+            let number = if signal == KillSignal::Kill {
                 libc::SIGKILL
             } else {
                 libc::SIGTERM
-            },
-            detached,
-        )?;
-        let status = match options.force_kill_after {
-            Some(grace) => match tokio::time::timeout(grace, child.wait()).await {
-                Ok(status) => status?,
-                Err(_) => {
-                    signal(pid, libc::SIGKILL, detached)?;
-                    child.wait().await?
-                }
-            },
-            None => child.wait().await?,
-        };
-        if !detached {
-            return Ok(status);
+            };
+            if unsafe { libc::kill(target, number) } == 0 {
+                return Ok(());
+            }
+            Err(io::Error::last_os_error())
         }
-        kill_group_remnants(pid).await?;
-        Ok(status)
-    }
-    #[cfg(windows)]
-    {
-        let _ = (options, detached);
-        let status = tokio::process::Command::new("taskkill")
-            .args(["/pid", &pid.to_string(), "/T", "/F"])
-            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-            .status()
-            .await?;
-        if !status.success() && child.try_wait()?.is_none() {
-            return Err(io::Error::other(
-                "taskkill failed to terminate process tree",
-            ));
+        #[cfg(windows)]
+        {
+            let _ = (target, signal);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "POSIX process signals are unavailable on Windows",
+            ))
         }
-        child.wait().await
-    }
-}
-
-// Stops what a leader that already exited left in its process group: TERM, a bounded grace for
-// the group to disappear, then KILL. A group without live members is a normal outcome.
-pub(crate) async fn sweep(pid: u32, grace: std::time::Duration, detached: bool) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        if !detached || !group_alive(pid).await? {
-            return Ok(());
-        }
-        signal(pid, libc::SIGTERM, true)?;
-        let deadline = tokio::time::Instant::now() + grace;
-        while group_alive(pid).await? && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        kill_group_remnants(pid).await
-    }
-    #[cfg(windows)]
-    {
-        let _ = (pid, grace, detached);
-        Ok(())
     }
 }
 
 #[cfg(unix)]
-async fn kill_group_remnants(pid: u32) -> io::Result<()> {
-    if group_alive(pid).await? {
-        signal(pid, libc::SIGKILL, true)?;
+async fn read_members() -> io::Result<Vec<Member>> {
+    Ok(snapshot().await?.lines().filter_map(member).collect())
+}
+
+#[cfg(windows)]
+async fn read_members() -> io::Result<Vec<Member>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "POSIX process groups are unavailable on Windows",
+    ))
+}
+
+#[cfg(unix)]
+fn member(line: &str) -> Option<Member> {
+    let fields: Vec<_> = line.split_whitespace().collect();
+    if fields.len() < 5 || fields[3].starts_with('Z') {
+        return None;
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if !group_alive(pid).await? {
+    Some(Member {
+        pid: fields[0].parse().ok()?,
+        pgid: fields[1].parse().ok()?,
+        started: fields[4..].join(" "),
+    })
+}
+
+#[cfg(unix)]
+pub(crate) struct Group {
+    system: Arc<dyn GroupSystem>,
+    leader: u32,
+    grouped: bool,
+    original: Result<Option<String>, (io::ErrorKind, String)>,
+    closed: bool,
+}
+
+#[cfg(unix)]
+impl Group {
+    pub(crate) async fn new(system: Arc<dyn GroupSystem>, leader: u32, grouped: bool) -> Self {
+        let original = match system.read().await {
+            Ok(members) => Ok(members
+                .into_iter()
+                .find(|member| member.pid == leader)
+                .map(|member| member.started)),
+            Err(error) => Err((error.kind(), error.to_string())),
+        };
+        Self {
+            system,
+            leader,
+            grouped,
+            original,
+            closed: false,
+        }
+    }
+
+    pub(crate) fn started(&self) -> Option<String> {
+        self.original.as_ref().ok().cloned().flatten()
+    }
+
+    async fn members(&mut self) -> io::Result<Vec<Member>> {
+        if self.closed {
+            return Ok(Vec::new());
+        }
+        let snapshot = self.system.read().await?;
+        let leader = self.leader;
+        let grouped = self.grouped;
+        let current: Vec<Member> = snapshot
+            .iter()
+            .filter(|member| {
+                if grouped {
+                    member.pgid == leader
+                } else {
+                    member.pid == leader
+                }
+            })
+            .cloned()
+            .collect();
+        if current.is_empty() {
+            self.closed = true;
+            return Ok(current);
+        }
+        if let Err((kind, message)) = &self.original {
+            return Err(io::Error::new(*kind, message.clone()));
+        }
+        let original = self.original.as_ref().ok().and_then(Option::as_ref);
+        let replaced = snapshot
+            .iter()
+            .any(|member| member.pid == leader && Some(&member.started) != original);
+        if replaced {
+            self.closed = true;
+            return Ok(Vec::new());
+        }
+        Ok(current)
+    }
+
+    pub(crate) async fn signal(&mut self, signal: KillSignal) -> io::Result<()> {
+        if self.members().await?.is_empty() {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(io::Error::other(
-                "Process group remained alive after SIGKILL",
-            ));
+        let leader = self.leader as i32;
+        let target = if self.grouped { -leader } else { leader };
+        match self.system.signal(target, signal) {
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+            result => result,
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    async fn gone(&mut self, within: Duration) -> io::Result<bool> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if self.members().await?.is_empty() {
+                return Ok(true);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(MEMBERSHIP_POLL.min(deadline - now)).await;
+        }
+    }
+
+    async fn escalate(&mut self, options: KillOptions) -> io::Result<()> {
+        self.signal(options.signal).await?;
+        if self
+            .gone(options.force_kill_after.unwrap_or(TERMINATE_GRACE))
+            .await?
+        {
+            return Ok(());
+        }
+        self.signal(KillSignal::Kill).await?;
+        if self.gone(KILL_CONFIRMATION).await? {
+            return Ok(());
+        }
+        Err(io::Error::other(
+            "Process group remained alive after SIGKILL",
+        ))
+    }
+
+    pub(crate) async fn stop(&mut self, options: KillOptions) -> io::Result<()> {
+        self.escalate(options).await
+    }
+
+    pub(crate) async fn terminate(
+        &mut self,
+        _child: &mut tokio::process::Child,
+        options: KillOptions,
+    ) -> io::Result<Option<ExitStatus>> {
+        self.stop(options).await.map(|()| None)
+    }
+
+    pub(crate) async fn sweep(&mut self, grace: Duration) -> io::Result<()> {
+        self.stop(KillOptions {
+            signal: KillSignal::Term,
+            force_kill_after: Some(grace),
+        })
+        .await
     }
 }
 
-pub(crate) fn send(pid: u32, requested: super::KillSignal, detached: bool) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        signal(
-            pid,
-            if requested == super::KillSignal::Kill {
-                libc::SIGKILL
-            } else {
-                libc::SIGTERM
-            },
-            detached,
-        )
+#[cfg(windows)]
+pub(crate) struct Group {
+    pid: u32,
+}
+
+#[cfg(windows)]
+impl Group {
+    pub(crate) async fn new(_system: Arc<dyn GroupSystem>, leader: u32, _grouped: bool) -> Self {
+        Self { pid: leader }
     }
-    #[cfg(windows)]
-    {
+
+    pub(crate) fn started(&self) -> Option<String> {
+        None
+    }
+
+    pub(crate) async fn signal(&mut self, _signal: KillSignal) -> io::Result<()> {
         use std::os::windows::process::CommandExt;
-        let _ = (requested, detached);
         let status = std::process::Command::new("taskkill")
-            .args(["/pid", &pid.to_string()])
+            .args(["/pid", &self.pid.to_string()])
             .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
             .status()?;
         if status.success() {
@@ -137,31 +239,91 @@ pub(crate) fn send(pid: u32, requested: super::KillSignal, detached: bool) -> io
             Err(io::Error::other("taskkill failed to signal process"))
         }
     }
-}
 
-pub(crate) fn force(pid: u32, detached: bool) {
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::kill(
-                if detached { -(pid as i32) } else { pid as i32 },
-                libc::SIGKILL,
-            );
+    pub(crate) async fn stop(&mut self, _options: KillOptions) -> io::Result<()> {
+        let status = tokio::process::Command::new("taskkill")
+            .args(["/pid", &self.pid.to_string(), "/T", "/F"])
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+            .status()
+            .await?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "taskkill failed to terminate process tree",
+            ))
         }
     }
-    #[cfg(windows)]
-    {
-        let _ = detached;
-        use windows_sys::Win32::{
-            Foundation::CloseHandle,
-            System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+
+    pub(crate) async fn terminate(
+        &mut self,
+        child: &mut tokio::process::Child,
+        options: KillOptions,
+    ) -> io::Result<Option<ExitStatus>> {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let stopped = self.stop(options).await;
+        if stopped.is_err() && child.try_wait()?.is_none() {
+            return stopped.map(|()| None);
+        }
+        child.wait().await.map(Some)
+    }
+
+    pub(crate) async fn sweep(&mut self, _grace: Duration) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) struct Owned {
+    child: tokio::process::Child,
+    grouped: bool,
+    pub(crate) released: bool,
+}
+
+impl Owned {
+    pub(crate) fn new(child: tokio::process::Child, grouped: bool) -> Self {
+        Self {
+            child,
+            grouped,
+            released: false,
+        }
+    }
+}
+
+impl std::ops::Deref for Owned {
+    type Target = tokio::process::Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for Owned {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let Some(pid) = self.child.id() else {
+            return;
         };
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !handle.is_null() {
-                TerminateProcess(handle, 1);
-                CloseHandle(handle);
+        #[cfg(unix)]
+        {
+            let leader = pid as i32;
+            unsafe {
+                libc::kill(if self.grouped { -leader } else { leader }, libc::SIGKILL);
             }
+        }
+        #[cfg(windows)]
+        {
+            let _ = (pid, self.grouped);
+            let _ = self.child.start_kill();
         }
     }
 }
@@ -258,14 +420,6 @@ pub async fn process_group_memory(pid: u32) -> io::Result<Option<(String, u64)>>
     }
 }
 
-#[cfg(unix)]
-async fn group_alive(pid: u32) -> io::Result<bool> {
-    Ok(snapshot().await?.lines().any(|line| {
-        let fields: Vec<_> = line.split_whitespace().collect();
-        fields.len() >= 4 && fields[1].parse::<u32>() == Ok(pid) && !fields[3].starts_with('Z')
-    }))
-}
-
 pub fn is_alive(pid: u32) -> io::Result<bool> {
     #[cfg(unix)]
     {
@@ -284,5 +438,43 @@ pub fn is_alive(pid: u32) -> io::Result<bool> {
             io::ErrorKind::Unsupported,
             "POSIX process observation is unavailable on Windows",
         ))
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::{Group, NativeGroupSystem};
+    use crate::platform::process::KillOptions;
+    use std::{process::Stdio, sync::Arc};
+
+    #[tokio::test]
+    async fn terminating_an_already_reaped_child_never_signals_the_stored_pid() {
+        let mut exited = tokio::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        exited.wait().await.unwrap();
+        let mut decoy = tokio::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut group = Group::new(
+            Arc::new(NativeGroupSystem),
+            decoy.id().expect("decoy is live"),
+            false,
+        )
+        .await;
+        let status = group
+            .terminate(&mut exited, KillOptions::default())
+            .await
+            .unwrap()
+            .expect("reaped child reports its status");
+        let alive = decoy.try_wait().unwrap().is_none();
+        decoy.start_kill().unwrap();
+        decoy.wait().await.unwrap();
+        assert_eq!(status.code(), Some(0));
+        assert!(alive, "the stale-PID terminate signalled a live process");
     }
 }

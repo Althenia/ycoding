@@ -13,8 +13,7 @@ use ycoding_schema::{
 const OPAQUE_COMPACTION_ITEM: &str = "opaqueCompactionItem";
 
 #[cfg(test)]
-#[path = "../../../tests/session_support/mod.rs"]
-mod test_support;
+use crate::test_support;
 
 struct Fragment {
     id: LosslessString,

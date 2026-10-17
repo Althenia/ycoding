@@ -3,6 +3,8 @@ import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
   connectionBanner,
+  lostResultLabel,
+  sessionActivityGroup,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
@@ -72,8 +74,10 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     agent: active?.agent ?? session.agent,
     model,
     autonomy: autonomy?.mode,
-    yoloLevel: autonomy?.yolo,
-    guardrailsEnforced: autonomy === undefined ? undefined : autonomy.mode !== "yolo" || autonomy.yolo < 3,
+    yoloLevel: autonomy?.effective?.yolo ?? autonomy?.yolo,
+    goalActive: autonomy?.goal?.status === "active",
+    asleep: autonomy?.effective?.asleep ?? (autonomy === undefined ? undefined : autonomy.sleep !== undefined),
+    autoAnswer: autonomy?.autoAnswer,
     updatedAt: session.updatedAt > 0 ? new Date(session.updatedAt).toISOString() : undefined,
   }
 }
@@ -89,7 +93,7 @@ export function awaitsApproval(view: SessionView | undefined, sessionID: string)
 }
 
 export function sessionNeedsAttention(session: SessionInfoView, view: SessionView | undefined): boolean {
-  if (session.attention === true) return true
+  if (session.attention === true && session.lost !== true) return true
   return view !== undefined && view.id === session.id && view.requests.length > 0
 }
 
@@ -98,18 +102,18 @@ export function sessionNeedsAttention(session: SessionInfoView, view: SessionVie
  * device reported, plus the fact that the loaded view is holding an unanswered approval.
  */
 export function sessionChips(session: SessionInfoView, view: SessionView | undefined): readonly SessionChip[] {
-  const chips = sessionStateChips(summarizeSession(session, view))
+  const review = view?.review?.items.filter((item) => item.rootSessionID === session.id || item.sessionID === session.id).length ?? 0
+  const chips = [
+    ...(review > 0 ? [{ label: `review ${review}`, tone: "attention" as const }] : []),
+    ...(session.lost === true ? [{ label: lostResultLabel, tone: "attention" as const }] : []),
+    ...sessionStateChips(summarizeSession(session, view)),
+  ]
   if (awaitsApproval(view, session.id)) return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
   if (sessionNeedsAttention(session, view)) return [{ label: "Waiting for you", tone: "attention" }, ...chips]
   return chips
 }
 
-/**
- * The client-side session filter. It reads the sessions the workspace already holds and
- * issues no request, so an empty result means the filter matched nothing rather than that
- * the device advertises nothing. Pinned sessions come first, in pin order.
- */
-export type SessionFilter = "all" | "running" | "idle"
+export type SessionFilter = "all" | "waiting" | "running" | "idle"
 
 export function filterSessions(
   sessions: readonly SessionInfoView[],
@@ -117,12 +121,9 @@ export function filterSessions(
   filter: SessionFilter = "all",
 ): readonly SessionInfoView[] {
   const needle = query.trim().toLowerCase()
-  const pinned = sessions
-    .filter((session) => session.pinnedAt !== undefined)
-    .toSorted((left, right) => left.pinnedAt! - right.pinnedAt!)
-  return [...pinned, ...sessions.filter((session) => session.pinnedAt === undefined)].filter((session) => {
-    if (filter === "running" && session.running !== true) return false
-    if (filter === "idle" && (session.running === true || session.archived)) return false
+  return sessions.filter((session) => {
+    if (filter !== "all" && sessionActivityGroup(session) !== filter) return false
+    if (filter === "idle" && session.archived) return false
     if (needle.length === 0) return true
     return [session.title, session.agent ?? "", session.modelLabel ?? ""].some((value) => value.toLowerCase().includes(needle))
   })

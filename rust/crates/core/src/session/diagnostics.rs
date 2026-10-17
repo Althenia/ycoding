@@ -20,7 +20,8 @@ impl Service {
         current: (model::Ref, Option<ycoding_schema::provider_request::Timing>),
     ) -> Result<Option<cache_diagnostics::GenerationSpeedHistory>, Error> {
         let snapshot = self.client.snapshot()?;
-        let mut records = super::provider_request::recent_steps_in(&snapshot, id)?;
+        let mut records =
+            super::provider_request::recent_steps_in(&snapshot, id, Some(&current.0), None)?;
         records.push(current);
         Ok(generation_speed(&records))
     }
@@ -38,24 +39,7 @@ pub(crate) fn read(
     id: &session::Id,
     boundary: Option<&session_message::Id>,
 ) -> Result<Option<cache_diagnostics::Info>, Error> {
-    let legacy = history::latest_compaction(snapshot, id)?;
-    let anchor = match boundary {
-        None => None,
-        Some(boundary) => {
-            let Some(row) = snapshot
-                .get::<MessageTable>(&key(boundary.as_lossless()))?
-                .filter(|row| &row.session_id == id.as_lossless())
-            else {
-                return Ok(None);
-            };
-            Some(row.seq)
-        }
-    };
-    let compaction = completed_compaction(snapshot, id, anchor)?;
-    let floor = compaction
-        .map(Bound::Excluded)
-        .or(legacy.map(Bound::Included));
-    let Some(assistant) = latest_measured_assistant(snapshot, id, anchor, floor)? else {
+    let Some(assistant) = measured_before(snapshot, id, boundary)? else {
         return Ok(None);
     };
     let data = &assistant.data;
@@ -87,50 +71,150 @@ pub(crate) fn read(
     })?;
     diagnostics.requests = Some(super::provider_request::summary_in(snapshot, id)?);
     diagnostics.generation_speed =
-        generation_speed(&super::provider_request::recent_steps_in(snapshot, id)?);
+        recent_speed(snapshot, id, boundary, &assistant.id, &diagnostics.model)?;
     Ok(Some(diagnostics))
+}
+
+pub(crate) fn generation_speed_in(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    boundary: Option<&session_message::Id>,
+) -> Result<Option<cache_diagnostics::GenerationSpeedHistory>, Error> {
+    let Some(assistant) = measured_before(snapshot, id, boundary)? else {
+        return Ok(None);
+    };
+    let path = JsonPath::default();
+    let measured: model::Ref = ObjectDecoder::new(&assistant.data, &path)
+        .map_err(super::projector::record_error)?
+        .field("model")
+        .map_err(super::projector::record_error)?;
+    recent_speed(snapshot, id, boundary, &assistant.id, &measured)
+}
+
+fn measured_before(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    boundary: Option<&session_message::Id>,
+) -> Result<Option<Message>, Error> {
+    let legacy = history::latest_compaction(snapshot, id)?;
+    let anchor = match boundary {
+        None => None,
+        Some(boundary) => {
+            let Some(row) = snapshot
+                .get::<MessageTable>(&key(boundary.as_lossless()))?
+                .filter(|row| &row.session_id == id.as_lossless())
+            else {
+                return Ok(None);
+            };
+            Some(row.seq)
+        }
+    };
+    let compaction = completed_compaction(snapshot, id, anchor)?;
+    let floor = compaction
+        .map(Bound::Excluded)
+        .or(legacy.map(Bound::Included));
+    latest_measured_assistant(snapshot, id, anchor, floor)
+}
+
+fn recent_speed(
+    snapshot: &Snapshot,
+    id: &session::Id,
+    boundary: Option<&session_message::Id>,
+    assistant: &LosslessString,
+    measured: &model::Ref,
+) -> Result<Option<cache_diagnostics::GenerationSpeedHistory>, Error> {
+    let selected = match boundary {
+        Some(_) => None,
+        None => snapshot
+            .get::<ycoding_store::session::SessionTable>(&key(id.as_lossless()))?
+            .and_then(|row| row.model)
+            .map(|model| model.domain())
+            .transpose()?,
+    }
+    .unwrap_or_else(|| measured.clone());
+    let before = boundary
+        .map(|_| super::provider_request::newest_request_of(snapshot, id, assistant))
+        .transpose()?
+        .map(|request| request.map_or(1, |request| request + 1));
+    let mut records =
+        super::provider_request::recent_steps_in(snapshot, id, Some(&selected), before)?;
+    records.push((selected, None));
+    Ok(generation_speed(&records))
 }
 
 pub fn generation_speed(
     records: &[(model::Ref, Option<ycoding_schema::provider_request::Timing>)],
 ) -> Option<cache_diagnostics::GenerationSpeedHistory> {
-    let records = &records[records.len().saturating_sub(8)..];
     let newest = &records.last()?.0;
-    let samples = records
+    let mut recent = records
         .iter()
-        .map(|(model, timing)| {
-            let timing = timing.as_ref()?;
-            let tokens = timing.generated_tokens?;
-            let duration = timing
-                .generation_duration_ns
-                .map(|duration| duration.get())
-                .or_else(|| {
-                    timing
-                        .observed_generation_duration_ns
-                        .map(|duration| duration.get())
-                        .filter(|duration| *duration >= 1_000_000_000)
-                })?;
-            let duration_ns = ycoding_schema::schema::PositiveInt::new(duration).ok()?;
-            let rate = tokens.get() as f64 * 1_000_000_000.0 / duration as f64;
-            (rate.is_finite() && rate > 0.0).then(|| cache_diagnostics::GenerationSpeed {
-                model: model.clone(),
-                tokens,
-                duration_ns,
-                tokens_per_second: rate,
+        .filter(|(model, _)| model.provider_id == newest.provider_id && model.id == newest.id)
+        .filter_map(|(model, timing)| generation_sample(model, timing.as_ref()))
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>();
+    recent.reverse();
+    let latest = recent
+        .iter()
+        .try_fold((0i64, 0i64), |(tokens, duration), sample| {
+            Some((
+                tokens.checked_add(sample.tokens.get())?,
+                duration.checked_add(sample.duration_ns.get())?,
+            ))
+        })
+        .and_then(|(tokens, duration)| {
+            Some(cache_diagnostics::GenerationSpeed {
+                model: newest.clone(),
+                tokens: ycoding_schema::schema::PositiveInt::new(tokens).ok()?,
+                duration_ns: ycoding_schema::schema::PositiveInt::new(duration).ok()?,
+                tokens_per_second: tokens as f64 * 1e9 / duration as f64,
+                estimated: recent
+                    .iter()
+                    .any(|sample| sample.estimated == Some(true))
+                    .then_some(true),
             })
+        });
+    Some(cache_diagnostics::GenerationSpeedHistory {
+        model: Some(newest.clone()),
+        unreported_reason: None,
+        latest,
+        recent,
+    })
+}
+
+pub(crate) fn generation_sample(
+    model: &model::Ref,
+    timing: Option<&ycoding_schema::provider_request::Timing>,
+) -> Option<cache_diagnostics::GenerationSpeed> {
+    let timing = timing?;
+    [
+        (
+            timing.generated_tokens,
+            timing.observed_generation_duration_ns.or_else(|| {
+                timing
+                    .generation_duration_ns
+                    .and_then(|value| ycoding_schema::schema::PositiveInt::new(value.get()).ok())
+            }),
+            None,
+        ),
+        (
+            timing.estimated_tokens,
+            timing.estimated_generation_duration_ns,
+            Some(true),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(tokens, duration_ns, estimated)| {
+        let (tokens, duration_ns) = (tokens?, duration_ns?);
+        let rate = tokens.get() as f64 * 1e9 / duration_ns.get() as f64;
+        (rate.is_finite() && rate > 0.0).then(|| cache_diagnostics::GenerationSpeed {
+            model: model.clone(),
+            tokens,
+            duration_ns,
+            tokens_per_second: rate,
+            estimated,
         })
-        .collect::<Vec<_>>();
-    let latest = samples.last().cloned().flatten();
-    let recent = samples
-        .into_iter()
-        .flatten()
-        .filter(|sample| {
-            sample.model.provider_id == newest.provider_id
-                && sample.model.id == newest.id
-                && sample.model.variant == newest.variant
-        })
-        .collect::<Vec<_>>();
-    (!recent.is_empty()).then_some(cache_diagnostics::GenerationSpeedHistory { latest, recent })
+    })
 }
 
 pub(crate) fn has_measured_assistant(

@@ -18,6 +18,7 @@ export type ToolLifecycleInput = {
   error?: { type?: string; message?: string }
   failed?: boolean
   cancelled?: boolean
+  queued?: boolean
   summary?: string
   now?: number
 }
@@ -92,6 +93,7 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
   const color = createMemo(() => {
     if (presentation().variant === "error") return theme.text.feedback.error.default
     if (presentation().variant === "warning") return theme.text.feedback.warning.default
+    if (props.lifecycle.queued) return theme.text.feedback.info.default
     return theme.text.subdued
   })
   return <text flexShrink={0} fg={color()}>{presentation().status}</text>
@@ -106,7 +108,9 @@ export function SessionActivityRow(props: {
   onSubagent?: (sessionID: string) => void
 }) {
   const { theme } = useTheme()
+  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
+  let rowElement: BoxRenderable | undefined
   let data: ReturnType<typeof useData> | undefined
   try {
     data = useData()
@@ -154,25 +158,39 @@ export function SessionActivityRow(props: {
     (props.row.type === "subagent" ? subagentActive() : false) ||
     (props.row.type === "task" && props.row.status === "in_progress" && props.running === true)
   const markerColor = () => {
-    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "guardrail")
+      return props.row.decided ? theme.text.feedback.info.default : theme.text.feedback.warning.default
     if (props.row.type === "subagent") return theme.text.feedback.info.default
     if (props.row.status === "completed") return theme.text.feedback.success.default
     return theme.text.feedback.info.default
   }
   const statusColor = () => {
-    if (props.row.type === "guardrail") return theme.text.feedback.warning.default
+    if (props.row.type === "guardrail")
+      return props.row.decided ? theme.text.feedback.info.default : theme.text.feedback.warning.default
     if (props.row.type === "subagent") return theme.text.feedback.info.default
     if (props.row.status === "completed") return theme.text.subdued
     return theme.text.feedback.success.default
   }
+  const [expanded, setExpanded] = createSignal(false)
+  const expandable = () =>
+    props.row.type === "guardrail" && props.row.decided !== undefined && (props.row.detail?.length ?? 0) > 0
   const open = () => {
     const row = props.row
-    if (row.type === "guardrail") props.onGuardrail?.(row.requestID)
+    if (expandable()) {
+      if (renderer.getSelection()?.getSelectedText()) return
+      setExpanded((value) => !value)
+      return
+    }
+    if (row.type === "guardrail" && !row.decided) props.onGuardrail?.(row.requestID)
     if (row.type === "subagent") props.onSubagent?.((row as Extract<SessionRow, { type: "subagent" }>).sessionID)
+  }
+  const onKeyDown = (key: { name: string }) => {
+    if (!expandable()) return
+    if (key.name === "return" || key.name === "space") setExpanded((value) => !value)
   }
   const status = () => {
     const row = props.row
-    if (row.type === "guardrail") return "needs approval"
+    if (row.type === "guardrail") return row.decided ?? "needs approval"
     if (row.type === "subagent") {
       const task = subagentTask()
       const subRow = row as Extract<SessionRow, { type: "subagent" }>
@@ -181,7 +199,7 @@ export function SessionActivityRow(props: {
       const end = subagentActive() ? now() : frozenEnd
       const duration = Locale.duration(Math.max(0, end - created))
       if (subagentActive()) return `running ${duration} · ↓ open`
-      const label = task?.state ?? "done"
+      const label = task?.stoppedRecovery ? "stopped" : (task?.state ?? "done")
       return `${label} ${duration} · ↓ open`
     }
     const taskRow = row as Extract<SessionRow, { type: "task" }>
@@ -198,10 +216,16 @@ export function SessionActivityRow(props: {
 
   return (
     <box
+      ref={(element: BoxRenderable) => (rowElement = element)}
       width={props.width ?? "100%"}
       flexDirection="column"
       paddingLeft={1}
+      focusable={expandable()}
+      onMouseDown={() => {
+        if (expandable()) rowElement?.focus()
+      }}
       onMouseUp={open}
+      onKeyDown={onKeyDown}
     >
       <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
         <text width={2} flexShrink={0} fg={markerColor()}>
@@ -213,7 +237,16 @@ export function SessionActivityRow(props: {
                 ? "ok"
                 : ".."}
         </text>
-        <SessionActivitySpacer running={running()} color={markerColor()} />
+        <Show
+          when={expandable()}
+          fallback={<SessionActivitySpacer running={running()} color={markerColor()} />}
+        >
+          <box width={5} flexShrink={0} flexDirection="row">
+            <text width={2} flexShrink={0} fg={theme.text.subdued}>
+              {expanded() ? "-" : "+"}
+            </text>
+          </box>
+        </Show>
         <text
           width={labelWidth()}
           flexShrink={1}
@@ -226,6 +259,19 @@ export function SessionActivityRow(props: {
         <box flexGrow={1} />
         <text flexShrink={0} fg={statusColor()}>{status()}</text>
       </box>
+      <Show when={expanded() && props.row.type === "guardrail" ? props.row.detail : undefined}>
+        {(detail) => (
+          <box flexDirection="column" paddingLeft={7} paddingTop={1}>
+            <For each={detail()}>
+              {(line) => (
+                <text fg={theme.text.subdued} wrapMode="word">
+                  <span style={{ fg: theme.text.label }}>{line.label}</span> {line.value}
+                </text>
+              )}
+            </For>
+          </box>
+        )}
+      </Show>
     </box>
   )
 }
@@ -322,7 +368,14 @@ export function SessionToolActivityRow(props: {
           {label()}
         </text>
         <box flexGrow={1} />
-        <text flexShrink={0} fg={variant() === "error" || variant() === "warning" ? color() : theme.text.subdued}>
+        <text
+          flexShrink={0}
+          fg={variant() === "error" || variant() === "warning"
+            ? color()
+            : props.lifecycle?.queued
+              ? theme.text.feedback.info.default
+              : theme.text.subdued}
+        >
           {status()}
         </text>
       </box>

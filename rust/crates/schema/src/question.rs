@@ -226,3 +226,60 @@ impl crate::event::EventType for Rejected {
     const TYPE: &'static str = "question.rejected";
     type Data = RejectedData;
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimedOutData {
+    pub session_id: crate::session_id::SessionId,
+    pub request_id: Id,
+}
+impl DomainDecode for TimedOutData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            session_id: o.field("sessionID")?,
+            request_id: o.field("requestID")?,
+        })
+    }
+}
+impl DomainEncode for TimedOutData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("requestID", &self.request_id)
+            .finish()
+    }
+}
+pub struct TimedOut;
+impl crate::event::EventType for TimedOut {
+    const TYPE: &'static str = "question.timed_out";
+    type Data = TimedOutData;
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeferredData {
+    pub session_id: crate::session_id::SessionId,
+    pub request_id: Id,
+    pub item_id: crate::session_review::Id,
+}
+impl DomainDecode for DeferredData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            session_id: o.field("sessionID")?,
+            request_id: o.field("requestID")?,
+            item_id: o.field("itemID")?,
+        })
+    }
+}
+impl DomainEncode for DeferredData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("requestID", &self.request_id)
+            .field("itemID", &self.item_id)
+            .finish()
+    }
+}
+pub struct Deferred;
+impl crate::event::EventType for Deferred {
+    const TYPE: &'static str = "question.deferred";
+    type Data = DeferredData;
+}

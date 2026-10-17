@@ -218,7 +218,7 @@ impl Tool for Subagent {
             }
             let child = self
                 .orchestration
-                .launch_with_cancellation(
+                .launch_attributed(
                     orchestration::LaunchInput {
                         parent_id: context.session_id.clone(),
                         parent_assistant_message_id: context.message_id.clone(),
@@ -230,6 +230,7 @@ impl Tool for Subagent {
                         guardrails: self.policy.guardrails.clone(),
                     },
                     &context.cancellation,
+                    &context.attribution,
                 )
                 .await
                 .map_err(failure)?;
@@ -290,6 +291,7 @@ impl Tool for Subagent {
             let execution = self.execution.clone();
             let id = child.session_id.clone();
             let parent = context.session_id.clone();
+            let attribution = context.attribution.clone();
             let job_id = id.as_lossless().to_utf8().unwrap_or_default();
             let jobs = self.jobs.clone();
             let started = self.jobs.start(job::StartInput {id: Some(job_id.clone()), kind: "subagent".into(), title: Some(description.to_utf8().unwrap_or_default()), metadata: Some(serde_json::Map::new()), run: Box::pin(async move {
@@ -300,7 +302,7 @@ impl Tool for Subagent {
                         loop {
                             tokio::time::sleep(Duration::from_secs(600)).await;
                             let message = session_message::Id::new(crate::platform::identifier("msg_").map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-                            orchestration.send(&parent, &id, &message, PROGRESS_PROMPT, "steer").await.map_err(|error| error.to_string())?;
+                            orchestration.send_attributed(&parent, &id, &message, PROGRESS_PROMPT, "steer", &attribution).await.map_err(|error| error.to_string())?;
                         }
                     };
                     tokio::select! {

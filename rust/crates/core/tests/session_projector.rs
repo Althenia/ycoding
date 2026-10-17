@@ -1,5 +1,7 @@
 use ycoding_core::session::store::Service;
-use ycoding_schema::{DomainEncode, JsonValue, parse_json, session, session_message};
+use ycoding_schema::{
+    DomainDecode, DomainEncode, JsonValue, model, parse_json, session, session_message,
+};
 use ycoding_store::{
     TableSpec,
     session::{Message, MessageTable, NewEvent},
@@ -492,6 +494,107 @@ async fn guardrail_approvals_are_durable_events_that_project_no_message() {
             1,
             r#","directories":["/tmp/outside"]"#,
         ))
+        .await
+        .unwrap();
+    assert!(
+        service
+            .snapshot(&session::Id::new("ses_one").unwrap(), 100, None)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+}
+
+fn model_ref(id: &str) -> model::Ref {
+    model::Ref::decode(&parse_json(&format!(r#"{{"providerID":"local","id":"{id}"}}"#)).unwrap())
+        .unwrap()
+}
+
+fn reroute(id: &str, now: i64, assistant: &str, to: &str, message: &str) -> NewEvent {
+    event(
+        "session.step.rerouted",
+        id,
+        now,
+        &format!(
+            r#", "assistantMessageID":"{assistant}","model":{{"providerID":"local","id":"{to}"}},"error":{{"type":"provider.quota","message":"{message}"}}"#
+        ),
+    )
+}
+
+#[tokio::test]
+async fn a_rerouted_step_records_each_abandoned_model_and_restarts_the_assistant() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    service
+        .publish(start("evt_start", 10, "msg_reroute"))
+        .await
+        .unwrap();
+    service
+        .publish(event(
+            "session.text.started",
+            "evt_text",
+            11,
+            r#", "assistantMessageID":"msg_reroute","ordinal":0"#,
+        ))
+        .await
+        .unwrap();
+    service.publish(event("session.retry.scheduled", "evt_retry", 12, r#", "assistantMessageID":"msg_reroute","attempt":2,"at":2000,"error":{"type":"provider.transport","message":"Disconnected"}"#)).await.unwrap();
+    let before = assistant(&service, "msg_reroute");
+    assert_eq!(before.content.len(), 1);
+    assert!(before.retry.is_some());
+    assert!(before.reroutes.is_none());
+
+    service
+        .publish(reroute(
+            "evt_reroute1",
+            13,
+            "msg_reroute",
+            "second",
+            "Quota one",
+        ))
+        .await
+        .unwrap();
+    let first = assistant(&service, "msg_reroute");
+    assert_eq!(first.model, model_ref("second"));
+    assert!(first.content.is_empty());
+    assert!(first.retry.is_none());
+    let reroutes = first.reroutes.unwrap();
+    assert_eq!(reroutes.len(), 1);
+    assert_eq!(reroutes[0].from, model_ref("test"));
+    assert_eq!(reroutes[0].model, model_ref("second"));
+    assert_eq!(reroutes[0].error.message.as_str(), Some("Quota one"));
+
+    service
+        .publish(reroute(
+            "evt_reroute2",
+            14,
+            "msg_reroute",
+            "third",
+            "Quota two",
+        ))
+        .await
+        .unwrap();
+    let second = assistant(&service, "msg_reroute");
+    assert_eq!(second.model, model_ref("third"));
+    let reroutes = second.reroutes.unwrap();
+    assert_eq!(
+        reroutes
+            .iter()
+            .map(|reroute| (reroute.from.clone(), reroute.model.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (model_ref("test"), model_ref("second")),
+            (model_ref("second"), model_ref("third"))
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_reroute_for_a_missing_assistant_creates_no_message() {
+    let store = support::store();
+    let service = Service::new(store.client());
+    service
+        .publish(reroute("evt_orphan", 10, "msg_missing", "second", "Quota"))
         .await
         .unwrap();
     assert!(

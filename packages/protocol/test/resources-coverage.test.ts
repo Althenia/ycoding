@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { enumNumbers, messageTags } from "./wire-allocation.js"
 import path from "node:path"
 import { resourceSources } from "./resources-source.js"
 import { resourceContract, resourceSharedSet, resourceFieldConstraints } from "./resources-contract.js"
@@ -12,14 +13,24 @@ import { Schema, SchemaAST } from "effect"
 import { operations, Paging, PeerRole } from "../src/generated/v5/index.js"
 import { frontendBoundaryBaseline, frontendBoundaryBaselineFields } from "./frontend-boundary-baseline.js"
 
-test("resource RPC membership equals the live 60-operation Protocol slice", async () => {
+test("resource RPC membership equals the live 65-operation Protocol slice", async () => {
   const sources = resourceSources()
-  expect(sources).toHaveLength(60)
+  expect(sources).toHaveLength(65)
   const proto = await Bun.file(path.resolve(import.meta.dir, "../../../protocol/ycoding/v5/resources.proto")).text()
   const names = Array.from(frontendBoundaryBaseline(proto).matchAll(/rpc (\w+)\(/g), (match) => match[1])
   expect(names.sort()).toEqual(sources.map((source) => source.name.replace(/[^a-zA-Z0-9]/g, "_")).sort())
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.members.filter((member) => member.kind === "connector").map((member) => member.name).sort()).toEqual(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY)).map((operation) => operation.diagnosticName).sort())
+  expect(
+    manifest.members
+      .filter((member) => member.kind === "connector")
+      .map((member) => member.name)
+      .sort(),
+  ).toEqual(
+    operations
+      .filter((operation) => operation.roles.includes(PeerRole.RELAY))
+      .map((operation) => operation.diagnosticName)
+      .sort(),
+  )
   const groups = new Set<string>(sources.map((source) => source.group))
   expect(
     manifest.members
@@ -114,12 +125,12 @@ test("every request, result and typed error matches the live Effect field types 
   }
   const actualEnums: Readonly<Record<string, readonly number[]>> = enums
   for (const [name, values] of contract.enums)
-    expect(actualEnums[`ycoding.v5.${name}`], name).toEqual(values.map((_, index) => index + 1))
+    expect(actualEnums[`ycoding.v5.${name}`], name).toEqual(enumNumbers(name, values))
   const reachable = new Set(
     contract.operations.flatMap((operation) => [operation.request, operation.result, ...operation.errors]),
   )
   expect(reachable.size >= 120).toBe(true)
-  expect(new Set(contract.operations.map((operation) => operation.id)).size).toBe(60)
+  expect(new Set(contract.operations.map((operation) => operation.id)).size).toBe(65)
   expect(contract.operations.every((operation) => operation.id >= 2000 && operation.id <= 2999)).toBe(true)
 })
 
@@ -149,7 +160,11 @@ test("canonical operation descriptors have exact resource IDs, request/result as
   const expected = resourceContract().operations
   expect(
     operations
-      .filter((operation) => operation.operationId >= 2000 && operation.operationId <= 2059)
+      .filter(
+        (operation) =>
+          (operation.operationId >= 2000 && operation.operationId <= 2059) ||
+          (operation.operationId >= 2063 && operation.operationId <= 2067),
+      )
       .map((operation) => ({
         id: operation.operationId,
         name: operation.diagnosticName,
@@ -158,13 +173,15 @@ test("canonical operation descriptors have exact resource IDs, request/result as
         errors: operation.errorTypes,
       })),
   ).toEqual(
-    expected.map((operation) => ({
-      id: operation.id,
-      name: operation.name,
-      request: `ycoding.v5.${operation.request}`,
-      result: `ycoding.v5.${operation.result}`,
-      errors: operation.errors.map((error) => `ycoding.v5.${error}`),
-    })),
+    expected
+      .toSorted((left, right) => left.id - right.id)
+      .map((operation) => ({
+        id: operation.id,
+        name: operation.name,
+        request: `ycoding.v5.${operation.request}`,
+        result: `ycoding.v5.${operation.result}`,
+        errors: operation.errors.map((error) => `ycoding.v5.${error}`),
+      })),
   )
 })
 

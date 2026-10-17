@@ -140,6 +140,7 @@ const pricedHelpers = Layer.succeed(
 )
 const guardrailSnapshots = new Map<SessionSchema.ID, SessionGuardrail.Snapshot>()
 const guardrails = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   withSnapshot: (sessionID, use) =>
     use(guardrailSnapshots.get(sessionID) ?? { sequence: 0, digest: ContextManifest.payloadDigest(null) }),
 })

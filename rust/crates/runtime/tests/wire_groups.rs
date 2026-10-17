@@ -88,6 +88,7 @@ fn session_row(id: &str, project_id: &str, directory: &str, updated: i64) -> ses
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 

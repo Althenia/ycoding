@@ -13,8 +13,10 @@ use std::{
     time::Duration,
 };
 use ycoding_schema::{
-    JsonValue, LosslessString, credential, provider,
-    provider_usage::{Observation, Snapshot},
+    JsonValue, LosslessString, credential, location, model, provider,
+    provider_usage::{self, Observation, Snapshot},
+    schema::NonNegativeInt,
+    usage_forecast,
 };
 
 #[derive(Clone, Default)]
@@ -43,6 +45,7 @@ pub struct Service {
     client: reqwest::Client,
     endpoints: Endpoints,
     observations: Arc<Mutex<Observations>>,
+    history: Arc<Mutex<super::forecast::History>>,
     user_agent: String,
     app_server: Option<super::AppServerCommand>,
     store: Option<ycoding_store::Client>,
@@ -67,6 +70,7 @@ impl Service {
                 .map_err(|_| Error::Request(None))?,
             endpoints,
             observations: Arc::new(Mutex::new(BTreeMap::new())),
+            history: Arc::new(Mutex::new(super::forecast::History::new(256, 256))),
             user_agent: "ycoding".into(),
             app_server: None,
             store: None,
@@ -148,16 +152,28 @@ impl Service {
         refresh: bool,
         now: i64,
     ) -> Snapshot {
+        self.bound(provider, credential_id, refresh, now).await.0
+    }
+    async fn bound(
+        &self,
+        provider: provider::Id,
+        credential_id: Option<&LosslessString>,
+        refresh: bool,
+        now: i64,
+    ) -> (Snapshot, Option<LosslessString>) {
         let label = label(&provider);
         let saved = match self.credentials.list(&provider.0) {
             Ok(saved) => saved,
             Err(_) => {
-                return unavailable(
-                    provider,
-                    &label,
-                    now,
-                    "error",
-                    "Provider usage refresh failed",
+                return (
+                    unavailable(
+                        provider,
+                        &label,
+                        now,
+                        "error",
+                        "Provider usage refresh failed",
+                    ),
+                    None,
                 );
             }
         };
@@ -190,12 +206,15 @@ impl Service {
         });
         if provider.0 == "muse".into() {
             if credential_id.is_some() && selected.is_none() {
-                return unavailable(
-                    provider,
-                    &label,
-                    now,
-                    "unsupported",
-                    "No supported credential is configured",
+                return (
+                    unavailable(
+                        provider,
+                        &label,
+                        now,
+                        "unsupported",
+                        "No supported credential is configured",
+                    ),
+                    None,
                 );
             }
             let observation = ycoding_ai::muse::Runtime::shared().ok().and_then(|r| {
@@ -212,13 +231,13 @@ impl Service {
                 if saved.len() > 1 {
                     observed.profile = selected.map(|c| c.label().clone());
                 }
-                return observed;
+                return self.bound_to(observed, profile_source);
             }
             let mut snapshot = ycoding_ai::muse::unreported(now);
             if saved.len() > 1 {
                 snapshot.profile = selected.map(|c| c.label().clone());
             }
-            return snapshot;
+            return (snapshot, None);
         }
         if !refresh
             && (profile_source.is_some() || credential_id.is_none())
@@ -235,33 +254,39 @@ impl Service {
                     .flatten()
                     .filter(|c| c.account_generation() == selected.account_generation());
                 let Some(current) = current else {
-                    return unavailable(
-                        provider,
-                        &label,
-                        now,
-                        "unsupported",
-                        "Provider usage account changed during refresh",
+                    return (
+                        unavailable(
+                            provider,
+                            &label,
+                            now,
+                            "unsupported",
+                            "Provider usage account changed during refresh",
+                        ),
+                        None,
                     );
                 };
                 let mut observed = observed.clone();
                 if saved.len() > 1 {
                     observed.profile = Some(current.label().clone());
                 }
-                return observed;
+                return self.bound_to(observed, profile_source.clone());
             }
-            return observed.clone();
+            return (observed.clone(), None);
         }
         if !self
             .endpoints
             .0
             .contains_key(provider.0.as_str().unwrap_or(""))
         {
-            return unavailable(
-                provider,
-                &label,
-                now,
-                "unsupported",
-                "Provider usage is unsupported",
+            return (
+                unavailable(
+                    provider,
+                    &label,
+                    now,
+                    "unsupported",
+                    "Provider usage is unsupported",
+                ),
+                None,
             );
         }
         let Some(selected) = selected else {
@@ -269,14 +294,17 @@ impl Service {
                 && let Ok(observations) = self.observations.lock()
                 && let Some(observed) = observations.get(&(provider.clone(), None))
             {
-                return observed.clone();
+                return (observed.clone(), None);
             }
-            return unavailable(
-                provider,
-                &label,
-                now,
-                "unsupported",
-                "No supported credential is configured",
+            return (
+                unavailable(
+                    provider,
+                    &label,
+                    now,
+                    "unsupported",
+                    "No supported credential is configured",
+                ),
+                None,
             );
         };
         let key = format!(
@@ -341,29 +369,37 @@ impl Service {
         let current = match current {
             Ok(current) => current,
             Err(_) => {
-                return unavailable(
-                    provider,
-                    &label,
-                    now,
-                    "error",
-                    "Provider usage refresh failed",
+                return (
+                    unavailable(
+                        provider,
+                        &label,
+                        now,
+                        "error",
+                        "Provider usage refresh failed",
+                    ),
+                    None,
                 );
             }
         };
         let Some(credential) = current.iter().find(|c| {
             c.id() == selected.id() && c.account_generation() == selected.account_generation()
         }) else {
-            return unavailable(
-                provider,
-                &label,
-                now,
-                "unsupported",
-                "Provider usage account changed during refresh",
+            return (
+                unavailable(
+                    provider,
+                    &label,
+                    now,
+                    "unsupported",
+                    "Provider usage account changed during refresh",
+                ),
+                None,
             );
         };
         if current.len() > 1 {
             snapshot.profile = Some(credential.label().clone());
         }
+        let account = super::super::account_identity(credential);
+        self.record(&snapshot, &account);
         if (profile_source.is_some() || credential_id.is_none())
             && let Ok(observations) = self.observations.lock()
             && let Some(observed) = observations.get(&(provider, profile_source.clone()))
@@ -375,13 +411,26 @@ impl Service {
                 if current.len() > 1 {
                     observed.profile = Some(credential.label().clone());
                 }
-                return observed;
+                return self.bound_to(observed, profile_source.clone());
             }
-            return observed.clone();
+            return (observed.clone(), None);
         }
-        snapshot
+        (snapshot, Some(account))
     }
     pub async fn list(&self, providers: &[provider::Id], refresh: bool, now: i64) -> Vec<Snapshot> {
+        self.bound_list(providers, refresh, now, true)
+            .await
+            .into_iter()
+            .map(|(snapshot, _)| snapshot)
+            .collect()
+    }
+    async fn bound_list(
+        &self,
+        providers: &[provider::Id],
+        refresh: bool,
+        now: i64,
+        local: bool,
+    ) -> Vec<(Snapshot, Option<LosslessString>)> {
         let available = providers.iter().cloned().collect::<BTreeSet<_>>();
         let mut targets = Vec::new();
         let mut providers = providers.to_vec();
@@ -424,7 +473,7 @@ impl Service {
                     (
                         index,
                         service
-                            .get(provider, credential.as_ref(), refresh, now)
+                            .bound(provider, credential.as_ref(), refresh, now)
                             .await,
                     )
                 });
@@ -440,12 +489,15 @@ impl Service {
                 if !results.iter().any(|(existing, _)| *existing == index) {
                     results.push((
                         index,
-                        unavailable(
-                            provider.clone(),
-                            &label(provider),
-                            now,
-                            "error",
-                            "Provider usage worker failed",
+                        (
+                            unavailable(
+                                provider.clone(),
+                                &label(provider),
+                                now,
+                                "error",
+                                "Provider usage worker failed",
+                            ),
+                            None,
                         ),
                     ));
                 }
@@ -465,7 +517,7 @@ impl Service {
                                 .list(&provider.0)
                                 .is_ok_and(|saved| saved.len() > 1)
                     })
-                    .map(|(_, snapshot)| snapshot.clone()),
+                    .map(|(_, snapshot)| (snapshot.clone(), None)),
             );
         }
         if let Some(command) = &self.app_server {
@@ -493,7 +545,7 @@ impl Service {
             match result {
                 Ok(snapshot) => {
                     if available.contains(&snapshot.provider_id) {
-                        snapshots.push(snapshot);
+                        snapshots.push((snapshot, None));
                     }
                     if let Ok(mut errors) = self.auxiliary_errors.lock() {
                         errors.remove("codex-app-server");
@@ -506,7 +558,7 @@ impl Service {
                 }
             }
         }
-        if let Some(store) = &self.store {
+        if local && let Some(store) = &self.store {
             let store = store.clone();
             let local =
                 tokio::task::spawn_blocking(move || super::local_spend_from_store(&store, now))
@@ -517,7 +569,8 @@ impl Service {
                     snapshots.extend(
                         local
                             .into_iter()
-                            .filter(|s| available.contains(&s.provider_id)),
+                            .filter(|s| available.contains(&s.provider_id))
+                            .map(|snapshot| (snapshot, None)),
                     );
                     if let Ok(mut errors) = self.auxiliary_errors.lock() {
                         errors.remove("local-spend");
@@ -537,29 +590,131 @@ impl Service {
         observation: Observation,
         profile_source: Option<LosslessString>,
     ) -> Result<(), Error> {
-        let key = (observation.provider_id.clone(), profile_source);
-        let mut observations = self.observations.lock().map_err(|_| Error::Worker)?;
-        if observations
-            .get(&key)
-            .is_some_and(|s| s.updated_at > observation.observed_at)
+        let key = (observation.provider_id.clone(), profile_source.clone());
+        let snapshot = Snapshot {
+            provider_id: observation.provider_id,
+            label: observation.label,
+            profile: None,
+            status: "available".into(),
+            source: observation.source,
+            stability: observation.stability,
+            updated_at: observation.observed_at,
+            windows: observation.windows,
+            message: None,
+        };
         {
-            return Ok(());
+            let mut observations = self.observations.lock().map_err(|_| Error::Worker)?;
+            if observations
+                .get(&key)
+                .is_some_and(|s| s.updated_at > snapshot.updated_at)
+            {
+                return Ok(());
+            }
+            observations.insert(key, snapshot.clone());
         }
-        observations.insert(
-            key,
-            Snapshot {
-                provider_id: observation.provider_id,
-                label: observation.label,
-                profile: None,
-                status: "available".into(),
-                source: observation.source,
-                stability: observation.stability,
-                updated_at: observation.observed_at,
-                windows: observation.windows,
-                message: None,
-            },
-        );
+        if let Some(account) = &profile_source {
+            self.record(&snapshot, account);
+        }
         Ok(())
+    }
+    pub async fn forecast(
+        &self,
+        providers: &[provider::Id],
+        location: Option<&location::Ref>,
+        now: NonNegativeInt,
+    ) -> usage_forecast::Info {
+        let as_of = now.get();
+        let local_rates = match &self.store {
+            None => Some(Vec::new()),
+            Some(store) => {
+                let store = store.clone();
+                let location = location.cloned();
+                tokio::task::spawn_blocking(move || {
+                    super::forecast::local_usage(&store, location.as_ref(), as_of)
+                })
+                .await
+                .ok()
+                .and_then(Result::ok)
+            }
+        };
+        let snapshots = self.bound_list(providers, false, as_of, false).await;
+        let quotas = self.history.lock().ok().map(|history| {
+            snapshots
+                .iter()
+                .filter(|(snapshot, _)| snapshot.source != "local_session".into())
+                .flat_map(|(snapshot, account)| {
+                    let history = &history;
+                    snapshot.windows.iter().map(move |window| {
+                        let estimate = history.quota(super::forecast::QuotaRequest {
+                            account: account.as_ref(),
+                            snapshot,
+                            window,
+                            now: as_of,
+                            semantics: super::forecast::semantics(&snapshot.provider_id, window),
+                            whole_window_mean: snapshot.provider_id.0 == "cursor".into()
+                                && window.id == "included".into(),
+                        });
+                        usage_forecast::Quota {
+                            provider_id: snapshot.provider_id.clone(),
+                            profile: snapshot.profile.clone().map(model::ProfileName),
+                            window_id: window.id.clone(),
+                            unit: provider_usage::Unit(window.unit.clone()),
+                            source: provider_usage::Source(estimate.source),
+                            stability: provider_usage::Stability(estimate.stability),
+                            updated_at: observed(estimate.updated_at),
+                            state: usage_forecast::QuotaState(estimate.state.into()),
+                            method: estimate
+                                .method
+                                .map(|method| usage_forecast::Method(method.into())),
+                            evidence: usage_forecast::Evidence(estimate.evidence.into()),
+                            reason: estimate.reason.map(Into::into),
+                            observed_from: estimate.observed_from.map(observed),
+                            observed_to: estimate.observed_to.map(observed),
+                            rate_per_hour: estimate.rate_per_hour,
+                            exhaustion_at: estimate
+                                .exhaustion_at
+                                .and_then(|at| NonNegativeInt::new(at).ok()),
+                            projected_used_at_reset: estimate.projected_used_at_reset,
+                        }
+                    })
+                })
+                .collect()
+        });
+        usage_forecast::Info {
+            as_of: now,
+            local_scope: usage_forecast::LocalScope(
+                if location.is_some() {
+                    "location"
+                } else {
+                    "backend"
+                }
+                .into(),
+            ),
+            local_rates,
+            quotas,
+        }
+    }
+    fn record(&self, snapshot: &Snapshot, account: &LosslessString) {
+        if let Ok(mut history) = self.history.lock() {
+            for window in &snapshot.windows {
+                history.observe(
+                    account,
+                    snapshot,
+                    window,
+                    super::forecast::semantics(&snapshot.provider_id, window),
+                );
+            }
+        }
+    }
+    fn bound_to(
+        &self,
+        snapshot: Snapshot,
+        account: Option<LosslessString>,
+    ) -> (Snapshot, Option<LosslessString>) {
+        if let Some(account) = &account {
+            self.record(&snapshot, account);
+        }
+        (snapshot, account)
     }
     pub async fn shutdown(&self) -> Result<(), Error> {
         self.cache.shutdown().await
@@ -926,6 +1081,9 @@ fn utc_starts(now: i64) -> (i64, i64) {
         week * 86400,
         date_millis(&format!("{year:04}-{month:02}-01")).unwrap_or(0.0) as i64 / 1000,
     )
+}
+fn observed(at: i64) -> NonNegativeInt {
+    NonNegativeInt::new(at).expect("observation times come from validated snapshot times")
 }
 fn unavailable(
     provider: provider::Id,

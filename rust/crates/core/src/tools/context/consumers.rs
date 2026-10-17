@@ -64,6 +64,7 @@ impl SessionTools {
             }),
             goal: Arc::new(Goal {
                 autonomy: crate::session::autonomy::Service::new(subagent.store.client.clone()),
+                sessions: subagent.store.clone(),
                 policy: subagent.policy.clone(),
             }),
             question: Arc::new(Question {

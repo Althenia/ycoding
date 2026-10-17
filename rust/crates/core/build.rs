@@ -6,9 +6,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed={}", file.display());
     println!("cargo:rerun-if-env-changed=PROTOC");
     let mut config = prost_build::Config::new();
-    config.protoc_executable(
-        env::var("PROTOC").unwrap_or_else(|_| "/opt/homebrew/bin/protoc".into()),
-    );
     let out = PathBuf::from(env::var("OUT_DIR")?);
     config.file_descriptor_set_path(out.join("extension.bin"));
     config.skip_debug([

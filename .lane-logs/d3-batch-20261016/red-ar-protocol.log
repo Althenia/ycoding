@@ -1,0 +1,1017 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/public-event-coverage.test.ts:
+ 9 | 
+10 | test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history", async () => {
+11 |   expect(publicEvents.map((event) => [event.name, event.durable]).sort()).toEqual(
+12 |     EventManifest.ServerDefinitions.map((event) => [event.type, event.durability === "durable"]).sort(),
+13 |   )
+14 |   expect(publicEvents).toHaveLength(115)
+                            ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 115
+Received length: 101
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/public-event-coverage.test.ts:14:24)
+(fail) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [4.51ms]
+38 |   )
+39 | })
+40 | 
+41 | test("REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions", () => {
+42 |   const log = messages["ycoding.v5.SessionLogItem"].fields
+43 |   expect(log).toHaveLength(59)
+                   ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 59
+Received length: 51
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/public-event-coverage.test.ts:43:15)
+(fail) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [0.38ms]
+(pass) REQ-WIRE-005 every public event field retains its source type, tag and presence [17.51ms]
+
+test/session-review.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+error: Cannot find module '../src/groups/review.js' from '/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-review.test.ts'
+-------------------------------
+
+
+test/platform-coverage.test.ts:
+39 | 
+40 | test("platform slice exactly matches all 55 baseline and live endpoint declarations", async () => {
+41 |   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
+42 |   expect(live).toHaveLength(55)
+43 |   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
+44 |   expect(manifest.counts).toEqual({ endpoint: 203, connector: 72, notice: 4 })
+                               ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "connector": 72,
+-   "endpoint": 203,
++   "connector": 70,
++   "endpoint": 201,
+    "notice": 4,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/platform-coverage.test.ts:44:27)
+(fail) platform slice exactly matches all 55 baseline and live endpoint declarations [11.66ms]
+(pass) every platform field, presence, enum and typed error matches the live Effect contract [21.96ms]
+(pass) canonical platform descriptors preserve IDs, associations, errors and delivery policies [2.46ms]
+(pass) wildcard asset path, native ticket headers and metadata retain their source boundaries [2.19ms]
+(pass) source ordering cannot change canonical tags, operation IDs or projected bytes [163.35ms]
+(pass) every platform domain obligation names a live source owner [7.83ms]
+(pass) result wrapper overrides are exactly the two verified prost collisions [4.07ms]
+
+test/canonical-remote.test.ts:
+27 |     const operation = operations.find((item) => item.diagnosticName === name)!
+28 |     expect(operation.operationId, name).toBe(id)
+29 |     expect(operation.roles, name).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
+30 |   }
+31 |   const canonical = new Set<string>(Object.values(connectorOperations).map(([, name]) => name))
+32 |   expect(canonical.size).toBe(72)
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: 72
+Received: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/canonical-remote.test.ts:32:26)
+(fail) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [0.71ms]
+(pass) REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds [0.10ms]
+(pass) REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result [0.08ms]
+
+test/repeated-constraints.test.ts:
+(pass) array-level and item-level checks stay separate > an array cardinality bound is a count bound, never a per-string length [0.12ms]
+(pass) array-level and item-level checks stay separate > an item bound stays a per-string length and never becomes a count [0.05ms]
+(pass) array-level and item-level checks stay separate > distinct-identity metadata on the array adds no string or count bound [0.03ms]
+(pass) array-level and item-level checks stay separate > every projected repeated field derives string bounds only from its item and counts only from its array [17.78ms]
+(pass) connector family member lists > session_team_economics_Request_payload_sessionIDs declares a structural count of 1 to 128 and 1 to 128 units per ID [1.02ms]
+(pass) connector family member lists > session_family_activity_Request_payload_sessionIDs declares a structural count of 0 to 128 and 1 to 128 units per ID [0.37ms]
+(pass) connector family member lists > a root-only activity read accepts an empty list and 128 entries but not 129 [2.50ms]
+(pass) generated usage accounting input descriptors > UsageAccounting_PromptInput_inputIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID [0.02ms]
+(pass) generated usage accounting input descriptors > UsageAccounting_TaskInput_sessionIDs bounds the distinct list at 1 to 100 entries and puts no length bound on each ID
+(pass) generated wire boundary > msg_ IDs of 101 to 128 units are accepted within 1 to 100 entries [2.15ms]
+(pass) generated wire boundary > ses_ IDs of 101 to 128 units are accepted within 1 to 100 entries [1.46ms]
+(pass) generated wire boundary > msg_ lists outside 1 to 100 entries are rejected by cardinality [1.03ms]
+(pass) generated wire boundary > ses_ lists outside 1 to 100 entries are rejected by cardinality [1.09ms]
+(pass) generated wire boundary > connector family IDs keep their own 1 to 128 unit item bound beside the entry count [0.38ms]
+(pass) generated wire boundary > browser group tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.11ms]
+(pass) generated wire boundary > browser ungroup tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.05ms]
+(pass) generated wire boundary > isolated browser group tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.07ms]
+(pass) generated wire boundary > isolated browser ungroup tab ID lists accept generated btab_ IDs within 1 to 8 entries [0.05ms]
+
+test/session-autonomy.test.ts:
+(pass) session autonomy state preserves active goal progress [3.38ms]
+(pass) session autonomy state maps legacy boolean yolo [0.16ms]
+(pass) session autonomy set accepts modes and rejects empty goals [0.69ms]
+(pass) R7 accepts explicit goal resume without replacing objective text [0.41ms]
+(pass) R7 documents typed goal resume, stale calculation, and provider failures [11.00ms]
+688 | function runSchemaErrorSync(self) {
+689 |   const exit = Effect.runSyncExit(self);
+690 |   if (Exit_.isSuccess(exit)) {
+691 |     return exit.value;
+692 |   }
+693 |   throw getSchemaErrorOrThrow(exit.cause, "Sync adapter can only throw schema errors");
+                                                                                           ^
+error: Missing key
+  at ["goal"]
+Missing key
+  at ["yolo"]
+      at runSchemaErrorSync (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/node_modules/.bun/effect@4.0.0-beta.98/node_modules/effect/dist/Schema.js:693:86)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-autonomy.test.ts:97:10)
+(fail) family autonomy accepts explicit switches without accepting empty or invalid requests [0.65ms]
+
+test/wire-numbers-baseline.test.ts:
+(pass) every operation ID in the before-map is unchanged [0.09ms]
+(pass) every public event tag, durability and envelope type in the before-map is unchanged [0.07ms]
+(pass) every enum value in the before-map is unchanged [0.32ms]
+(pass) every message field tag in the before-map is unchanged and no later field reuses one [2.23ms]
+(pass) retired slots stay reserved and unused [0.04ms]
+
+test/session-coverage.test.ts:
+47 |   const endpoints = manifest.members.filter((member) => member.kind === "endpoint")
+48 |   const excluded = [...Object.keys(resourceIDs), ...Object.keys(platformIDs), ...Object.keys(platformExclusions)]
+49 |   expect(excluded).toHaveLength(116)
+50 |   expect(new Set(excluded).size).toBe(116)
+51 |   const remaining = endpoints.filter((member) => !excluded.includes(member.name))
+52 |   expect(remaining).toHaveLength(87)
+                         ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 87
+Received length: 85
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:52:21)
+(fail) session slice completes the 203 endpoints without overlap and adds only inventory unsubscribe [5.77ms]
+(pass) all session fields, tags, presence, enums and obligations match live source projection [22.30ms]
+(pass) session descriptors preserve IDs, typed associations, middleware errors and delivery policies [8.20ms]
+(pass) typed subscriptions preserve log items and finite StreamEnd without SSE or synchronous prompt execution [5.49ms]
+(pass) source reordering preserves canonical bytes and frozen materialization rejects overwrite [260.62ms]
+(pass) every session domain obligation names a live source owner [11.96ms]
+(pass) session result wrapper overrides cannot grow or become stale without a real collision [148.18ms]
+
+test/resources-coverage.test.ts:
+(pass) resource RPC membership equals the live 61-operation Protocol slice [8.69ms]
+(pass) enum literal names match live Effect literals, including single-member tagged fields [2.31ms]
+(pass) shared declarations are exactly those reached by live endpoints outside the resource slice [207.64ms]
+(pass) every request, result and typed error matches the live Effect field types and presence [5.17ms]
+(pass) every checked live source field has exact structural metadata and an unenforced source obligation [9.52ms]
+(pass) canonical operation descriptors have exact resource IDs, request/result associations and inherited errors [5.72ms]
+(pass) every domain obligation names a live source schema owner [17.23ms]
+(pass) named integer schemas retain 64-bit integer wire types rather than ref-shaped double fallthrough [4.28ms]
+(pass) numeric offset paging is distinct from opaque cursor paging [2.21ms]
+
+test/local-family.test.ts:
+(pass) M7 session.capturedChanges.list admits the canonical local read through the connection [3.19ms]
+(pass) M7 session.team.economics admits the canonical local read through the connection [0.66ms]
+(pass) M7 session.family.activity admits the canonical local read through the connection [0.47ms]
+(pass) M7 session.capturedChanges.list rejects an unrelated scope and server/agent request authority [0.43ms]
+(pass) M7 session.team.economics rejects an unrelated scope and server/agent request authority [0.41ms]
+(pass) M7 session.family.activity rejects an unrelated scope and server/agent request authority [0.29ms]
+87 |   expect(
+88 |     operations
+89 |       .filter((item) => item.operationId >= 5000 && item.roles.includes(PeerRole.LOCAL_CLIENT))
+90 |       .map((item) => item.operationId),
+91 |   ).toEqual([5008, 5013, 5018])
+92 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(76)
+                                                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 76
+Received length: 74
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/local-family.test.ts:92:54)
+(fail) M7 widens exactly three connector reads without adding remote operations [0.15ms]
+
+test/autonomy-review-wire-contract.test.ts:
+26 |   message(name)
+27 |     .fields.find((candidate) => candidate.name === field)!
+28 |     .target!.replace("ycoding.v5.", "")
+29 | const operation = (name: string) => {
+30 |   const found = operations.find((candidate) => candidate.diagnosticName === name)
+31 |   if (!found) throw new Error(`missing operation ${name}`)
+                                                              ^
+error: missing operation session.review.list
+      at operation (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:31:58)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:47:24)
+(fail) review operations > session.review.list is Session-scoped for local, remote and relay peers [0.14ms]
+26 |   message(name)
+27 |     .fields.find((candidate) => candidate.name === field)!
+28 |     .target!.replace("ycoding.v5.", "")
+29 | const operation = (name: string) => {
+30 |   const found = operations.find((candidate) => candidate.diagnosticName === name)
+31 |   if (!found) throw new Error(`missing operation ${name}`)
+                                                              ^
+error: missing operation session.review.decide
+      at operation (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:31:58)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:47:24)
+(fail) review operations > session.review.decide is Session-scoped for local, remote and relay peers [0.04ms]
+26 |   message(name)
+27 |     .fields.find((candidate) => candidate.name === field)!
+28 |     .target!.replace("ycoding.v5.", "")
+29 | const operation = (name: string) => {
+30 |   const found = operations.find((candidate) => candidate.diagnosticName === name)
+31 |   if (!found) throw new Error(`missing operation ${name}`)
+                                                              ^
+error: missing operation session.review.list
+      at operation (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:31:58)
+      at errors (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:40:38)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:69:12)
+(fail) review operations > declared errors are closed and include the review lookup failure [0.05ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message session_review_list_Request
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:86:12)
+(fail) review operations > request and result wrappers carry the Session and item identity [0.05ms]
+ 95 |   test("the Session operation range stays contiguous through 4087 and keeps the usage allocations", () => {
+ 96 |     const ids = operations
+ 97 |       .map((descriptor) => descriptor.operationId)
+ 98 |       .filter((id) => id >= 4000 && id <= 4999)
+ 99 |       .sort((a, b) => a - b)
+100 |     expect(ids).toEqual(Array.from({ length: 88 }, (_, index) => 4000 + index))
+                      ^
+error: expect(received).toEqual(expected)
+
+  [
+    4000,
+    4001,
+    4002,
+    4003,
+    4004,
+    4005,
+    4006,
+    4007,
+    4008,
+    4009,
+    4010,
+    4011,
+    4012,
+    4013,
+    4014,
+    4015,
+    4016,
+    4017,
+    4018,
+    4019,
+    4020,
+    4021,
+    4022,
+    4023,
+    4024,
+    4025,
+    4026,
+    4027,
+    4028,
+    4029,
+    4030,
+    4031,
+    4032,
+    4033,
+    4034,
+    4035,
+    4036,
+    4037,
+    4038,
+    4039,
+    4040,
+    4041,
+    4042,
+    4043,
+    4044,
+    4045,
+    4046,
+    4047,
+    4048,
+    4049,
+    4050,
+    4051,
+    4052,
+    4053,
+    4054,
+    4055,
+    4056,
+    4057,
+    4058,
+    4059,
+    4060,
+    4061,
+    4062,
+    4063,
+    4064,
+    4065,
+    4066,
+    4067,
+    4068,
+    4069,
+    4070,
+    4071,
+    4072,
+    4073,
+    4074,
+    4075,
+    4076,
+    4077,
+    4078,
+    4079,
+    4080,
+    4081,
+    4082,
+    4083,
+    4084,
+    4085,
+-   4086,
+-   4087,
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:100:17)
+(fail) review operations > the Session operation range stays contiguous through 4087 and keeps the usage allocations [0.35ms]
+102 |     expect(operation("session.taskCosts").operationId).toBe(4085)
+103 |     expect(operation("providerUsage.forecast").operationId).toBe(2063)
+104 |   })
+105 | 
+106 |   test("the current inventory grows by exactly the two review operations", () => {
+107 |     expect(operations).toHaveLength(227)
+                             ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 227
+Received length: 225
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:107:24)
+(fail) review operations > the current inventory grows by exactly the two review operations [0.04ms]
+111 |   })
+112 | 
+113 |   test("web latency values append the two review operations after the usage values", async () => {
+114 |     const values = enumValues(await proto("platform.proto"), "Telemetry_RequestSample_operation")
+115 |     const prefix = "TELEMETRY_REQUESTSAMPLE_OPERATION_"
+116 |     expect(Object.keys(values)).toHaveLength(72)
+                                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 72
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:116:33)
+(fail) review operations > web latency values append the two review operations after the usage values [0.26ms]
+122 | 
+123 | describe("public events", () => {
+124 |   const entry = (name: string) => publicEvents.find((event) => event.name === name)
+125 | 
+126 |   test("the inventory is 115 branches, 58 durable, with the old numbering intact", () => {
+127 |     expect(publicEvents).toHaveLength(115)
+                               ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 115
+Received length: 101
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:127:26)
+(fail) public events > the inventory is 115 branches, 58 durable, with the old numbering intact [0.03ms]
+139 |       [113, "guardrail.deferred"],
+140 |       [114, "question.deferred"],
+141 |       [115, "form.deferred"],
+142 |     ] as const
+143 |     for (const [tag, name] of live)
+144 |       expect(entry(name), name).toEqual({
+                                      ^
+error: question.timed_out
+
+- {
+-   "durable": false,
+-   "name": "question.timed_out",
+-   "tag": 102,
+-   "type": "ycoding.v5.PublicEvent_question_timed_out",
+- }
++ undefined
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:144:33)
+(fail) public events > deadline and deferral branches are live-only and follow the frozen order [0.07ms]
+159 |       [109, 58, "session.review.withdrawn"],
+160 |       [110, 59, "session.review.consumed"],
+161 |       [111, 60, "session.step.rerouted"],
+162 |     ] as const
+163 |     for (const [tag, slot, name] of durable)
+164 |       expect(entry(name), name).toEqual({ name, durable: true, tag, type: `ycoding.v5.SessionLogItemValue${slot}` })
+                                      ^
+error: session.guardrail.dismissed
+
+- {
+-   "durable": true,
+-   "name": "session.guardrail.dismissed",
+-   "tag": 104,
+-   "type": "ycoding.v5.SessionLogItemValue53",
+- }
++ undefined
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:164:33)
+(fail) public events > guardrail, review and reroute events are durable and reuse the appended log slots [0.05ms]
+164 |       expect(entry(name), name).toEqual({ name, durable: true, tag, type: `ycoding.v5.SessionLogItemValue${slot}` })
+165 |   })
+166 | 
+167 |   test("the log union keeps log.synced and the reserved slot and appends eight members", async () => {
+168 |     const log = tags("SessionLogItem")
+169 |     expect(Object.keys(log)).toHaveLength(59)
+                                   ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 59
+Received length: 51
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:169:30)
+(fail) public events > the log union keeps log.synced and the reserved slot and appends eight members [0.07ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue53
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue53 carries its data fields in declaration order [0.03ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue54
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue54 carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue55
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue55 carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue56
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue56 carries its data fields in declaration order [0.01ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue57
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue57 carries its data fields in declaration order [0.01ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue58
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue58 carries its data fields in declaration order [0.01ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue59
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue59 carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message SessionLogItemValue60
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:192:12)
+(fail) public events > SessionLogItemValue60 carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_question_timed_out
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > question.timed_out carries its data fields in declaration order [0.03ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_form_timed_out
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > form.timed_out carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_permission_deferred
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > permission.deferred carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_guardrail_deferred
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > guardrail.deferred carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_question_deferred
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > question.deferred carries its data fields in declaration order [0.02ms]
+16 | 
+17 | type Field = { tag: number; name: string; target?: string }
+18 | const declared = messages as Record<string, { fields: readonly Field[] }>
+19 | const message = (name: string) => {
+20 |   const found = declared[`ycoding.v5.${name}`]
+21 |   if (!found) throw new Error(`missing message ${name}`)
+                                                            ^
+error: missing message PublicEvent_form_deferred
+      at message (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:21:56)
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:24:51)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:207:12)
+(fail) public events > form.deferred carries its data fields in declaration order [0.01ms]
+210 | })
+211 | 
+212 | describe("appended additions to existing declarations", () => {
+213 |   test("task changes append the timed-out question at 12 and the restart resume at 13", async () => {
+214 |     const change = tags("SessionLogItemValue24_data_change")
+215 |     expect(Object.keys(change)).toHaveLength(13)
+                                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 13
+Received length: 11
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:215:33)
+(fail) appended additions to existing declarations > task changes append the timed-out question at 12 and the restart resume at 13 [0.06ms]
+227 |     expect(tags("SessionLogItemValue24_data_changeValue12")).toEqual({ type: 1, questionID: 2 })
+228 |     expect(tags("SessionLogItemValue24_data_changeValue13")).toEqual({ type: 1 })
+229 |   })
+230 | 
+231 |   test("form states append the timed-out and deferred states", () => {
+232 |     expect(tags("Form_State")).toEqual({ value_1: 1, value_2: 2, value_3: 3, value_4: 4, value_5: 5 })
+                                     ^
+error: expect(received).toEqual(expected)
+
+  {
+    "value_1": 1,
+    "value_2": 2,
+    "value_3": 3,
+-   "value_4": 4,
+-   "value_5": 5,
+  }
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:232:32)
+(fail) appended additions to existing declarations > form states append the timed-out and deferred states [0.04ms]
+233 |     expect(tags("Form_StateValue4")).toEqual({ status: 1, seconds: 2 })
+234 |     expect(tags("Form_StateValue5")).toEqual({ status: 1, itemID: 2 })
+235 |   })
+236 | 
+237 |   test("autonomy gains the empty sleep marker and its setter alternative", () => {
+238 |     expect(tags("SessionAutonomyState")).toEqual({ mode: 1, yolo: 2, goal: 3, sleep: 4 })
+                                               ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goal": 3,
+    "mode": 1,
+-   "sleep": 4,
+    "yolo": 2,
+  }
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:238:42)
+(fail) appended additions to existing declarations > autonomy gains the empty sleep marker and its setter alternative [0.03ms]
+244 |   })
+245 | 
+246 |   test("guardrail requests append the escalation after their metadata", () => {
+247 |     for (const name of ["Guardrail_Request", "PublicEvent_guardrail_asked_data"]) {
+248 |       const fields = tags(name)
+249 |       expect([fields.metadata, fields.escalation]).toEqual([11, 12])
+                                                         ^
+error: expect(received).toEqual(expected)
+
+  [
+    11,
+-   12,
++   undefined,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:249:52)
+(fail) appended additions to existing declarations > guardrail requests append the escalation after their metadata [0.03ms]
+249 |       expect([fields.metadata, fields.escalation]).toEqual([11, 12])
+250 |     }
+251 |   })
+252 | 
+253 |   test("guardrail replies and status append their decision provenance", () => {
+254 |     expect(tags("PublicEvent_guardrail_replied_data")).toEqual({
+                                                             ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "choice": 6,
+-   "confidence": 7,
+-   "decidedBy": 5,
+-   "grades": 8,
+    "reply": 4,
+    "requestID": 3,
+    "rootSessionID": 1,
+    "sessionID": 2,
+  }
+
+- Expected  - 4
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:254:56)
+(fail) appended additions to existing declarations > guardrail replies and status append their decision provenance [0.03ms]
+263 |     })
+264 |     expect(tags("Guardrail_Status")).toMatchObject({ invalidFiles: 7, dismissals: 8, decisions: 9 })
+265 |   })
+266 | 
+267 |   test("managed-task, question and assistant messages append their review and reroute fields", () => {
+268 |     expect(tags("SessionOrchestration_Question")).toEqual({ id: 1, text: 2, data: 3, time: 4, deferred: 5 })
+                                                        ^
+error: expect(received).toEqual(expected)
+
+  {
+    "data": 3,
+-   "deferred": 5,
+    "id": 1,
+    "text": 2,
+    "time": 4,
+  }
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/autonomy-review-wire-contract.test.ts:268:51)
+(fail) appended additions to existing declarations > managed-task, question and assistant messages append their review and reroute fields [0.03ms]
+
+test/usage-wire-contract.test.ts:
+(pass) operations > prompt and task costs are Session-scoped reads for local, remote and relay peers [0.09ms]
+(pass) operations > the usage forecast is a Location read that remote and relay peers address at machine or Session scope [0.03ms]
+(pass) operations > the Session usage report becomes remote and relay readable [0.01ms]
+100 |     ] as const) {
+101 |       const ids = operations
+102 |         .map((descriptor) => descriptor.operationId)
+103 |         .filter((id) => id >= first && id <= last)
+104 |         .sort((a, b) => a - b)
+105 |       expect(ids).toEqual(Array.from({ length: last - first + 1 }, (_, index) => first + index))
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    4000,
+    4001,
+    4002,
+    4003,
+    4004,
+    4005,
+    4006,
+    4007,
+    4008,
+    4009,
+    4010,
+    4011,
+    4012,
+    4013,
+    4014,
+    4015,
+    4016,
+    4017,
+    4018,
+    4019,
+    4020,
+    4021,
+    4022,
+    4023,
+    4024,
+    4025,
+    4026,
+    4027,
+    4028,
+    4029,
+    4030,
+    4031,
+    4032,
+    4033,
+    4034,
+    4035,
+    4036,
+    4037,
+    4038,
+    4039,
+    4040,
+    4041,
+    4042,
+    4043,
+    4044,
+    4045,
+    4046,
+    4047,
+    4048,
+    4049,
+    4050,
+    4051,
+    4052,
+    4053,
+    4054,
+    4055,
+    4056,
+    4057,
+    4058,
+    4059,
+    4060,
+    4061,
+    4062,
+    4063,
+    4064,
+    4065,
+    4066,
+    4067,
+    4068,
+    4069,
+    4070,
+    4071,
+    4072,
+    4073,
+    4074,
+    4075,
+    4076,
+    4077,
+    4078,
+    4079,
+    4080,
+    4081,
+    4082,
+    4083,
+    4084,
+    4085,
+-   4086,
+-   4087,
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:105:19)
+(fail) operations > operation IDs stay contiguous in the Session and resource ranges [0.17ms]
+107 |   })
+108 | 
+109 |   test("remote and relay allowlists grow by the four usage reads", () => {
+110 |     const remote = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.REMOTE_CLIENT)).length
+111 |     const relay = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.RELAY)).length
+112 |     expect([remote, relay]).toEqual([76, 72])
+                                  ^
+error: expect(received).toEqual(expected)
+
+  [
+-   76,
+-   72,
++   74,
++   70,
+  ]
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:112:29)
+(fail) operations > remote and relay allowlists grow by the four usage reads [0.10ms]
+(pass) operations > each new request type wraps its declared parameters [0.03ms]
+(pass) allocated tags and values > report queries keep their tags and append the four filters [0.02ms]
+(pass) allocated tags and values > report groups append seven values [0.24ms]
+(pass) allocated tags and values > timing, speed, report and diagnostics fields append after their existing tags [0.05ms]
+(pass) allocated tags and values > attribution fields are optional appended event fields [0.02ms]
+(pass) allocated tags and values > web latency operations append four values after the keep-awake values [0.12ms]
+(pass) tool progress > is a live-only public event in its original slot [0.02ms]
+216 |     })
+217 |   })
+218 | 
+219 |   test("leaves its durable slot reserved without renumbering later events", async () => {
+220 |     const log = Object.values(tags("SessionLogItem"))
+221 |     expect(log).toHaveLength(59)
+                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 59
+Received length: 51
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:221:17)
+(fail) tool progress > leaves its durable slot reserved without renumbering later events [0.09ms]
+
+test/wire-allocation.test.ts:
+(pass) message field tags > a message without an allocation keeps declaration order [0.10ms]
+(pass) message field tags > reordering the declaration does not move an allocated tag [0.01ms]
+(pass) message field tags > a field appended to the declaration keeps every earlier tag only when it is allocated last
+(pass) message field tags > a reserved slot keeps its number and later fields keep theirs [0.03ms]
+(pass) message field tags > a message with no reserved slot renders no reserved statement [0.02ms]
+(pass) message field tags > preset tags are used as given and must be unique [0.06ms]
+(pass) message field tags > a field missing from the allocation is rejected [0.03ms]
+(pass) message field tags > an allocated name that is neither declared nor reserved is rejected [0.02ms]
+(pass) message field tags > a duplicated allocation entry is rejected [0.04ms]
+(pass) enum numbers > an enum without an allocation keeps literal order
+(pass) enum numbers > reordering or appending literals does not move an allocated number
+(pass) enum numbers > a reserved slot keeps its number and later literals keep theirs [0.01ms]
+(pass) enum numbers > non-string literals are allocated by value [0.02ms]
+(pass) enum numbers > unallocated, stale and duplicate entries are rejected [0.03ms]
+(pass) union members > members are numbered by position without an allocation [0.11ms]
+(pass) union members > a removed member leaves its slot reserved and later names and tags stay put [0.04ms]
+(pass) union members > reordering the declared members does not move an allocated slot [0.02ms]
+(pass) union members > a member appended to the declaration takes the next allocated slot [0.05ms]
+(pass) union members > unallocated, stale and duplicate members are rejected [0.06ms]
+(pass) union members > a member without a type identity cannot be allocated [0.04ms]
+(pass) projection > the current allocation renders every checked-in descriptor unchanged [145.21ms]
+(pass) projection > session descriptor honors message and enum allocations [36.54ms]
+(pass) projection > resources descriptor honors message and enum allocations [9.80ms]
+(pass) projection > shared descriptor honors message and enum allocations [195.26ms]
+(pass) projection > platform descriptor honors message and enum allocations [69.14ms]
+(pass) projection > events descriptor honors the PublicEvent allocation [37.88ms]
+(pass) projection > an incomplete allocation fails the descriptor render [22.59ms]
+
+test/connector-coverage.test.ts:
+10 |   const expected = [
+11 |     ...new Map(
+12 |       [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
+13 |     ).values(),
+14 |   ]
+15 |   expect(expected).toHaveLength(76)
+                        ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 76
+Received length: 74
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:15:20)
+(fail) 76 live source names resolve to 72 canonical connector and four relay notice operations [0.32ms]
+26 | test("generated per-role allowlists equal descriptor roles including empty agent and server sets", () => {
+27 |   for (const role of [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY, PeerRole.AGENT, PeerRole.SERVER])
+28 |     expect(operationIDsByRole[role]).toEqual(
+29 |       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
+30 |     )
+31 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(76)
+                                                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 76
+Received length: 74
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:31:54)
+(fail) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.26ms]
+(pass) descriptor role-scope and event payload metadata append fresh fields [0.02ms]
+(pass) all connector fields, presence, associations and constraints match the bounded remote source projection [11.88ms]
+(pass) spec admission table matches the connector inventory, descriptor roles and mutation classes [0.77ms]
+160 |   }
+161 | })
+162 | 
+163 | test("relay forwards exactly the connector set; agents and servers send no operation requests", () => {
+164 |   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
+165 |   expect(actual).toHaveLength(72)
+                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 72
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:165:18)
+(fail) relay forwards exactly the connector set; agents and servers send no operation requests [0.12ms]
+(pass) no local-only operation gains remote authority and all shared IDs retain local authority [0.09ms]
+
+45 tests failed:
+(fail) REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, not internal history [4.51ms]
+(fail) REQ-WIRE-005 public durable branches reuse exact SessionLogItem shapes; ephemerals cannot carry durable positions [0.38ms]
+(fail) platform slice exactly matches all 55 baseline and live endpoint declarations [11.66ms]
+(fail) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [0.71ms]
+(fail) family autonomy accepts explicit switches without accepting empty or invalid requests [0.65ms]
+(fail) session slice completes the 203 endpoints without overlap and adds only inventory unsubscribe [5.77ms]
+(fail) M7 widens exactly three connector reads without adding remote operations [0.15ms]
+(fail) review operations > session.review.list is Session-scoped for local, remote and relay peers [0.14ms]
+(fail) review operations > session.review.decide is Session-scoped for local, remote and relay peers [0.04ms]
+(fail) review operations > declared errors are closed and include the review lookup failure [0.05ms]
+(fail) review operations > request and result wrappers carry the Session and item identity [0.05ms]
+(fail) review operations > the Session operation range stays contiguous through 4087 and keeps the usage allocations [0.35ms]
+(fail) review operations > the current inventory grows by exactly the two review operations [0.04ms]
+(fail) review operations > web latency values append the two review operations after the usage values [0.26ms]
+(fail) public events > the inventory is 115 branches, 58 durable, with the old numbering intact [0.03ms]
+(fail) public events > deadline and deferral branches are live-only and follow the frozen order [0.07ms]
+(fail) public events > guardrail, review and reroute events are durable and reuse the appended log slots [0.05ms]
+(fail) public events > the log union keeps log.synced and the reserved slot and appends eight members [0.07ms]
+(fail) public events > SessionLogItemValue53 carries its data fields in declaration order [0.03ms]
+(fail) public events > SessionLogItemValue54 carries its data fields in declaration order [0.02ms]
+(fail) public events > SessionLogItemValue55 carries its data fields in declaration order [0.02ms]
+(fail) public events > SessionLogItemValue56 carries its data fields in declaration order [0.01ms]
+(fail) public events > SessionLogItemValue57 carries its data fields in declaration order [0.01ms]
+(fail) public events > SessionLogItemValue58 carries its data fields in declaration order [0.01ms]
+(fail) public events > SessionLogItemValue59 carries its data fields in declaration order [0.02ms]
+(fail) public events > SessionLogItemValue60 carries its data fields in declaration order [0.02ms]
+(fail) public events > question.timed_out carries its data fields in declaration order [0.03ms]
+(fail) public events > form.timed_out carries its data fields in declaration order [0.02ms]
+(fail) public events > permission.deferred carries its data fields in declaration order [0.02ms]
+(fail) public events > guardrail.deferred carries its data fields in declaration order [0.02ms]
+(fail) public events > question.deferred carries its data fields in declaration order [0.02ms]
+(fail) public events > form.deferred carries its data fields in declaration order [0.01ms]
+(fail) appended additions to existing declarations > task changes append the timed-out question at 12 and the restart resume at 13 [0.06ms]
+(fail) appended additions to existing declarations > form states append the timed-out and deferred states [0.04ms]
+(fail) appended additions to existing declarations > autonomy gains the empty sleep marker and its setter alternative [0.03ms]
+(fail) appended additions to existing declarations > guardrail requests append the escalation after their metadata [0.03ms]
+(fail) appended additions to existing declarations > guardrail replies and status append their decision provenance [0.03ms]
+(fail) appended additions to existing declarations > managed-task, question and assistant messages append their review and reroute fields [0.03ms]
+(fail) operations > operation IDs stay contiguous in the Session and resource ranges [0.17ms]
+(fail) operations > remote and relay allowlists grow by the four usage reads [0.10ms]
+(fail) tool progress > leaves its durable slot reserved without renumbering later events [0.09ms]
+(fail) 76 live source names resolve to 72 canonical connector and four relay notice operations [0.32ms]
+(fail) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.26ms]
+(fail) relay forwards exactly the connector set; agents and servers send no operation requests [0.12ms]
+
+ 99 pass
+ 45 fail
+ 1 error
+ 20553 expect() calls
+Ran 144 tests across 14 files. [1.78s]

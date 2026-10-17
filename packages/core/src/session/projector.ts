@@ -682,6 +682,15 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     })
     return
   }
+  if (change.type === "resumed") {
+    if (task.state !== "running") return yield* conflict()
+    yield* update({ attempt_started: false })
+    yield* notify(
+      "resumed",
+      "The service restarted while this subagent was working; it resumed with one recovery step.",
+    )
+    return
+  }
   if (change.type === "backgrounded") {
     if (task.state !== "running" || task.background) return yield* conflict()
     yield* update({ background: true })
@@ -704,8 +713,9 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     yield* notify("question")
     return
   }
-  if (change.type === "question_answered") {
-    if (task.state !== "waiting" || task.question_id !== change.answer.questionID) return yield* conflict()
+  if (change.type === "question_answered" || change.type === "question_timed_out") {
+    const questionID = change.type === "question_answered" ? change.answer.questionID : change.questionID
+    if (task.state !== "waiting" || task.question_id !== questionID) return yield* conflict()
     yield* update({
       state: "running",
       question_id: null,
@@ -1092,7 +1102,6 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Called, (event) => run(db, event))
-    yield* events.project(SessionEvent.Tool.Progress, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.FileChange.Recorded, (event) => {
@@ -1123,6 +1132,9 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.RetryScheduled, (event) => run(db, event))
+    yield* events.project(SessionEvent.Step.Rerouted, (event) => run(db, event))
+    yield* events.project(SessionEvent.GuardrailEscalated, (event) => run(db, event))
+    yield* events.project(SessionEvent.Review.Withdrawn, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Admitted, (event) => projectCurrentCompaction(db, event, "pending"))
     yield* events.project(SessionEvent.Compaction.Started, (event) => projectCurrentCompaction(db, event, "running"))
     yield* events.project(SessionEvent.Compaction.StartedV1, (event) => run(db, event))

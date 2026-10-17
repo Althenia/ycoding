@@ -2008,6 +2008,45 @@ async fn root_only_family_activity_crosses_the_real_connector_socket() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remote_family_selections_beyond_fifteen_members_are_refused_before_member_reads() {
+    let fixture = Fixture::new().await;
+    let mut harness = Harness::new(fixture.environment(true)).await;
+    let members: Vec<_> = (0..16)
+        .map(|index| text(&format!("{}_member{index}", fixture.root)))
+        .collect();
+    harness
+        .refuse(
+            NAMES[10],
+            session_scope(&fixture.root),
+            v5::SessionFamilyActivityRequest {
+                payload: v5::SessionFamilyActivityRequestPayload {
+                    session_i_ds: v5::SessionFamilyActivityRequestPayloadSessionIDs {
+                        items: members.clone(),
+                    },
+                },
+            },
+            1,
+        )
+        .await;
+    harness
+        .refuse(
+            NAMES[13],
+            session_scope(&fixture.root),
+            v5::SessionTeamEconomicsRequest {
+                payload: v5::SessionTeamEconomicsRequestPayload {
+                    session_i_ds: v5::SessionTeamEconomicsRequestPayloadSessionIDs {
+                        items: members,
+                    },
+                },
+            },
+            1,
+        )
+        .await;
+    harness.close().await;
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn command_auth_cancels_and_expired_oauth_attempts_cannot_be_polled() {
     let mut fixture = Fixture::new().await;
     let id = fixture.integration.clone();

@@ -1,6 +1,6 @@
 use crate::{
     resources::agent,
-    session::store,
+    session::{helper_generation::matches, store},
     tools::{
         code_mode::Cancellation,
         policy::helper::{self, Models, Role, StreamInput, TitleMode},
@@ -18,6 +18,8 @@ use ycoding_store::{
     session::{EventTable, NewEvent, SessionTable},
     tuple_key,
 };
+
+const REFUSAL: &str = r#"^(?:["'“‘`]\s*)?(?:unfortunately[,:]?\s+)?(?:(?:i|we)\s+(?:cannot|can['’]t|won['’]t|will not|(?:am|are)\s+(?:unable|not able)|(?:(?:must|have to)\s+)?(?:decline|refuse))\b|(?:i['’]m|we['’]re|i am|we are)\s+(?:sorry|unable|not able)\b|sorry\b|as an (?:ai|assistant)\b)"#;
 
 pub struct Service {
     pub store: store::Service,
@@ -86,6 +88,18 @@ impl Service {
             match self.agents.get(&"title".into()) {
                 None => local,
                 Some(agent) => {
+                    let attribution = crate::session::usage_attribution::first_prompt(
+                        &self.store.client,
+                        session.id.as_lossless(),
+                        user.id.as_lossless(),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    let _activity = crate::session::usage_activity::contribute(
+                        &self.store.client,
+                        session.id.clone(),
+                        attribution.anchor().cloned(),
+                    );
                     match tokio::select! {biased; _ = cancellation.cancelled() => return Ok(()), resolved = self.models.role(session, Role::Title, agent) => resolved}
                     {
                         Err(_) => local,
@@ -110,6 +124,7 @@ impl Service {
                                     cancellation,
                                     byte_limit: None,
                                     require_stop: false,
+                                    attribution,
                                 },
                             )
                             .await?;
@@ -119,7 +134,9 @@ impl Service {
                             if result.failed {
                                 local
                             } else {
-                                first_line(&result.text).unwrap_or(local)
+                                first_line(&result.text)
+                                    .filter(|title| !refusal(title))
+                                    .unwrap_or(local)
                             }
                         }
                     }
@@ -209,4 +226,11 @@ fn first_line(value: &LosslessString) -> Option<LosslessString> {
     } else {
         line[..97].iter().copied().chain([46, 46, 46]).collect()
     }))
+}
+fn refusal(title: &LosslessString) -> bool {
+    matches(
+        REFUSAL,
+        "iu",
+        &String::from_utf16_lossy(&title.code_units().collect::<Vec<_>>()),
+    )
 }

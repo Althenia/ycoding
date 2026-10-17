@@ -150,9 +150,40 @@ impl crate::event::EventType for Replied {
     const TYPE: &'static str = "permission.replied";
     type Data = RepliedData;
 }
-pub fn definitions() -> [crate::event::Definition; 2] {
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeferredData {
+    pub session_id: SessionId,
+    pub request_id: Id,
+    pub item_id: crate::session_review::Id,
+}
+impl DomainDecode for DeferredData {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            session_id: o.field("sessionID")?,
+            request_id: o.field("requestID")?,
+            item_id: o.field("itemID")?,
+        })
+    }
+}
+impl DomainEncode for DeferredData {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("sessionID", &self.session_id)
+            .field("requestID", &self.request_id)
+            .field("itemID", &self.item_id)
+            .finish()
+    }
+}
+pub struct Deferred;
+impl crate::event::EventType for Deferred {
+    const TYPE: &'static str = "permission.deferred";
+    type Data = DeferredData;
+}
+pub fn definitions() -> [crate::event::Definition; 3] {
     [
         crate::event::Definition::ephemeral::<Asked>(),
         crate::event::Definition::ephemeral::<Replied>(),
+        crate::event::Definition::ephemeral::<Deferred>(),
     ]
 }

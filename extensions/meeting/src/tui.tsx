@@ -126,11 +126,11 @@ export function MeetingPage(props: {
         )
       ) {
         try {
-          const page = await props.control({ action: "view" })
+          const page = await props.control({ action: "owner-view" })
           if (!mounted || generation !== expected) return
           if (typeof page !== "object" || page === null || !("url" in page) || typeof page.url !== "string")
             throw new Error("The meeting runtime did not return a live page address")
-          setNotice(`Capture is armed. Live page: ${page.url}`)
+          setNotice(`Capture is armed. Owner live page (private settings link, do not share): ${page.url}`)
         } catch (reason) {
           if (mounted && generation === expected) setError(reason instanceof Error ? reason.message : String(reason))
         }

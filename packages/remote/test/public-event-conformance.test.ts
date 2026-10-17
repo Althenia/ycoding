@@ -38,7 +38,7 @@ test("REQ-WIRE-005 shared public event corpus preserves ephemeral lone UTF16 and
   expect(decodeStrict(SessionLogItemSchema, encodeStrict(SessionLogItemSchema, log)).kind.case).toBe("value50")
   for (const name of ["public-catalog", "public-text-delta", "public-durable"])
     expect(encodeStrict(PublicEventSchema, decodeStrict(PublicEventSchema, vector(name)))).toEqual(vector(name))
-  expect(publicEvents).toHaveLength(101)
+  expect(publicEvents).toHaveLength(115)
   expect(() => decodeStrict(PublicEventSchema, vector("public-event-empty"))).toThrow("required presence")
   expect(() => decodeStrict(PublicEventSchema, vector("public-event-duplicate"))).toThrow("duplicate oneof")
 })

@@ -1781,7 +1781,6 @@ describe("Mini transport", () => {
       id: "evt_progress",
       created: 3,
       type: "session.tool.progress",
-      durable: durable("ses_1", 2),
       data: {
         sessionID: "ses_1",
         assistantMessageID: "msg_progress",
@@ -2772,7 +2771,6 @@ describe("Mini transport", () => {
       id: "evt_subagent_progress",
       created: 3,
       type: "session.tool.progress",
-      durable: durable("ses_1", 2),
       data: {
         sessionID: "ses_1",
         assistantMessageID: "msg_subagent",
@@ -2827,7 +2825,6 @@ describe("Mini transport", () => {
       id: "evt_child_tool_progress",
       created: 6,
       type: "session.tool.progress",
-      durable: durable("ses_child_progress", 2),
       data: {
         sessionID: "ses_child_progress",
         assistantMessageID: "msg_child_tool",

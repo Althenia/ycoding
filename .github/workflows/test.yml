@@ -50,6 +50,9 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
       - name: Configure git identity
         run: |
           git config --global user.email "bot@ycoding.ai"
@@ -63,6 +66,18 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
             turbo-${{ runner.os }}-
+
+      - name: Build debug runtime
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
+
+      - name: Verify Windows process lifecycle
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          test_name=platform::process::tree::windows_tests::terminating_an_already_reaped_child_never_signals_the_stored_pid
+          cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-core --lib platform::process 2>&1 | tee "$RUNNER_TEMP/windows-process-tests.log"
+          grep -Fq "test $test_name ... ok" "$RUNNER_TEMP/windows-process-tests.log" || { echo "Windows process test did not run: $test_name" >&2; exit 1; }
 
       - name: Run unit tests
         timeout-minutes: 20

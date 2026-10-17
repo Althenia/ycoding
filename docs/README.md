@@ -9,8 +9,8 @@ YCoding is a standalone terminal coding agent. Current code, tests, Schema, Prot
 Use this order when sources disagree:
 
 1. Executable behavior and targeted tests in the current checkout.
-2. Public contracts in `packages/schema` and `packages/protocol`.
-3. Runtime implementation in `packages/core`, `packages/server`, and `packages/ai`.
+2. Public shapes in `packages/schema`, revision 5 operations in `protocol/ycoding/v5`, and reference HTTP contracts in `packages/protocol`.
+3. Beta runtime implementation in `rust/crates`; TypeScript reference implementations in `packages/core`, `packages/server`, and `packages/ai`.
 4. Terminal implementation in `packages/cli` and `packages/tui`.
 5. Current documentation in `docs` and accepted contracts in `specs`.
 6. Package-level `AGENTS.md` guidance.
@@ -27,7 +27,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`browser-extension.md`](./browser-extension.md)                         | Chrome pairing, profile and agent-owned tab control, installation, ownership, operations, and mutation limits.                               |
 | [`computer-use.md`](./computer-use.md)                                   | Native macOS iTerm, Finder, and desktop control, permissions, helper development, and packaging.                                             |
 | [`memory.md`](./memory.md)                                               | On-demand workspace knowledge, Markdown concepts, permissions, conflict-safe updates, and offline graph export.                              |
-| [`meeting-intelligence.md`](./meeting-intelligence.md)                   | Opt-in local speech capture, model management, bounded meeting analysis, and approval-gated MCP reconciliation. |
+| [`meeting-intelligence.md`](./meeting-intelligence.md)                   | Opt-in local speech capture, model management, bounded meeting analysis, and approval-gated MCP reconciliation.                              |
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
 | [`provider-efficiency.md`](./provider-efficiency.md)                     | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks.      |
 | [`configuration.md`](./configuration.md)                                 | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.                                               |
@@ -37,9 +37,9 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`ycoding-migration.md`](./ycoding-migration.md)                         | Canonical YCoding identifiers and external-provider exceptions.                                                                              |
 | [`releases/`](./releases/)                                               | Shared TUI and web release notes (`v<version>.md`); the file matching the tag ships as the TUI GitHub Release notes and asset.               |
 | [`../specs/README.md`](../specs/README.md)                               | Detailed cross-module contracts and accepted decisions.                                                                                      |
-| [`../DESIGN.md`](../DESIGN.md)                                           | Brand identity, repository-wide design principles, binding UI rules, verification, and maintenance. |
-| [`../apps/web/DESIGN.md`](../apps/web/DESIGN.md)                         | Web design system: tokens checked against `tokens.css`, components, layout, motion, and web rules. |
-| [`../packages/tui/DESIGN.md`](../packages/tui/DESIGN.md)                 | Terminal design system: theme roles checked against the default theme, layout, components, and TUI rules. |
+| [`../DESIGN.md`](../DESIGN.md)                                           | Brand identity, repository-wide design principles, binding UI rules, verification, and maintenance.                                          |
+| [`../apps/web/DESIGN.md`](../apps/web/DESIGN.md)                         | Web design system: tokens checked against `tokens.css`, components, layout, motion, and web rules.                                           |
+| [`../packages/tui/DESIGN.md`](../packages/tui/DESIGN.md)                 | Terminal design system: theme roles checked against the default theme, layout, components, and TUI rules.                                    |
 | [`../AGENTS.md`](../AGENTS.md)                                           | Mandatory contributor and coding-agent invariants.                                                                                           |
 
 ## Documentation placement
@@ -63,17 +63,17 @@ Open `http://127.0.0.1:4174/`. Stop the preview with Ctrl-C. Use another free po
 
 ## Required updates
 
-| Change                                                                                                 | Required documentation                                     |
-| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Product scope or release surface                                                                       | `product-direction.md` and root `README.md`                |
-| Package ownership or dependency direction                                                              | `architecture.md` and root `AGENTS.md`                     |
-| Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
-| Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement  | `provider-efficiency.md` and `runtime.md`                  |
-| Public HTTP operation or Schema                                                                        | relevant `specs` contract and regenerated Client output |
-| Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration                     | `configuration.md`                                         |
-| Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery                     | `repository-resources.md`                                  |
-| Product identity, path, environment, or provider exception                                             | `ycoding-migration.md`                                     |
-| Contributor invariant or verification requirement                                                      | root or package-level `AGENTS.md`                          |
+| Change                                                                                                 | Required documentation                                                   |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| Product scope or release surface                                                                       | `product-direction.md` and root `README.md`                              |
+| Package ownership or dependency direction                                                              | `architecture.md` and root `AGENTS.md`                                   |
+| Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                                             |
+| Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement  | `provider-efficiency.md` and `runtime.md`                                |
+| Public operation or Schema                                                                             | relevant `specs` contract and generated bindings from the owning command |
+| Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration                     | `configuration.md`                                                       |
+| Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery                     | `repository-resources.md`                                                |
+| Product identity, path, environment, or provider exception                                             | `ycoding-migration.md`                                                   |
+| Contributor invariant or verification requirement                                                      | root or package-level `AGENTS.md`                                        |
 
 ## Authoring guidance
 

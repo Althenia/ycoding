@@ -11,14 +11,20 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, oneshot},
+    sync::{Notify, mpsc, oneshot, watch},
     task::JoinHandle,
     time::Instant,
 };
 #[cfg(unix)]
 mod fds;
+#[cfg(test)]
+mod tests;
 pub(crate) mod tree;
-pub use tree::{identity, is_alive, process_group_memory};
+pub use tree::{
+    GroupSystem, Member, Members, NativeGroupSystem, identity, is_alive, process_group_memory,
+};
+const FORCED_DRAIN_IDLE: Duration = Duration::from_millis(100);
+const FORCED_DRAIN_TOTAL: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 pub struct Command {
     pub program: String,
@@ -35,6 +41,8 @@ pub struct Command {
     pub detached: bool,
     pub kill: KillOptions,
     pub shell: Option<ShellRoute>,
+    pub(crate) system: Arc<dyn GroupSystem>,
+    pub(crate) group_cleanup: bool,
 }
 impl Command {
     pub fn new(
@@ -56,6 +64,8 @@ impl Command {
             detached: cfg!(unix),
             kill: KillOptions::default(),
             shell: None,
+            system: Arc::new(NativeGroupSystem),
+            group_cleanup: false,
         }
     }
     pub fn pipe_to(self, mut next: Self, options: PipeOptions) -> Self {
@@ -195,7 +205,7 @@ enum Request {
     Release(oneshot::Sender<()>),
     Write(Vec<u8>, oneshot::Sender<io::Result<()>>),
     CloseInput(oneshot::Sender<io::Result<()>>),
-    Terminate(Termination),
+    Terminate(Termination, oneshot::Sender<io::Result<()>>),
     Timeout(Duration),
     Kill(KillOptions, oneshot::Sender<io::Result<()>>),
     WriteFd(u32, Vec<u8>, oneshot::Sender<io::Result<()>>),
@@ -205,12 +215,19 @@ enum InputRequest {
     Write(u32, Vec<u8>, oneshot::Sender<io::Result<()>>),
     Close(u32, oneshot::Sender<io::Result<()>>),
 }
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Teardown {
+    pub attempt: u64,
+    pub failure: Option<(io::ErrorKind, String)>,
+}
 #[derive(Clone)]
 pub struct Control {
     running: Arc<AtomicBool>,
     pid: u32,
     sender: mpsc::Sender<Request>,
-    detached: bool,
+    group: Arc<tokio::sync::Mutex<tree::Group>>,
+    abandon: Arc<Notify>,
+    teardown: watch::Receiver<Teardown>,
 }
 impl Control {
     pub fn is_running(&self) -> bool {
@@ -234,12 +251,15 @@ impl Control {
         if self.sender.is_closed() {
             return;
         }
-        if self
-            .sender
-            .try_send(Request::Terminate(Termination::Killed))
-            .is_err()
-        {
-            tree::force(self.pid, self.detached);
+        self.abandon.notify_one();
+    }
+    pub fn teardown(&self) -> watch::Receiver<Teardown> {
+        self.teardown.clone()
+    }
+    fn settled(&self) -> io::Result<()> {
+        match &self.teardown.borrow().failure {
+            Some((kind, message)) => Err(io::Error::new(*kind, message.clone())),
+            None => Ok(()),
         }
     }
     pub async fn write(&self, bytes: Vec<u8>) -> io::Result<()> {
@@ -260,12 +280,21 @@ impl Control {
     }
     pub async fn terminate(&self, reason: Termination) -> io::Result<()> {
         if self.sender.is_closed() {
-            return Ok(());
+            return self.settled();
         }
-        self.sender
-            .send(Request::Terminate(reason))
+        let (send, receive) = oneshot::channel();
+        if self
+            .sender
+            .send(Request::Terminate(reason, send))
             .await
-            .map_err(closed)
+            .is_err()
+        {
+            return self.settled();
+        }
+        match receive.await {
+            Ok(result) => result,
+            Err(_) => self.settled(),
+        }
     }
     pub async fn set_timeout(&self, duration: Duration) -> io::Result<()> {
         self.sender
@@ -275,14 +304,21 @@ impl Control {
     }
     pub async fn kill(&self, options: KillOptions) -> io::Result<()> {
         if self.sender.is_closed() {
-            return Ok(());
+            return self.settled();
         }
         let (send, receive) = oneshot::channel();
-        self.sender
+        if self
+            .sender
             .send(Request::Kill(options, send))
             .await
-            .map_err(closed)?;
-        receive.await.map_err(closed)?
+            .is_err()
+        {
+            return self.settled();
+        }
+        match receive.await {
+            Ok(result) => result,
+            Err(_) => self.settled(),
+        }
     }
     pub async fn write_fd(&self, fd: u32, bytes: Vec<u8>) -> io::Result<()> {
         if fd == 0 {
@@ -308,6 +344,7 @@ impl Control {
     }
 }
 pub struct Process {
+    started: Option<String>,
     force_on_drop: bool,
     control: Control,
     output: Option<mpsc::Receiver<Chunk>>,
@@ -337,7 +374,10 @@ impl Process {
     }
     // Reaps descendants a leader left behind after it exited and was joined.
     pub async fn reap_group(&self, grace: Duration) -> io::Result<()> {
-        tree::sweep(self.control.pid, grace, self.control.detached).await
+        self.control.group.lock().await.sweep(grace).await
+    }
+    pub fn leader_started(&self) -> Option<String> {
+        self.started.clone()
     }
     pub async fn release(mut self) -> io::Result<()> {
         if self.task.is_some() && !self.control.sender.is_closed() {
@@ -431,7 +471,7 @@ impl Drop for Process {
             task.abort();
         }
         if self.task.is_some() && self.force_on_drop {
-            tree::force(self.pid(), self.control.detached);
+            self.control.terminate_now();
         }
     }
 }
@@ -592,17 +632,24 @@ async fn spawn_standard(command: Command) -> io::Result<Process> {
     }
     #[cfg(windows)]
     cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    let mut child = cmd.spawn()?;
+    let mut child = tree::Owned::new(cmd.spawn()?, command.detached);
     let pid = child
         .id()
         .ok_or_else(|| io::Error::other("Spawn returned no process ID"))?;
     let (sender, receiver) = mpsc::channel(16);
     let (output, receive) = mpsc::channel(16);
+    let group = tree::Group::new(command.system.clone(), pid, command.detached).await;
+    let started = group.started();
+    let group = Arc::new(tokio::sync::Mutex::new(group));
+    let abandon = Arc::new(Notify::new());
+    let (teardown_sender, teardown) = watch::channel(Teardown::default());
     let control = Control {
         running: Arc::new(AtomicBool::new(true)),
         pid,
         sender,
-        detached: command.detached,
+        group: group.clone(),
+        abandon: abandon.clone(),
+        teardown,
     };
     #[cfg(unix)]
     let parents = extra.parent;
@@ -646,7 +693,10 @@ async fn spawn_standard(command: Command) -> io::Result<Process> {
                 running,
                 timeout: command.timeout,
                 kill: command.kill,
-                detached: command.detached,
+                group,
+                cleanup: command.group_cleanup,
+                abandon,
+                teardown: teardown_sender,
             },
         );
         let extra = async {
@@ -660,6 +710,7 @@ async fn spawn_standard(command: Command) -> io::Result<Process> {
         root
     });
     Ok(Process {
+        started,
         force_on_drop: true,
         control,
         output: Some(receive),
@@ -681,10 +732,29 @@ struct Settings {
     running: Arc<AtomicBool>,
     timeout: Duration,
     kill: KillOptions,
-    detached: bool,
+    group: Arc<tokio::sync::Mutex<tree::Group>>,
+    cleanup: bool,
+    abandon: Arc<Notify>,
+    teardown: watch::Sender<Teardown>,
+}
+async fn attempt(
+    group: &tokio::sync::Mutex<tree::Group>,
+    child: &mut tokio::process::Child,
+    options: KillOptions,
+    teardown: &watch::Sender<Teardown>,
+) -> io::Result<Option<std::process::ExitStatus>> {
+    let result = group.lock().await.terminate(child, options).await;
+    teardown.send_modify(|state| {
+        state.attempt += 1;
+        state.failure = result
+            .as_ref()
+            .err()
+            .map(|error| (error.kind(), error.to_string()));
+    });
+    result
 }
 async fn supervise(
-    mut child: tokio::process::Child,
+    mut child: tree::Owned,
     streams: Streams,
     mut requests: mpsc::Receiver<Request>,
     output: mpsc::Sender<Chunk>,
@@ -697,7 +767,10 @@ async fn supervise(
         inputs.insert(0, Box::new(stdin));
     }
     let kill = settings.kill;
-    let detached = settings.detached;
+    let group = settings.group.clone();
+    let cleanup = settings.cleanup;
+    let abandon = settings.abandon.clone();
+    let teardown = &settings.teardown;
     let (input, mut input_requests) = mpsc::channel(16);
     let input_task = tokio::spawn(async move {
         while let Some(request) = input_requests.recv().await {
@@ -723,9 +796,6 @@ async fn supervise(
             }
         }
     });
-    let pid = child
-        .id()
-        .ok_or_else(|| io::Error::other("Missing process ID"))?;
     let mut out = vec![0; 65536];
     let mut err = vec![0; 65536];
     let mut out_open = stdout.is_some();
@@ -736,34 +806,83 @@ async fn supervise(
     let mut reason = Termination::Exit;
     let mut pending = None;
     let mut released = false;
+    let mut closed = false;
+    let mut forced: Option<Instant> = None;
+    let mut last_data = Instant::now();
+    let mut unresolved = false;
+    let mut discard = false;
+    let mut abandoned = false;
+    let mut final_attempt = false;
     let result = async {
-        while exit.is_none() || out_open || err_open {
+        while exit.is_none() || out_open || err_open || unresolved {
             if !out_open && !err_open && pending.is_none() { output = None; }
             if exit.is_some() { settings.running.store(false, Ordering::Release); }
+            let drain_end = forced.map(|forced| (last_data.max(forced) + FORCED_DRAIN_IDLE).min(forced + FORCED_DRAIN_TOTAL));
             tokio::select! {
                 sent = async { output.as_ref().expect("pending output has a sender").reserve().await }, if pending.is_some() => {
                     match sent {
                         Ok(permit) => { permit.send(pending.take().expect("pending output selected")); }
-                        Err(_) => { pending = None; if exit.is_none() && !released { reason = Termination::Cancelled; exit = Some(tree::terminate(&mut child, pid, kill, detached).await?); } }
+                        Err(_) => {
+                            pending = None;
+                            discard = true;
+                            if exit.is_none() && !released {
+                                match attempt(&group, &mut child, kill, teardown).await {
+                                    Ok(status) => {
+                                        reason = Termination::Cancelled;
+                                        if let Some(status) = status { exit = Some(status); }
+                                        if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                        unresolved = false;
+                                    }
+                                    Err(_) => { unresolved = true; }
+                                }
+                            } else if cleanup {
+                                out_open = false;
+                                err_open = false;
+                            }
+                        }
                     }
+                }
+                () = async { match drain_end { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } }, if drain_end.is_some() => {
+                    if let Some(chunk) = pending.take() && let Some(sender) = &output { let _ = sender.try_send(chunk); }
+                    out_open = false;
+                    err_open = false;
                 }
                 read = async { stdout.as_mut().expect("open stdout").read(&mut out).await }, if out_open && pending.is_none() => {
                     let count = read?;
                     out_open = count != 0;
-                    if count != 0 { pending = Some(Chunk { kind: StreamKind::Stdout, bytes: out[..count].to_vec() }); }
+                    if count != 0 { last_data = Instant::now(); if !discard { pending = Some(Chunk { kind: StreamKind::Stdout, bytes: out[..count].to_vec() }); } }
                 }
                 read = async { stderr.as_mut().expect("open stderr").read(&mut err).await }, if err_open && pending.is_none() => {
                     let count = read?;
                     err_open = count != 0;
-                    if count != 0 { pending = Some(Chunk { kind: StreamKind::Stderr, bytes: err[..count].to_vec() }); }
+                    if count != 0 { last_data = Instant::now(); if !discard { pending = Some(Chunk { kind: StreamKind::Stderr, bytes: err[..count].to_vec() }); } }
                 }
-                status = child.wait(), if exit.is_none() => { exit = Some(status?); }
-                request = requests.recv(), if !released => {
+                status = child.wait(), if exit.is_none() => {
+                    exit = Some(status?);
+                    if cleanup && cfg!(unix) && reason == Termination::Exit && !unresolved {
+                        unresolved = attempt(&group, &mut child, kill, teardown).await.is_err();
+                    }
+                }
+                () = abandon.notified(), if !abandoned => {
+                    abandoned = true;
+                    if exit.is_none() || unresolved || cleanup {
+                        match attempt(&group, &mut child, kill, teardown).await {
+                            Ok(status) => {
+                                if exit.is_none() { reason = Termination::Killed; }
+                                if let Some(status) = status { exit = Some(status); }
+                                if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                unresolved = false;
+                            }
+                            Err(error) => { tracing::error!("Process group cleanup failed during abandonment"); final_attempt = true; return Err(error); }
+                        }
+                    }
+                }
+                request = requests.recv(), if !released && !closed => {
                     match request {
-                        Some(Request::Release(reply)) => { released = true; let _ = reply.send(()); }
+                        Some(Request::Release(reply)) => { released = true; child.released = true; let _ = reply.send(()); }
                         Some(Request::Signal(signal, reply)) => {
                             reason = Termination::Killed;
-                            let result = if exit.is_none() { tree::send(pid, signal, detached) } else { Ok(()) };
+                            let result = if exit.is_none() { group.lock().await.signal(signal).await } else { Ok(()) };
                             let _ = reply.send(result);
                         }
                         Some(Request::Write(bytes, reply)) => {
@@ -779,21 +898,71 @@ async fn supervise(
                             if let Err(error) = input.try_send(InputRequest::Close(fd, reply)) && let InputRequest::Close(_, reply) = error.into_inner() { let _ = reply.send(Err(io::Error::new(io::ErrorKind::WouldBlock, "Process input queue full or closed"))); }
                         }
                         Some(Request::Timeout(duration)) => { deadline = (!duration.is_zero()).then(|| Instant::now() + duration); }
-                        Some(Request::Terminate(termination)) => { if exit.is_none() { reason = termination; exit = Some(tree::terminate(&mut child, pid, kill, detached).await?); } }
-                        Some(Request::Kill(options, reply)) => {
-                            if exit.is_some() { let _ = reply.send(Ok(())); continue; }
-                            reason = Termination::Killed;
-                            match tree::terminate(&mut child, pid, options, detached).await {
-                                Ok(status) => { exit = Some(status); let _ = reply.send(Ok(())); }
-                                Err(error) => { let _ = reply.send(Err(io::Error::new(error.kind(), error.to_string()))); return Err(error); }
+                        Some(Request::Terminate(termination, reply)) => {
+                            if exit.is_none() || unresolved {
+                                match attempt(&group, &mut child, kill, teardown).await {
+                                    Ok(status) => {
+                                        if exit.is_none() { reason = termination; }
+                                        if let Some(status) = status { exit = Some(status); }
+                                        if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                        unresolved = false;
+                                        let _ = reply.send(Ok(()));
+                                    }
+                                    Err(error) => {
+                                        unresolved = true;
+                                        let _ = reply.send(Err(io::Error::new(error.kind(), error.to_string())));
+                                    }
+                                }
+                            } else {
+                                if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                let _ = reply.send(Ok(()));
                             }
                         }
-                        None => { if exit.is_none() { reason = Termination::Cancelled; exit = Some(tree::terminate(&mut child, pid, kill, detached).await?); } else { released = true; } }
+                        Some(Request::Kill(options, reply)) => {
+                            if exit.is_some() && !cleanup && !unresolved { let _ = reply.send(Ok(())); continue; }
+                            match attempt(&group, &mut child, options, teardown).await {
+                                Ok(status) => {
+                                    if exit.is_none() { reason = Termination::Killed; }
+                                    if let Some(status) = status { exit = Some(status); }
+                                    if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                    unresolved = false;
+                                    let _ = reply.send(Ok(()));
+                                }
+                                Err(error) => {
+                                    unresolved = true;
+                                    let _ = reply.send(Err(io::Error::new(error.kind(), error.to_string())));
+                                }
+                            }
+                        }
+                        None => {
+                            closed = true;
+                            if exit.is_none() || unresolved {
+                                match attempt(&group, &mut child, kill, teardown).await {
+                                    Ok(status) => {
+                                        if exit.is_none() { reason = Termination::Cancelled; }
+                                        if let Some(status) = status { exit = Some(status); }
+                                        if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                        unresolved = false;
+                                    }
+                                    Err(error) => { tracing::error!("Process group cleanup failed during abandonment"); final_attempt = true; return Err(error); }
+                                }
+                            }
+                        }
                     }
                 }
-                () = async { match deadline { Some(deadline) => tokio::time::sleep_until(deadline).await, None => std::future::pending().await } }, if exit.is_none() => {
-                    reason = Termination::Timeout;
-                    exit = Some(tree::terminate(&mut child, pid, kill, detached).await?);
+                () = async { match deadline { Some(deadline) => tokio::time::sleep_until(deadline).await, None => std::future::pending().await } }, if exit.is_none() || (cleanup && forced.is_none() && !unresolved) => {
+                    deadline = None;
+                    if exit.is_none() {
+                        match attempt(&group, &mut child, kill, teardown).await {
+                            Ok(status) => {
+                                reason = Termination::Timeout;
+                                if let Some(status) = status { exit = Some(status); }
+                                if cleanup && forced.is_none() { forced = Some(Instant::now()); }
+                                unresolved = false;
+                            }
+                            Err(_) => { unresolved = true; }
+                        }
+                    } else if cleanup && forced.is_none() { forced = Some(Instant::now()); }
                 }
             }
         }
@@ -806,20 +975,21 @@ async fn supervise(
         #[cfg(windows)]
         Ok(Exit { code: status.code(), signal: None, reason })
     }.await;
-    if result.is_err() && released {
-        child.wait().await?;
-    }
-    if result.is_err() && !released {
-        tree::terminate(
-            &mut child,
-            pid,
-            KillOptions {
-                signal: KillSignal::Kill,
-                force_kill_after: Some(Duration::ZERO),
-            },
-            detached,
-        )
-        .await?;
+    if result.is_err() && !final_attempt {
+        if released {
+            child.wait().await?;
+        } else {
+            let _ = attempt(
+                &group,
+                &mut child,
+                KillOptions {
+                    signal: KillSignal::Kill,
+                    force_kill_after: Some(Duration::ZERO),
+                },
+                teardown,
+            )
+            .await;
+        }
     }
     settings.running.store(false, Ordering::Release);
     input_task.abort();

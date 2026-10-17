@@ -21,6 +21,7 @@ const cases: [string, string, (client: V5Client) => Promise<unknown>][] = [
     "session.guardrail.request.reply",
     (client) => client.guardrail.request.reply({ sessionID: "ses_owner", requestID: "review_1", reply: "once" }),
   ],
+  ["review", "session.review.list", (client) => client.review.list({ sessionID: "ses_owner" })],
   ["message", "session.messages", (client) => client.message.list({ sessionID: "ses_owner" })],
   ["model", "model.list", (client) => client.model.list()],
   ["generate", "generate.text", (client) => client.generate.text({ prompt: "fixture" })],
@@ -86,6 +87,7 @@ const cases: [string, string, (client: V5Client) => Promise<unknown>][] = [
   ["browser", "browser.status", (client) => client.browser.status({ sessionID: "ses_owner" })],
   ["isolatedBrowser", "isolatedBrowser.status", (client) => client.isolatedBrowser.status({ sessionID: "ses_owner" })],
   ["usage", "usage.get", (client) => client.usage.get()],
+  ["incident", "incident.report", (client) => client.incident.report({ group: "model" })],
   ["remote", "remote.set", (client) => client.remote.set({ enabled: false })],
   ["keepAwake", "keepAwake.set", (client) => client.keepAwake.set({ enabled: false })],
   ["config", "config.diagnostics", (client) => client.config.diagnostics()],
@@ -114,9 +116,9 @@ test.each(cases)("REQ-WIRE-001 %s group dispatches its canonical %s operation", 
   }
 })
 
-test("REQ-WIRE-001 the complete existing 196-method surface has one canonical LocalClient descriptor", () => {
-  expect(methodCoverage).toHaveLength(196)
-  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(196)
+test("REQ-WIRE-001 the complete 205-method surface has one canonical LocalClient descriptor", () => {
+  expect(methodCoverage).toHaveLength(205)
+  expect(new Set(methodCoverage.map((entry) => entry.method)).size).toBe(205)
   for (const entry of methodCoverage) {
     const operation = operations.find((operation) => operation.operationId === entry.operationID)!
     expect(operation.diagnosticName).toBe(entry.operation)

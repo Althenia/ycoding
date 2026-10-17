@@ -113,6 +113,17 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     return instance.itemSizeCache.has(item.key) ? item.end <= offset : item.start < offset
   }
 
+  const thaw = () => {
+    if (!frozen()) {
+      virtualizer.elementsCache.forEach((element, key) => {
+        const index = untrack(indexByKey).get(String(key))
+        if (index !== undefined && element.isConnected && !virtualizer.itemSizeCache.has(key))
+          virtualizer.resizeItem(index, virtualizer.options.measureElement(element, undefined, virtualizer))
+      })
+    }
+    setThaws((count) => count + 1)
+  }
+
   const measureLayout = () => {
     const list = input.list()
     const root = input.scroller()
@@ -120,7 +131,7 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     const inert = frozen()
     if (inert !== wasFrozen) {
       wasFrozen = inert
-      setThaws((count) => count + 1)
+      thaw()
     }
     if (inert) return
     const rowGap = Number.parseFloat(getComputedStyle(list).rowGap)
@@ -150,8 +161,12 @@ export function createRowVirtualizer(input: RowVirtualizerInput) {
     observer.observe(list)
     observer.observe(root)
     if (list.parentElement) observer.observe(list.parentElement)
+    const activity = new MutationObserver(thaw)
+    for (let parent: HTMLElement | null = list; parent; parent = parent.parentElement)
+      activity.observe(parent, { attributes: true, attributeFilter: ["inert"] })
     onCleanup(() => {
       observer.disconnect()
+      activity.disconnect()
       if (scheduled !== undefined) cancelAnimationFrame(scheduled)
     })
   })

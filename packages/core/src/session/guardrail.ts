@@ -86,7 +86,14 @@ export type AssertError =
   | SessionGuardrailCounter.CapExceededError
   | SessionErrors.NotFoundError
 
+export interface ReviewPolicy {
+  readonly enabled: boolean
+  readonly decideReviews: boolean
+  readonly decideHardReviews: boolean
+}
+
 export interface Interface {
+  readonly reviewPolicy: ReviewPolicy
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
@@ -175,6 +182,11 @@ export const layer = Layer.effect(
       reviews: settings?.max_pending_reviews ?? 16,
     })
     const shellWait = Duration.seconds(settings?.shell_wait_seconds ?? 60)
+    const reviewPolicy: ReviewPolicy = {
+      enabled: settings?.enabled !== false,
+      decideReviews: false,
+      decideHardReviews: true,
+    }
     const pending = new Map<Guardrail.RequestID, Pending>()
     const approvals = new Map<Session.ID, number>()
     const blocked = new Map<Session.ID, number>()
@@ -602,7 +614,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ evaluate, assert, reply, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply, forSession, status, snapshot, withSnapshot })
   }),
 )
 

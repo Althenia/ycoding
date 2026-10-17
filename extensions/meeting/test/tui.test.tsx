@@ -168,7 +168,7 @@ test("Meeting page renders actual original and corrected Thai transcript and kee
     calls.push(input)
     if (typeof input === "object" && input !== null && "action" in input && input.action === "select")
       return { ...fixture, meeting: fixture.meetings[1] }
-    if (typeof input === "object" && input !== null && "action" in input && input.action === "view")
+    if (typeof input === "object" && input !== null && "action" in input && input.action === "owner-view")
       return { url: "http://127.0.0.1:59099/view#key=test-view-key" }
     return fixture
   })
@@ -188,7 +188,7 @@ test("Meeting page renders actual original and corrected Thai transcript and kee
     expect(command.slash).toEqual({ name: "meeting", arguments: true })
     await command.run("start")
     await screen.app.waitForFrame((next) => next.includes("Capture is armed"))
-    expect(calls.slice(-2)).toEqual([{ action: "start" }, { action: "view" }])
+    expect(calls.slice(-2)).toEqual([{ action: "start" }, { action: "owner-view" }])
     expect(screen.app.captureCharFrame()).toContain("http://127.0.0.1:59099/view#key=test-view-key")
     expect(screen.app.captureCharFrame()).not.toMatch(/Pair Chrome|pairing|Chrome click/)
   } finally {
@@ -266,7 +266,7 @@ test("starting from a Session inherits that Session's provider selection without
         if ("sessionID" in input && input.sessionID === "explicit-session") explicit.resolve(input)
         else started.resolve(input)
       }
-      if (typeof input === "object" && input !== null && "action" in input && input.action === "view")
+      if (typeof input === "object" && input !== null && "action" in input && input.action === "owner-view")
         return { url: "http://127.0.0.1:59099/view#key=test-view-key" }
       return fixture
     },

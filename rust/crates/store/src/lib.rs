@@ -8,14 +8,16 @@ pub mod import;
 mod key;
 pub mod meeting;
 mod metadata;
+pub mod model_incident;
 pub mod project;
 pub mod resources;
 pub mod session;
+pub mod upgrade;
 
 pub use catalog::{Catalog, IndexDefinition, TableDeclaration, TableSpec};
 pub use engine::{
     Client, IndexCursor, IndexEntry, IndexOrder, IndexQuery, Options, Receipt, Snapshot, Store,
-    Write,
+    WeakClient, Write,
 };
 pub use error::Error;
 pub use key::{KeyPart, tuple_key};

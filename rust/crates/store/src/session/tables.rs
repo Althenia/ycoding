@@ -5,7 +5,7 @@ use super::codec::{
 use crate::{Error, IndexDefinition, KeyPart, tuple_key};
 use ycoding_schema::{
     JsonValue, LosslessString, domain, instruction, model, permission, session_event,
-    session_revert,
+    session_revert, usage_anchor,
 };
 
 table!(SessionTable, Session, "session", {
@@ -16,7 +16,7 @@ table!(SessionTable, Session, "session", {
     permission: Option<Document<permission::Ruleset>>, autonomy: Option<JsonValue>, autonomy_revision: i64, orchestration_revision: i64,
     agent: Option<LosslessString>, model: Option<Document<model::Ref>>, profile_binding: Option<Document<session_event::ProfileBinding>>,
     daybreak: Option<LosslessString>, time_created: i64, time_updated: i64, time_archived: Option<i64>, time_active: Option<i64>,
-    time_pinned: Option<i64>, time_suspended: Option<i64>
+    time_pinned: Option<i64>, time_suspended: Option<i64>, usage_pruned_through: Option<i64>
 }, r, key(&r.id), &[
     IndexDefinition::secondary("session_project_idx"), IndexDefinition::secondary("session_workspace_idx"),
     IndexDefinition::secondary("session_parent_idx"), IndexDefinition::secondary("session_time_suspended_idx")
@@ -126,7 +126,8 @@ table!(TaskTable, Task, "session_task", {
     input_id: LosslessString, description: LosslessString, agent: LosslessString, model: Document<model::Ref>, prompt_digest: LosslessString,
     background: i64, delivery: LosslessString, state: LosslessString, progress: Option<LosslessString>, progress_time: Option<i64>,
     question_id: Option<LosslessString>, question: Option<LosslessString>, question_data: Option<Document<domain::Json>>, question_time: Option<i64>,
-    attempt_started: i64, owner_pid: Option<i64>, owner_started: Option<LosslessString>, revision: i64, time_created: i64, time_updated: i64
+    attempt_started: i64, owner_pid: Option<i64>, owner_started: Option<LosslessString>, revision: i64, time_created: i64, time_updated: i64,
+    usage_anchor: Option<Document<usage_anchor::Ref>>
 }, r, key(&r.session_id), &[
     IndexDefinition::unique("sqlite_autoindex_session_task_2"), IndexDefinition::unique("session_task_launch_identity_idx"),
     IndexDefinition::secondary("session_task_parent_state_updated_idx")
@@ -138,6 +139,7 @@ table!(TaskTable, Task, "session_task", {
 }, Ok::<_, Error>(()), tx, {
     require::<SessionTable>(tx, &key(&r.session_id))?;
     require::<SessionTable>(tx, &key(&r.parent_id))?;
+    crate::resources::source_changed(tx, "task", key(&r.session_id), false)?;
 });
 
 table!(NotificationTable, Notification, "session_task_notification", {
@@ -218,7 +220,8 @@ table!(JobTable, Job, "session_compaction_job", {
     id: LosslessString, session_id: LosslessString, legacy_input_id: Option<LosslessString>, trigger: LosslessString,
     requested_through_message_id: LosslessString, requested_through_seq: i64, base_context_revision: i64, target_max_input_tokens: Option<i64>,
     config_digest: Option<LosslessString>, status: LosslessString, lease_owner: Option<LosslessString>, lease_expires_at: Option<i64>, attempts: i64,
-    manifest_digest: Option<LosslessString>, error_code: Option<LosslessString>, error_message: Option<LosslessString>, time_created: i64, time_started: Option<i64>, time_ended: Option<i64>
+    manifest_digest: Option<LosslessString>, error_code: Option<LosslessString>, error_message: Option<LosslessString>, time_created: i64, time_started: Option<i64>, time_ended: Option<i64>,
+    usage_anchor: Option<Document<usage_anchor::Ref>>
 }, r, key(&r.id), &[
     IndexDefinition::unique("session_compaction_job_pending_revision_idx"), IndexDefinition::unique("session_compaction_job_legacy_input_idx"),
     IndexDefinition::secondary("session_compaction_job_recovery_idx"), IndexDefinition::secondary("session_compaction_job_manifest_idx")

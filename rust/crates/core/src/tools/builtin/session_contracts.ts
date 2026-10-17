@@ -32,9 +32,14 @@ for (const [file, exported] of [
   const source = path.join(root, "packages/core/src/tool", `${file}.ts`)
   const module = (await import(source))[exported]
   const content = await Bun.file(source).text()
+  const tool = content.slice(content.indexOf("Tool.make({"))
+  const template = tool.match(/description:\s*`((?:\\.|[^`\\])*)`/)?.[1]
+  const example = content.match(/const example = ('[^'\\]*')/)?.[1]
   const description =
     module.description ??
-    JSON.parse(content.slice(content.indexOf("Tool.make({")).match(/description:\s*("(?:\\.|[^"\\])*")/)?.[1] ?? "null")
+    (template !== undefined && example !== undefined
+      ? new Function("example", `return \`${template}\``)(example.slice(1, -1))
+      : JSON.parse(tool.match(/description:\s*("(?:\\.|[^"\\])*")/)?.[1] ?? "null"))
   if (typeof description !== "string") throw new Error(`Missing description: ${file}`)
   const input = module.Input ?? Schema.Struct({})
   const output = module.Output ?? Schema.Struct({ recorded: Schema.Literal(true) })

@@ -48,10 +48,8 @@ test("session autonomy state maps legacy boolean yolo", () => {
     mode: "normal",
     yolo: 1,
   })
-  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: 3 })).toEqual({
-    mode: "normal",
-    yolo: 3,
-  })
+  for (const yolo of [-1, 3, 2.5])
+    expect(() => Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo })).toThrow()
 })
 
 test("session autonomy set accepts modes and rejects empty goals", () => {
@@ -60,7 +58,7 @@ test("session autonomy set accepts modes and rejects empty goals", () => {
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: false })).toEqual({ yolo: 0 })
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 0 })).toEqual({ yolo: 0 })
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 1 })).toEqual({ yolo: 1 })
-  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 3 })).toEqual({ yolo: 3 })
+  for (const yolo of [-1, 3, 2.5]) expect(() => Schema.decodeUnknownSync(SessionAutonomySet)({ yolo })).toThrow()
   expect(
     Schema.decodeUnknownSync(SessionAutonomySet)({
       goal: "Finish the migration",
@@ -90,4 +88,58 @@ test("R7 documents typed goal resume, stale calculation, and provider failures",
   const responses = document.paths["/api/session/{sessionID}/autonomy"]?.put?.responses
   for (const status of [200, 400, 404, 409, 500]) expect(responses?.[status]).toBeDefined()
   expect(group.endpoints["session.autonomy.set"].middlewares.has(SessionLocationMiddleware)).toBe(true)
+})
+
+test("family autonomy accepts explicit switches without accepting empty or invalid requests", () => {
+  const decode = Schema.decodeUnknownSync(SessionAutonomySet)
+  expect(decode({ sleep: false })).toEqual({ sleep: false })
+  expect(decode({ sleep: true })).toEqual({ sleep: true })
+  expect(
+    Schema.decodeUnknownSync(SessionAutonomyState)({
+      mode: "normal",
+      yolo: 0,
+      guardrailDecision: true,
+      sleep: { priorGuardrailDecision: false },
+    }),
+  ).toEqual({ mode: "normal", yolo: 0, sleep: {} })
+  for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: true }])
+    expect(() => decode(value)).toThrow()
+})
+
+test("automatic answers round-trip as an independent optional Session setting", () => {
+  for (const autoAnswer of [true, false]) {
+    expect<unknown>(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: 0, autoAnswer })).toEqual({
+      mode: "normal",
+      yolo: 0,
+      autoAnswer,
+    })
+    expect<unknown>(Schema.decodeUnknownSync(SessionAutonomySet)({ autoAnswer })).toEqual({ autoAnswer })
+  }
+  const decode = Schema.decodeUnknownSync(SessionAutonomySet)
+  for (const value of [
+    { autoAnswer: null },
+    { autoAnswer: "true" },
+    { autoAnswer: 1 },
+    { autoAnswer: true, yolo: 1 },
+    { autoAnswer: true, goal: "Finish verification" },
+    { autoAnswer: true, sleep: false },
+  ])
+    expect(() => decode(value)).toThrow()
+})
+
+test("autonomy reads and writes expose required effective approval settings", () => {
+  const document = OpenApi.fromApi(HttpApi.make("autonomy-view-test").add(makeSessionGroup(SessionLocationMiddleware)))
+  for (const method of ["get", "put"] as const)
+    expect(document.paths["/api/session/{sessionID}/autonomy"]?.[method]?.responses?.[200]).toMatchObject({
+      content: {
+        "application/json": { schema: { properties: { data: { $ref: "#/components/schemas/SessionAutonomyView" } } } },
+      },
+    })
+  expect(document.components?.schemas?.SessionAutonomyView).toMatchObject({
+    required: expect.arrayContaining(["mode", "yolo", "effective"]),
+    properties: { effective: { $ref: "#/components/schemas/SessionAutonomyEffective" } },
+  })
+  expect(document.components?.schemas?.SessionAutonomyEffective).toMatchObject({
+    required: ["yolo", "asleep", "guardrailsEnabled", "ordinaryReviewsAuto", "modelReviews", "hardModelReviews"],
+  })
 })

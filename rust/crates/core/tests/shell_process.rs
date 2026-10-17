@@ -276,6 +276,45 @@ async fn configurable_codex_shutdown_terms_waits_half_second_and_forces_stubborn
     );
 }
 #[tokio::test]
+async fn termination_grants_the_grace_to_group_members_after_the_leader_exits_first() {
+    let marker = std::env::temp_dir().join(format!(
+        "ycoding-w50-grace-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&marker);
+    let mut child = process::spawn(command(&format!(
+        "/bin/sh -c \"trap 'sleep 0.5; printf graceful > {}; exit 0' TERM; printf READY; while :; do sleep 0.05; done\" & wait",
+        marker.display()
+    )))
+    .await
+    .unwrap();
+    let mut output = child.take_output().unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), output.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .bytes,
+        b"READY"
+    );
+    let started = tokio::time::Instant::now();
+    child.terminate(Termination::Killed).await.unwrap();
+    let exit = tokio::time::timeout(Duration::from_secs(8), child.wait())
+        .await
+        .unwrap();
+    let written = std::fs::read_to_string(&marker);
+    let _ = std::fs::remove_file(&marker);
+    assert_eq!(exit.unwrap().reason, Termination::Killed);
+    assert_eq!(
+        written.ok().as_deref(),
+        Some("graceful"),
+        "a member still handling SIGTERM was killed before the three-second grace"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[tokio::test]
 async fn line_stream_strips_only_the_initial_decoder_bom() {
     let mut stream = process::run_stream(
         command(r"printf '\357\273\277first\n\357\273\277second\n'"),

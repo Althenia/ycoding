@@ -5,7 +5,8 @@ import { createTuiAttention } from "../../../../src/attention"
 import Notifications, { createNotifications } from "../../../../src/feature-plugins/system/notifications"
 import { createBuiltinPlugins } from "../../../../src/feature-plugins/builtins"
 import { builtins } from "../../../../src/plugin/builtins"
-import type { YCodingEvent, SessionAutonomyState } from "@ycoding-ai/client"
+import type { YCodingEvent } from "@ycoding-ai/client"
+import { localAutonomyView, type AutonomyState } from "../../../../src/util/session-autonomy"
 import type { TuiAttentionNotifyInput } from "../../../../src/plugin/host-api"
 import type { Context } from "@ycoding-ai/plugin/tui/context"
 import { createTuiPluginContext } from "../../../fixture/tui-plugin"
@@ -35,7 +36,7 @@ async function setup(options: {
     time: { started: number }
   }> = []
   let activeSubagents = 0
-  const autonomy = new Map<string, SessionAutonomyState>()
+  const autonomy = new Map<string, AutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
   const terminalSignals: WeakRef<AbortSignal>[] = []
   let notificationAttempts = 0
@@ -128,7 +129,7 @@ async function setup(options: {
           },
           autonomy: {
             get: async ({ sessionID }: { sessionID: string }) =>
-              autonomy.get(sessionID) ?? { mode: "normal", yolo: false },
+              localAutonomyView(autonomy.get(sessionID) ?? { mode: "normal", yolo: false }),
           },
         },
       } as unknown as Context["client"],
@@ -189,9 +190,14 @@ async function setup(options: {
     },
     emit(event: YCodingEvent) {
       if (event.type === "form.created") forms.set(event.data.form.id, event.data.form)
-      if (event.type === "form.replied" || event.type === "form.cancelled") forms.delete(event.data.id)
+      if (event.type === "form.replied" || event.type === "form.cancelled" || event.type === "form.timed_out")
+        forms.delete(event.data.id)
       if (event.type === "question.asked") questions.set(event.data.id, event.data)
-      if (event.type === "question.replied" || event.type === "question.rejected")
+      if (
+        event.type === "question.replied" ||
+        event.type === "question.rejected" ||
+        event.type === "question.timed_out"
+      )
         questions.delete(event.data.requestID)
       if (event.type === "permission.asked") permissions.set(event.data.id, event.data)
       if (event.type === "permission.replied") permissions.delete(event.data.requestID)
@@ -1069,9 +1075,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([])
   })
 
-  test("alerts for hard guardrail at YOLO 3", async () => {
+  test("alerts for hard guardrail at level 2", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: 3 })
+    harness.autonomy.set("session", { mode: "normal", yolo: 2 })
     harness.emit({
       id: "asked",
       created: 0,
@@ -1082,9 +1088,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([guardrailNotification])
   })
 
-  test("ignores an auto-approved ordinary guardrail at YOLO 3", async () => {
+  test("ignores an auto-approved ordinary guardrail at level 2", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: 3 })
+    harness.autonomy.set("session", { mode: "normal", yolo: 2 })
     harness.emit({ id: "asked", created: 0, type: "guardrail.asked", data: guardrail("ordinary-1") })
     harness.emit({
       id: "approved",
@@ -1109,6 +1115,36 @@ describe("internal notifications TUI plugin", () => {
     await harness.flush()
 
     expect(harness.notifications).toEqual([globalFormNotification])
+  })
+
+  test("clears timed-out forms and questions so a later request notifies again", async () => {
+    const harness = await setup()
+
+    harness.emit({ id: "event-1", created: 0, type: "form.created", data: { form: form("form-1") } })
+    harness.emit({ id: "event-2", created: 0, type: "question.asked", data: question("question-1") })
+    await harness.flush()
+    harness.emit({
+      id: "event-3",
+      created: 0,
+      type: "form.timed_out",
+      data: { sessionID: "session", id: "form-1" },
+    })
+    harness.emit({
+      id: "event-4",
+      created: 0,
+      type: "question.timed_out",
+      data: { sessionID: "session", requestID: "question-1" },
+    })
+    harness.emit({ id: "event-5", created: 0, type: "form.created", data: { form: form("form-1") } })
+    harness.emit({ id: "event-6", created: 0, type: "question.asked", data: question("question-1") })
+    await harness.flush()
+
+    expect(harness.notifications).toEqual([
+      formNotification,
+      questionNotification,
+      formNotification,
+      questionNotification,
+    ])
   })
 
   test("dedupes pending forms, questions, and permissions until they are resolved", async () => {

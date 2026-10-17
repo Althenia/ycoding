@@ -17,7 +17,8 @@ use ycoding_core::{
     },
 };
 use ycoding_schema::{
-    JsonValue, parse_json, session, session_delivery::Delivery, session_pending, stringify_json,
+    DomainDecode, JsonValue, parse_json, session, session_delivery::Delivery, session_pending,
+    stringify_json,
 };
 
 type Delivered = Arc<Mutex<Vec<(session::Id, session_pending::Message)>>>;
@@ -230,6 +231,64 @@ async fn a_completion_notice_that_fails_to_deliver_keeps_the_session_outstanding
     until(|| (harness.jobs.get("call_tool")?.status == Status::Completed).then_some(())).await;
 
     assert!(harness.outstanding());
+    harness.finish().await;
+}
+
+fn shell_rows(store: &ycoding_store::Store) -> usize {
+    store
+        .client()
+        .snapshot()
+        .unwrap()
+        .scan::<ycoding_store::resources::ShellTable>(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Unbounded,
+            8,
+        )
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn a_completion_notice_for_a_deleted_session_is_discarded_without_keeping_work_outstanding() {
+    let harness = Harness::new(AUTO_BACKGROUND).await;
+    *harness.outcome.lock().unwrap() = std::io::ErrorKind::NotFound;
+
+    harness
+        .call(serde_json::json!({"command": "echo done", "background": true}))
+        .await;
+    until(|| (!harness.delivered.lock().unwrap().is_empty()).then_some(())).await;
+    until(|| (harness.jobs.get("call_tool")?.status == Status::Completed).then_some(())).await;
+
+    until(|| (!harness.outstanding()).then_some(())).await;
+    until(|| (shell_rows(&harness.store) == 0).then_some(())).await;
+    assert_eq!(harness.delivered.lock().unwrap().len(), 1);
+    harness.finish().await;
+}
+
+#[tokio::test]
+async fn removing_a_background_shell_delivers_one_cancelled_notice() {
+    let harness = Harness::new(AUTO_BACKGROUND).await;
+    let output = harness
+        .call(serde_json::json!({"command": "exec sleep 600", "background": true}))
+        .await;
+    let JsonValue::Object(structured) = &output.structured else {
+        panic!("background output is structured")
+    };
+    let id = ycoding_schema::shell::Id::decode(structured.get(&"shellID".into()).unwrap()).unwrap();
+    harness.shell.remove(&id).await.unwrap();
+
+    until(|| (!harness.outstanding()).then_some(())).await;
+    until(|| (harness.jobs.get("call_tool")?.status == Status::Cancelled).then_some(())).await;
+    let delivered = harness.delivered.lock().unwrap().clone();
+    assert_eq!(delivered.len(), 1);
+    let (text, _, metadata, delivery) = synthetic(&delivered[0].1);
+    assert_eq!(
+        text,
+        "<shell id=\"call_tool\" state=\"cancelled\" command=\"exec sleep 600\">\nCommand cancelled\n</shell>"
+    );
+    assert_eq!(metadata, r#"{"source":"shell","state":"cancelled"}"#);
+    assert_eq!(delivery, Delivery::Steer);
+    until(|| (shell_rows(&harness.store) == 0).then_some(())).await;
     harness.finish().await;
 }
 

@@ -24,12 +24,15 @@ import { TokenUsage } from "./token-usage.js"
 import { SessionPending } from "./session-pending.js"
 import { Project } from "./project.js"
 import { ProviderRequest } from "./provider-request.js"
+import { UsageAnchor } from "./usage-anchor.js"
 import { SessionOrchestration } from "./session-orchestration.js"
 import { Permission } from "./permission.js"
 import { SessionCompaction } from "./session-compaction.js"
 import { Credential } from "./credential.js"
 import { Integration } from "./integration.js"
 import { Provider } from "./provider.js"
+import { Guardrail } from "./guardrail.js"
+import { SessionReview } from "./session-review.js"
 
 export { FileAttachment }
 
@@ -127,6 +130,76 @@ export const GuardrailApproved = Event.durable({
   },
 })
 export type GuardrailApproved = typeof GuardrailApproved.Type
+
+export namespace Review {
+  export const Deferred = Event.durable({
+    type: "session.review.deferred",
+    ...options,
+    schema: { ...Base, ...SessionReview.Deferral.fields },
+  })
+  export type Deferred = typeof Deferred.Type
+  export const Decided = Event.durable({
+    type: "session.review.decided",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision },
+  })
+  export type Decided = typeof Decided.Type
+  export const Withdrawn = Event.durable({
+    type: "session.review.withdrawn",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID, reason: Schema.Literals(["reverted", "task_closed"]) },
+  })
+  export type Withdrawn = typeof Withdrawn.Type
+  export const Consumed = Event.durable({
+    type: "session.review.consumed",
+    ...options,
+    schema: { ...Base, itemID: SessionReview.ID },
+  })
+  export type Consumed = typeof Consumed.Type
+}
+
+export const GuardrailDecided = Event.durable({
+  type: "session.guardrail.decided",
+  ...options,
+  schema: {
+    ...Base,
+    reviewSessionID: SessionID,
+    requestID: Schema.String,
+    reply: Guardrail.Reply,
+    choice: Guardrail.DecisionChoice.pipe(optional),
+    grades: Schema.Array(Guardrail.Grade).pipe(optional),
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+    ruleIDs: Schema.Array(Schema.String).pipe(optional),
+    source: Guardrail.Source.pipe(optional),
+  },
+})
+export type GuardrailDecided = typeof GuardrailDecided.Type
+
+export const GuardrailEscalated = Event.durable({
+  type: "session.guardrail.escalated",
+  ...options,
+  schema: {
+    ...Base,
+    requestID: Schema.String,
+    ...Guardrail.Escalation.fields,
+    ruleIDs: Schema.Array(Schema.String).pipe(optional),
+    source: Guardrail.Source.pipe(optional),
+  },
+})
+export type GuardrailEscalated = typeof GuardrailEscalated.Type
+
+export const GuardrailDismissed = Event.durable({
+  type: "session.guardrail.dismissed",
+  ...options,
+  schema: {
+    ...Base,
+    reviewSessionID: SessionID,
+    ruleID: Schema.String.check(Schema.isPattern(/^standard\.review\./)),
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0.9, maximum: 1 })),
+    source: Guardrail.Source.pipe(optional),
+  },
+})
+export type GuardrailDismissed = typeof GuardrailDismissed.Type
 
 export const DaybreakSet = Event.durable({
   type: "session.daybreak.set",
@@ -297,6 +370,7 @@ export const InputAdmitted = Event.durable({
     ...Base,
     inputID: SessionMessage.ID,
     input: SessionPending.Message,
+    causedBy: UsageAnchor.Ref.pipe(optional),
   },
 })
 export type InputAdmitted = typeof InputAdmitted.Type
@@ -370,7 +444,13 @@ export namespace Task {
   export const Updated = Event.durable({
     type: "session.task.updated",
     ...options,
-    schema: { sessionID: SessionID, change: SessionOrchestration.Change },
+    schema: {
+      sessionID: SessionID,
+      change: SessionOrchestration.Change.mapMembers(([launched, ...rest]) => [
+        Schema.Struct({ ...launched.fields, usageAnchor: UsageAnchor.Ref.pipe(optional) }),
+        ...rest,
+      ]).pipe(Schema.toTaggedUnion("type")),
+    },
   })
   export type Updated = typeof Updated.Type
 }
@@ -487,6 +567,18 @@ export namespace Step {
     },
   })
   export type Failed = typeof Failed.Type
+
+  export const Rerouted = Event.durable({
+    type: "session.step.rerouted",
+    ...options,
+    schema: {
+      ...Base,
+      assistantMessageID: SessionMessage.ID,
+      model: Model.Ref,
+      error: SessionError.Error,
+    },
+  })
+  export type Rerouted = typeof Rerouted.Type
 }
 
 export namespace Text {
@@ -618,13 +710,9 @@ export namespace Tool {
   })
   export type Called = typeof Called.Type
 
-  /**
-   * Replayable bounded running-tool state. Tools should checkpoint semantic
-   * transitions or at a bounded cadence, not persist every stdout/stderr chunk.
-   */
-  export const Progress = Event.durable({
+  // Running-tool state is live-only; Success and Failed are the replayable settlement boundary.
+  export const Progress = Event.ephemeral({
     type: "session.tool.progress",
-    ...options,
     schema: {
       ...ToolBase,
       structured: Schema.Record(Schema.String, Schema.Unknown),
@@ -777,7 +865,12 @@ export namespace Compaction {
   export const Admitted = Event.durable({
     type: "session.compaction.admitted",
     ...current,
-    schema: { ...Base, jobID: SessionCompaction.ID, pressure: SessionCompaction.Pressure.pipe(optional) },
+    schema: {
+      ...Base,
+      jobID: SessionCompaction.ID,
+      pressure: SessionCompaction.Pressure.pipe(optional),
+      usageAnchor: UsageAnchor.Ref.pipe(optional),
+    },
   })
   export type Admitted = typeof Admitted.Type
 
@@ -848,6 +941,13 @@ export const Definitions = Event.inventory(
   ModelSelected,
   DaybreakSet,
   ProjectArtifactsEnded,
+  GuardrailDismissed,
+  GuardrailEscalated,
+  GuardrailDecided,
+  Review.Deferred,
+  Review.Decided,
+  Review.Withdrawn,
+  Review.Consumed,
   Moved,
   Renamed,
   UsageUpdated,
@@ -878,6 +978,7 @@ export const Definitions = Event.inventory(
   Step.Started,
   Step.Ended,
   Step.Failed,
+  Step.Rerouted,
   Text.Started,
   Text.Delta,
   Text.Ended,

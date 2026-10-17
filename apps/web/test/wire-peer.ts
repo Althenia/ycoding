@@ -21,6 +21,7 @@ import {
   Streaming,
   encodeStrict,
   encodeLossless,
+  FailureCategory,
   remotePayloadCodecs,
   type Connection,
   type Decision,
@@ -108,6 +109,7 @@ export class BinarySocket extends EventTarget {
   quiet = false
   holdMessages = false
   private readonly heldMessages: (string | ArrayBuffer)[] = []
+  private readonly heldBodies: Frame["body"][] = []
   private readonly subscriptions = new Map<string, string>()
   private readonly transfers: {
     readonly start: BulkStart
@@ -152,6 +154,7 @@ export class BinarySocket extends EventTarget {
   close(code?: number, reason?: string) {
     this.readyState = 3
     this.transfers.length = 0
+    this.heldBodies.length = 0
     this.closes.push({ code, reason })
     this.connection.close(5)
     this.dispatchEvent(Object.assign(new Event("close"), { code: code ?? 1000, reason: reason ?? "" }))
@@ -201,6 +204,7 @@ export class BinarySocket extends EventTarget {
       this.connection.state !== "closed"
     )
       this.connection.consume(LedgerClass.NORMAL, incoming.frame.deliveryOrdinal, this.now())
+    this.releaseBodies()
     this.flush()
   }
   flush() {
@@ -209,7 +213,7 @@ export class BinarySocket extends EventTarget {
       const prepared = this.connection.prepareHandoff(this.now())
       if (!prepared) {
         const transfer = this.transfers[0]
-        if (!transfer) return
+        if (!transfer || this.heldBodies.length || this.connection.state !== "established") return
         const piece = transfer.data.subarray(transfer.offset, transfer.offset + 65536)
         const body: Frame["body"] =
           transfer.offset === transfer.data.byteLength
@@ -237,8 +241,8 @@ export class BinarySocket extends EventTarget {
         )
           return
         const decisions = this.connection.enqueue(body, frameReservation(body), this.now())
-        if (decisions.some((decision) => decision.type === "closed"))
-          throw new Error("Fixture bulk producer was rejected")
+        const rejected = decisions.find((decision) => decision.type === "closed")
+        if (rejected) throw new Error(`Fixture bulk producer was rejected: ${FailureCategory[rejected.category]}`)
         if (body.case === "bulkEnd") this.transfers.shift()
         if (body.case === "bulkPiece") {
           transfer.offset += piece.byteLength
@@ -264,11 +268,27 @@ export class BinarySocket extends EventTarget {
     }
   }
   body(body: Frame["body"]) {
-    const decisions = this.connection.enqueue(body, frameReservation(body), this.now())
-    if (decisions.some((decision) => decision.type === "closed")) throw new Error("Fixture body was rejected")
+    if (this.connection.state === "closed") throw new Error("Fixture peer is closed")
+    // The connection closes on a body sent before establishment; hold bodies in order until a receive establishes it.
+    if (this.connection.state !== "established" || this.heldBodies.length) {
+      this.heldBodies.push(body)
+      return
+    }
+    this.enqueueBody(body)
     this.flush()
   }
+  private releaseBodies() {
+    while (this.heldBodies.length && this.connection.state === "established") this.enqueueBody(this.heldBodies.shift()!)
+  }
+  private enqueueBody(body: Frame["body"]) {
+    const rejected = this.connection
+      .enqueue(body, frameReservation(body), this.now())
+      .find((decision) => decision.type === "closed")
+    if (rejected) throw new Error(`Fixture body was rejected: ${FailureCategory[rejected.category]}`)
+  }
+  // A reply to a request whose connection has closed is dropped; only pushes report a closed peer.
   result(dispatch: Extract<Decision, { type: "dispatch" }>, value: unknown) {
+    if (this.connection.state === "closed") return
     const codec = remotePayloadCodecs.get(dispatch.operation.diagnosticName)!
     const payload = codec.result.encode(writeWireMessage(codec.result.schema, value))
     if (payload.byteLength > this.connection.budgets.inlineBytes) {
@@ -310,6 +330,7 @@ export class BinarySocket extends EventTarget {
     }
   }
   error(dispatch: Extract<Decision, { type: "dispatch" }>, typeName: string, value: unknown) {
+    if (this.connection.state === "closed") return
     const codec = remotePayloadCodecs.get(dispatch.operation.diagnosticName)!.errors.get(typeName)
     if (!codec) throw new Error("Fixture error type does not belong to the operation")
     this.body({
@@ -356,6 +377,7 @@ export class BinarySocket extends EventTarget {
     )
   }
   asset(dispatch: Extract<Decision, { type: "dispatch" }>, data: Uint8Array, mime = "image/png") {
+    if (this.connection.state === "closed") return
     const codec = remotePayloadCodecs.get(dispatch.operation.diagnosticName)!
     this.body({
       case: "result",
@@ -434,6 +456,7 @@ export class BinarySocket extends EventTarget {
     this.flush()
   }
   log(sessionID: string, subscriptionID: string, events: readonly unknown[], after: number) {
+    if (this.connection.state === "closed") return
     const records = events.map((event, index) => {
       if (typeof event !== "object" || event === null) throw new Error("Expected a log event object")
       return {

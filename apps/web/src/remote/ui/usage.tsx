@@ -4,19 +4,33 @@ import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
 import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
+import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
+import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
+import { QuotaForecastBlock, UsageStatisticsDetails } from "./usage-cost"
+import { ModelIncidents } from "./model-incidents"
+import type { UsageForecastView } from "../wire-views"
 import {
   compactUsageTotal,
+  dailyBars,
   dailySpend,
   donutGeometry,
-  modelIdentity,
+  matchingQuotaForecast,
   money,
   providerDistribution,
   providerHeading,
   quotaWindow,
   relativeFreshness,
+  reportCost,
+  reportCostText,
+  reportIdentity,
+  reportLabel,
+  spendCostText,
   spendMetrics,
+  spendSharesUnavailable,
+  sparklinePoints,
   tokenCount,
   tooltipPosition,
+  unsupportedReportMessage,
   usageReportInputs,
   usageZoneKey,
   visibleProviders,
@@ -30,9 +44,20 @@ import {
 } from "./usage-model"
 import "./usage.css"
 
-const groups = ["model", "session", "project", "agent"] as const
 type BreakdownInput = UsageReportInput & UsageBreakdown
-const names = { model: "Model", session: "Session", project: "Project", agent: "Agent" }
+const names = {
+  model: "Model",
+  session: "Session",
+  project: "Project",
+  agent: "Agent",
+  provider: "Provider",
+  "provider-profile-model": "Provider / profile / model",
+  "provider-model": "Provider / model",
+  "model-id": "Model ID",
+  profile: "Profile",
+  prompt: "Prompt",
+  task: "Task",
+}
 const columns = [
   { key: "steps", label: "Steps" },
   { key: "tokens", label: "Tokens" },
@@ -40,6 +65,7 @@ const columns = [
   { key: "output", label: "Output" },
   { key: "reasoning", label: "Reasoning" },
   { key: "cacheRead", label: "Cache read" },
+  { key: "cacheWrite", label: "Cache write" },
   { key: "cost", label: "Cost" },
 ] as const
 const count = (value: number) => new Intl.NumberFormat().format(value)
@@ -62,7 +88,14 @@ export function UsagePage() {
   const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(
     localStorage.getItem(usageZoneKey) === "local" ? "local" : "utc",
   )
-  const [group, setGroup] = createSignal<(typeof groups)[number]>("model")
+  const [group, setGroup] = createSignal<(typeof usageGroups)[number]["value"]>("model")
+  const [filters, setFilters] = createSignal<UsageFiltersPresentation>({
+    provider: "",
+    profile: "",
+    model: "",
+    effort: "",
+    range: "last30",
+  })
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
   const [offset, setOffset] = createSignal(0)
@@ -94,7 +127,19 @@ export function UsagePage() {
   const selectedZone = () => (zoneMode() === "local" ? localZone : undefined)
   const zoneLabel = () => (zoneMode() === "local" ? `Local · ${localZone}` : "UTC")
   const reports = createMemo(() =>
-    usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order() }),
+    usageReportInputs(openedAt, selectedZone(), {
+      group: group(),
+      offset: offset(),
+      sort: sort(),
+      order: order(),
+      providerID: filters().provider,
+      profile: filters().profile,
+      modelID: filters().model,
+      selectedEffort: filters().effort,
+      range: filters().range,
+      from: filters().from,
+      to: filters().to,
+    }),
   )
   const dailyInput = createMemo<UsageReportInput>(() => reports().daily)
   const monthlyInput = createMemo<UsageReportInput>(() => reports().monthly)
@@ -102,6 +147,13 @@ export function UsagePage() {
   const providersQuery = createRemoteQuery(remote.store.queryClient, () =>
     remote.queries.usageProviders(remote.scope(), connected()),
   )
+  const forecastQuery = createRemoteQuery(remote.store.queryClient, () =>
+    remote.queries.usageForecast(remote.scope(), connected()),
+  )
+  const forecast = () => usageRead(forecastQuery())
+  const forecastData = () => (forecast().status === "error" ? undefined : forecast().data)
+  const quotaForecastState = () =>
+    forecast().status === "ready" && forecastData()?.quotas === undefined ? "error" : forecast().status
   createRemoteQuery(remote.store.queryClient, () => remote.queries.usageSummary(remote.scope(), connected()))
   const dailyQuery = createRemoteQuery(remote.store.queryClient, () =>
     remote.queries.usageReport(remote.scope(), connected(), dailyInput()),
@@ -144,7 +196,7 @@ export function UsagePage() {
   const distribution = createMemo(() => providerDistribution(monthlyData(), providerData() ?? [], distributionMetric()))
   const totalLabel = () =>
     distributionMetric() === "spend"
-      ? `Exact estimated USD total: ${money(distribution().total)}`
+      ? `Exact known USD subtotal: ${money(distribution().total)}`
       : `Exact token total: ${count(distribution().total)}`
   const shownTotal = () =>
     compactTotal()
@@ -154,15 +206,6 @@ export function UsagePage() {
         : count(distribution().total)
   const arcs = createMemo(() => donutGeometry(distribution().segments, 72))
   const segmentIDs = createMemo(() => distribution().segments.map((segment) => segment.providerID))
-  const providerCosts = createMemo(
-    () =>
-      new Map(
-        providerDistribution(monthlyData(), providerData() ?? [], "spend").segments.map((segment) => [
-          segment.providerID,
-          segment.value,
-        ]),
-      ),
-  )
   const activeSegment = () => arcs().find((segment) => segment.providerID === activeProvider())
   const placeDay = (x: number, y: number) => {
     if (!dayCard || !dayTooltip) return
@@ -207,14 +250,9 @@ export function UsagePage() {
   const dayKeys = createMemo(() => days().map((entry) => entry.key))
   const tileValue = (id: (typeof tileIDs)[number]) =>
     spendMetrics(id === "today" ? days().slice(-1) : id === "yesterday" ? days().slice(-2, -1) : days())
-  const sparkline = createMemo(() => {
-    const costs = days().map((entry) => entry.cost)
-    const highest = Math.max(1, ...costs)
-    return costs
-      .map((cost, index) => `${((index / 29) * 96).toFixed(1)},${(28 - (cost / highest) * 24).toFixed(1)}`)
-      .join(" ")
-  })
-  const selectGroup = (next: (typeof groups)[number]) => {
+  const sparkline = createMemo(() => sparklinePoints(days().map((entry) => entry.cost)))
+  const bars = createMemo(() => dailyBars(days().map((entry) => entry.cost)))
+  const selectGroup = (next: (typeof usageGroups)[number]["value"]) => {
     holdRows()
     batch(() => {
       setGroup(next)
@@ -364,12 +402,41 @@ export function UsagePage() {
                 <ProviderCard
                   provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial}
                   now={now()}
+                  forecasts={forecastData()?.quotas}
+                  forecastAsOf={forecastData()?.asOf}
+                  forecastState={quotaForecastState()}
                 />
               )
             }}
           </For>
         </div>
       </section>
+
+      <Show when={forecastData()}>
+        <section class="usage-breakdown-section" aria-label="Recorded token consumption">
+          <h2>Recorded consumption · Backend</h2>
+          <For each={forecastData()?.localRates}>
+            {(rate) => (
+              <p class="usage-message">
+                {rate.providerID}
+                {rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}
+                {rate.modelID ? ` · ${rate.modelID}` : ""}: {count(rate.tokensPerMinute)} tokens/min · 5m{" "}
+                {rate.tokensPerMinute5 === undefined ? "unreported" : count(rate.tokensPerMinute5)} · 60m{" "}
+                {rate.tokensPerMinute60 === undefined ? "unreported" : count(rate.tokensPerMinute60)}
+                <Show when={rate.estimatedUSDPerHour !== undefined}> · {money(rate.estimatedUSDPerHour!)} estimated/hour</Show>
+                {" "}· {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed{" "}
+                {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}
+              </p>
+            )}
+          </For>
+          <Show when={forecastData()?.localRates === undefined}>
+            <p class="usage-message">Recorded consumption unreported · lookup unavailable.</p>
+          </Show>
+          <Show when={forecastData()?.localRates?.length === 0}>
+            <p class="usage-message">No recorded consumption in the observation window.</p>
+          </Show>
+        </section>
+      </Show>
 
       <section class="usage-spend" aria-labelledby="usage-spend-title">
         <h2 class="visually-hidden" id="usage-spend-title">
@@ -381,7 +448,7 @@ export function UsagePage() {
               {(id) => (
                 <article class="usage-tile">
                   <h3>{tileLabels[id]}</h3>
-                  <strong>{money(tileValue(id).cost)}</strong>
+                  <strong>{spendCostText(tileValue(id))}</strong>
                   <p class="usage-tile__meta">
                     <span>{count(tileValue(id).requests)} requests</span>
                     <span>{count(tileValue(id).tokens)} tokens</span>
@@ -453,7 +520,7 @@ export function UsagePage() {
               }
             >
               <p class="usage-chart__today">
-                Today: {money(days().at(-1)?.cost ?? 0)} · {count(days().at(-1)?.requests ?? 0)} requests
+                Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests
               </p>
               <svg
                 viewBox="0 0 900 180"
@@ -461,26 +528,22 @@ export function UsagePage() {
                 aria-label="Daily cost over the last 30 days, with exact values in the table"
                 preserveAspectRatio="none"
               >
-                <line x1="0" y1="156" x2="900" y2="156" class="usage-chart__axis" />
+                <line x1="0" y1={bars().axis} x2="900" y2={bars().axis} class="usage-chart__axis" />
                 <For each={dayKeys()}>
                   {(key, index) => {
                     const entry = () => days().find((item) => item.key === key)!
-                    const height = () =>
-                      entry().cost === 0
-                        ? 2
-                        : Math.max(4, (entry().cost / Math.max(1, ...days().map((item) => item.cost))) * 138)
                     return (
                       <rect
                         x={index() * 30 + 7}
-                        y={156 - height()}
+                        y={bars().bars[index()]!.y}
                         width="16"
-                        height={height()}
+                        height={bars().bars[index()]!.height}
                         rx="2"
                         class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
                         tabindex="0"
                         role="img"
                         data-cursor="action"
-                        aria-label={`${key}: estimated cost ${money(entry().cost)}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
+                        aria-label={`${key}: estimated cost ${spendCostText(entry())}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
                         onPointerEnter={(event) => {
                           if (event.pointerType !== "touch") {
                             setActiveDay(entry())
@@ -523,7 +586,7 @@ export function UsagePage() {
                     role="status"
                   >
                     <strong>{entry().key}</strong>
-                    <span>Estimated cost {money(entry().cost)}</span>
+                    <span>Estimated cost {spendCostText(entry())}</span>
                     <span>
                       {count(entry().requests)} requests · {count(entry().tokens)} tokens
                     </span>
@@ -552,7 +615,7 @@ export function UsagePage() {
                         {(entry) => (
                           <tr>
                             <th scope="row">{entry.key}</th>
-                            <td>{money(entry.cost)}</td>
+                            <td>{spendCostText(entry)}</td>
                             <td>{count(entry.tokens)}</td>
                             <td>{count(entry.requests)}</td>
                           </tr>
@@ -565,6 +628,9 @@ export function UsagePage() {
             </Show>
           </div>
           <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
+            <Show when={monthlyData()}>
+              {(value) => <p class="usage-message">Pricing: {reportCostText(value().total)}</p>}
+            </Show>
             <div class="usage-distribution__head">
               <div>
                 <h3 id="usage-distribution-title">Provider distribution (current {zoneLabel()} month)</h3>
@@ -621,11 +687,22 @@ export function UsagePage() {
             </Show>
             <Show when={monthlyData()}>
               <Show
-                when={distribution().total > 0}
+                when={
+                  distribution().total > 0 && !(distributionMetric() === "spend" && spendSharesUnavailable(monthlyData()))
+                }
                 fallback={
-                  <p class="usage-distribution__empty">
-                    No {distributionMetric() === "spend" ? "priced" : "token"} usage this month.
-                  </p>
+                  distributionMetric() === "spend" && spendSharesUnavailable(monthlyData()) ? (
+                    <p class="usage-distribution__unavailable" role="status">
+                      Spend shares unavailable · credits offset charges this month. Net known spend{" "}
+                      {reportCostText(monthlyData()!.total)}.
+                    </p>
+                  ) : (
+                    <p class="usage-distribution__empty">
+                      {distributionMetric() === "spend"
+                        ? `Cost ${reportCostText(monthlyData()!.total)} · no positive known spend this month.`
+                        : "No recorded tokens this month."}
+                    </p>
+                  )
                 }
               >
                 <div class="usage-distribution__body">
@@ -658,7 +735,7 @@ export function UsagePage() {
                               tabindex="0"
                               role="img"
                               data-cursor="action"
-                              aria-label={`${segment().label}: estimated cost ${money(providerCosts().get(id) ?? 0)}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
+                              aria-label={`${segment().label}: cost ${segment().costLabel ?? "unreported"}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
                               onPointerEnter={(event) => {
                                 if (event.pointerType !== "touch") {
                                   setActiveProvider(id)
@@ -705,7 +782,7 @@ export function UsagePage() {
                         {shownTotal()}
                       </strong>
                       <span class="usage-donut__caption" ref={distributionCaption}>
-                        {distributionMetric() === "spend" ? "estimated USD" : "tokens"}
+                        {distributionMetric() === "spend" ? "known USD" : "tokens"}
                       </span>
                       <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">
                         {distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}
@@ -722,7 +799,7 @@ export function UsagePage() {
                       >
                         <strong>{segment().label}</strong>
                         <span>
-                          Estimated cost {money(providerCosts().get(segment().providerID) ?? 0)} ·{" "}
+                          Cost {segment().costLabel ?? "unreported"} ·{" "}
                           {Math.round(segment().share * 100)}% share
                         </span>
                         <Show when={distributionMetric() === "tokens"}>
@@ -751,7 +828,9 @@ export function UsagePage() {
                             <span class="usage-distribution__name">{segment().label}</span>
                             <span>{Math.round(segment().share * 100)}%</span>
                             <strong>
-                              {distributionMetric() === "spend" ? money(segment().value) : count(segment().value)}
+                              {distributionMetric() === "spend"
+                                ? (segment().costLabel ?? "unreported")
+                                : count(segment().value)}
                             </strong>
                           </li>
                         )
@@ -775,50 +854,33 @@ export function UsagePage() {
               {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s
             </span>
           </Show>
-          <div
-            class="usage-tabs"
-            role="tablist"
-            aria-label="Breakdown group"
-            onKeyDown={(event) => {
-              if (
-                event.key !== "ArrowLeft" &&
-                event.key !== "ArrowRight" &&
-                event.key !== "Home" &&
-                event.key !== "End"
-              )
-                return
-              event.preventDefault()
-              const index =
-                event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? groups.length - 1
-                    : (groups.indexOf(group()) + (event.key === "ArrowRight" ? 1 : -1) + groups.length) % groups.length
-              selectGroup(groups[index]!)
-              event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[index]?.focus()
-            }}
-          >
-            <For each={groups}>
-              {(item) => (
-                <button
-                  id={`usage-tab-${item}`}
-                  role="tab"
-                  type="button"
-                  aria-selected={group() === item}
-                  aria-controls="usage-breakdown-panel"
-                  tabindex={group() === item ? 0 : -1}
-                  onClick={() => selectGroup(item)}
-                >
-                  {names[item]}
-                </button>
-              )}
-            </For>
-          </div>
+          <UsageGroupControl value={group()} onChange={selectGroup} />
         </div>
+        <UsageFilterControls
+          value={filters()}
+          providers={[
+            ...new Map(
+              (providerRead().data ?? []).map((provider) => [
+                provider.providerID,
+                { id: provider.providerID, label: providerHeading(provider).name },
+              ]),
+            ).values(),
+          ]}
+          onChange={(value) => {
+            holdRows()
+            batch(() => {
+              setFilters(value)
+              setOffset(0)
+            })
+          }}
+        />
+        <Show when={group() === "task"}>
+          <p class="usage-message">Inclusive task rows overlap; do not add them for a family total.</p>
+        </Show>
         <div
           id="usage-breakdown-panel"
-          role="tabpanel"
-          aria-labelledby={`usage-tab-${group()}`}
+          role="region"
+          aria-label={`${names[group()]} usage breakdown`}
           class="usage-breakdown"
           aria-busy={updating() ? "true" : "false"}
         >
@@ -833,9 +895,7 @@ export function UsagePage() {
           </Show>
           <Show when={!displayed() && breakdown()?.status === "unsupported"}>
             <p class="usage-message" role="status">
-              {zoneMode() === "local"
-                ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue."
-                : "Update YCoding on this machine to see usage."}
+              {unsupportedReportMessage(breakdownInput())}
             </p>
           </Show>
           <Show when={!displayed() && breakdown()?.status === "error"}>
@@ -856,24 +916,27 @@ export function UsagePage() {
                 <For each={displayed()?.rows}>
                   {(row: UsageReportRow) => {
                     const identity = () =>
-                      shownBreakdown()?.input.group === "model"
-                        ? modelIdentity(row.key, providerRead().data ?? [])
+                      shownBreakdown()?.input.group === "model" || row.dimensions
+                        ? reportIdentity(row, providerRead().data ?? [])
                         : undefined
                     return (
                       <article class="usage-mobile-row">
                         <div class="usage-mobile-row__top">
                           <div>
-                            <strong>{identity()?.model ?? row.label}</strong>
+                            <strong>
+                              {identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}
+                            </strong>
                             <Show when={identity()}>
                               <span class="usage-provider-chip">{identity()?.provider}</span>
                             </Show>
                           </div>
-                          <b>{money(row.cost ?? 0)}</b>
+                          <b>{reportCostText(row)}</b>
                         </div>
                         <p>
                           {count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out
                           <Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show>
                         </p>
+                        <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
                       </article>
                     )
                   }}
@@ -925,16 +988,19 @@ export function UsagePage() {
                     <For each={displayed()?.rows}>
                       {(row: UsageReportRow) => {
                         const identity = () =>
-                          shownBreakdown()?.input.group === "model"
-                            ? modelIdentity(row.key, providerRead().data ?? [])
+                          shownBreakdown()?.input.group === "model" || row.dimensions
+                            ? reportIdentity(row, providerRead().data ?? [])
                             : undefined
                         return (
                           <tr>
                             <th scope="row">
-                              <span>{identity()?.model ?? row.label}</span>
+                              <span>
+                                {identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}
+                              </span>
                               <Show when={identity()}>
                                 <span class="usage-provider-chip">{identity()?.provider}</span>
                               </Show>
+                              <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
                             </th>
                             <td>{count(row.logical)}</td>
                             <td>{count(tokenCount(row.tokens))}</td>
@@ -942,8 +1008,9 @@ export function UsagePage() {
                             <td>{count(row.tokens.output)}</td>
                             <td>{count(row.tokens.reasoning)}</td>
                             <td>{count(row.tokens.cache.read)}</td>
+                            <td>{count(row.tokens.cache.write)}</td>
                             <td class="usage-table__cost">
-                              {money(row.cost ?? 0)}
+                              {reportCostText(row)}
                               <Show when={row.costProvenance === "current_catalog"}>
                                 <small>estimate</small>
                               </Show>
@@ -991,18 +1058,30 @@ export function UsagePage() {
                   </button>
                 </div>
               </div>
+              <p class="usage-message">
+                Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}
+              </p>
             </Show>
           </Show>
         </div>
       </section>
+      <ModelIncidents />
       <footer class="usage-cost-note">
-        Costs are estimates from recorded usage and model pricing, not provider bills.
+        Costs are estimates from recorded usage and model pricing, not provider bills. Analytics use configurable
+        request-date retention (default 30 days), independently of Session deletion. Session-owned prompt and task views
+        can have a shorter retained history.
       </footer>
     </div>
   )
 }
 
-function ProviderCard(props: { readonly provider: () => UsageProvider; readonly now: number }) {
+function ProviderCard(props: {
+  readonly provider: () => UsageProvider
+  readonly now: number
+  readonly forecasts?: UsageForecastView["quotas"]
+  readonly forecastAsOf?: number
+  readonly forecastState: string
+}) {
   const label = (value: string) => value.replaceAll("_", " ")
   const heading = () => providerHeading(props.provider())
   const updated = () =>
@@ -1053,6 +1132,13 @@ function ProviderCard(props: { readonly provider: () => UsageProvider; readonly 
                 <QuotaRow
                   window={() => props.provider().windows.find((window) => window.id === id) ?? initial}
                   now={props.now}
+                  forecast={matchingQuotaForecast(
+                    props.provider(),
+                    props.provider().windows.find((window) => window.id === id) ?? initial,
+                    props.forecasts,
+                  )}
+                  forecastAsOf={props.forecastAsOf}
+                  forecastState={props.forecastState}
                 />
               )
             }}
@@ -1063,7 +1149,13 @@ function ProviderCard(props: { readonly provider: () => UsageProvider; readonly 
   )
 }
 
-function QuotaRow(props: { readonly window: () => UsageWindow; readonly now: number }) {
+function QuotaRow(props: {
+  readonly window: () => UsageWindow
+  readonly now: number
+  readonly forecast?: NonNullable<UsageForecastView["quotas"]>[number]
+  readonly forecastAsOf?: number
+  readonly forecastState: string
+}) {
   const quota = () => quotaWindow(props.window(), props.now)
   return (
     <div class="usage-window">
@@ -1113,6 +1205,21 @@ function QuotaRow(props: { readonly window: () => UsageWindow; readonly now: num
           <span>Unlimited</span>
         </Show>
       </div>
+      <Show
+        when={props.forecast}
+        fallback={
+          <p class="usage-window__details">
+            Forecast {props.forecastState === "loading" || props.forecastState === "idle" ? "loading" : "unavailable"}
+            {props.forecastState === "error"
+              ? " · lookup failed; refresh quotas to retry"
+              : props.forecastState === "ready"
+                ? " · No matching quota observation"
+                : ""}
+          </p>
+        }
+      >
+        {(value) => <QuotaForecastBlock forecast={value()} now={props.now} asOf={props.forecastAsOf} />}
+      </Show>
     </div>
   )
 }

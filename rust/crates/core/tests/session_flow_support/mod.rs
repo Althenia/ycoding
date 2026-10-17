@@ -278,6 +278,7 @@ pub fn record(id: &str) -> store_session::Session {
         time_active: None,
         time_pinned: None,
         time_suspended: None,
+        usage_pruned_through: None,
     }
 }
 
@@ -552,6 +553,33 @@ fn guardrails(client: &ycoding_store::Client) -> ycoding_core::process::guardrai
     policy(client).1
 }
 
+#[test]
+fn fixture_policy_allows_goal_completion_but_keeps_external_directory_approval() {
+    use ycoding_core::tools::policy::Effect;
+
+    let root = Root::new();
+    let store = file_store(&root);
+    let (permissions, _) = policy(&store.client());
+    let session = session::Id::new("ses_one").unwrap();
+    for (action, resource, expected) in [
+        ("goal", "complete", Effect::Allow),
+        ("external_directory", "/outside", Effect::Ask),
+    ] {
+        assert_eq!(
+            permissions
+                .evaluate_effective(
+                    &session,
+                    Some(&"build".into()),
+                    &action.into(),
+                    &resource.into(),
+                )
+                .unwrap(),
+            expected,
+            "{action} {resource}"
+        );
+    }
+}
+
 fn policy(
     client: &ycoding_store::Client,
 ) -> (
@@ -565,7 +593,8 @@ fn policy(
     let authority = Authority {
         store: client.clone(),
         agents: Arc::new(|agent| {
-            Some((agent.cloned().unwrap_or_else(|| "build".into()), Vec::new()))
+            let agent = agent::empty(agent.cloned().unwrap_or_else(|| "build".into()));
+            Some((agent.id, agent.permissions))
         }),
     };
     let publisher: Publisher = Arc::new(|_| Ok(()));
@@ -589,6 +618,8 @@ fn policy(
             custom: Arc::new(Vec::new),
             enabled: true,
             limits: Limits::default(),
+            decide_reviews: false,
+            decide_hard_reviews: true,
         },
         publisher,
     );
@@ -609,6 +640,7 @@ pub fn session_tools_registry(client: &ycoding_store::Client) -> Arc<Registry> {
             "goal".into(),
             Arc::new(Goal {
                 autonomy: ycoding_core::session::autonomy::Service::new(client.clone()),
+                sessions: ycoding_core::session::store::Service::new(client.clone()),
                 policy: Arc::new(LeafPolicy {
                     permissions,
                     guardrails,

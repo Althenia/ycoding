@@ -1,0 +1,564 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/session-usage-report.test.ts:
+(pass) decodes and validates usage report query bounds [1.53ms]
+49 |   const document = OpenApi.fromApi(HttpApi.make("usage-report-test").add(group))
+50 |   const operation = document.paths["/api/session/{sessionID}/usage/report"]?.get
+51 | 
+52 |   expect(endpoint.middlewares.has(SessionLocationMiddleware)).toBe(true)
+53 |   expect(operation?.operationId).toBe("session.usageReport")
+54 |   expect(operation?.parameters?.map((parameter) => "$ref" in parameter ? parameter.$ref : parameter.name)).toEqual([
+                                                                                                                ^
+error: expect(received).toEqual(expected)
+
+  [
+    "sessionID",
+    "group",
+-   "providerID",
+-   "profile",
+-   "modelID",
+-   "selectedEffort",
+    "timeZone",
+    "from",
+    "to",
+    "offset",
+    "limit",
+    "sort",
+    "order",
+  ]
+
+- Expected  - 4
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-usage-report.test.ts:54:108)
+(fail) publishes the additive location-owned usage report OpenAPI operation [13.61ms]
+
+test/canonical-remote.test.ts:
+27 |     const operation = operations.find((item) => item.diagnosticName === name)!
+28 |     expect(operation.operationId, name).toBe(id)
+29 |     expect(operation.roles, name).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
+30 |   }
+31 |   const canonical = new Set<string>(Object.values(connectorOperations).map(([, name]) => name))
+32 |   expect(canonical.size).toBe(70)
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: 70
+Received: 66
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/canonical-remote.test.ts:32:26)
+(fail) REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors [2.58ms]
+(pass) REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds [0.15ms]
+(pass) REQ-WIRE-012 attachments are raw bytes and full messages use the canonical typed bulk result [0.07ms]
+
+test/session-coverage.test.ts:
+52 |     remaining
+53 |       .filter((member) => member.disposition === "STREAM")
+54 |       .map((member) => member.name)
+55 |       .sort(),
+56 |   ).toEqual(["event.subscribe", "session.attachment.read", "session.log", "session.message", "session.messages"])
+57 |   expect(remaining.filter((member) => member.disposition === "RPC")).toHaveLength(80)
+                                                                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 80
+Received length: 78
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/session-coverage.test.ts:57:70)
+(fail) session slice completes the 198 endpoints without overlap and adds only inventory unsubscribe [7.96ms]
+(pass) all session fields, tags, presence, enums and obligations match live source projection [29.55ms]
+(pass) session descriptors preserve IDs, typed associations, middleware errors and delivery policies [6.85ms]
+(pass) typed subscriptions preserve log items and finite StreamEnd without SSE or synchronous prompt execution [7.03ms]
+(pass) source reordering preserves canonical bytes and frozen materialization rejects overwrite [199.06ms]
+(pass) every session domain obligation names a live source owner [11.97ms]
+(pass) session result wrapper overrides cannot grow or become stale without a real collision [141.03ms]
+
+test/local-family.test.ts:
+(pass) M7 session.capturedChanges.list admits the canonical local read through the connection [3.26ms]
+(pass) M7 session.team.economics admits the canonical local read through the connection [0.68ms]
+(pass) M7 session.family.activity admits the canonical local read through the connection [0.40ms]
+(pass) M7 session.capturedChanges.list rejects an unrelated scope and server/agent request authority [0.26ms]
+(pass) M7 session.team.economics rejects an unrelated scope and server/agent request authority [0.22ms]
+(pass) M7 session.family.activity rejects an unrelated scope and server/agent request authority [0.20ms]
+87 |   expect(
+88 |     operations
+89 |       .filter((item) => item.operationId >= 5000 && item.roles.includes(PeerRole.LOCAL_CLIENT))
+90 |       .map((item) => item.operationId),
+91 |   ).toEqual([5008, 5013, 5018])
+92 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(74)
+                                                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 74
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/local-family.test.ts:92:54)
+(fail) M7 widens exactly three connector reads without adding remote operations [0.14ms]
+
+test/usage-accounting.test.ts:
+ 8 | 
+ 9 | test("prompt and recursive task costs are bounded Session-owned GET reads", () => {
+10 |   const group = makeSessionGroup(LocationMiddleware)
+11 |   const document = OpenApi.fromApi(HttpApi.make("accounting").add(group))
+12 |   for (const [name, path] of [["session.promptCosts", "prompts"], ["session.taskCosts", "tasks"]] as const) {
+13 |     expect(group.endpoints[name].method).toBe("GET")
+                                ^
+TypeError: undefined is not an object (evaluating 'group.endpoints[name].method')
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-accounting.test.ts:13:28)
+(fail) prompt and recursive task costs are bounded Session-owned GET reads [6.32ms]
+19 | })
+20 | 
+21 | test("forecast is a read-only provider-usage endpoint with explicit local token scope", () => {
+22 |   const document = OpenApi.fromApi(HttpApi.make("forecast").add(ProviderUsageGroup))
+23 |   const operation = document.paths["/api/provider/usage/forecast"]?.get
+24 |   expect(operation?.operationId).toBe("providerUsage.forecast")
+                                      ^
+error: expect(received).toBe(expected)
+
+Expected: "providerUsage.forecast"
+Received: undefined
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-accounting.test.ts:24:34)
+(fail) forecast is a read-only provider-usage endpoint with explicit local token scope [0.54ms]
+688 | function runSchemaErrorSync(self) {
+689 |   const exit = Effect.runSyncExit(self);
+690 |   if (Exit_.isSuccess(exit)) {
+691 |     return exit.value;
+692 |   }
+693 |   throw getSchemaErrorOrThrow(exit.cause, "Sync adapter can only throw schema errors");
+                                                                                           ^
+error: Expected "model" | "hour" | "day" | "month" | "session" | "project" | "agent", got "profile"
+  at ["group"]
+      at runSchemaErrorSync (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/node_modules/.bun/effect@4.0.0-beta.98/node_modules/effect/dist/Schema.js:693:86)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-accounting.test.ts:31:67)
+(fail) report query preserves selected effort and provider-qualified profile filters [0.47ms]
+
+test/usage-wire-contract.test.ts:
+33 |     for (const [name, id] of [
+34 |       ["session.promptCosts", 4084],
+35 |       ["session.taskCosts", 4085],
+36 |     ] as const) {
+37 |       const descriptor = operation(name)
+38 |       expect(descriptor.operationId).toBe(id)
+                  ^
+TypeError: undefined is not an object (evaluating 'descriptor.operationId')
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:38:14)
+(fail) operations > prompt and task costs are Session-scoped reads for local, remote and relay peers [0.08ms]
+63 |     }
+64 |   })
+65 | 
+66 |   test("the usage forecast is a Location read that remote and relay peers address at machine or Session scope", () => {
+67 |     const descriptor = operation("providerUsage.forecast")
+68 |     expect(descriptor.operationId).toBe(2063)
+                ^
+TypeError: undefined is not an object (evaluating 'descriptor.operationId')
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:68:12)
+(fail) operations > the usage forecast is a Location read that remote and relay peers address at machine or Session scope [0.05ms]
+84 |     )
+85 |   })
+86 | 
+87 |   test("the Session usage report becomes remote and relay readable", () => {
+88 |     expect(operation("session.usageReport").operationId).toBe(4078)
+89 |     expect(operation("session.usageReport").roles).toEqual([
+                                                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    1,
+-   2,
+-   3,
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:89:52)
+(fail) operations > the Session usage report becomes remote and relay readable [0.04ms]
+100 |     ] as const) {
+101 |       const ids = operations
+102 |         .map((descriptor) => descriptor.operationId)
+103 |         .filter((id) => id >= first && id <= last)
+104 |         .sort((a, b) => a - b)
+105 |       expect(ids).toEqual(Array.from({ length: last - first + 1 }, (_, index) => first + index))
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    4000,
+    4001,
+    4002,
+    4003,
+    4004,
+    4005,
+    4006,
+    4007,
+    4008,
+    4009,
+    4010,
+    4011,
+    4012,
+    4013,
+    4014,
+    4015,
+    4016,
+    4017,
+    4018,
+    4019,
+    4020,
+    4021,
+    4022,
+    4023,
+    4024,
+    4025,
+    4026,
+    4027,
+    4028,
+    4029,
+    4030,
+    4031,
+    4032,
+    4033,
+    4034,
+    4035,
+    4036,
+    4037,
+    4038,
+    4039,
+    4040,
+    4041,
+    4042,
+    4043,
+    4044,
+    4045,
+    4046,
+    4047,
+    4048,
+    4049,
+    4050,
+    4051,
+    4052,
+    4053,
+    4054,
+    4055,
+    4056,
+    4057,
+    4058,
+    4059,
+    4060,
+    4061,
+    4062,
+    4063,
+    4064,
+    4065,
+    4066,
+    4067,
+    4068,
+    4069,
+    4070,
+    4071,
+    4072,
+    4073,
+    4074,
+    4075,
+    4076,
+    4077,
+    4078,
+    4079,
+    4080,
+    4081,
+    4082,
+    4083,
+-   4084,
+-   4085,
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:105:19)
+(fail) operations > operation IDs stay contiguous in the Session and resource ranges [0.09ms]
+107 |   })
+108 | 
+109 |   test("remote and relay allowlists grow by the four usage reads", () => {
+110 |     const remote = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.REMOTE_CLIENT)).length
+111 |     const relay = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.RELAY)).length
+112 |     expect([remote, relay]).toEqual([74, 70])
+                                  ^
+error: expect(received).toEqual(expected)
+
+  [
+-   74,
+    70,
++   66,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:112:29)
+(fail) operations > remote and relay allowlists grow by the four usage reads [0.07ms]
+17 | const read = (file: string) => Bun.file(path.join(descriptors, file)).text()
+18 | 
+19 | const tags = (message: string) =>
+20 |   Object.fromEntries(
+21 |     (messages as Record<string, { fields: readonly { tag: number; name: string }[] }>)[
+22 |       `ycoding.v5.${message}`
+                         ^
+TypeError: undefined is not an object (evaluating 'messages[`ycoding.v5.${message}`].fields')
+      at tags (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:22:21)
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:116:12)
+(fail) operations > each new request type wraps its declared parameters [0.03ms]
+121 | })
+122 | 
+123 | describe("allocated tags and values", () => {
+124 |   test("report queries keep their tags and append the four filters", () => {
+125 |     for (const message of ["usage_report_Request_query", "session_usageReport_Request_query"])
+126 |       expect(tags(message)).toEqual({
+                                  ^
+error: expect(received).toEqual(expected)
+
+  {
+    "from": 3,
+    "group": 1,
+    "limit": 6,
+-   "modelID": 11,
+    "offset": 5,
+    "order": 8,
+-   "profile": 10,
+-   "providerID": 9,
+-   "selectedEffort": 12,
+    "sort": 7,
+    "timeZone": 2,
+    "to": 4,
+  }
+
+- Expected  - 4
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:126:29)
+(fail) allocated tags and values > report queries keep their tags and append the four filters [0.06ms]
+139 |       })
+140 |   })
+141 | 
+142 |   test("report groups append seven values", async () => {
+143 |     const values = enumValues(await read("resources.proto"), "usage_report_Request_query_group")
+144 |     expect(Object.values(values)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+                                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+-   8,
+-   9,
+-   10,
+-   11,
+-   12,
+-   13,
+-   14,
+  ]
+
+- Expected  - 7
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:144:35)
+(fail) allocated tags and values > report groups append seven values [0.42ms]
+150 |     const session = enumValues(await read("session.proto"), "session_usageReport_Request_query_group")
+151 |     expect(Object.values(session)).toEqual(Object.values(values))
+152 |   })
+153 | 
+154 |   test("timing, speed, report and diagnostics fields append after their existing tags", () => {
+155 |     expect(tags("ProviderRequest_Timing")).toMatchObject({
+                                                 ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "estimatedGenerationDurationNs": 10,
+-   "estimatedTokens": 9,
+    "firstOutputMs": 1,
+    "generatedTokens": 7,
++   "generationDurationNs": 5,
+    "loadDurationNs": 8,
++   "observedGenerationDurationNs": 6,
++   "promptEvalDurationNs": 4,
++   "retryWaitMs": 3,
++   "totalMs": 2,
+  }
+
+- Expected  - 2
++ Received  + 5
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:155:44)
+(fail) allocated tags and values > timing, speed, report and diagnostics fields append after their existing tags [0.05ms]
+186 |     expect(tags("ProviderRequest_CostCoverage")).toEqual({ pricedRequests: 1, unpricedRequests: 2 })
+187 |     expect(tags("UsageAnchor_Ref")).toEqual({ sessionID: 1, inputID: 2 })
+188 |   })
+189 | 
+190 |   test("attribution fields are optional appended event fields", () => {
+191 |     expect(tags("SessionLogItemValue15_data")).toMatchObject({ input: 3, causedBy: 4 })
+                                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "causedBy": 4,
+    "input": 3,
++   "inputID": 2,
++   "sessionID": 1,
+  }
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:191:48)
+(fail) allocated tags and values > attribution fields are optional appended event fields [0.03ms]
+200 |     expect(values[`${prefix}MACHINE_KEEPAWAKE_SET`]).toBe(66)
+201 |     expect(
+202 |       ["SESSION_USAGEREPORT", "SESSION_PROMPTCOSTS", "SESSION_TASKCOSTS", "USAGE_FORECAST"].map(
+203 |         (name) => values[`${prefix}${name}`],
+204 |       ),
+205 |     ).toEqual([67, 68, 69, 70])
+            ^
+error: expect(received).toEqual(expected)
+
+  [
+-   67,
+-   68,
+-   69,
+-   70,
++   undefined,
++   undefined,
++   undefined,
++   undefined,
+  ]
+
+- Expected  - 4
++ Received  + 4
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:205:7)
+(fail) allocated tags and values > web latency operations append four values after the keep-awake values [0.29ms]
+206 |   })
+207 | })
+208 | 
+209 | describe("tool progress", () => {
+210 |   test("is a live-only public event in its original slot", () => {
+211 |     expect(publicEvents.find((event) => event.name === "session.tool.progress")).toEqual({
+                                                                                       ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "durable": false,
++   "durable": true,
+    "name": "session.tool.progress",
+    "tag": 51,
+-   "type": "ycoding.v5.PublicEvent_session_tool_progress",
++   "type": "ycoding.v5.SessionLogItemValue40",
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:211:82)
+(fail) tool progress > is a live-only public event in its original slot [0.04ms]
+216 |     })
+217 |   })
+218 | 
+219 |   test("leaves its durable slot reserved without renumbering later events", async () => {
+220 |     const log = Object.values(tags("SessionLogItem"))
+221 |     expect(log).toHaveLength(51)
+                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 51
+Received length: 52
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage-wire-contract.test.ts:221:17)
+(fail) tool progress > leaves its durable slot reserved without renumbering later events [0.06ms]
+
+test/usage.test.ts:
+17 |   expect(document.paths["/api/usage/report"]?.get?.operationId).toBe("usage.report")
+18 |   expect(
+19 |     document.paths["/api/usage/report"]?.get?.parameters?.map((parameter) =>
+20 |       "$ref" in parameter ? parameter.$ref : parameter.name,
+21 |     ),
+22 |   ).toEqual(["group", "providerID", "profile", "modelID", "selectedEffort", "timeZone", "from", "to", "offset", "limit", "sort", "order"])
+         ^
+error: expect(received).toEqual(expected)
+
+  [
+    "group",
+-   "providerID",
+-   "profile",
+-   "modelID",
+-   "selectedEffort",
+    "timeZone",
+    "from",
+    "to",
+    "offset",
+    "limit",
+    "sort",
+    "order",
+  ]
+
+- Expected  - 4
++ Received  + 0
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/usage.test.ts:22:5)
+(fail) declares local-runtime global usage summary and report operations [0.32ms]
+
+test/connector-coverage.test.ts:
+10 |   const expected = [
+11 |     ...new Map(
+12 |       [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
+13 |     ).values(),
+14 |   ]
+15 |   expect(expected).toHaveLength(74)
+                        ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 74
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:15:20)
+(fail) 74 live source names resolve to 70 canonical connector and four relay notice operations [0.09ms]
+26 | test("generated per-role allowlists equal descriptor roles including empty agent and server sets", () => {
+27 |   for (const role of [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY, PeerRole.AGENT, PeerRole.SERVER])
+28 |     expect(operationIDsByRole[role]).toEqual(
+29 |       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
+30 |     )
+31 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(74)
+                                                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 74
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:31:54)
+(fail) generated per-role allowlists equal descriptor roles including empty agent and server sets [0.10ms]
+(pass) descriptor role-scope and event payload metadata append fresh fields
+(pass) all connector fields, presence, associations and constraints match the bounded remote source projection [8.83ms]
+(pass) spec admission table matches the connector inventory, descriptor roles and mutation classes [0.89ms]
+160 |   }
+161 | })
+162 | 
+163 | test("relay forwards exactly the connector set; agents and servers send no operation requests", () => {
+164 |   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
+165 |   expect(actual).toHaveLength(70)
+                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 70
+Received length: 66
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/protocol/test/connector-coverage.test.ts:165:18)
+(fail) relay forwards exactly the connector set; agents and servers send no operation requests [0.12ms]
+(pass) no local-only operation gains remote authority and all shared IDs retain local authority [0.09ms]
+
+ 19 pass
+ 24 fail
+ 11862 expect() calls
+Ran 43 tests across 8 files. [588.00ms]

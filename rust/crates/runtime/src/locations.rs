@@ -68,6 +68,7 @@ struct Inner {
     factory: Option<Arc<crate::production::Factory>>,
     feed: Feed,
     autonomy: autonomy::Service,
+    review: ycoding_core::session::review::Service,
     services: Mutex<BTreeMap<Key, Cached>>,
     pricing: Mutex<crate::usage::PricingCache>,
     retired: Mutex<Vec<Arc<ServiceSet>>>,
@@ -155,14 +156,8 @@ impl Pending {
         for request in self.permissions.for_session(session) {
             self.permissions.cancel(&request.id);
         }
-        for request in self
-            .questions
-            .list()
-            .iter()
-            .filter(|request| &request.session_id == session)
-        {
-            self.questions.cancel(&request.id);
-        }
+        self.questions.cancel_session(session);
+        self.guardrails.cancel_session(session);
         for form in self.forms.list(Some(session.as_lossless())) {
             if self.forms.cancel(&form.id).is_err() {
                 tracing::error!("pending Form cancellation failed");
@@ -231,6 +226,7 @@ impl Locations {
         configuration: Configuration,
         feed: Feed,
         autonomy: autonomy::Service,
+        review: ycoding_core::session::review::Service,
     ) -> Self {
         Self(Arc::new(Inner {
             client,
@@ -239,6 +235,7 @@ impl Locations {
             factory: None,
             feed,
             autonomy,
+            review,
             services: Mutex::new(BTreeMap::new()),
             pricing: Mutex::new(crate::usage::PricingCache::default()),
             retired: Mutex::new(Vec::new()),
@@ -683,8 +680,13 @@ impl Locations {
             feed.publish(publication);
             Ok(())
         });
+        let review = ycoding_core::tools::policy::Reviews {
+            service: self.0.review.clone(),
+            limit: configuration.guardrails.limits.reviews as usize,
+        };
         let permissions =
-            Permissions::new(authority.clone(), project.id.clone(), publisher.clone());
+            Permissions::new(authority.clone(), project.id.clone(), publisher.clone())
+                .with_reviews(review.clone(), directory.clone());
         let guardrails = Guardrails::new(
             authority.clone(),
             permissions.clone(),
@@ -707,7 +709,8 @@ impl Locations {
                 ..configuration.guardrails.clone()
             },
             publisher.clone(),
-        );
+        )
+        .with_reviews(review.clone());
         let info = location::Info {
             directory: AbsolutePath::new(directory.clone()).map_err(|_| unrepresentable())?,
             workspace_id: workspace
@@ -727,8 +730,9 @@ impl Locations {
                 store: self.0.client.clone(),
             },
             permissions,
-            questions: Questions::new(authority.clone(), publisher.clone()),
-            forms: Forms::new(authority, publisher),
+            questions: Questions::new(authority.clone(), publisher.clone())
+                .with_reviews(review.clone()),
+            forms: Forms::new(authority, publisher).with_reviews(review),
             guardrails,
             agents: configuration.agents.clone(),
             production: None,
@@ -854,6 +858,15 @@ impl Locations {
         sets
     }
 
+    pub(crate) async fn cancel_queued_shells(&self, session: &session::Id) -> Result<(), Failure> {
+        for services in self.sets() {
+            if let Some(composed) = &services.production {
+                composed.cancel_queued_shells(session).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn cancel_session(&self, session: &session::Id) -> Result<(), Failure> {
         match &self.0.factory {
             Some(factory) => factory.cancel_session(session).await,
@@ -862,6 +875,7 @@ impl Locations {
     }
 
     pub(crate) async fn release_controls(&self, session: &session::Id) -> Result<(), Failure> {
+        self.cancel_queued_shells(session).await?;
         let locations = self.clone();
         let cancelling = session.clone();
         let isolated = tokio::task::spawn_blocking(move || {
@@ -1114,6 +1128,32 @@ fn unrepresentable() -> Failure {
 
 #[cfg(test)]
 mod tests {
+    struct Refused;
+
+    impl ycoding_core::session::review::Delivery for Refused {
+        fn wake(&self, _: &session::Id) {}
+        fn answer_child<'a>(
+            &'a self,
+            _: ycoding_core::session::review::ChildAnswer,
+        ) -> ycoding_core::session::review::DeliveryFuture<'a> {
+            Box::pin(async {
+                Err(ycoding_core::session::review::DeliveryError::Conflict(
+                    "no delivery in this fixture".into(),
+                ))
+            })
+        }
+        fn resolve_recovery<'a>(
+            &'a self,
+            _: ycoding_core::session::review::RecoveryResolution,
+        ) -> ycoding_core::session::review::DeliveryFuture<'a> {
+            Box::pin(async {
+                Err(ycoding_core::session::review::DeliveryError::Conflict(
+                    "no delivery in this fixture".into(),
+                ))
+            })
+        }
+    }
+
     use super::*;
     use ycoding_core::process::guardrails::Limits;
     use ycoding_core::ycoding_store::{Catalog, Metadata, Options, Store, TableDeclaration};
@@ -1188,6 +1228,8 @@ mod tests {
                 custom: Arc::new(Vec::new),
                 enabled: true,
                 limits: Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             snapshots: SnapshotSettings {
                 git: Arc::new(git::Service::new(1024)),
@@ -1200,7 +1242,11 @@ mod tests {
             SessionStore::new(client.clone()),
             configuration,
             Feed::attach(&client),
-            autonomy::Service::new(client),
+            autonomy::Service::new(client.clone()),
+            ycoding_core::session::review::Service::new(
+                SessionStore::new(client),
+                Arc::new(Refused),
+            ),
         );
         let lease = locations.location(&path, None).unwrap();
         assert_eq!(

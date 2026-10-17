@@ -6,6 +6,7 @@ import { createSignal } from "solid-js"
 import { InstallationVersion } from "../src/build-version"
 import { Keymap } from "../src/context/keymap"
 import { modeChips } from "../src/component/prompt/mode-chips"
+import { localAutonomyView } from "../src/util/session-autonomy"
 import {
   Header,
   headerModelLabel,
@@ -62,6 +63,21 @@ describe("header truncation ladder", () => {
 
   test("omits segments the session has not resolved yet", () => {
     expect(headerSegments({ width: 160, agent: "Build" }).map((segment) => segment.key)).toEqual(["agent"])
+  })
+
+  test("drops location metadata before clipping an inactive model program", () => {
+    const segments = headerSegments({
+      width: 120, availableWidth: 76, path: "/repo/daybreak-command", branch: "main", agent: "Build",
+      profile: "Personal", model: "openai/GPT 5.6 Terra", daybreak: { program: "daybreak_blue", active: false }, variant: "high",
+    })
+    expect(segments.map((segment) => segment.key)).toEqual(["agent", "profile", "model", "daybreak", "variant"])
+    expect(segments.map((segment) => segment.label).join(" · ")).toContain("Daybreak Blue (inactive)")
+    expect(segments.map((segment) => segment.label).join(" · ").length).toBeLessThanOrEqual(76)
+  })
+
+  test("keeps the model readable when narrow status chrome consumes the identity budget", () => {
+    const segments = headerSegments({ width: 80, availableWidth: 26, agent: "General", model: "anthropic/Claude Sonnet 5", variant: "high" })
+    expect(segments).toEqual([{ key: "model", label: "anthropic/Claude Sonnet 5" }])
   })
 
   test("places the active profile immediately after the agent", () => {
@@ -131,11 +147,11 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO 2 · auto-approve · ready"],
+    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "Tools + reviews · ready"],
     [
       { type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } },
       120,
-      "Goal · autonomous · cooking 4.1s",
+      "Ask first · goal · cooking 4.1s",
     ],
   ]
 
@@ -171,7 +187,7 @@ describe("header status", () => {
         undefined,
         10_000,
       ),
-    ).toBe("Goal · autonomous · 1 failed · retry 2 · in 5s")
+    ).toBe("Ask first · goal · 1 failed · retry 2 · in 5s")
   })
 
   test("keeps active autonomy and retrying visible together", () => {
@@ -182,7 +198,15 @@ describe("header status", () => {
         undefined,
         10_000,
       ),
-    ).toBe("Goal · autonomous · retrying · attempt 2")
+    ).toBe("Ask first · goal · retrying · attempt 2")
+  })
+
+  test("shows actual auto-answer and an unloaded level without inventing either", () => {
+    expect(
+      headerStatusLabel({ type: "autonomy", yolo: 1, goalActive: true, answersAuto: true, state: { type: "ready" } }, 120),
+    ).toBe("Allow tools · goal · answers auto · ready")
+    expect(headerStatusLabel({ type: "autonomy", yolo: 1, goalActive: false, state: { type: "ready" } }, 120)).toBe("Allow tools · ready")
+    expect(headerStatusLabel({ type: "autonomy", yolo: undefined, goalActive: false, state: { type: "ready" } }, 120)).toBe("unknown · ready")
   })
 })
 
@@ -420,16 +444,16 @@ async function renderHeader(
 
 describe("autonomy mode chips", () => {
   test("shows both modes off for a normal session", () => {
-    expect(modeChips({ autonomy: { mode: "normal", yolo: 0 } })).toEqual([
+    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 0 }) })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
-      { key: "yolo", label: "YOLO off", tone: "off" },
+      { key: "yolo", label: "Ask first", tone: "off" },
     ])
   })
 
-  test("inverts YOLO because it auto-approves", () => {
-    expect(modeChips({ autonomy: { mode: "normal", yolo: 2 } })[1]).toEqual({
+  test("inverts the level chip because it auto-approves", () => {
+    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 2 }) })[1]).toEqual({
       key: "yolo",
-      label: "YOLO 2",
+      label: "Tools + reviews",
       tone: "danger",
     })
   })
@@ -440,7 +464,7 @@ describe("autonomy mode chips", () => {
       yolo: 0,
       goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
-    const chip = modeChips({ autonomy })[0]
+    const chip = modeChips({ autonomy: localAutonomyView(autonomy) })[0]
     expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
     expect(chip?.label).not.toContain("/")
   })
@@ -451,7 +475,7 @@ describe("autonomy mode chips", () => {
       yolo: 0,
       goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
-    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
+    expect(modeChips({ autonomy: localAutonomyView(autonomy) })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
   })
 
   test("renders the chips on the composer status row", async () => {
@@ -467,7 +491,7 @@ describe("autonomy mode chips", () => {
           <ConfigProvider config={config}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={{ mode: "normal", yolo: 2 }} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: 2 })} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -476,11 +500,11 @@ describe("autonomy mode chips", () => {
       { width: 60, height: 4 },
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("YOLO"))
+    await app.waitForFrame((frame) => frame.includes("Tools + reviews"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("YOLO")
-    expect(frame).not.toContain("YOLO off")
+    expect(frame).toContain("Tools + reviews")
+    expect(frame).not.toContain("Ask first")
     app.renderer.destroy()
   })
 })
@@ -544,12 +568,12 @@ describe("header rendering", () => {
       ],
       [
         { type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } },
-        "YOLO 2 · auto-approve · ready",
+        "Tools + reviews · ready",
         theme.text.feedback.error.default,
       ],
       [
         { type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } },
-        "Goal · autonomous · ready",
+        "Ask first · goal · ready",
         theme.text.feedback.success.default,
       ],
       [
@@ -611,13 +635,29 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
+  test("renders active sleep beside YOLO at narrow and wide header widths", async () => {
+    for (const width of [80, 200]) {
+      for (const asleep of [false, true]) {
+        const app = await renderHeader(width, {
+          type: "autonomy", yolo: 1, goalActive: false, asleep, state: { type: "ready" },
+        })
+        try {
+          expect(app.captureCharFrame()).toContain(`Allow tools${asleep ? " · asleep" : ""} · ready`)
+          expect(app.captureCharFrame()).not.toContain("machine may sleep")
+        } finally {
+          app.renderer.destroy()
+        }
+      }
+    }
+  })
+
+  test("renders the danger rule as a full-width filled band under the header at level 2", async () => {
     const app = await renderHeader(100, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
     // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("YOLO 2 \u00b7 auto-approve")
+    expect(frame).toContain("Tools + reviews · ready")
     expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
       (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
@@ -815,7 +855,7 @@ describe("header rendering", () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("YOLO 2 · auto-approve · cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("Tools + reviews · cooking 4.1s"))
 
     expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
@@ -940,7 +980,7 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("updates the waiting-question timer with the blocked surface and stops after settlement", async () => {
+  test("updates the waiting-question timer and removes it after the question settles", async () => {
     const config = createTuiResolvedConfig()
     const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
       import("../src/config"),
@@ -948,23 +988,9 @@ describe("header rendering", () => {
     ])
     let setState!: (state: SessionHeaderState) => void
     function LiveHeader() {
-      const questionTime = Date.now() - 242_000
-      const [state, set] = createSignal<SessionHeaderState>({
-        type: "awaiting-input",
-        count: 1,
-        startedAt: questionTime,
-      })
-      const [blockedAt, setBlockedAt] = createSignal<number | undefined>(questionTime)
-      setState = (next) => {
-        set(next)
-        if (next.type !== "awaiting-input") setBlockedAt(undefined)
-      }
-      return (
-        <>
-          <Header {...identity} state={state()} />
-          <SubagentBlockedSurface title="Build" blockedAt={blockedAt()} question="Waiting for a decision" />
-        </>
-      )
+      const [state, set] = createSignal<SessionHeaderState>({ type: "awaiting-input", count: 1, startedAt: Date.now() - 1_000 })
+      setState = set
+      return <Header {...identity} state={state()} />
     }
     const app = await testRender(
       () => (
@@ -978,29 +1004,23 @@ describe("header rendering", () => {
           </ConfigProvider>
         </TestTuiContexts>
       ),
-      { width: 160, height: 20, kittyKeyboard: true },
+      { width: 160, height: 6, kittyKeyboard: true },
     )
     app.renderer.start()
-    await app.waitForFrame(
-      (frame) => frame.match(/\? awaiting input · (4m\d{2}s)/)?.[1] === frame.match(/blocked (4m\d{2}s)/)?.[1],
-    )
+    await app.waitForFrame((frame) => frame.includes("? awaiting input · 1."))
     const initial = app.captureCharFrame()
-    const initialWait = initial.match(/\? awaiting input · (4m\d{2}s)/)?.[1]
-    const next = await app.waitForFrame((frame) => {
-      const headerWait = frame.match(/\? awaiting input · (4m\d{2}s)/)?.[1]
-      const blockedWait = frame.match(/blocked (4m\d{2}s)/)?.[1]
-      return headerWait !== initialWait && headerWait === blockedWait
-    })
-    expect(next).not.toBe(initial)
+    await Bun.sleep(1_100)
+    expect(app.captureCharFrame()).not.toBe(initial)
+    expect(app.captureCharFrame()).toMatch(/\? awaiting input · 2\./)
     setState({ type: "ready" })
     await app.waitForFrame((frame) => frame.includes("ready"))
     const settled = app.captureCharFrame()
     expect(settled).not.toContain("awaiting input")
-    expect(settled).not.toContain("blocked 4m")
-    await Bun.sleep(1_100)
+    await Bun.sleep(200)
     expect(app.captureCharFrame()).toBe(settled)
     app.renderer.destroy()
   })
+
 })
 
 describe("footer branch identity", () => {

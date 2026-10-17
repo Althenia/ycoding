@@ -48,6 +48,9 @@ test("rebound shell-output kill and back keys act on the real shell and Session 
           return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
         if (/^\/api\/session\/[^/]+\/(pending|permission|form|todo|skills|guardrail\/request)$/.test(url.pathname))
           return json({ data: [] })
+        if (url.pathname === `/api/session/${sessionID}/guardrail`)
+          return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+        if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: null })
         if (url.pathname === "/api/shell") return json({ location, data: [shell] })
         if (url.pathname === `/api/shell/${shellID}/output`)
           return json({ location, data: { output: "shell output", cursor: 12, size: 12, truncated: false } })
@@ -55,6 +58,7 @@ test("rebound shell-output kill and back keys act on the real shell and Session 
           kills.push(shellID)
           return new Response(null, { status: 204 })
         }
+        if (url.pathname === `/api/shell/${shellID}`) return json({ location, data: shell })
         return undefined
       },
     })

@@ -74,7 +74,7 @@ message Checked {
 service Fixture { rpc Read(Checked) returns (Empty) { ${annotation} } }`,
     )
     const result = Bun.spawnSync([
-      process.env.PROTOC ?? "/opt/homebrew/bin/protoc",
+      process.env.PROTOC ?? "protoc",
       `--proto_path=${root}/protocol`,
       `--proto_path=${dir}`,
       "--include_imports",

@@ -138,6 +138,7 @@ describe("Session.log", () => {
         helpers: 0,
         continued: 0,
         fallback: 0,
+        costCoverage: { pricedRequests: 0, unpricedRequests: 0 },
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       })
       expect(Schema.encodeSync(ProviderRequest.Report)(empty)).toBeDefined()
@@ -329,6 +330,7 @@ describe("Session.log", () => {
         { totalMs: 200, generatedTokens: 999 },
         undefined,
         { generatedTokens: 2_355, observedGenerationDurationNs: 71_223_792 },
+        { estimatedTokens: 500, estimatedGenerationDurationNs: 2_000_000_000 },
       ]
       for (const [index, timing] of timings.entries())
         yield* events.publish(SessionEvent.ProviderRequestRecorded, {
@@ -358,12 +360,25 @@ describe("Session.log", () => {
         totalP95Ms: 300,
         outputTokensPerSecond: 5,
         samples: 3,
+        generationSamples: 2,
+        providerTimedSamples: 2,
+        observedSamples: 0,
+        generationP50TokensPerSecond: 10 / 3,
+        generationP90TokensPerSecond: 20,
       })
       expect(global.rows).toEqual(local.rows)
+      expect(local.rows[0]?.model).toMatchObject({ providerID: "custom", id: "speed" })
       expect(SessionProviderRequest.reportSpeed([])).toBeUndefined()
       const ledger = yield* SessionProviderRequest.Service
       const absent = (yield* ledger.list(created.id)).slice(3)
-      expect(SessionProviderRequest.reportSpeed(absent)).toEqual({ totalP50Ms: 200, totalP95Ms: 200, samples: 0 })
+      expect(SessionProviderRequest.reportSpeed(absent)).toEqual({
+        totalP50Ms: 200,
+        totalP95Ms: 200,
+        samples: 0,
+        generationSamples: 0,
+        providerTimedSamples: 0,
+        observedSamples: 0,
+      })
       expect(SessionProviderRequest.reportSpeed(absent.slice(1))).toBeUndefined()
     }),
   )

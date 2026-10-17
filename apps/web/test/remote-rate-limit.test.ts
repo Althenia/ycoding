@@ -3,14 +3,16 @@ import { WebLimits, type RelayRequestView } from "../src/remote/wire-views"
 import { createAgentPeer, binaryData, binaryFrame, startAgent } from "./core-peer"
 import { fixtureSession, fixtureSnapshot } from "./wire-peer"
 import { createRelay } from "../../../infra/cloudflare/src/relay/core"
+import { PublicEventSchema } from "@ycoding-ai/remote"
 import { createRemoteHttp } from "../src/remote/http"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { loadWorkspaces } from "./remote-queries"
 import { fixtureResult, waitFor } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
+import { accountedTask } from "./usage-fixture"
 
-async function harness(count: number, statusGate?: Promise<void>) {
+async function harness(count: number, statusGate?: Promise<void>, residentMessages = 0) {
   const sockets = new Map<string, Bun.ServerWebSocket<{ id: string }>>()
   const closed: { code: number; reason: string }[] = []
   const requests: RelayRequestView[] = []
@@ -18,8 +20,11 @@ async function harness(count: number, statusGate?: Promise<void>) {
   let statusResponses = 0
   let clientPings = 0
   const gatedResponses: Promise<void>[] = []
+  const eventSequences = new Map<string, number>()
+  let clockSkew = 0
+  const promptHold: { promise?: Promise<void> } = {}
   const agent = createAgentPeer(
-    () => performance.now(),
+    () => performance.now() + clockSkew,
     (request, dispatch, peer) => {
       requests.push(request)
       if (request.operation === "session.interrupt") return
@@ -66,7 +71,45 @@ async function harness(count: number, statusGate?: Promise<void>) {
                   : {}),
               }
         if (request.operation === "session.snapshot") {
-          peer.result(dispatch, fixtureSnapshot(request.sessionID!))
+          peer.result(
+            dispatch,
+            fixtureResult("session.snapshot", {
+              ...fixtureSnapshot(request.sessionID!).data,
+              sourceEpoch: peer.backendEpoch,
+              watermark: {
+                type: "log.synced",
+                aggregateID: request.sessionID!,
+                seq: eventSequences.get(request.sessionID!) ?? 0,
+              },
+              messages: Array.from({ length: residentMessages }, (_, index) => ({
+                id: `msg_${index}`,
+                type: "user",
+                text: `Prompt ${index}`,
+                files: [],
+                agents: [],
+                time: { created: index + 1, consumed: index + 2 },
+              })),
+            }),
+          )
+          return
+        }
+        if (request.operation === "session.promptCosts") {
+          const ids = Array.isArray(request.input?.inputIDs) ? (request.input.inputIDs as string[]) : []
+          peer.result(dispatch, {
+            data: {
+              units: ids.map((inputID) => ({
+                anchor: { sessionID: request.sessionID!, inputID },
+                ...accountedTask(request.sessionID!, 0.01, 10),
+                helpers: [],
+              })),
+              unattributed: accountedTask().children,
+              history: "retained",
+            },
+          })
+          return
+        }
+        if (request.operation === "session.taskCosts") {
+          peer.result(dispatch, { data: { tasks: [], total: accountedTask().children, history: "retained" } })
           return
         }
         if (request.operation === "event.subscribe") {
@@ -79,6 +122,20 @@ async function harness(count: number, statusGate?: Promise<void>) {
         }
         if (request.operation === "session.get") {
           peer.result(dispatch, { data: fixtureSession(request.sessionID!) })
+          return
+        }
+        if (request.operation === "session.log") {
+          const subscription = `log-${dispatch.requestID}`
+          peer.result(dispatch, { subscription_id: subscription })
+          peer.log(
+            request.sessionID!,
+            subscription,
+            [],
+            Math.max(
+              typeof request.input?.after === "number" ? request.input.after : 0,
+              eventSequences.get(request.sessionID!) ?? 0,
+            ),
+          )
           return
         }
         if (request.operation === "session.autonomy.get") {
@@ -125,6 +182,8 @@ async function harness(count: number, statusGate?: Promise<void>) {
       }
       if (request.operation === "session.status" && statusGate && ++statusReads === 1)
         gatedResponses.push(statusGate.then(respond))
+      else if (request.operation === "session.promptCosts" && promptHold.promise)
+        gatedResponses.push(promptHold.promise.then(respond))
       else void respond()
     },
   )
@@ -233,7 +292,62 @@ async function harness(count: number, statusGate?: Promise<void>) {
       agent.control({ case: "inventoryInvalidated", value: {} })
       while (deliveries.length) await Promise.all(deliveries.splice(0))
     },
+    flushEvents: async () => {
+      clockSkew += 40
+      agent.flush()
+      while (deliveries.length) await Promise.all(deliveries.splice(0))
+    },
+    lastSequence: (sessionID: string) => eventSequences.get(sessionID) ?? 0,
+    holdPromptCosts: () => {
+      const gate = Promise.withResolvers<void>()
+      promptHold.promise = gate.promise
+      return () => {
+        promptHold.promise = undefined
+        gate.resolve()
+      }
+    },
+    event: async (sessionID: string, event: Record<string, unknown>) => {
+      const branch = PublicEventSchema.fields.find((field) => field.name === String(event.type).replaceAll(".", "_"))
+      const durable = branch?.message?.fields.some((field) => field.name === "durable") === true
+      const seq = (eventSequences.get(sessionID) ?? 0) + 1
+      if (durable) eventSequences.set(sessionID, seq)
+      agent.events(sessionID, [
+        {
+          id: crypto.randomUUID(),
+          created: Date.now(),
+          sourceEpoch: agent.backendEpoch,
+          ...(durable ? { durable: { aggregateID: sessionID, seq, version: 1 } } : {}),
+          ...event,
+          data: { sessionID, ...(event.data as object) },
+        },
+      ])
+      while (deliveries.length) await Promise.all(deliveries.splice(0))
+    },
   }
+}
+
+function observedStore(fixture: Awaited<ReturnType<typeof harness>>) {
+  const statuses: string[] = []
+  const resyncs: string[] = []
+  const store = createRemoteStore({
+    http: createRemoteHttp({ baseURL: `http://127.0.0.1:${fixture.server.port}` }),
+    createTransport: (_deviceID, handlers) =>
+      createRemoteTransport({
+        url: `ws://127.0.0.1:${fixture.server.port}`,
+        handlers: {
+          ...handlers,
+          onStatus: (status) => {
+            statuses.push(status.kind)
+            handlers.onStatus?.(status)
+          },
+          onResync: (sessionID) => {
+            resyncs.push(sessionID)
+            handlers.onResync?.(sessionID)
+          },
+        },
+      }),
+  })
+  return { store, statuses, resyncs }
 }
 
 describe("remote request budget integration", () => {
@@ -434,6 +548,119 @@ describe("remote request budget integration", () => {
       await fixture.server.stop(true)
     }
   }, 60_000)
+  test("a Session log through the real relay settles on the snapshot's backend epoch without a client close or reconnect", async () => {
+    const fixture = await harness(10, undefined, 1)
+    const { store, statuses, resyncs } = observedStore(fixture)
+    const operations = (name: string) =>
+      fixture.requests.filter((request) => request.operation === name && request.sessionID === "ses_0")
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length > 0, 25_000)
+      await store.selectSession("ses_0")
+      await waitFor(() => operations("session.log").length === 1, 25_000)
+      await fixture.event("ses_0", { type: "session.execution.succeeded", data: {} })
+      await fixture.flushEvents()
+      await waitFor(() => {
+        fixture.ping()
+        return store.state().view?.watermark === 1
+      }, 25_000)
+      expect(resyncs).toEqual([])
+      expect(statuses.filter((kind) => kind === "closed" || kind === "reconnecting")).toEqual([])
+      expect(statuses.filter((kind) => kind === "connecting")).toHaveLength(1)
+      expect(operations("event.subscribe")).toHaveLength(1)
+      expect(operations("session.snapshot")).toHaveLength(1)
+      expect(operations("session.log")).toHaveLength(1)
+      expect(fixture.closed).toEqual([])
+    } finally {
+      store.dispose()
+      await fixture.server.stop(true)
+    }
+  }, 60_000)
+
+  test("continuous accounting events over a full resident page keep prompt-cost reads coalesced inside the relay window", async () => {
+    const fixture = await harness(10, undefined, 100)
+    const observed = observedStore(fixture)
+    const store = observed.store
+    const promptReads = () => fixture.requests.filter((request) => request.operation === "session.promptCosts")
+    const accountingEvent = (index: number) => ({
+      type: index % 20 === 19 ? "session.execution.succeeded" : "session.usage.updated",
+      data:
+        index % 20 === 19
+          ? {}
+          : { cost: 0.01, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } },
+    })
+    const deliver = async (batch: number) => {
+      for (let index = batch * 20; index < batch * 20 + 20; index += 1) await fixture.event("ses_0", accountingEvent(index))
+      await fixture.flushEvents()
+      await waitFor(() => {
+        fixture.ping()
+        return store.state().view?.watermark === fixture.lastSequence("ses_0")
+      }, 25_000).catch(
+        (cause: unknown) => {
+          throw new Error(
+            JSON.stringify({
+              batch,
+              watermark: store.state().view?.watermark,
+              pushed: fixture.lastSequence("ses_0"),
+              promptCostState: store.state().view?.promptCostState,
+              ...fixture.diagnostics(),
+            }),
+            { cause },
+          )
+        },
+      )
+    }
+    const settled = () => {
+      fixture.ping()
+      return (
+        store.state().view?.watermark === fixture.lastSequence("ses_0") && store.state().view?.promptCostState === "ready"
+      )
+    }
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length > 0, 25_000)
+      await store.selectSession("ses_0")
+      await waitFor(() => store.state().view?.promptCostState === "ready", 25_000)
+      expect(promptReads()).toHaveLength(1)
+      expect((promptReads()[0]?.input?.inputIDs as string[]).length).toBe(100)
+
+      const release = fixture.holdPromptCosts()
+      await fixture.event("ses_0", accountingEvent(19))
+      await fixture.flushEvents()
+      await waitFor(() => {
+        fixture.ping()
+        return promptReads().length === 2
+      }, 25_000)
+      for (let batch = 0; batch < 20; batch += 1) await deliver(batch)
+      expect(promptReads()).toHaveLength(2)
+      release()
+      await waitFor(settled, 25_000)
+      expect(promptReads()).toHaveLength(3)
+
+      const admitted = fixture.requests.length
+      const started = performance.now()
+      let probe: ReturnType<typeof store.findFiles> | undefined
+      for (let batch = 0; batch < 20; batch += 1) {
+        await deliver(batch)
+        if (batch === 10) probe = store.findFiles({ sessionID: "ses_0" }, "during-events")
+      }
+      expect((await probe!).status).toBe("ok")
+      await waitFor(settled, 25_000)
+      const windows = Math.ceil((performance.now() - started) / WebLimits.clientRateWindowMs)
+      expect(fixture.requests.length - admitted).toBeLessThanOrEqual(
+        (WebLimits.maxClientRequestsPerWindow - 3) * windows,
+      )
+      expect(promptReads().every((request) => (request.input?.inputIDs as string[]).length <= 100)).toBe(true)
+      expect(fixture.closed).toEqual([])
+      expect(observed.statuses.filter((kind) => kind === "closed" || kind === "reconnecting")).toEqual([])
+      expect(observed.resyncs).toEqual([])
+      expect(store.state().connection.kind).toBe("connected")
+    } finally {
+      store.dispose()
+      await fixture.server.stop(true)
+    }
+  }, 60_000)
+
   test("loads a bounded first page of a large inventory and continues only on demand", async () => {
     const count = 14_501
     const fixture = await harness(count)

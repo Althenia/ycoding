@@ -101,9 +101,116 @@ summary:focus-visible,
 a:focus-visible,
 textarea:focus-visible,
 input:focus-visible,
+select:focus-visible,
 [tabindex]:focus-visible {
   outline: var(--focus-width) solid var(--focus);
   outline-offset: 2px;
+}
+select,
+select::picker(select) {
+  appearance: base-select;
+}
+select {
+  display: block;
+  width: 100%;
+  min-height: var(--control-height);
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  padding: var(--gap) 40px var(--gap) var(--padding);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+select:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+select::picker-icon {
+  display: none;
+}
+select::picker(select) {
+  font: inherit;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  padding: var(--small);
+  box-shadow: none;
+  scrollbar-color: var(--control-border) var(--raised);
+  scrollbar-width: thin;
+}
+option {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  min-height: var(--control-height);
+  padding: var(--gap) var(--padding);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--raised);
+  cursor: pointer;
+}
+option:checked {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+option:focus-visible {
+  outline: var(--focus-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+option:disabled {
+  color: var(--muted);
+  background: var(--surface);
+  cursor: not-allowed;
+}
+option::checkmark {
+  content: "";
+  order: 1;
+  margin-inline-start: auto;
+  width: var(--small);
+  height: var(--gap);
+  border-right: var(--focus-width) solid currentColor;
+  border-bottom: var(--focus-width) solid currentColor;
+  transform: rotate(45deg);
+}
+.select-wrap {
+  position: relative;
+  display: block;
+  margin: var(--gap) 0;
+}
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: var(--padding);
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: var(--padding);
+  margin: var(--padding) 0;
+  min-width: 0;
+}
+fieldset:disabled {
+  opacity: 0.65;
+}
+legend {
+  font-weight: 600;
+  padding: 0 var(--gap);
+}
+label.field {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: var(--gap);
 }
 textarea {
   display: block;
@@ -472,6 +579,25 @@ dialog::backdrop {
 dialog .actions {
   margin-top: var(--padding);
 }
+.owner-panel > * + * {
+  margin-top: var(--padding);
+}
+.owner-panel p {
+  max-inline-size: var(--measure);
+}
+.owner-binding {
+  border-bottom: 1px solid var(--border);
+  padding: var(--padding) 0;
+}
+.owner-binding > * + * {
+  margin-top: var(--gap);
+}
+.owner-add {
+  margin-top: var(--padding);
+}
+.owner-add > button {
+  margin-top: var(--gap);
+}
 .chat-history {
   display: grid;
   gap: var(--padding);
@@ -499,23 +625,26 @@ dialog .actions {
   }
 }
 @media (hover: hover) {
+  option:not(:disabled):not(:checked):hover {
+    background: var(--surface);
+  }
   button:not(:disabled):hover,
+  select:not(:disabled):hover,
   summary:hover {
     border-color: var(--success);
   }
 }
-@media (pointer: fine) and (forced-colors: none) {
-  ::-webkit-scrollbar {
-    width: 12px;
-  }
-  ::-webkit-scrollbar-track {
-    background: var(--bg);
-  }
-  ::-webkit-scrollbar-thumb {
-    background: var(--control-border);
-    border: 4px solid var(--bg);
-    border-radius: 14px;
-  }
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--control-border);
+  border: 4px solid var(--bg);
+  border-radius: var(--radius-panel);
 }
 @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
   ::-webkit-scrollbar-thumb:hover {
@@ -540,9 +669,15 @@ dialog .actions {
     padding: var(--padding);
   }
   .runtime,
-  .ask-panel {
+  .ask-panel,
+  .owner-panel {
     border-top: 1px solid var(--border);
     padding-top: var(--padding);
+  }
+  .owner-binding > button,
+  .owner-add > button,
+  #owner-retry {
+    width: 100%;
   }
   .actions > button,
   .capture-gate form > button,
@@ -572,10 +707,23 @@ dialog .actions {
   }
 }
 @media (forced-colors: active) {
+  ::-webkit-scrollbar,
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-thumb {
+    all: revert;
+  }
   button,
   summary,
-  textarea {
+  textarea,
+  select {
     forced-color-adjust: auto;
+  }
+  select,
+  select::picker(select) {
+    appearance: auto;
+  }
+  .select-wrap::after {
+    display: none;
   }
   .check input {
     appearance: auto;

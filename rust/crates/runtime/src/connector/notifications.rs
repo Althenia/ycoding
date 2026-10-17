@@ -30,6 +30,10 @@ pub(super) const TYPES: &[&str] = &[
     "session.shell.ended.1",
     "session.step.ended.1",
     "session.step.failed.1",
+    "session.review.deferred.1",
+    "session.review.decided.1",
+    "session.review.withdrawn.1",
+    "session.review.consumed.1",
     "permission.asked",
     "permission.replied",
     "question.asked",
@@ -223,6 +227,11 @@ impl Notifications {
                 }
             }
         }
+        for info in sessions.values().filter(|info| info.parent_id.is_none()) {
+            for item in core.reviews.list(&info.id).map_err(|_| Error::Transport)? {
+                need(item.session_id.as_lossless(), v5::AttentionNeed::Review);
+            }
+        }
         let attention = needs
             .keys()
             .cloned()
@@ -232,6 +241,10 @@ impl Notifications {
         let failed = failed
             .into_iter()
             .filter(|id| !needs.contains_key(id) && !lost.contains(id))
+            .collect::<BTreeSet<_>>();
+        let lost = lost
+            .into_iter()
+            .filter(|id| !needs.contains_key(id))
             .collect::<BTreeSet<_>>();
         let details = attention
             .iter()
@@ -255,6 +268,9 @@ impl Notifications {
                 .transpose()?,
             failed: (!failed.is_empty())
                 .then(|| bounded(failed).map(|items| v5::IdentifierList { items }))
+                .transpose()?,
+            lost: (!lost.is_empty())
+                .then(|| bounded(lost).map(|items| v5::IdentifierList { items }))
                 .transpose()?,
             details: (!details.is_empty()).then_some(v5::AttentionList { items: details }),
         };

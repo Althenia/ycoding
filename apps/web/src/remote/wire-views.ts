@@ -27,6 +27,7 @@ export type SessionStatusView = {
   readonly attention: readonly string[]
   readonly outstanding?: readonly string[]
   readonly failed?: readonly string[]
+  readonly lost?: readonly string[]
   readonly details?: readonly {
     readonly sessionID: string
     readonly title?: string
@@ -129,6 +130,20 @@ export type QuotaProviderView = {
   }[]
   readonly message?: string
 }
+export type UsageCostCoverageView = { readonly pricedRequests: number; readonly unpricedRequests: number }
+export type UsageSpeedView = {
+  readonly generationSamples: number
+  readonly generationP50TokensPerSecond?: number
+  readonly generationP90TokensPerSecond?: number
+  readonly providerTimedSamples: number
+  readonly observedSamples: number
+  readonly firstOutputP50Ms?: number
+  readonly firstOutputP95Ms?: number
+  readonly totalP50Ms?: number
+  readonly totalP95Ms?: number
+  readonly outputTokensPerSecond?: number
+  readonly samples: number
+}
 export type UsageMetricsView = {
   readonly logical: number
   readonly physical: number
@@ -138,7 +153,83 @@ export type UsageMetricsView = {
   readonly tokens: UsageTokensView
   readonly cost?: number
   readonly costProvenance?: "recorded" | "current_catalog"
+  readonly costCoverage?: UsageCostCoverageView
   readonly cacheReadReported?: boolean
+}
+export type UsageCostView = UsageCostCoverageView & {
+  readonly total?: number
+  readonly known?: number
+  readonly provenance?: "recorded" | "current_catalog"
+}
+export type UsageBreakdownView = {
+  readonly requests: number
+  readonly tokens: UsageTokensView
+  readonly cost: UsageCostView
+}
+export type UsageHelperView = UsageBreakdownView & {
+  readonly source: "step" | "title" | "goal" | "compaction" | "decision" | "prediction" | "prompt"
+}
+type UsageUnitCostView = {
+  readonly status: "settled" | "so-far"
+  readonly attribution: "complete" | "partial" | "unattributed"
+  readonly history: "retained" | "partial"
+  readonly total: UsageBreakdownView
+  readonly main: UsageBreakdownView
+  readonly children: UsageBreakdownView
+  readonly helpers: readonly UsageHelperView[]
+}
+export type UsagePromptCostView = UsageUnitCostView & {
+  readonly anchor: { readonly sessionID: string; readonly inputID: string }
+}
+export type UsageTaskCostView = UsageUnitCostView & {
+  readonly sessionID: string
+  readonly usageAnchor?: { readonly sessionID: string; readonly inputID: string }
+}
+export type UsagePromptCostsView = {
+  readonly units: readonly UsagePromptCostView[]
+  readonly unattributed: UsageBreakdownView
+  readonly history: "retained" | "partial"
+}
+export type UsageTaskCostsView = {
+  readonly tasks: readonly UsageTaskCostView[]
+  readonly total: UsageBreakdownView
+  readonly history: "retained" | "partial"
+}
+export type UsageForecastRateView = {
+  readonly providerID: string
+  readonly profile?: string
+  readonly modelID?: string
+  readonly observedFrom: number
+  readonly observedTo: number
+  readonly tokensPerMinute: number
+  readonly tokensPerMinute5?: number
+  readonly tokensPerMinute60?: number
+  readonly estimatedUSDPerHour?: number
+  readonly coverage: UsageCostCoverageView
+}
+export type UsageForecastQuotaView = {
+  readonly providerID: string
+  readonly profile?: string
+  readonly windowID: string
+  readonly unit: "percent" | "usd" | "requests" | "tokens" | "count"
+  readonly source: QuotaProviderView["source"]
+  readonly stability: QuotaProviderView["stability"]
+  readonly updatedAt: number
+  readonly state: "estimated" | "insufficient" | "exhausted" | "unlimited"
+  readonly method?: "quota-delta-ema" | "window-mean"
+  readonly evidence: "low" | "medium" | "insufficient"
+  readonly reason?: string
+  readonly observedFrom?: number
+  readonly observedTo?: number
+  readonly ratePerHour?: number
+  readonly exhaustionAt?: number
+  readonly projectedUsedAtReset?: number
+}
+export type UsageForecastView = {
+  readonly asOf: number
+  readonly localScope: "backend" | "location"
+  readonly localRates?: readonly UsageForecastRateView[]
+  readonly quotas?: readonly UsageForecastQuotaView[]
 }
 export type UsageSummaryValueView = {
   readonly data: UsageMetricsView & {
@@ -159,9 +250,54 @@ export type UsageSummaryValueView = {
     }
   }
 }
-export type UsageGroupView = "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+export type UsageGroupView =
+  | "model"
+  | "hour"
+  | "day"
+  | "month"
+  | "session"
+  | "project"
+  | "agent"
+  | "provider"
+  | "provider-profile-model"
+  | "provider-model"
+  | "model-id"
+  | "profile"
+  | "prompt"
+  | "task"
+export type UsageReportDimensionsView =
+  | { readonly group: "provider"; readonly providerID: string }
+  | {
+      readonly group: "provider-profile-model"
+      readonly providerID: string
+      readonly profile?: string
+      readonly profileState: "recorded" | "provider-default"
+      readonly modelID: string
+    }
+  | { readonly group: "provider-model"; readonly providerID: string; readonly modelID: string }
+  | { readonly group: "model-id"; readonly modelID: string }
+  | {
+      readonly group: "profile"
+      readonly providerID: string
+      readonly profile?: string
+      readonly profileState: "recorded" | "provider-default"
+    }
+  | {
+      readonly group: "prompt"
+      readonly anchor?: { readonly sessionID: string; readonly inputID: string }
+      readonly attribution: "complete" | "partial" | "unattributed"
+    }
+  | {
+      readonly group: "task"
+      readonly sessionID?: string
+      readonly attribution: "complete" | "partial" | "unattributed"
+    }
 export type UsageReportInputView = {
   readonly group: UsageGroupView
+  readonly providerID?: string
+  readonly profile?: string
+  readonly modelID?: string
+  readonly selectedEffort?: string
   readonly timeZone?: string
   readonly from?: number
   readonly to?: number
@@ -173,12 +309,68 @@ export type UsageReportInputView = {
 export type UsageReportValueView = {
   readonly data: {
     readonly group: UsageGroupView
-    readonly rows: readonly (UsageMetricsView & { readonly key: string; readonly label: string })[]
+    readonly rows: readonly (UsageMetricsView & {
+      readonly key: string
+      readonly label: string
+      readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }
+      readonly dimensions?: UsageReportDimensionsView
+      readonly speed?: UsageSpeedView
+    })[]
     readonly total: UsageMetricsView
     readonly rowCount: number
     readonly nextOffset?: number
   }
 }
+export type IncidentKindView = "fallback" | "guardrail-escalated" | "guardrail-rejected"
+export type IncidentModelRefView = {
+  readonly id: string
+  readonly providerID: string
+  readonly variant?: string
+  readonly profile?: string
+}
+export type IncidentReportInputView = {
+  readonly group: "model" | "agent"
+  readonly from?: number
+  readonly to?: number
+  readonly offset?: number
+  readonly limit?: number
+}
+export type IncidentReportRowView = {
+  readonly providerID: string
+  readonly modelID: string
+  readonly agent?: string
+  readonly fallbacks: number
+  readonly escalated: number
+  readonly rejected: number
+  readonly last: number
+}
+export type IncidentReportView = {
+  readonly data: { readonly rows: readonly IncidentReportRowView[]; readonly groups: number }
+}
+export type IncidentRecentInputView = {
+  readonly provider: string
+  readonly model: string
+  readonly agent?: string
+  readonly limit?: number
+}
+export type IncidentItemView = {
+  readonly id: string
+  readonly time: number
+  readonly kind: IncidentKindView
+  readonly category: string
+  readonly ruleIDs: readonly string[]
+  readonly agent: string
+  readonly variant?: string
+  readonly profile?: string
+  readonly target?: IncidentModelRefView
+  readonly decidedBy?: "decision-model" | "human"
+}
+export type IncidentRecentView = { readonly data: { readonly items: readonly IncidentItemView[] } }
+export type IncidentGuidanceInputView = { readonly provider: string; readonly model: string }
+export type IncidentGuidanceView = {
+  readonly data: { readonly text?: string; readonly clearedAt?: number; readonly enabled: boolean }
+}
+
 export type AuthPromptView =
   | {
       readonly type: "text"
@@ -238,6 +430,10 @@ export type NoticeFrame =
   | { readonly type: "notice.unavailable" }
   | { readonly type: "notice.offline"; readonly at: number }
   | { readonly type: "notice.present"; readonly items: readonly NoticePresentationView[] }
+
+export function validReviewItemID(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128 && /^rvw_[A-Za-z0-9_-]+$/.test(value)
+}
 
 export const WebLimits = {
   ...RemoteLimits,
@@ -354,6 +550,7 @@ export function telemetryOperation(operation: string) {
     "catalog.get": "session.catalog",
     "fs.find": "session.file.find",
     "providerUsage.list": "usage.providers",
+    "providerUsage.forecast": "usage.forecast",
     "usage.get": "usage.summary",
     "keepAwake.get": "machine.keepAwake.get",
     "keepAwake.set": "machine.keepAwake.set",

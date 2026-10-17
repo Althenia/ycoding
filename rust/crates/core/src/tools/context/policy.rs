@@ -6,7 +6,7 @@ use crate::{
         registry::Failure,
     },
 };
-use ycoding_schema::{JsonObject, LosslessString, permission};
+use ycoding_schema::{JsonObject, LosslessString, guardrail, permission};
 
 #[derive(Clone)]
 pub struct LeafPolicy {
@@ -86,6 +86,27 @@ impl LeafPolicy {
         metadata: Option<JsonObject>,
         skip_review: bool,
     ) -> Result<Result<Reservation, guardrails::Error>, Failure> {
+        self.admit_input(context, action, resources, metadata, skip_review, false)
+            .await
+    }
+    pub async fn admit_deferred_shell(
+        &self,
+        context: &Context,
+        resources: Vec<LosslessString>,
+        metadata: Option<JsonObject>,
+    ) -> Result<Result<Reservation, guardrails::Error>, Failure> {
+        self.admit_input(context, "shell", resources, metadata, false, true)
+            .await
+    }
+    async fn admit_input(
+        &self,
+        context: &Context,
+        action: &str,
+        resources: Vec<LosslessString>,
+        metadata: Option<JsonObject>,
+        skip_review: bool,
+        defer_shell: bool,
+    ) -> Result<Result<Reservation, guardrails::Error>, Failure> {
         let admission = match self.guardrails.assert(Input {
             session_id: context.session_id.clone(),
             action: action.into(),
@@ -93,6 +114,11 @@ impl LeafPolicy {
             metadata,
             skip_review,
             holder: Some(context.call_id.clone()),
+            defer_shell,
+            source: Some(guardrail::Source {
+                message_id: context.message_id.clone(),
+                call_id: context.call_id.clone(),
+            }),
         }) {
             Ok(admission) => admission,
             Err(error) => return Ok(Err(error)),

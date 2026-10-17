@@ -17,7 +17,7 @@ import { preloadKeepAwake, preloadWorkspaces } from "../preload"
 import { SIGN_IN_PROVIDERS } from "../http"
 import { createInviteHttp } from "../http"
 import { normalizeAccessKey } from "../invite"
-import { type PendingRequestView } from "../projection"
+import { generationSpeedDisplay, type PendingRequestView } from "../projection"
 import type { SessionInfoView } from "../store"
 import {
   accountReadState,
@@ -56,6 +56,9 @@ import {
   moveRadio,
 } from "./settings"
 import { RequestCard } from "./conversation"
+import { ReviewBox } from "./review-box"
+import { GuardrailDecisionRows } from "./decision-grades"
+import { KeepAwakeIndicator } from "./keep-awake-indicator"
 import { JumpControls, TranscriptNavigation, jumpBehavior, type TranscriptPosition } from "./transcript-nav"
 import { NotificationCenter, ToastLayer } from "./notifications"
 import { TodoPanel } from "./todo-panel"
@@ -515,6 +518,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       onCancel={remote.store.cancelSubagent}
       onAnswer={remote.store.answerSubagent}
       onPin={remote.store.pinSubagent}
+      onContinueRecovery={remote.store.continueRecovery}
       onLoadOlder={remote.store.loadMoreTeam}
       onViewShell={remote.store.teamShellOutput}
       onKillShell={remote.store.killTeamShell}
@@ -659,6 +663,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                       onChange={office.present}
                     />
                   </Show>
+                  <KeepAwakeIndicator />
                 </div>
               </div>
             </Show>
@@ -698,6 +703,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                           onPositioned={() => setPendingAnchor(undefined)}
                           canCreateSession={canCreateSession()}
                           onNewSession={openNewSession}
+                          onOpenSession={openSession}
                         />
                       </Show>
                     </RoutePanel>
@@ -784,20 +790,19 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   description={currentTask()?.description ?? activeSession()?.title}
                   status={currentTask()?.state}
                   modelLabel={activeSession()?.modelLabel ?? currentTask()?.modelLabel}
-                  economics={
-                    currentTask() === undefined
-                      ? undefined
-                      : {
-                          tokens: currentTask()?.tokens,
-                          cost: currentTask()?.cost,
-                          cacheHitRatio: currentTask()?.cacheHitRatio,
-                          cacheRead: currentTask()?.cacheRead,
-                          cacheWrite: currentTask()?.cacheWrite,
-                          contextTotal: currentTask()?.contextTotal,
-                          contextLimit: currentTask()?.contextLimit,
-                        }
-                  }
-                  question={currentTask()?.question}
+                  economics={{
+                    speed: generationSpeedDisplay(state().view, state().view?.model),
+                    accounting: currentTask()?.accounting,
+                    accountingUnavailable: currentTask()?.accountingUnavailable,
+                    tokens: currentTask()?.tokens,
+                    cost: currentTask()?.cost,
+                    cacheHitRatio: currentTask()?.cacheHitRatio,
+                    cacheRead: currentTask()?.cacheRead,
+                    cacheWrite: currentTask()?.cacheWrite,
+                    contextTotal: currentTask()?.contextTotal,
+                    contextLimit: currentTask()?.contextLimit,
+                  }}
+                  question={currentTask()?.question?.deferred === true ? undefined : currentTask()?.question}
                   onAnswer={(questionID, text) =>
                     remote.store.answerSubagent(activeSession()?.id ?? "", questionID, text)
                   }
@@ -1333,9 +1338,10 @@ function SessionPanel(props: {
     return workspace === undefined ? "Sessions" : (labels().get(workspace.id) ?? workspace.name ?? workspace.directory)
   }
   let feed: HTMLDivElement | undefined
+  let feedRows: ReturnType<typeof createRowVirtualizer> | undefined
   let detachFeed = () => {}
   onMount(() => {
-    if (feed) detachFeed = attachSessionFeed(feed, remote.store)
+    if (feed) detachFeed = attachSessionFeed(feed, remote.store, () => feedRows)
   })
   onCleanup(() => detachFeed())
   const deviceName = () => {
@@ -1373,7 +1379,14 @@ function SessionPanel(props: {
               {(view) => (
                 <>
                   <p class="panel__note">{view().note}</p>
-                  <SessionRailList sessions={state().sessions} readOnly onSelectSession={props.onSelectSession} />
+                  <SessionRailList
+                    sessions={state().sessions}
+                    readOnly
+                    onSelectSession={props.onSelectSession}
+                    onVirtualizer={(rows) => {
+                      feedRows = rows
+                    }}
+                  />
                 </>
               )}
             </Show>
@@ -1399,6 +1412,13 @@ function SessionPanel(props: {
               onInput={(event) => remote.store.searchSessions(event.currentTarget.value)}
             />
           </label>
+          <Show when={state().sessionListNotice}>
+            {(notice) => (
+              <p class="panel__note" role="status" aria-label="Session list status">
+                {notice()}
+              </p>
+            )}
+          </Show>
           <Show
             when={state().sessions.length > 0}
             fallback={
@@ -1412,6 +1432,9 @@ function SessionPanel(props: {
             }
           >
             <SessionRailList
+              onVirtualizer={(rows) => {
+                feedRows = rows
+              }}
               sessions={state().sessions}
               readOnly={state().sessionRowsStale === true}
               busy={state().sessionRowsStale === true}
@@ -1435,6 +1458,7 @@ function SessionRailList(props: {
   readonly busy?: boolean
   readonly onSelectSession: (sessionID: string) => void
   readonly onNavigate?: () => void
+  readonly onVirtualizer: (rows: ReturnType<typeof createRowVirtualizer>) => void
 }): JSX.Element {
   let list: HTMLDivElement | undefined
   let scroller: HTMLElement | undefined
@@ -1449,6 +1473,7 @@ function SessionRailList(props: {
     overscan: 6,
     layout: () => keys().length > 0,
   })
+  onMount(() => props.onVirtualizer(rows))
   return (
     <div
       ref={list}
@@ -1488,6 +1513,7 @@ function SessionTableRows(props: {
   readonly sessions: readonly SessionInfoView[]
   readonly readOnly: boolean
   readonly onSelectSession: (sessionID: string) => void
+  readonly onVirtualizer: (rows: ReturnType<typeof createRowVirtualizer>) => void
 }): JSX.Element {
   let body: HTMLDivElement | undefined
   let scroller: HTMLElement | undefined
@@ -1502,6 +1528,7 @@ function SessionTableRows(props: {
     overscan: 6,
     layout: () => keys().length > 0,
   })
+  onMount(() => props.onVirtualizer(rows))
   return (
     <div
       ref={body}
@@ -1543,6 +1570,7 @@ function SessionRow(props: {
     <button
       type="button"
       class={`session-row${active() ? " session-row--active" : ""}`}
+      data-session-id={props.session.id}
       aria-pressed={active()}
       disabled={props.readOnly}
       onClick={() => {
@@ -1560,7 +1588,9 @@ function SessionRow(props: {
         <span class="session-row__meta">
           <span title={props.session.directory}>{sessionProjectLabel(props.session)}</span>
           <span class="session-row__status">
-            <For each={chips().slice(0, 1)}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+            <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review "))}>
+              {(chip) => <Chip label={chip.label} tone={chip.tone} />}
+            </For>
           </span>
         </span>
       </span>
@@ -1587,6 +1617,7 @@ function SessionSummaryRow(props: {
       class="sessions-table__row"
       role="row"
       aria-rowindex={props.rowIndex}
+      data-session-id={props.session.id}
       data-index={props.rowIndex - 2}
       style={{ "inset-block-start": `${props.top}px` }}
       ref={props.measure}
@@ -1606,7 +1637,9 @@ function SessionSummaryRow(props: {
         </button>
       </span>
       <span class="sessions-table__status" role="cell">
-        <For each={chips().slice(0, 1)}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+        <For each={chips().filter((chip, index) => index === 0 || chip.label.startsWith("review "))}>
+          {(chip) => <Chip label={chip.label} tone={chip.tone} />}
+        </For>
         <Show when={chips().length === 0}>
           <Chip label="Idle" tone="neutral" />
         </Show>
@@ -1713,6 +1746,7 @@ function ConversationView(props: {
   readonly onPositioned: () => void
   readonly canCreateSession: boolean
   readonly onNewSession: () => void
+  readonly onOpenSession: (sessionID: string) => void
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
@@ -1723,7 +1757,10 @@ function ConversationView(props: {
     state().team?.status === "ready" && state().team?.rootID === state().activeSessionID
       ? (state().team?.tasks.filter(
           (task) =>
-            task.parentID === state().activeSessionID && task.state === "waiting" && task.question !== undefined,
+            task.parentID === state().activeSessionID &&
+            task.state === "waiting" &&
+            task.question !== undefined &&
+            task.question.deferred !== true,
         ) ?? [])
       : []
   const devices = useDeviceAvailability()
@@ -1783,6 +1820,7 @@ function ConversationView(props: {
             onPositioned={props.onPositioned}
           />
         </Show>
+        <GuardrailDecisionRows decisions={view()?.guardrailDecisions ?? []} />
         <Show when={requests().length > 0}>
           <div id="pending-requests" class="requests" tabindex="-1" aria-label="Pending requests">
             <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
@@ -1814,6 +1852,7 @@ function ConversationView(props: {
             </For>
           </div>
         </Show>
+        <ReviewBox onOpenSession={props.onOpenSession} />
       </div>
     </Show>
   )
@@ -1983,9 +2022,10 @@ function SessionsPage(props: {
 }): JSX.Element {
   const remote = useRemote()
   let feed: HTMLDivElement | undefined
+  let feedRows: ReturnType<typeof createRowVirtualizer> | undefined
   let detachFeed = () => {}
   onMount(() => {
-    if (feed) detachFeed = attachSessionFeed(feed, remote.store)
+    if (feed) detachFeed = attachSessionFeed(feed, remote.store, () => feedRows)
   })
   onCleanup(() => detachFeed())
   const sessions = () => remote.state().sessions
@@ -2053,7 +2093,7 @@ function SessionsPage(props: {
               </label>
             </div>
             <div class="session-filters" role="group" aria-label="Session status">
-              <For each={["all", "running", "idle"] as const}>
+              <For each={["all", "waiting", "running", "idle"] as const}>
                 {(value) => (
                   <button
                     type="button"
@@ -2068,6 +2108,13 @@ function SessionsPage(props: {
                 )}
               </For>
             </div>
+            <Show when={remote.state().sessionListNotice}>
+              {(notice) => (
+                <p class="panel__note" role="status" aria-label="Session list status">
+                  {notice()}
+                </p>
+              )}
+            </Show>
             <Show
               when={sessions().length > 0}
               fallback={
@@ -2090,6 +2137,9 @@ function SessionsPage(props: {
                     <span role="columnheader">Updated</span>
                   </div>
                   <SessionTableRows
+                    onVirtualizer={(rows) => {
+                      feedRows = rows
+                    }}
                     sessions={sessions()}
                     readOnly={cached() !== undefined || remote.state().sessionRowsStale === true}
                     onSelectSession={props.onSelectSession}
@@ -2197,7 +2247,11 @@ function WorkspaceNav(): JSX.Element {
   )
 }
 
-function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof useRemote>["store"]) {
+function attachSessionFeed(
+  element: HTMLDivElement,
+  store: ReturnType<typeof useRemote>["store"],
+  virtualRows: () => ReturnType<typeof createRowVirtualizer> | undefined,
+) {
   const root =
     element.closest<HTMLElement>(".workspace__scroll, .workspace__rail-body") ??
     (document.scrollingElement instanceof HTMLElement ? document.scrollingElement : undefined)
@@ -2205,11 +2259,55 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   let direction = 0
   let gesture = false
   let lastTop = root.scrollTop
+  let position: { readonly id: string; readonly offset: number } | undefined
+  let resident = store.state().sessions
+  let restore: number | undefined
+  let revealed: { readonly rows: ReturnType<typeof createRowVirtualizer>; readonly id: string } | undefined
+  const cancelRestore = () => {
+    if (restore !== undefined) cancelAnimationFrame(restore)
+    restore = undefined
+    revealed?.rows.release(revealed.id)
+    revealed = undefined
+  }
   let context = `${store.state().activeDeviceID}:${store.state().selectedWorkspaceID}:${store.state().sessionQuery}:${store.state().sessionFilter}`
   const unsubscribe = store.subscribe(() => {
     const next = `${store.state().activeDeviceID}:${store.state().selectedWorkspaceID}:${store.state().sessionQuery}:${store.state().sessionFilter}`
-    if (next === context) return
+    if (next === context) {
+      if (resident === store.state().sessions || position === undefined) return
+      resident = store.state().sessions
+      cancelRestore()
+      restore = requestAnimationFrame(() => {
+        restore = undefined
+        const anchor = position
+        const rows = virtualRows()
+        const index = anchor === undefined ? undefined : rows?.indexByKey().get(anchor.id)
+        if (!anchor || !rows || index === undefined) return
+        gesture = false
+        direction = 0
+        rows.reveal(anchor.id)
+        revealed = { rows, id: anchor.id }
+        const offset = rows.virtualizer.getOffsetForIndex(index, "start")
+        if (offset !== undefined) rows.write(root, offset[0] - anchor.offset)
+        restore = requestAnimationFrame(() => {
+          restore = undefined
+          const row = [...element.querySelectorAll<HTMLElement>("[data-session-id]")].find(
+            (row) => row.dataset.sessionId === anchor.id,
+          )
+          if (row)
+            rows.write(
+              root,
+              root.scrollTop + row.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.offset,
+            )
+          rows.release(anchor.id)
+          revealed = undefined
+        })
+      })
+      return
+    }
     context = next
+    cancelRestore()
+    position = undefined
+    store.setSessionListAnchor(undefined)
     gesture = false
     direction = 0
     lastTop = root.scrollTop
@@ -2259,6 +2357,15 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   const scroll = () => {
     if (gesture && root.scrollTop !== lastTop) direction = Math.sign(root.scrollTop - lastTop)
     lastTop = root.scrollTop
+    const bounds = root.getBoundingClientRect()
+    const row = [...element.querySelectorAll<HTMLElement>("[data-session-id]")].find(
+      (row) => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom,
+    )
+    position =
+      row?.dataset.sessionId === undefined
+        ? undefined
+        : { id: row.dataset.sessionId, offset: row.getBoundingClientRect().top - bounds.top }
+    store.setSessionListAnchor(position?.id)
     pacedCheck.maybeExecute()
   }
   root.addEventListener("wheel", wheel, { passive: true })
@@ -2269,6 +2376,7 @@ function attachSessionFeed(element: HTMLDivElement, store: ReturnType<typeof use
   root.addEventListener("scroll", scroll, { passive: true })
   return () => {
     unsubscribe()
+    cancelRestore()
     pacedCheck.cancel()
     root.removeEventListener("wheel", wheel)
     root.removeEventListener("touchstart", touchStart)

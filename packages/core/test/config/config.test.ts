@@ -291,6 +291,14 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("ignores a global auto_answer key because automatic answers are a per-Session toggle", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Config.Info)
+      expect(decode({ auto_answer: true })).not.toHaveProperty("auto_answer")
+      expect(decode({ auto_answer: "invalid" })).not.toHaveProperty("auto_answer")
+    }),
+  )
+
   it.effect("decodes and resolves selective compaction policy", () =>
     Effect.sync(() => {
       const decode = Schema.decodeUnknownSync(Config.Info)

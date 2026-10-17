@@ -49,6 +49,7 @@ pub struct ContextBreakdown {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct GenerationSpeed {
+    pub estimated: Option<bool>,
     pub model: model::Ref,
     pub tokens: PositiveInt,
     pub duration_ns: PositiveInt,
@@ -56,6 +57,8 @@ pub struct GenerationSpeed {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct GenerationSpeedHistory {
+    pub model: Option<model::Ref>,
+    pub unreported_reason: Option<LosslessString>,
     pub latest: Option<GenerationSpeed>,
     pub recent: Vec<GenerationSpeed>,
 }
@@ -158,6 +161,7 @@ impl DomainDecode for GenerationSpeed {
                 }));
         }
         Ok(Self {
+            estimated: o.optional("estimated")?,
             model: o.field("model")?,
             tokens: o.field("tokens")?,
             duration_ns: o.field("durationNs")?,
@@ -168,6 +172,7 @@ impl DomainDecode for GenerationSpeed {
 impl DomainEncode for GenerationSpeed {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("estimated", &self.estimated)
             .field("model", &self.model)
             .field("tokens", &self.tokens)
             .field("durationNs", &self.duration_ns)
@@ -186,6 +191,8 @@ impl DomainDecode for GenerationSpeedHistory {
             }));
         }
         Ok(Self {
+            model: o.optional("model")?,
+            unreported_reason: o.optional("unreportedReason")?,
             latest: o.optional("latest")?,
             recent,
         })
@@ -194,6 +201,8 @@ impl DomainDecode for GenerationSpeedHistory {
 impl DomainEncode for GenerationSpeedHistory {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("model", &self.model)
+            .optional("unreportedReason", &self.unreported_reason)
             .optional("latest", &self.latest)
             .field("recent", &self.recent)
             .finish()

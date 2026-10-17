@@ -174,6 +174,8 @@ fn status(state: &v5::FormState) -> &'static str {
         v5::form_state::Kind::Value1(_) => "pending",
         v5::form_state::Kind::Value2(_) => "answered",
         v5::form_state::Kind::Value3(_) => "cancelled",
+        v5::form_state::Kind::Value4(_) => "timed_out",
+        v5::form_state::Kind::Value5(_) => "deferred",
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -50,6 +50,14 @@
     },
     "@ycoding-ai/cli#test": {
       "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/rust/Cargo.toml",
+        "$TURBO_ROOT$/rust/Cargo.lock",
+        "$TURBO_ROOT$/rust/crates/**",
+        "$TURBO_ROOT$/protocol/**",
+        "$TURBO_ROOT$/.github/actions/setup-rust/**"
+      ],
       "outputs": []
     },
     "@ycoding-ai/tui#test": {

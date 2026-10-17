@@ -121,7 +121,7 @@ function deliveryWith(options: {
 describe("notificationCategory", () => {
   test("finished and attention use fixed privacy-safe copy", () => {
     expect(NOTIFICATION_TEXT["agent-completed"]).toEqual({ title: "YCoding — work finished", body: "A session finished all its work." })
-    expect(NOTIFICATION_TEXT["approval-requested"]).toEqual({ title: "YCoding — needs your attention", body: "A session is waiting for you." })
+    expect(NOTIFICATION_TEXT["approval-requested"]).toEqual({ title: "YCoding — needs your attention", body: "A session needs attention. Open it to review." })
     expect(NOTIFICATION_TEXT["machine-offline"]).toEqual({ title: "YCoding — machine offline", body: "The connected machine stopped reporting." })
   })
   test("maps each live event the workspace receives to one category", () => {
@@ -318,7 +318,7 @@ describe("createNotificationDelivery", () => {
       ["YCoding — question for you", "“Fix login” is waiting for your answer."],
       ["YCoding — guardrail review", "“Fix login” is waiting for you to approve or reject a guarded action."],
       ["YCoding — session failed", "“Fix login” stopped with an error. Open it to review and retry."],
-      ["YCoding — needs your attention", "“Fix login” is waiting for you."],
+      ["YCoding — needs your attention", "“Fix login” needs attention. Open it to review."],
       ["YCoding — session failed", "A session stopped with an error. Open it to review and retry."],
       ["YCoding — work finished", "“Fix login” finished all its work."],
     ])

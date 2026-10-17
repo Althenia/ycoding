@@ -13,6 +13,7 @@ use ycoding_core::{
         },
         run_coordinator::{Outcome, RunFuture},
         store,
+        usage_attribution::Attribution,
     },
     tools::policy::{Authority, Publisher, permissions::Permissions},
 };
@@ -43,6 +44,10 @@ impl Recorder {
 }
 
 impl Execution for Recorder {
+    fn resume(&self, _: &session::Id) -> RunFuture {
+        panic!("unexpected explicit resumption")
+    }
+
     fn wake(&self, id: &session::Id) -> Outcome {
         self.woken
             .lock()
@@ -417,12 +422,12 @@ async fn questions_wait_for_a_human_unless_the_family_is_autonomous() {
     assert_eq!(harness.sessions.pending_list(&child).unwrap().len(), 2);
 
     Autonomy::new(harness.store.client())
-        .set_yolo(&id("ses_one"), YoloLevel::ANSWERS)
+        .set_auto_answer(&child, true)
         .await
         .unwrap();
     let automatic = harness
         .service
-        .question(&child, "Which cache?", None)
+        .question_attributed(&child, "Which cache?", None, &Attribution::Unset)
         .await
         .unwrap();
     assert!(automatic.auto_answered);
@@ -438,7 +443,7 @@ async fn questions_wait_for_a_human_unless_the_family_is_autonomous() {
 }
 
 #[tokio::test]
-async fn an_active_parent_goal_also_auto_answers_child_questions_at_yolo_zero() {
+async fn an_active_parent_goal_never_answers_child_questions() {
     let harness = harness();
     let child = launched(&harness, "call_1").await;
     Autonomy::new(harness.store.client())
@@ -446,12 +451,16 @@ async fn an_active_parent_goal_also_auto_answers_child_questions_at_yolo_zero() 
         .await
         .unwrap();
     assert!(
-        harness
+        !harness
             .service
-            .question(&child, "Which?", None)
+            .question_attributed(&child, "Which?", None, &Attribution::Unset)
             .await
             .unwrap()
             .auto_answered
+    );
+    assert_eq!(
+        harness.service.get(&id("ses_one"), &child).unwrap().state,
+        State::Waiting
     );
 }
 
@@ -625,6 +634,10 @@ async fn cancel_interrupts_once_and_rejects_settled_tasks() {
 async fn notification_wake_storage_failures_propagate_and_leave_the_original_notice_retryable() {
     struct FailedWake;
     impl Execution for FailedWake {
+        fn resume(&self, _: &session::Id) -> RunFuture {
+            panic!("unexpected explicit resumption")
+        }
+
         fn wake(&self, _: &session::Id) -> Outcome {
             Err(ycoding_core::session::run_coordinator::Error::Store(
                 Arc::new(ycoding_store::Error::Rejected("parent wake storage failed")),
@@ -716,13 +729,13 @@ async fn parent_input_is_held_behind_a_staged_child_revert_without_waking_it() {
         .await
         .unwrap();
     Autonomy::new(harness.store.client())
-        .set_yolo(&id("ses_one"), YoloLevel::ANSWERS)
+        .set_auto_answer(&child, true)
         .await
         .unwrap();
     assert!(
         harness
             .service
-            .question(&child, "Which cache?", None)
+            .question_attributed(&child, "Which cache?", None, &Attribution::Unset)
             .await
             .unwrap()
             .auto_answered
@@ -1505,7 +1518,7 @@ async fn restart_reconciliation_marks_active_tasks_lost_without_waking_the_paren
 }
 
 #[tokio::test]
-async fn child_autonomy_inherits_the_strongest_ancestor_level_and_goal() {
+async fn child_autonomy_inherits_the_strongest_ancestor_level_but_no_goal_authority() {
     let harness = harness();
     let child = launched(&harness, "call_1").await;
     let autonomy = Autonomy::new(harness.store.client());
@@ -1515,8 +1528,14 @@ async fn child_autonomy_inherits_the_strongest_ancestor_level_and_goal() {
         .await
         .unwrap();
     let inherited = autonomy.effective(&child).unwrap();
-    assert!(inherited.can_auto_permission() && inherited.can_auto_guardrail());
+    assert!(inherited.can_auto_permission() && !inherited.can_auto_guardrail());
     assert!(!inherited.can_auto_answer());
+    autonomy
+        .set_yolo(&id("ses_one"), YoloLevel::GUARDRAILS)
+        .await
+        .unwrap();
+    let reviews = autonomy.effective(&child).unwrap();
+    assert!(reviews.can_auto_permission() && reviews.can_auto_guardrail());
     autonomy
         .set_yolo(&id("ses_one"), YoloLevel::OFF)
         .await
@@ -1526,7 +1545,12 @@ async fn child_autonomy_inherits_the_strongest_ancestor_level_and_goal() {
         .await
         .unwrap();
     let goal = autonomy.effective(&child).unwrap();
-    assert!(goal.can_auto_answer() && goal.can_auto_permission() && !goal.can_auto_guardrail());
+    assert!(
+        goal.goal_active
+            && !goal.can_auto_answer()
+            && !goal.can_auto_permission()
+            && !goal.can_auto_guardrail()
+    );
 }
 
 #[tokio::test]
@@ -1952,6 +1976,8 @@ fn guarded(store: &Store, subagents: u64) -> Guardrails {
                 subagents,
                 ..Limits::default()
             },
+            decide_reviews: false,
+            decide_hard_reviews: true,
         },
         publisher,
     )
@@ -2156,6 +2182,10 @@ async fn a_guardrail_rejection_other_than_capacity_names_the_target() {
 async fn a_failed_child_wake_releases_the_launch_reservation() {
     struct Closed;
     impl Execution for Closed {
+        fn resume(&self, _: &session::Id) -> RunFuture {
+            panic!("unexpected explicit resumption")
+        }
+
         fn wake(&self, _: &session::Id) -> Outcome {
             Err(ycoding_core::session::run_coordinator::Error::Closed)
         }

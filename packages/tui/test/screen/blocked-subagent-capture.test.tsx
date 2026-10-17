@@ -61,8 +61,9 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(output).toContain("awaiting decision")
     expect(output.match(/TEST-TRIAGE SUBAGENT/g)).toHaveLength(1)
     expect(output.match(/Two provider tests fail on main before my changes\./g)).toHaveLength(1)
-    const blockedWait = output.match(/blocked (4m\d{2}s)/)?.[1]
-    expect(blockedWait).toBeDefined()
+    const headerWait = output.match(/\? awaiting input · (4m\d{2}s)/)?.[1]
+    expect(headerWait).toBeDefined()
+    expect(output).toContain(`blocked ${headerWait}`)
     expect(output).not.toContain("─")
     expect(output).not.toContain("│")
     expect(rows[9]?.indexOf("TEST-TRIAGE SUBAGENT")).toBe(3)
@@ -70,7 +71,7 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(rows[15]?.indexOf("ok")).toBe(3)
     expect(rows[18]?.indexOf("?")).toBe(3)
     expect(rows[24]?.indexOf("Should I mark the pre-existing failures as expected, or fix them?")).toBe(6)
-    expect(rows[1]).toContain(`? awaiting input · ${blockedWait}`)
+    expect(rows[1]).toMatch(/\? awaiting input · 4m\d{2}s/)
     expect(rows[62]?.indexOf("Enter answer")).toBe(3)
     expect(rows[62]).not.toContain("Esc leave blocked")
     expect(rows[4]?.indexOf("↑ Provider cache audit")).toBe(3)
@@ -97,6 +98,7 @@ function route(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [parent, child], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: child })
+  if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (["ses_docs", "ses_keymap"].some((id) => url.pathname === `/api/session/${id}`))
     return json({ data: { ...session(url.pathname.slice("/api/session/".length), "Sibling", now), parentID } })
   if (url.pathname === `/api/session/${sessionID}/snapshot`)
@@ -198,18 +200,7 @@ function task(
   question?: string,
 ) {
   const agent = sessionID === "ses_docs" ? "docs-sync" : sessionID === "ses_keymap" ? "keymap-audit" : "test-triage"
-  return {
-    sessionID,
-    parentID,
-    description,
-    agent,
-    model: { providerID: "anthropic", id: "claude-sonnet-5" },
-    background: true,
-    state,
-    ...(question ? { question: { id: "qst_blocked", text: question, time: now - 242_000 } } : {}),
-    revision: 1,
-    time: { created: now - (5 - order) * 60_000, updated: now },
-  }
+  return { sessionID, parentID, description, agent, model: { providerID: "anthropic", id: "claude-sonnet-5" }, background: true, state, ...(question ? { question: { id: "qst_blocked", text: question, time: now - 242_000 } } : {}), revision: 1, time: { created: now - (5 - order) * 60_000, updated: now } }
 }
 
 function guardrail() {

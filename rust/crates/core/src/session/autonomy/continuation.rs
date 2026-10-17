@@ -93,7 +93,14 @@ pub(crate) async fn prepare_continuation(
     let Some(goal) = snapshot.state.goal.filter(Goal::is_active) else {
         return Ok(None);
     };
-    if active_shell || has_active_child(sessions, session_id)? {
+    if active_shell
+        || has_active_child(sessions, session_id)?
+        || crate::session::review_fold::family_open(
+            &sessions.client.snapshot()?,
+            session_id.as_lossless(),
+        )?
+        .0 > 0
+    {
         return Ok(None);
     }
     let Some(text) = steer
@@ -109,7 +116,7 @@ pub(crate) async fn prepare_continuation(
     let advanced = autonomy
         .advance_if_current(session_id, snapshot.sequence)
         .await?;
-    let State { yolo, goal } = advanced.state;
+    let State { yolo, goal, .. } = advanced.state;
     let Some(goal) = goal.filter(|goal| advanced.applied && goal.is_active()) else {
         return Ok(None);
     };

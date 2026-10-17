@@ -1017,7 +1017,7 @@ async fn test046_runner_revert_restores_real_edit_and_write_tool_effects() {
     let service = Service::new(store.client());
     admit(&service).await;
     let registry = runner_registry(&project_root);
-    fixture.authority.session("ses_one", None, 1, false, None);
+    fixture.authority.session("ses_one", None, 2, false, None);
     let paths = Arc::new(Paths {
         directory: project.clone(),
         data: project_root.join("data"),

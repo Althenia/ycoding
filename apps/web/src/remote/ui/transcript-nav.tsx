@@ -135,7 +135,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     scrollEndThreshold: 48,
     layout: historyHeader,
     compensate: () => !following(),
-    onChange: () => { if (mounted && following() && !jumping && !jumpingTop) pin() },
+    onChange: () => {
+      if (!mounted) return
+      if (following() && !jumping && !jumpingTop) pin()
+      if (!following()) olderCheck.maybeExecute()
+    },
   })
   const restorePosition = () => {
     const position = props.position
@@ -161,8 +165,12 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     virtual.rendered()
     queueMicrotask(restorePosition)
   })
+  const nearLoadedStart = () => {
+    const first = list?.querySelector<HTMLElement>('[data-index="0"]')
+    return !!scrollRoot && !!first && first.getBoundingClientRect().top >= scrollRoot.getBoundingClientRect().top - 120
+  }
   const olderCheck = createThrottler(() => {
-    if (scrollRoot && scrollRoot.scrollTop < 120 && remote.state().history?.status === "idle") void loadOlder()
+    if (nearLoadedStart() && remote.state().history?.status === "idle") void loadOlder()
   }, { wait: 100, leading: false })
   const loadOlder = async () => {
     if (!active() || loadingOlder || checkpoint() || remote.state().history?.status === "loading" || !remote.state().history?.before) return

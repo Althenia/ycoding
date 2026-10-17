@@ -4,8 +4,15 @@ import { Modal } from "../../ui/modal"
 import type { TeamActionOutcome, TeamSubagent } from "./team-model"
 import { formatCacheHit } from "./team-model"
 import "./subagent-bar.css"
+import type { UsageTaskCostView } from "../wire-views"
+import { accountingPresentation, costText } from "./usage-accounting"
+import { TaskCostDetails } from "./usage-cost"
+import { tokenCount } from "./usage-model"
 
 export type SubagentEconomicsView = {
+  readonly accounting?: UsageTaskCostView
+  readonly accountingUnavailable?: boolean
+  readonly speed?: { readonly label: string; readonly description: string }
   readonly tokens?: number
   readonly contextTotal?: number
   readonly contextLimit?: number
@@ -13,18 +20,23 @@ export type SubagentEconomicsView = {
   readonly cacheRead?: number
   readonly cacheWrite?: number
   readonly cost?: number
+  readonly speed?: { readonly label: string; readonly description: string }
 }
 
 export function TeamAnswerForm(props: {
   readonly question: { readonly id: string; readonly text: string }
-  readonly onAnswer: (questionID: string, text: string) => Promise<TeamActionOutcome>
+  readonly onAnswer?: (questionID: string, text: string) => Promise<TeamActionOutcome>
+  readonly review?: { readonly busy: boolean; readonly submit: (text: string) => void; readonly dismiss: () => void }
 }): JSX.Element {
   const [text, setText] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string>()
+  const disabled = () => busy() || props.review?.busy === true
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
-    if (busy() || !text().trim()) return
+    if (disabled() || !text().trim()) return
+    if (props.review) { props.review.submit(text().trim()); return }
+    if (!props.onAnswer) return
     setBusy(true)
     setError(undefined)
     void props.onAnswer(props.question.id, text().trim()).then((result) => {
@@ -33,14 +45,15 @@ export function TeamAnswerForm(props: {
     }, (cause: unknown) => setError(cause instanceof Error ? cause.message : "The answer could not be sent.")).finally(() => setBusy(false))
   }
   return <form class="team-answer" onSubmit={submit}>
-    <label><span>{props.question.text}</span><textarea aria-label="Answer subagent question" value={text()} onInput={(event) => setText(event.currentTarget.value)} disabled={busy()} rows={2} /></label>
-    <button type="submit" class="button button--primary button--small" disabled={busy() || !text().trim()}>{busy() ? "Answering…" : "Answer"}</button>
+    <label><span>{props.question.text}</span><textarea aria-label="Answer subagent question" value={text()} onInput={(event) => setText(event.currentTarget.value)} disabled={disabled()} rows={2} /></label>
+    <Show when={props.review} fallback={<button type="submit" class="button button--primary button--small" disabled={disabled() || !text().trim()}>{busy() ? "Answering…" : "Answer"}</button>}>
+      <div class="request__actions"><button type="submit" class="button button--primary button--small" disabled={disabled() || !text().trim()}>Submit</button><button type="button" class="button button--secondary button--small" disabled={disabled()} onClick={() => { if (!disabled()) props.review?.dismiss() }}>Dismiss</button></div>
+    </Show>
     <Show when={error()}>{(message) => <p role="alert">{message()}</p>}</Show>
   </form>
 }
 
 const statusIcon: Readonly<Partial<Record<TeamSubagent["state"], IconName>>> = { completed: "check", failed: "alert", lost: "alert", cancelled: "minus" }
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
 export function subagentMetrics(modelLabel: string | undefined, economics: SubagentEconomicsView | undefined) {
   const count = (value: number) => value.toLocaleString("en-US")
@@ -52,9 +65,10 @@ export function subagentMetrics(modelLabel: string | undefined, economics: Subag
     ].filter((part) => part !== undefined).join(" · ")
   return [
     { key: "model", label: "Model", value: modelLabel },
-    { key: "tokens", label: "Tokens", value: economics?.tokens === undefined ? undefined : count(economics.tokens) },
+    { key: "speed", label: "Speed", value: economics?.speed?.label },
+    { key: "tokens", label: "Tokens (inclusive)", value: economics?.accounting === undefined ? undefined : count(tokenCount(economics.accounting.total.tokens)) },
     { key: "cache", label: "Cache", value: cache },
-    { key: "cost", label: "Cost", value: economics?.cost === undefined ? undefined : money.format(economics.cost) },
+    { key: "cost", label: "Cost (inclusive)", value: economics?.accounting === undefined ? undefined : `${costText(economics.accounting.total.cost)}${economics.accounting.status === "so-far" ? " · so far" : ""}${accountingPresentation(economics.accounting, economics.accountingUnavailable).complete ? "" : " · incomplete"}` },
     { key: "context", label: "Context", value: economics?.contextTotal === undefined ? undefined : `${count(economics.contextTotal)} / ${economics.contextLimit === undefined ? "unreported" : count(economics.contextLimit)}` },
   ].flatMap((metric) => metric.value === undefined ? [] : [{ key: metric.key, label: metric.label, value: metric.value }])
 }
@@ -83,6 +97,7 @@ export function SubagentBar(props: {
     <div class="subagent-bar__header">
       <div class="subagent-bar__identity">
         <strong class="subagent-bar__agent" title={props.agent ?? "Subagent"}>{props.agent ?? "Subagent"}</strong>
+        <Show when={props.economics?.speed}>{(speed) => <span class="subagent-bar__speed" title={speed().description}>{speed().label}</span>}</Show>
         <span class={`subagent-bar__status subagent-bar__status--${props.status ?? "unreported"}`}>
           <span class="subagent-bar__mark" aria-hidden="true"><Show when={props.status !== undefined ? statusIcon[props.status] : undefined} fallback={<span class="status-dot" />}>{(name) => <Icon name={name()} size={12} />}</Show></span>
           {props.status ?? "Status unreported"}
@@ -106,6 +121,7 @@ export function SubagentBar(props: {
             </dl>
           </Show>
           <p class="subagent-bar__rollup">Rolls up to {props.parentTitle}</p>
+          <Show when={props.economics?.accounting}>{(task) => <TaskCostDetails unit={accountingPresentation(task(), props.economics?.accountingUnavailable)} />}</Show>
         </div>
       </Modal>
     </Show>

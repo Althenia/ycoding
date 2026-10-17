@@ -1485,7 +1485,7 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("auto handles child permissions and questions for yolo and goal roots without notifications", () =>
+  it.live("auto handles child permissions at YOLO and child questions with the child toggle without notifications", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -1530,19 +1530,21 @@ describe("SubagentTool", () => {
           const db = (yield* Database.Service).db
 
           const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
-          for (const yolo of [0, 1, 2, 3]) {
+          for (const yolo of [0, 1, 2]) {
             yield* autonomy.setYolo({ sessionID: parent.id, yolo })
             expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(yolo >= 1)
-            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(yolo >= 1)
-            expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(yolo >= 2)
-            if (yolo >= 2) continue
+            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(yolo >= 2)
+            expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(false)
             const question = yield* orchestration.question(child.sessionID, `Manual question at YOLO ${yolo}`)
             expect(question.autoAnswered).toBe(false)
             expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: question.question.id } })
             yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id, text: "Human answer" })
           }
 
-          for (const mode of [2, 3, "goal"] as const) {
+          yield* autonomy.set({ sessionID: parent.id, autoAnswer: true })
+          expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(false)
+          yield* autonomy.set({ sessionID: child.sessionID, autoAnswer: true })
+          for (const mode of [2, "goal"] as const) {
             yield* db
               .update(SessionTable)
               .set({
@@ -1565,15 +1567,15 @@ describe("SubagentTool", () => {
               .run()
               .pipe(Effect.orDie)
 
-            expect(
-              yield* permission.ask({
-                id: Permission.ID.create(`per_child_${mode}`),
-                sessionID: child.sessionID,
-                agent: Agent.ID.make("reviewer"),
-                action: "edit",
-                resources: ["src/index.ts"],
-              }),
-            ).toMatchObject({ effect: "allow" })
+            const childPermission = yield* permission.ask({
+              id: Permission.ID.create(`per_child_${mode}`),
+              sessionID: child.sessionID,
+              agent: Agent.ID.make("reviewer"),
+              action: "edit",
+              resources: ["src/index.ts"],
+            })
+            expect(childPermission).toMatchObject({ effect: mode === "goal" ? "ask" : "allow" })
+            if (mode === "goal") yield* permission.reply({ requestID: childPermission.id, reply: "once" })
             expect(
               yield* permission.ask({
                 id: Permission.ID.create(`per_child_deny_${mode}`),
@@ -1640,7 +1642,7 @@ describe("SubagentTool", () => {
               .all()
               .pipe(Effect.orDie))
               .filter((item) => item.type === "question"),
-          ).toHaveLength(2)
+          ).toHaveLength(3)
         }),
       ),
     ),

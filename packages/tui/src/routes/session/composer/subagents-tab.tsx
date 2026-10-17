@@ -13,6 +13,11 @@ import { stringWidth } from "../../../util/string-width"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 import { useToast } from "../../../ui/toast"
+import { errorMessage } from "../../../util/error"
+import { escapeTerminalText } from "../../../util/terminal-text"
+import { useDialog } from "../../../ui/dialog"
+import { TaskCostDialog } from "../usage-cost"
+import { accountingPresentation } from "../../../util/usage-accounting"
 import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
@@ -30,6 +35,7 @@ interface SubagentEntry {
   endedAt?: number
   current: boolean
   pinnedAt?: number
+  stoppedRecoveryItemID?: string
 }
 
 type CancelClient = {
@@ -117,6 +123,7 @@ export function entriesFromTasks(
       endedAt: isActiveSubagent(task.state) ? undefined : task.time.updated,
       current: task.sessionID === currentSessionID,
       ...(task.pinnedAt === undefined ? {} : { pinnedAt: task.pinnedAt }),
+      ...(task.stoppedRecovery === undefined ? {} : { stoppedRecoveryItemID: task.stoppedRecovery.itemID }),
     }))
 }
 
@@ -149,7 +156,8 @@ export function subagentScrollIndex(
   )
 }
 
-export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
+export function taskStatusLabel(state: SessionOrchestrationTask["state"], stopped = false) {
+  if (stopped) return "stopped"
   return {
     starting: "starting",
     running: "running",
@@ -176,6 +184,16 @@ const AGENT_WIDTH = 16
 const TITLE_MIN_WIDTH = 8
 /** Composer padding (3 left, 4 right) plus the row's own right padding. */
 const COMPOSER_INSET = 8
+
+// Outlives the tab so a reply that settles after the tab closes or the Session changes can neither be replayed nor lost.
+const [recovery, setRecovery] = createStore<Record<string, "sending" | "sent" | { failed: string }>>({})
+
+function recoveryNote(state: "sending" | "sent" | { failed: string } | undefined, shortcut: string) {
+  if (state === "sending") return "Continuing…"
+  if (state === "sent") return "Continue requested"
+  if (state) return `Continue unresolved · ${escapeTerminalText(state.failed)}`
+  return `Stopped after restart · ${shortcut} continue`
+}
 
 /**
  * The picker row shares its terminal with the docked rail, so the widest row it can own is the
@@ -251,6 +269,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
   const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
   const toast = useToast()
+  const dialog = useDialog()
   const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -289,6 +308,12 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
     if (!composer.active("subagents")) return
     const id = parentID()
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
+  })
+  createEffect(() => {
+    if (!composer.active("subagents")) return
+    const sessionIDs = allEntries().map((entry) => entry.sessionID)
+    if (sessionIDs.length === 0) return
+    void data.session.taskCosts.sync(parentID(), sessionIDs).catch(() => undefined)
   })
   createEffect(() => {
     const rootID = familyRootID()
@@ -418,14 +443,9 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
           { label: "Enter", shortcut: "attach", gapAfter: 3 },
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           ...(canCancelSubagent(entry.status) ? [{ label: "⌃x k", shortcut: "cancel", gapAfter: 4 }] : []),
-          {
-            label: shortcuts.get("composer.subagent.pin.toggle") ?? "p",
-            shortcut: entry.pinnedAt === undefined ? "pin" : "unpin",
-            gapAfter: 3,
-          },
-          ...(entry.status === "waiting" && entry.awaitingInput
-            ? [{ label: shortcuts.get("composer.subagent.answer") ?? "r", shortcut: "answer", gapAfter: 3 }]
-            : []),
+          { label: shortcuts.get("composer.subagent.pin.toggle") ?? "p", shortcut: entry.pinnedAt === undefined ? "pin" : "unpin", gapAfter: 3 },
+          ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: shortcuts.get("composer.subagent.answer") ?? "r", shortcut: "answer", gapAfter: 3 }] : []),
+          ...(entry.stoppedRecoveryItemID ? [{ label: shortcuts.get("composer.subagent.recovery.continue") ?? "⇧c", shortcut: "continue", gapAfter: 3 }] : []),
           ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
           ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
@@ -443,6 +463,39 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
     mode: "composer",
     enabled: () => composer.active("subagents"),
     commands: [
+      { id: "session.subagent.cost", title: "Recursive subagent task cost", group: "Subagents", bind: "c", run: () => {
+        const entry = selectedEntry()
+        if (!entry) return
+        dialog.replace(() => <TaskCostDialog unit={data.session.taskCosts.get(parentID(), entry.sessionID) ? accountingPresentation(data.session.taskCosts.get(parentID(), entry.sessionID)!, data.session.taskCosts.state(parentID()) === "unavailable") : undefined} loading={data.session.taskCosts.state(parentID()) === "loading"}
+          onRefresh={() => { data.session.taskCosts.invalidate(parentID()); void data.session.taskCosts.sync(parentID(), allEntries().map((task) => task.sessionID)).catch(() => undefined) }} />)
+      } },
+      {
+        id: "session.subagent.cost",
+        title: "Recursive subagent task cost",
+        group: "Subagents",
+        bind: "c",
+        run() {
+          const entry = selectedEntry()
+          if (!entry) return
+          const parent = parentID()
+          const unit = () => {
+            const task = data.session.taskCosts.get(parent, entry.sessionID)
+            return task ? accountingPresentation(task, data.session.taskCosts.state(parent) === "unavailable") : undefined
+          }
+          dialog.replace(() => (
+            <TaskCostDialog
+              unit={unit()}
+              loading={data.session.taskCosts.state(parent) === "loading"}
+              onRefresh={() => {
+                data.session.taskCosts.invalidate(parent)
+                void data.session.taskCosts
+                  .sync(parent, allEntries().map((item) => item.sessionID))
+                  .catch(() => undefined)
+              }}
+            />
+          ))
+        },
+      },
       {
         id: "composer.subagent.up",
         title: "Previous subagent",
@@ -515,6 +568,27 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         },
       },
       {
+        id: "composer.subagent.recovery.continue",
+        title: "Continue stopped subagent",
+        group: "Composer",
+        bind: "shift+c",
+        run() {
+          const entry = selectedEntry()
+          const itemID = entry?.stoppedRecoveryItemID
+          if (!entry || !itemID || recovery[itemID] !== undefined) return
+          setRecovery(itemID, "sending")
+          void client.api.review
+            .decide({ sessionID: entry.sessionID, itemID, decision: { kind: "recovery", choice: "continue" } })
+            .then(() => {
+              setRecovery(itemID, "sent")
+              const id = parentID()
+              data.session.subagent.invalidate(id)
+              return data.session.subagent.sync(id)
+            })
+            .catch((error) => setRecovery(itemID, { failed: errorMessage(error) }))
+        },
+      },
+      {
         id: "composer.subagent.pin.toggle",
         title: "Pin or unpin subagent task",
         group: "Composer",
@@ -562,8 +636,8 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         scrollbarOptions={{ visible: false }}
         width="100%"
         maxWidth={dimensions().width}
-        maxHeight={16}
-        paddingTop={2}
+        maxHeight={Math.max(1, Math.min(16, dimensions().height - 16))}
+        paddingTop={dimensions().height <= 24 ? 1 : 2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
         <Show
@@ -590,6 +664,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                     const statusColor = createMemo(() => {
                       if (awaitingInput()) return theme.text.feedback.warning.default
                       if (entry.status === "running") return theme.text.feedback.success.default
+                      if (entry.stoppedRecoveryItemID) return theme.text.feedback.warning.default
                       if (entry.status === "cancelled") return theme.text.feedback.error.default
                       return theme.text.subdued
                     })
@@ -612,7 +687,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                         >
                           <box width={STATUS_WIDTH} flexShrink={0}>
                             <text fg={statusColor()} wrapMode="none">
-                              {taskStatusLabel(entry.status)}
+                              {taskStatusLabel(entry.status, entry.stoppedRecoveryItemID !== undefined)}
                             </text>
                           </box>
                           <box flexShrink={0}>
@@ -644,6 +719,15 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                             status={entry.status === "running" ? "attached" : undefined}
                           />
                         </box>
+                        <Show when={entry.stoppedRecoveryItemID}>
+                          {(itemID) => (
+                            <box paddingLeft={16}>
+                              <text fg={typeof recovery[itemID()] === "object" ? theme.text.feedback.error.default : theme.text.subdued} wrapMode="word">
+                                {recoveryNote(recovery[itemID()], shortcuts.get("composer.subagent.recovery.continue") ?? "⇧c")}
+                              </text>
+                            </box>
+                          )}
+                        </Show>
                         <Show when={entry.awaitingInput && entry.detail}>
                           <box paddingLeft={16}>
                             <text fg={theme.text.feedback.warning.default} wrapMode="none">
@@ -694,6 +778,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
           </box>
         </Show>
       </scrollbox>
+      <text fg={theme.text.subdued}>c inclusive task cost details · totals include descendants</text>
     </Show>
   )
 }

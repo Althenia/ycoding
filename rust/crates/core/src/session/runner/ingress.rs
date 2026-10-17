@@ -700,6 +700,25 @@ impl Local {
         config: &Configuration,
         input: CommandInput<'_>,
     ) -> Result<Pending, IngressError> {
+        self.command_from(
+            execution,
+            commands,
+            mcp,
+            config,
+            input,
+            crate::session::autonomy::Origin::User,
+        )
+        .await
+    }
+    pub async fn command_from(
+        &self,
+        execution: &crate::session::execution::Execution,
+        commands: &command::Service,
+        mcp: Option<&crate::resources::mcp::Service>,
+        config: &Configuration,
+        input: CommandInput<'_>,
+        origin: crate::session::autonomy::Origin,
+    ) -> Result<Pending, IngressError> {
         let lock = self.ingress_lock(instructions::join(
             &["command:".into(), input.request.id.as_lossless().clone()],
             "",
@@ -709,7 +728,9 @@ impl Local {
         if self.0.services.store.pending(&input.request.id)?.is_some()
             || self.0.services.store.message(&input.request.id)?.is_some()
         {
-            return Ok(execution.prompt(input.request, input.resume).await?);
+            return Ok(execution
+                .prompt_with_origin(input.request, input.resume, origin)
+                .await?);
         }
         let command = commands.get(input.name);
         let agent = command
@@ -801,7 +822,9 @@ impl Local {
             metadata.insert("projectArtifact".into(), provenance.message().encode());
             metadata
         });
-        let admitted = execution.prompt(request, input.resume).await?;
+        let admitted = execution
+            .prompt_with_origin(request, input.resume, origin)
+            .await?;
         if let Some(source) = source.filter(|_| provenance.is_some())
             && source
                 .activate(ActivationInput {
@@ -851,6 +874,8 @@ impl Local {
                         metadata: Some(metadata),
                         skip_review: false,
                         holder: None,
+                        defer_shell: false,
+                        source: None,
                     })
                     .map_err(IngressError::Guardrail)?;
                 let reservation = match admission.wait {

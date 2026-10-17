@@ -37,6 +37,11 @@ export const connectorOperations = {
   "session.interrupt": [4037, "session.interrupt", "A", "MUTATION"],
   "session.prediction": [4082, "session.prediction", "B-reuse", "MUTATION"],
   "session.promptGenerate": [4083, "session.promptGenerate", "B-reuse", "MUTATION"],
+  "session.usageReport": [4078, "session.usageReport", "A", "READ"],
+  "session.promptCosts": [4084, "session.promptCosts", "A", "READ"],
+  "session.taskCosts": [4085, "session.taskCosts", "A", "READ"],
+  "session.review.list": [4086, "session.review.list", "A", "READ"],
+  "session.review.decide": [4087, "session.review.decide", "A", "MUTATION"],
   "session.permission.list": [4047, "session.permission.list", "A", "READ"],
   "session.permission.reply": [4048, "session.permission.reply", "B-reuse", "MUTATION"],
   "session.guardrail.status": [4033, "session.guardrail.status", "A", "READ"],
@@ -63,6 +68,10 @@ export const connectorOperations = {
   "usage.providers": [2055, "providerUsage.list", "B-reuse", "READ"],
   "usage.summary": [2058, "usage.get", "A", "READ"],
   "usage.report": [2059, "usage.report", "A", "READ"],
+  "usage.forecast": [2063, "providerUsage.forecast", "B-reuse", "READ"],
+  "incident.report": [2064, "incident.report", "A", "READ"],
+  "incident.recent": [2065, "incident.recent", "A", "READ"],
+  "incident.guidance.get": [2066, "incident.guidance.get", "B-reuse", "READ"],
   "machine.keepAwake.get": [3025, "keepAwake.get", "A", "READ"],
   "machine.keepAwake.set": [3026, "keepAwake.set", "A", "MUTATION"],
   "machine.telemetry.consent.get": [3047, "telemetry.consent.get", "A", "READ"],
@@ -98,6 +107,8 @@ export function connectorScopeOptions(name: string) {
     "shell.output": ["SESSION"],
     "session.create": ["WORKSPACE"],
     "providerUsage.list": ["MACHINE"],
+    "providerUsage.forecast": ["MACHINE", "SESSION"],
+    "incident.guidance.get": ["SESSION"],
   }[name]
   return scopes
     ? ["REMOTE_CLIENT", "RELAY"]

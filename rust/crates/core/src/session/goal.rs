@@ -11,14 +11,12 @@ use crate::{
 use std::{string::FromUtf16Error, sync::Arc};
 use ycoding_schema::{DomainDecode, location, parse_json, permission, session, session_message};
 
-pub const SYSTEM: &str = "Handle the task identified in the request using the recent conversation context.\n\n- For goal synthesis, preserve the user's authority and produce the current autonomous-work goal with its intended outcome and observable completion condition.\n- For a user-proxy steer, preserve the active goal exactly. Use the latest assistant response and context to direct the next useful action. Decide on the user's behalf: answer any question or choice the assistant raises with the safest reasonable option that serves the goal, so the user is not consulted until the goal is satisfied.\n- Never grant or imply human approval, permission, authorization, or confirmation. Do not weaken permission ceilings, guardrails, or required human review.\n\nOutput exactly one concise imperative sentence, or two only when required for clarity. Do not use Markdown, a preamble, an explanation, or quotation marks.";
-
 pub fn agent() -> ycoding_schema::agent::Info {
     let mut info = agent::empty("goal".into());
     info.name = "Goal".into();
     info.mode = "primary".into();
     info.hidden = true;
-    info.system = Some(SYSTEM.into());
+    info.system = Some(agent::prompts::GOAL.into());
     info.permissions = vec![
         permission::Rule::decode(
             &parse_json(r#"{"action":"*","resource":"*","effect":"deny"}"#)
@@ -158,6 +156,15 @@ impl Service {
                 &context
             },
         );
+        let attribution =
+            super::usage_attribution::entry(&self.store.client, session.id.as_lossless())
+                .await
+                .map_err(|_| Error::CalculationFailed)?;
+        let _activity = super::usage_activity::contribute(
+            &self.store.client,
+            session.id.clone(),
+            attribution.anchor().cloned(),
+        );
         let output = environment
             .generate
             .generate(Request {
@@ -168,6 +175,7 @@ impl Service {
                 user: prompt,
                 character_limit: usize::MAX,
                 cancellation,
+                attribution,
             })
             .await;
         if cancellation.is_cancelled() {

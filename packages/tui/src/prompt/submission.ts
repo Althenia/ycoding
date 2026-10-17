@@ -15,12 +15,7 @@ import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
 import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
-import {
-  createLandingSession,
-  landingAutonomyPayload,
-  persistLandingAutonomy,
-  persistLandingDaybreak,
-} from "../util/landing-session"
+import { createLandingSession, landingAutonomyPayloads, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
 import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client/v5"
@@ -33,7 +28,7 @@ export type PromptSubmissionPayload = {
   mode: NonNullable<PromptInfo["mode"]>
   agentID: string
   daybreak?: ModelDaybreak
-  autonomy?: { yolo: YoloLevel; goal?: string }
+  autonomy?: { yolo: YoloLevel; goal?: string; autoAnswer?: boolean }
   model: ModelRef
   modelSelectionPending: boolean
   editor?: { key: string; text: string }
@@ -47,6 +42,7 @@ type Submission = {
   location: LocationRef
   skillOnly?: string
   steerNow?: boolean
+  createdSession?: SessionInfo
   created: number
   state: "queued" | "sending" | "attention"
   phase: string
@@ -78,6 +74,13 @@ export function createPromptSubmissions(input: {
   function update(entry: Submission, value: Partial<Submission>) {
     Object.assign(entry, value)
     setEntries((current) => [...current])
+  }
+
+  function announceCreated(entry: Submission) {
+    if (!entry.createdSession) return
+    const session = entry.createdSession
+    entry.createdSession = undefined
+    input.created?.(session)
   }
 
   async function request<T>(
@@ -116,6 +119,7 @@ export function createPromptSubmissions(input: {
     const sessionID = submission.sessionID
     update(entry, { state: "sending" })
     if (entry.consumed || entry.discarded) {
+      announceCreated(entry)
       if (entry.completed.has("cleanup")) return
       if (entry.discarded) await entry.onDiscarded?.()
       if (!entry.discarded) {
@@ -145,14 +149,15 @@ export function createPromptSubmissions(input: {
         }),
       )
       submission.creationConfirmed = true
-      input.created?.(session)
+      entry.createdSession = session
     }
-    const autonomy = landingAutonomyPayload(payload.autonomy)
-    if (autonomy && !entry.completed.has("autonomy")) {
+    const autonomyPayloads = landingAutonomyPayloads(payload.autonomy)
+    if (autonomyPayloads.length > 0 && !entry.completed.has("autonomy")) {
       update(entry, { phase: "Setting autonomy" })
-      await request(entry, "autonomy", (signal) =>
-        persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal }),
-      )
+      await request(entry, "autonomy", async (signal) => {
+        for (const autonomy of autonomyPayloads)
+          await persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal })
+      })
       entry.completed.add("autonomy")
     }
     if (payload.daybreak && !entry.completed.has("daybreak")) {
@@ -161,6 +166,7 @@ export function createPromptSubmissions(input: {
       await request(entry, "daybreak", (signal) => persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }))
       entry.completed.add("daybreak")
     }
+    announceCreated(entry)
     if (entry.skillOnly) {
       update(entry, { phase: "Loading skill" })
       await request(entry, "standalone", (signal) =>
@@ -304,7 +310,8 @@ export function createPromptSubmissions(input: {
         setEntries((current) => current.filter((item) => item !== entry))
       })
       .catch((error: unknown) => {
-        if (!disposed)
+        if (!disposed) {
+          announceCreated(entry)
           update(entry, {
             state: "attention",
             error: errorMessage(error),
@@ -318,6 +325,7 @@ export function createPromptSubmissions(input: {
                     : entry.phase + " unresolved"
             } · Retry send`,
           })
+        }
       })
       .finally(() => {
         running.delete(sessionID)

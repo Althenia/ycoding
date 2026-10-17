@@ -293,6 +293,7 @@ const permissions = Layer.mock(Permission.Service, {
     }),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: () => Effect.succeed({ release: Effect.void }),
 })
 const events = Layer.mock(EventRuntime.Service, { subscribe: () => Stream.never })

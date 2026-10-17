@@ -73,6 +73,7 @@ const route: FetchHandler = (url) => {
           noProgress: 3,
           maxNoProgress: 5,
         },
+        effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false },
       },
     })
   if (url.pathname === `/api/session/${sessionID}/todo`)
@@ -277,7 +278,7 @@ const route: FetchHandler = (url) => {
   return undefined
 }
 
-test("captures the expanded goal and YOLO session with populated rail fixtures", async () => {
+test("captures the expanded goal session with populated rail fixtures", async () => {
   const output = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
   await mkdir(output, { recursive: true })
 
@@ -351,7 +352,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(rail).not.toContain("3 / 5")
         // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
-        expect(rail).toMatch(/−\s+AUTONOMY\s+Manual · goal/)
+        expect(rail).toMatch(/−\s+AUTONOMY\s+Ask first · goal/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

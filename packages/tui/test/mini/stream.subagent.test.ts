@@ -145,7 +145,6 @@ function subagentProgress(childID: string) {
     id: "evt_sub_progress",
     created: 3,
     type: "session.tool.progress",
-    durable: durable("ses_1", 2),
     data: {
       sessionID: "ses_1",
       assistantMessageID: MESSAGE_ID,

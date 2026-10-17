@@ -2,6 +2,8 @@ use crate::session::codec::Field;
 use crate::{Error, IndexDefinition, TableSpec};
 use ycoding_schema::LosslessString;
 
+pub const IMPORTER_VERSION: i64 = 2;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableSummary {
     pub name: String,
@@ -27,7 +29,7 @@ impl TableSpec for ProvenanceTable {
         vec![]
     }
     fn encode(record: &Report) -> Result<Vec<u8>, Error> {
-        if record.importer_version != 1 || record.source_bytes < 0 {
+        if record.importer_version != IMPORTER_VERSION || record.source_bytes < 0 {
             return Err(Error::Incompatible("import provenance version or size"));
         }
         let mut bytes = vec![1];
@@ -54,7 +56,7 @@ impl TableSpec for ProvenanceTable {
         let source_bytes = i64::decode(&mut bytes)?;
         let importer_version = i64::decode(&mut bytes)?;
         let count = i64::decode(&mut bytes)?;
-        if !(0..=49).contains(&count) {
+        if !(0..=52).contains(&count) {
             return Err(Error::Incompatible("import table count"));
         }
         let tables = (0..count)

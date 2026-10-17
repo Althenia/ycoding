@@ -59,6 +59,16 @@ impl Locations for Placement {
 struct LocalExecution;
 
 impl orchestration::Execution for LocalExecution {
+    fn resume(&self, id: &session::Id) -> RunFuture {
+        let id = id.clone();
+        Box::pin(async move {
+            execution::Execution::global()
+                .unwrap()
+                .request_resume(&id)
+                .await
+        })
+    }
+
     fn wake(&self, id: &session::Id) -> Outcome {
         execution::Execution::global().unwrap().wake(id)
     }
@@ -238,6 +248,8 @@ async fn phase() {
                 custom: Arc::new(Vec::new),
                 enabled: true,
                 limits: Limits::default(),
+                decide_reviews: false,
+                decide_hard_reviews: true,
             },
             publisher,
         );

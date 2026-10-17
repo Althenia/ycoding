@@ -1,0 +1,205 @@
+bun test v1.4.3 (c6da4a4d3)
+
+test/cutover-manifest.test.ts:
+ 7 | 
+ 8 | const root = path.resolve(import.meta.dir, "../../..")
+ 9 | 
+10 | test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
+11 |   const manifest = await generateManifest(root)
+12 |   expect(manifest.counts).toEqual({ endpoint: 201, connector: 70, notice: 4 })
+                               ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "connector": 70,
+-   "endpoint": 201,
++   "connector": 66,
++   "endpoint": 198,
+    "notice": 4,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/remote/test/cutover-manifest.test.ts:12:27)
+(fail) TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source [7.48ms]
+(pass) TEST-057 retired source names are migration evidence, never manifest aliases [4.47ms]
+(pass) TEST-057 public event membership is unique and descriptor-referenced events are declared [0.08ms]
+(pass) TEST-057 inventory rejects missing section ## API Spec: Complete Local Endpoint Inventory explicitly [10.39ms]
+(pass) TEST-057 inventory rejects missing section ### Explicit local transport/domain exceptions explicitly [5.51ms]
+(pass) TEST-057 inventory rejects missing section ## Complete Remote Operation Inventory explicitly [6.64ms]
+(pass) TEST-057 inventory rejects missing section ### Relay-owned notice operations explicitly [5.49ms]
+(pass) TEST-057 inventory rejects missing section ## Complete Application Event Inventory explicitly [11.45ms]
+(pass) TEST-057 inventory rejects missing endpoint names explicitly [5.38ms]
+(pass) TEST-057 inventory rejects missing connector disposition explicitly [12.83ms]
+
+test/connector-conformance.test.ts:
+(pass) remote membership equals the frozen connector and relay notice operation IDs without runtime aliases [0.51ms]
+(pass) session requirement and workspace placement use existing scope metadata [0.05ms]
+44 |     remoteDescriptors.filter((item) => item.diagnosticName.startsWith("notice.")).map((item) => item.scope),
+45 |   ).toEqual([ScopeKind.MACHINE, ScopeKind.MACHINE, ScopeKind.MACHINE, ScopeKind.MACHINE])
+46 | })
+47 | 
+48 | test("relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices", () => {
+49 |   expect(relayDescriptors).toHaveLength(70)
+                                ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 70
+Received length: 66
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/remote/test/connector-conformance.test.ts:49:28)
+(fail) relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices [0.07ms]
+(pass) Rust/TS remote goal start, resume and stop use the shared autonomy branches [1.20ms]
+(pass) Rust/TS canonical file matches retain URI and file type without remote Location leakage [0.40ms]
+(pass) family activity preserves the producer's 80-code-point boundary rather than an 80-unit boundary [0.40ms]
+(pass) Rust/TS remote form arrays use the shared result while derived auth retains result markers [0.25ms]
+(pass) Rust/TS notice pages reuse foundation Notice while mutation settlement remains no-content [0.36ms]
+135 |     ),
+136 |   ).toThrow("collection limit")
+137 | })
+138 | 
+139 | test("remote bindings expose the same closed generated per-role operation allowlists", () => {
+140 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(74)
+                                                           ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 74
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/remote/test/connector-conformance.test.ts:140:54)
+(fail) remote bindings expose the same closed generated per-role operation allowlists [0.08ms]
+
+test/binary-conformance.test.ts:
+(pass) canonical control collection metadata enforces each current RemoteLimits N/N+1 [5.62ms]
+(pass) alert titles preserve 120-code-point, lossless and trim/control/bidi constraints [0.38ms]
+(pass) independent golden: empty-string [0.09ms]
+(pass) independent golden: scalar-string [0.01ms]
+(pass) independent golden: lone-high [0.02ms]
+(pass) independent golden: lone-low [0.01ms]
+(pass) independent golden: mixed-units [0.01ms]
+(pass) independent golden: null [0.02ms]
+(pass) independent golden: false [0.01ms]
+(pass) independent golden: zero [0.05ms]
+(pass) independent golden: fraction
+(pass) independent golden: bytes
+(pass) independent golden: value-string [0.01ms]
+(pass) independent golden: empty-list [0.01ms]
+(pass) independent golden: empty-object
+(pass) independent golden: object-lone-key [0.04ms]
+(pass) independent golden: clear [0.02ms]
+(pass) independent golden: present-empty [0.01ms]
+(pass) independent golden: present-false [0.02ms]
+(pass) independent golden: bigint [0.03ms]
+(pass) independent golden: present-empty-list
+(pass) independent golden: hello [0.13ms]
+(pass) independent golden: ready [0.05ms]
+(pass) independent golden: request [0.03ms]
+(pass) independent golden: result [0.03ms]
+(pass) independent golden: error [0.02ms]
+(pass) independent golden: events [0.08ms]
+(pass) independent golden: stream-end [0.01ms]
+(pass) independent golden: bulk-start [0.02ms]
+(pass) independent golden: bulk-piece [0.01ms]
+(pass) independent golden: bulk-end [0.03ms]
+(pass) independent golden: bulk-error [0.01ms]
+(pass) independent golden: descriptor [0.05ms]
+(pass) independent golden: public-catalog [0.96ms]
+(pass) independent golden: public-text-delta [0.07ms]
+(pass) independent golden: public-durable [0.07ms]
+(pass) independent golden: upload-raw [0.07ms]
+(pass) independent golden: global-form-scope [0.02ms]
+(pass) independent golden: fs-asset-metadata [0.03ms]
+(pass) independent golden: asset-empty-start [0.03ms]
+(pass) independent golden: ping [0.02ms]
+(pass) independent golden: pong [0.02ms]
+(pass) independent golden: cancel [0.02ms]
+(pass) independent golden: credit [0.04ms]
+(pass) independent golden: subscription_snapshot [0.02ms]
+(pass) independent golden: priority [0.02ms]
+(pass) independent golden: inventory_invalidated [0.02ms]
+(pass) independent golden: status [0.03ms]
+(pass) independent golden: completions [0.04ms]
+(pass) independent golden: blocked [0.04ms]
+(pass) independent golden: notice [0.02ms]
+(pass) independent golden: resync_required [0.03ms]
+(pass) independent golden: failure [0.02ms]
+(pass) independent golden: http-credit [0.01ms]
+(pass) independent golden: asset-metadata-empty [0.09ms]
+(pass) independent negative: asset-metadata-client [0.26ms]
+(pass) independent negative: asset-bad-mime [0.01ms]
+(pass) independent negative: asset-oversize
+(pass) independent negative: asset-empty-extra-piece [0.24ms]
+(pass) independent negative: bad-utf8 [0.02ms]
+(pass) independent negative: surrogate-utf8
+(pass) independent negative: odd-utf16
+(pass) independent negative: paired-only
+(pass) independent negative: both-branches
+(pass) independent negative: neither-branch
+(pass) independent negative: duplicate-singular
+(pass) independent negative: unknown-command [0.01ms]
+(pass) independent negative: hello-epoch [0.08ms]
+(pass) independent negative: hello-ledger [0.01ms]
+(pass) independent negative: hello-inner-epoch
+(pass) independent negative: before-ready [0.03ms]
+(pass) independent negative: depth-overflow [0.05ms]
+(pass) independent negative: field-overflow [23.85ms]
+(pass) independent negative: duplicate-key [0.06ms]
+(pass) independent negative: nan [0.01ms]
+(pass) independent negative: infinity
+(pass) independent negative: bad-bool
+(pass) independent negative: bad-varint [0.01ms]
+(pass) independent negative: bad-length
+(pass) independent negative: wrong-wire
+(pass) independent negative: concatenated-frame [0.09ms]
+(pass) independent negative: duplicate-command [0.02ms]
+(pass) independent negative: unknown-control
+(pass) independent negative: missing-command-field
+(pass) independent negative: missing-frame-body
+(pass) independent negative: both-frame-bodies
+(pass) independent negative: unknown-enum
+(pass) independent negative: tiny-credit
+(pass) independent negative: zero-credit [0.04ms]
+(pass) independent negative: http-credit-normal
+(pass) independent negative: http-credit-empty-id
+(pass) independent negative: stream-end-client [0.03ms]
+(pass) independent negative: stream-end-duplicate
+(pass) independent negative: public-event-empty [0.02ms]
+(pass) independent negative: public-event-duplicate [0.04ms]
+(pass) independent negative: ephemeral-durable [0.01ms]
+(pass) independent negative: upload-empty [0.02ms]
+(pass) duplicate singular command is rejected [0.28ms]
+(pass) unknown command field is rejected [0.02ms]
+(pass) canonical codecs preserve exact JS units and use scalar UTF-8 only when possible [0.18ms]
+(pass) presence, explicit clears, exact uint64 and negative zero survive [0.09ms]
+(pass) handshake establishes epochs and rejects repeated/stale/missing/wrong-direction frames without corrupting state [1.77ms]
+(pass) handshake rejects digest/revision/window mismatch and enforces both 5-second deadlines [0.26ms]
+(pass) depth and field-count exact boundaries remain accepted [23.01ms]
+(pass) inline/chunk/event/complete-frame byte bounds reject N+1 before dispatch [2.63ms]
+(pass) handshake, tiny control, event bytes, bulk announcement/end and all frame headers obey their exact bounds [0.99ms]
+388 |   for (const name of ["session.capturedChanges.list", "session.team.economics", "session.family.activity"]) {
+389 |     const operation = operations.find((operation) => operation.diagnosticName === name)
+390 |     expect(operation?.roles).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
+391 |     expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toContain(operation!.operationId)
+392 |   }
+393 |   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(74)
+                                                           ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 74
+Received length: 70
+
+      at <anonymous> (/Users/viadz/Workspace/Project/ycoding/.worktrees/stage-3d14/packages/remote/test/binary-conformance.test.ts:393:54)
+(fail) TEST-027 descriptor membership is exhaustive for operations, fields, oneofs and events [0.64ms]
+(pass) TEST-030 protocol and thin client generation is reproducible and matches checked-in consumers [16738.57ms]
+
+4 tests failed:
+(fail) TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source [7.48ms]
+(fail) relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices [0.07ms]
+(fail) remote bindings expose the same closed generated per-role operation allowlists [0.08ms]
+(fail) TEST-027 descriptor membership is exhaustive for operations, fields, oneofs and events [0.64ms]
+
+ 123 pass
+ 4 fail
+ 1799 expect() calls
+Ran 127 tests across 3 files. [16.92s]

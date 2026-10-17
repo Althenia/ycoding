@@ -6,10 +6,10 @@ mod provenance;
 mod read;
 
 use crate::{
-    Catalog, Metadata, Options, Store, TableDeclaration, analytics, artifacts, project, resources,
-    session,
+    Catalog, Metadata, Options, Store, TableDeclaration, analytics, artifacts, model_incident,
+    project, resources, session,
 };
-pub use provenance::{ProvenanceTable, Report, TableSummary};
+pub use provenance::{IMPORTER_VERSION, ProvenanceTable, Report, TableSummary};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
@@ -137,6 +137,7 @@ pub fn catalog(kind: DatabaseKind) -> Catalog {
                 .chain(session::TABLES)
                 .chain(artifacts::TABLES)
                 .chain(resources::TABLES)
+                .chain(model_incident::TABLES)
                 .copied()
                 .chain([
                     TableDeclaration::of::<analytics::DeliveryTable>(),
@@ -580,8 +581,16 @@ fn validate_source(db: &Connection, kind: DatabaseKind) -> Result<(), Error> {
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<BTreeSet<_>, _>>()?;
+    let migrated = kind == DatabaseKind::Core && names.contains("migration");
+    let analytics = migrated && mappings::analytics_migrated(db)?;
+    let incidents = migrated && mappings::incidents_migrated(db)?;
+    let present = |name: &str| {
+        (analytics || name != mappings::FACTS)
+            && (incidents || !mappings::INCIDENT_TABLES.contains(&name))
+    };
     let expected = mappings::tables(kind)
         .iter()
+        .filter(|table| present(table.name))
         .map(|table| table.name.to_owned())
         .collect::<BTreeSet<_>>();
     if names != expected {
@@ -606,8 +615,15 @@ fn validate_source(db: &Connection, kind: DatabaseKind) -> Result<(), Error> {
     if db.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))? != "ok" {
         return Err(Error::Source("SQLite integrity check failed"));
     }
-    let task_owner_migrated = kind == DatabaseKind::Core && mappings::task_owner_migrated(db)?;
-    for table in mappings::tables(kind) {
+    for table in mappings::tables(kind)
+        .iter()
+        .filter(|table| present(table.name))
+    {
+        let missing: &[&str] = if kind == DatabaseKind::Core {
+            mappings::missing_columns(db, table.name)?
+        } else {
+            &[]
+        };
         let mut columns = db
             .prepare(&format!("PRAGMA table_xinfo('{}')", table.name))?
             .query_map([], |row| row.get::<_, String>(1))?
@@ -641,11 +657,7 @@ fn validate_source(db: &Connection, kind: DatabaseKind) -> Result<(), Error> {
                 .columns
                 .iter()
                 .copied()
-                .filter(|column| {
-                    table.name != "session_task"
-                        || task_owner_migrated
-                        || !["owner_pid", "owner_started"].contains(column)
-                })
+                .filter(|column| !missing.contains(column))
                 .map(str::to_owned)
                 .collect()
         {

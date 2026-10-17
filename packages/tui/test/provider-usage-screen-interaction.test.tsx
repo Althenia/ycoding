@@ -206,7 +206,6 @@ async function route(url: URL, request: Request) {
       `/api/session/${sessionID}/permission`,
       `/api/session/${sessionID}/todo`,
       `/api/session/${sessionID}/skills`,
-      `/api/session/${sessionID}/subagent`,
       "/api/shell",
       "/api/mcp",
       "/api/integration",
@@ -400,3 +399,78 @@ test.each([80, 189])(
   },
   60_000,
 )
+
+const incidentCalls = { report: [] as URLSearchParams[], recent: [] as URLSearchParams[], guidance: [] as URLSearchParams[], clear: [] as URLSearchParams[] }
+
+function incidentRoute(guidance: { text?: string }) {
+  return (url: URL, request: Request) => {
+    if (url.pathname === "/api/incident/report") {
+      incidentCalls.report.push(new URLSearchParams(url.searchParams))
+      return json({
+        data: {
+          rows: [{ providerID: "openai", modelID: "gpt-5.6", fallbacks: 3, escalated: 2, rejected: 1, last: Date.UTC(2026, 8, 22, 11, 30) }],
+          groups: 1,
+        },
+      })
+    }
+    if (url.pathname === "/api/incident/recent") {
+      incidentCalls.recent.push(new URLSearchParams(url.searchParams))
+      return json({
+        data: {
+          items: [{ id: "inc_1", time: Date.UTC(2026, 8, 22, 11, 30), kind: "fallback", category: "rate_limit", ruleIDs: [], agent: "build" }],
+        },
+      })
+    }
+    if (url.pathname === "/api/incident/guidance" && request.method === "DELETE") {
+      incidentCalls.clear.push(new URLSearchParams(url.searchParams))
+      delete guidance.text
+      return json({ data: { clearedAt: Date.UTC(2026, 8, 22, 12), enabled: true } })
+    }
+    if (url.pathname === "/api/incident/guidance") {
+      incidentCalls.guidance.push(new URLSearchParams(url.searchParams))
+      return json({ data: { ...(guidance.text ? { text: guidance.text } : {}), enabled: true } })
+    }
+    return route(url, request)
+  }
+}
+
+test("reaches Incidents in the real Usage route and clears guidance on a second ctrl+d without exiting the app", async () => {
+  for (const calls of Object.values(incidentCalls)) calls.length = 0
+  const guidance = { text: "Prefer a smaller model after repeated rate limits." }
+  const screen = await renderScreen({ width: 160, height: 60, args: { sessionID }, route: incidentRoute(guidance), settle: "Message YCoding…" })
+  try {
+    await screen.waitForEventStream()
+    await screen.input.pressKey("x", { ctrl: true })
+    await screen.input.pressKey("u", { shift: true })
+    await waitFor(screen, "Overview")
+    await screen.input.pressKey("ARROW_LEFT")
+    await waitFor(screen, "FALLBACKS")
+    await waitFor(screen, "Prefer a smaller model after repeated rate limits.")
+    expect(incidentCalls.report[0]?.get("group")).toBe("model")
+    expect(incidentCalls.recent[0]?.get("provider")).toBe("openai")
+    expect(incidentCalls.recent[0]?.get("model")).toBe("gpt-5.6")
+    expect(incidentCalls.recent[0]?.get("limit")).toBe("20")
+    expect(incidentCalls.guidance[0]?.get("provider")).toBe("openai")
+
+    await screen.input.pressKey("d", { ctrl: true })
+    await waitFor(screen, "Press ctrl+d again to clear guidance for openai/gpt-5.6")
+    expect(screen.renderer.isDestroyed).toBe(false)
+    expect(incidentCalls.clear).toHaveLength(0)
+
+    await screen.input.pressKey("d", { ctrl: true })
+    await waitFor(screen, "No guidance for this model")
+    expect(screen.renderer.isDestroyed).toBe(false)
+    expect(incidentCalls.clear).toHaveLength(1)
+    expect(incidentCalls.clear[0]?.get("provider")).toBe("openai")
+    expect(incidentCalls.clear[0]?.get("model")).toBe("gpt-5.6")
+    expect(screen.frame()).toContain("Incidents · All sessions")
+
+    await screen.input.pressKey("d", { ctrl: true })
+    await screen.renderer.idle()
+    expect(screen.renderer.isDestroyed).toBe(false)
+    expect(screen.frame()).not.toContain("Press ctrl+d again")
+    expect(incidentCalls.clear).toHaveLength(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)

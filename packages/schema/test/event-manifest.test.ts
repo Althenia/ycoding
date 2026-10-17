@@ -25,6 +25,20 @@ import { SessionMessage } from "../src/session-message.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
+  test("publishes minimal durable standard-match dismissal provenance", () => {
+    const data = {
+      sessionID: SessionID.make("ses_root"),
+      reviewSessionID: SessionID.make("ses_child"),
+      ruleID: "standard.review.force-push",
+      confidence: 0.9,
+    }
+    expect(Schema.decodeUnknownSync(SessionEvent.GuardrailDismissed.data)(data)).toEqual(data)
+    expect(EventManifest.Durable.get("session.guardrail.dismissed.1")).toBe(SessionEvent.GuardrailDismissed)
+    expect(EventManifest.Server.has("session.guardrail.dismissed")).toBe(true)
+    expect(SessionEvent.GuardrailDismissed.data.fields).not.toHaveProperty("answer")
+    for (const invalid of [{ confidence: 0.8999 }, { confidence: Infinity }, { ruleID: "custom-review" }])
+      expect(() => Schema.decodeUnknownSync(SessionEvent.GuardrailDismissed.data)({ ...data, ...invalid })).toThrow()
+  })
   test("keeps profile bindings private while accepting them in durable replay", () => {
     const definition = EventManifest.Durable.get("session.profile.bound.1")
     expect(definition).toBeDefined()
@@ -134,13 +148,24 @@ describe("public event manifest", () => {
     expect(Config.Event.Definitions).toEqual([Config.Event.Updated])
     expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Changed])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])
-    expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied])
+    expect(Permission.Event.Definitions).toEqual([
+      Permission.Event.Asked,
+      Permission.Event.Replied,
+      Permission.Event.Deferred,
+    ])
     expect(EventManifest.Latest.get("permission.asked")).toBe(Permission.Event.Asked)
     expect(EventManifest.Latest.get("permission.replied")).toBe(Permission.Event.Replied)
     expect(EventManifest.Latest.get("question.asked")).toBe(Question.Event.Asked)
     expect(EventManifest.Latest.get("question.replied")).toBe(Question.Event.Replied)
     expect(EventManifest.Latest.get("question.rejected")).toBe(Question.Event.Rejected)
-    expect(Form.Event.Definitions).toEqual([Form.Event.Created, Form.Event.Replied, Form.Event.Cancelled])
+    expect(EventManifest.Latest.get("question.timed_out")).toBe(Question.Event.TimedOut)
+    expect(Form.Event.Definitions).toEqual([
+      Form.Event.Created,
+      Form.Event.Replied,
+      Form.Event.Cancelled,
+      Form.Event.TimedOut,
+      Form.Event.Deferred,
+    ])
     expect(Reference.Event.Definitions).toEqual([Reference.Event.Updated])
     expect(Plugin.Event.Definitions).toEqual([Plugin.Event.Added, Plugin.Event.Updated])
     expect(McpEvent.Definitions).toEqual([McpEvent.ToolsChanged, McpEvent.ResourcesChanged, McpEvent.StatusChanged])
@@ -225,6 +250,7 @@ describe("public event manifest", () => {
         "session.model.selected.1",
         "session.profile.bound.1",
         "session.guardrail.approved.1",
+        "session.guardrail.decided.1",
         "session.daybreak.set.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",
@@ -240,6 +266,12 @@ describe("public event manifest", () => {
         "session.execution.failed.1",
         "session.execution.interrupted.1",
         "session.work.completed.1",
+        "session.guardrail.dismissed.1",
+        "session.guardrail.escalated.1",
+        "session.review.deferred.1",
+        "session.review.decided.1",
+        "session.review.withdrawn.1",
+        "session.review.consumed.1",
         "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.context.observed.1",
@@ -252,12 +284,12 @@ describe("public event manifest", () => {
         "session.step.started.1",
         "session.step.ended.1",
         "session.step.failed.1",
+        "session.step.rerouted.1",
         "session.text.started.1",
         "session.text.ended.1",
         "session.tool.input.started.1",
         "session.tool.input.ended.1",
         "session.tool.called.1",
-        "session.tool.progress.1",
         "session.tool.success.1",
         "session.tool.failed.1",
         "session.reasoning.started.1",
@@ -307,6 +339,9 @@ describe("public event manifest", () => {
     expect(SessionEvent.DiagnosticsUpdated.durability).toBe("ephemeral")
     expect(SessionEvent.Compaction.Delta.durability).toBe("ephemeral")
     expect(EventManifest.Durable.has("session.compaction.delta.1")).toBe(false)
+    expect(SessionEvent.Tool.Progress.durability).toBe("ephemeral")
+    expect(EventManifest.Durable.has("session.tool.progress.1")).toBe(false)
+    expect(EventManifest.ServerDefinitions).toContain(SessionEvent.Tool.Progress)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.UsageUpdated)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.DiagnosticsUpdated)
     expect(EventManifest.Definitions.every((definition) => definition.durability !== undefined)).toBe(true)

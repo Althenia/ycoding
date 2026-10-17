@@ -1,5 +1,7 @@
 use super::{
     execution::Execution,
+    history_pruning::free_bytes,
+    retention::Settings,
     runner::{Clock, WallClock},
 };
 use crate::resources::{config::Roots, tool_output_store};
@@ -14,10 +16,15 @@ use std::{
 use ycoding_schema::session;
 use ycoding_store::{
     Client, analytics,
-    session::{CLEANUP_BATCH, Projection, cleanup_projections, cleanup_sessions},
+    backup::Status,
+    model_incident,
+    session::{
+        CLEANUP_BATCH, CLEANUP_ROWS, CleanupCursor, Projection, cleanup_batch, cleanup_sessions,
+        delete_expired_facts, has_cleanup_rows, has_expired_facts,
+    },
 };
 
-pub const RETENTION_MS: i64 = 30 * 86_400_000;
+const DAY_MS: i64 = 86_400_000;
 pub const INTERVAL_MS: u64 = 3_600_000;
 static OWNER: AtomicBool = AtomicBool::new(false);
 
@@ -47,6 +54,7 @@ pub struct Cleanups {
     outputs: Arc<tool_output_store::Store>,
     clock: Arc<dyn Clock>,
     active: Arc<dyn Fn() -> Vec<session::Id> + Send + Sync>,
+    settings: Arc<dyn Fn() -> Settings + Send + Sync>,
 }
 impl Cleanups {
     pub fn new(
@@ -54,20 +62,27 @@ impl Cleanups {
         outputs: Arc<tool_output_store::Store>,
         clock: Arc<dyn Clock>,
         active: Arc<dyn Fn() -> Vec<session::Id> + Send + Sync>,
+        settings: Arc<dyn Fn() -> Settings + Send + Sync>,
     ) -> Self {
         Self {
             client,
             outputs,
             clock,
             active,
+            settings,
         }
     }
-    pub fn process(client: Client, roots: &Roots) -> Self {
+    pub fn process(
+        client: Client,
+        roots: &Roots,
+        settings: Arc<dyn Fn() -> Settings + Send + Sync>,
+    ) -> Self {
         Self::new(
             client,
             Arc::new(tool_output_store::Store::new(roots)),
             Arc::new(WallClock),
             Arc::new(|| Execution::global().map_or_else(Vec::new, Execution::active)),
+            settings,
         )
     }
     pub async fn context_exclusions(&self) -> Result<usize, Error> {
@@ -78,6 +93,51 @@ impl Cleanups {
     }
     pub async fn usage(&self) -> Result<usize, Error> {
         let deleted = self.projections(Projection::Usage).await?;
+        self.purge_pending().await?;
+        Ok(deleted)
+    }
+    pub async fn usage_facts(&self) -> Result<usize, Error> {
+        let cutoff = self.cutoff((self.settings)().usage_days);
+        let mut deleted = 0;
+        if has_expired_facts(&self.client.snapshot()?, cutoff)? && self.backup_ready().await? {
+            loop {
+                let removed = self
+                    .client
+                    .submit(move |tx| delete_expired_facts(tx, cutoff))?
+                    .await?;
+                deleted += removed;
+                if removed < CLEANUP_ROWS {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+        if deleted > 0 {
+            self.purge_pending().await?;
+        }
+        Ok(deleted)
+    }
+    pub async fn incidents(&self) -> Result<usize, Error> {
+        let cutoff = self.cutoff((self.settings)().incident_days);
+        let mut deleted = 0;
+        if model_incident::has_expired(&self.client.snapshot()?, cutoff)?
+            && self.backup_ready().await?
+        {
+            loop {
+                let removed = self
+                    .client
+                    .submit(move |tx| model_incident::delete_expired(tx, cutoff))?
+                    .await?;
+                deleted += removed;
+                if removed < model_incident::CLEANUP_ROWS {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+        Ok(deleted)
+    }
+    async fn purge_pending(&self) -> Result<(), Error> {
         let client = self.client.clone();
         tokio::task::spawn_blocking(move || {
             let pending = client
@@ -94,8 +154,7 @@ impl Cleanups {
             Ok::<_, Error>(())
         })
         .await
-        .map_err(Error::Worker)??;
-        Ok(deleted)
+        .map_err(Error::Worker)?
     }
     pub async fn tool_outputs(&self) -> Result<(), Error> {
         let now = self.clock.now();
@@ -106,67 +165,87 @@ impl Cleanups {
         };
         self.outputs.cleanup(now).await.map_err(Error::Io)
     }
+    fn cutoff(&self, days: i64) -> i64 {
+        self.clock.now().saturating_sub(days.saturating_mul(DAY_MS))
+    }
+    async fn backup_ready(&self) -> Result<bool, Error> {
+        let client = self.client.clone();
+        let now = self.clock.now();
+        let status = tokio::task::spawn_blocking(move || client.prepare_pruning(now, free_bytes))
+            .await
+            .map_err(Error::Worker)??;
+        match status {
+            Status::Ready => Ok(true),
+            Status::Blocked { notice } => {
+                if let Some(reason) = notice {
+                    tracing::warn!(%reason, "Session usage cleanup paused: verified backup unavailable");
+                }
+                Ok(false)
+            }
+        }
+    }
     async fn projections(&self, projection: Projection) -> Result<usize, Error> {
-        let cutoff = self.clock.now().saturating_sub(RETENTION_MS);
+        let cutoff = self.cutoff((self.settings)().records_days);
         let snapshot = Arc::new(self.client.snapshot()?);
         let initial: Vec<_> = (self.active)()
             .into_iter()
             .map(|id| id.as_lossless().clone())
             .collect();
-        if matches!(projection, Projection::Exclusions) {
-            let active = self.active.clone();
-            return Ok(self
-                .client
-                .submit(move |tx| {
-                    let mut after = None;
-                    let mut deleted = 0;
-                    loop {
-                        let sessions = cleanup_sessions(&snapshot, cutoff, after.as_ref())?;
-                        let mut exempt = initial.clone();
-                        exempt.extend(active().into_iter().map(|id| id.as_lossless().clone()));
-                        deleted += cleanup_projections(
-                            tx, &snapshot, &sessions, cutoff, &exempt, projection,
-                        )?
-                        .exclusions;
-                        if sessions.len() < CLEANUP_BATCH {
-                            return Ok(deleted);
-                        }
-                        after = sessions.last().cloned();
-                    }
-                })?
-                .await?);
-        }
+        let mut backup = false;
         let mut after = None;
         let mut deleted = 0;
         loop {
-            let snapshot = snapshot.clone();
-            let initial = initial.clone();
-            let active = self.active.clone();
-            let cursor = after.clone();
-            let (count, last, done) = self
-                .client
-                .submit(move |tx| {
-                    let sessions = cleanup_sessions(&snapshot, cutoff, cursor.as_ref())?;
-                    let mut exempt = initial;
-                    exempt.extend(active().into_iter().map(|id| id.as_lossless().clone()));
-                    let deleted =
-                        cleanup_projections(tx, &snapshot, &sessions, cutoff, &exempt, projection)?;
-                    Ok((
-                        match projection {
-                            Projection::Files => deleted.files,
-                            Projection::Usage => deleted.requests,
-                            Projection::Exclusions => unreachable!(),
-                        },
-                        sessions.last().cloned(),
-                        sessions.len() < CLEANUP_BATCH,
-                    ))
-                })?
-                .await?;
-            deleted += count;
-            if done {
+            let sessions = cleanup_sessions(&snapshot, cutoff, after.as_ref())?;
+            for session in &sessions {
+                if !has_cleanup_rows(&snapshot, session, projection)? {
+                    continue;
+                }
+                if !backup {
+                    if !self.backup_ready().await? {
+                        return Ok(deleted);
+                    }
+                    backup = true;
+                }
+                let mut cursor = CleanupCursor::default();
+                loop {
+                    let snapshot = snapshot.clone();
+                    let initial = initial.clone();
+                    let active = self.active.clone();
+                    let target = session.clone();
+                    let (batch, next) = self
+                        .client
+                        .submit(move |tx| {
+                            let mut exempt = initial;
+                            exempt.extend(active().into_iter().map(|id| id.as_lossless().clone()));
+                            let batch = cleanup_batch(
+                                tx,
+                                &snapshot,
+                                &target,
+                                cutoff,
+                                &exempt,
+                                projection,
+                                &mut cursor,
+                            )?;
+                            Ok((batch, cursor))
+                        })?
+                        .await?;
+                    deleted += match projection {
+                        Projection::Exclusions => batch.deleted.exclusions,
+                        Projection::Files => batch.deleted.files,
+                        Projection::Usage => batch.deleted.requests,
+                    };
+                    if batch.finished {
+                        break;
+                    }
+                    cursor = next;
+                    tokio::task::yield_now().await;
+                }
+                tokio::task::yield_now().await;
+            }
+            if sessions.len() < CLEANUP_BATCH {
                 return Ok(deleted);
             }
-            after = last;
+            after = sessions.last().cloned();
         }
     }
     pub async fn sweep(&self) -> Sweep {
@@ -175,6 +254,8 @@ impl Cleanups {
             (Kind::ContextExclusions, self.context_exclusions().await),
             (Kind::FileChanges, self.file_changes().await),
             (Kind::Usage, self.usage().await),
+            (Kind::UsageFacts, self.usage_facts().await),
+            (Kind::Incidents, self.incidents().await),
             (Kind::ToolOutputs, self.tool_outputs().await.map(|()| 0)),
         ] {
             match result {
@@ -182,6 +263,8 @@ impl Cleanups {
                     Kind::ContextExclusions => sweep.context_exclusions = count,
                     Kind::FileChanges => sweep.file_changes = count,
                     Kind::Usage => sweep.requests = count,
+                    Kind::UsageFacts => sweep.facts = count,
+                    Kind::Incidents => sweep.incidents = count,
                     Kind::ToolOutputs => {}
                 },
                 Err(error) => {
@@ -197,6 +280,8 @@ impl Cleanups {
             Kind::ContextExclusions => self.context_exclusions().await,
             Kind::FileChanges => self.file_changes().await,
             Kind::Usage => self.usage().await,
+            Kind::UsageFacts => self.usage_facts().await,
+            Kind::Incidents => self.incidents().await,
             Kind::ToolOutputs => self.tool_outputs().await.map(|()| 0),
         }
     }
@@ -207,6 +292,8 @@ pub enum Kind {
     ContextExclusions,
     FileChanges,
     Usage,
+    UsageFacts,
+    Incidents,
     ToolOutputs,
 }
 #[derive(Debug, Default)]
@@ -214,6 +301,8 @@ pub struct Sweep {
     pub context_exclusions: usize,
     pub file_changes: usize,
     pub requests: usize,
+    pub facts: usize,
+    pub incidents: usize,
     pub failures: Vec<(Kind, Error)>,
 }
 
@@ -247,6 +336,8 @@ impl Maintenance {
                 Kind::ContextExclusions,
                 Kind::FileChanges,
                 Kind::Usage,
+                Kind::UsageFacts,
+                Kind::Incidents,
                 Kind::ToolOutputs,
             ] {
                 let cleanups = cleanups.clone();

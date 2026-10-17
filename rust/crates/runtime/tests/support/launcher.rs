@@ -10,6 +10,26 @@ use ycoding_runtime::launch::service_filename;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+const INHERITED: [&str; 17] = [
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "windir",
+    "COMSPEC",
+    "COMPUTERNAME",
+    "SHELL",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "RUST_BACKTRACE",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "SystemDrive",
+];
+
 pub struct Directory(pub PathBuf);
 
 impl Default for Directory {
@@ -31,6 +51,11 @@ impl Directory {
 
     pub fn command(&self, version: &str, channel: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ycoding-runtime"));
+        for (key, _) in std::env::vars_os() {
+            if !INHERITED.iter().any(|name| key.eq_ignore_ascii_case(name)) {
+                command.env_remove(key);
+            }
+        }
         command
             .env("HOME", self.0.join("home"))
             .env("XDG_CONFIG_HOME", self.0.join("config"))
@@ -41,17 +66,12 @@ impl Directory {
             .env("YCODING_VERSION", version)
             .env("YCODING_CHANNEL", channel)
             .env("YCODING_DISABLE_MODELS_FETCH", "true")
-            .env("YCODING_CONFIG_PROJECT_DISABLE", "true")
-            .env_remove("YCODING_CONFIG_DIR")
-            .env_remove("YCODING_CONFIG")
-            .env_remove("YCODING_CONFIG_CONTENT")
-            .env_remove("YCODING_TEST_HOME")
-            .env_remove("YCODING_MODELS_PATH")
-            .env_remove("YCODING_MODELS_URL")
-            .env_remove("YCODING_PASSWORD")
-            .env_remove("YCODING_SERVER_PASSWORD")
-            .env_remove("YCODING_SERVICE_STARTUP_ERROR_FILE")
-            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            .env("YCODING_CONFIG_PROJECT_DISABLE", "true");
+        #[cfg(windows)]
+        command
+            .env("USERPROFILE", self.0.join("home"))
+            .env("TEMP", self.0.join("tmp"))
+            .env("TMP", self.0.join("tmp"));
         std::fs::create_dir_all(self.0.join("home")).unwrap();
         command
     }

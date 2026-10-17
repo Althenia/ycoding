@@ -3,8 +3,9 @@ use super::audio::{
     AudioError, AudioInput, AudioProcessor, Options as AudioOptions, reconcile_overlap,
 };
 use super::bridge::CaptureMessage;
-use super::config::{ConfigError, MeetingConfig, TranscriptionConfig};
+use super::config::{AnalysisModel, ConfigError, MeetingConfig, TranscriptionConfig};
 use super::intelligence::{Generate, Intelligence, Mcp, Settings};
+use super::owner::Update;
 use super::pcm::{AudioChunk, AudioSource};
 use super::store::{Change, MeetingDatabase, StoreError, now, to_store, uuid};
 use super::transcription::{
@@ -75,8 +76,11 @@ fn fail<T>(message: &str) -> Result<T, RuntimeError> {
     Err(RuntimeError(message.into()))
 }
 
-pub type SessionFactory =
-    Arc<dyn Fn(Option<String>) -> BoxFuture<'static, Result<String, String>> + Send + Sync>;
+pub type SessionFactory = Arc<
+    dyn Fn(Option<String>, AnalysisModel) -> BoxFuture<'static, Result<String, String>>
+        + Send
+        + Sync,
+>;
 pub type ProviderFactory = Arc<
     dyn Fn(&TranscriptionConfig) -> Result<Arc<dyn TranscriptionProvider>, TranscriptionError>
         + Send
@@ -439,7 +443,8 @@ impl MeetingRuntime {
             return fail("Explicitly retry retained failed audio before arming another meeting");
         }
         self.load().await?;
-        let session = (self.create_session)(input.session_id.clone())
+        let model = self.config().analysis.model;
+        let session = (self.create_session)(input.session_id.clone(), model)
             .await
             .map_err(RuntimeError)?;
         let meeting = self
@@ -1424,8 +1429,36 @@ impl MeetingRuntime {
         });
     }
 
-    pub async fn create_session(&self, parent: Option<String>) -> Result<String, RuntimeError> {
-        (self.create_session)(parent).await.map_err(RuntimeError)
+    pub async fn create_session(
+        &self,
+        parent: Option<String>,
+        model: AnalysisModel,
+    ) -> Result<String, RuntimeError> {
+        (self.create_session)(parent, model)
+            .await
+            .map_err(RuntimeError)
+    }
+
+    pub async fn update_owner_settings(&self, update: &Update) -> Result<(), RuntimeError> {
+        let _turn = self.control_turn.lock().await;
+        if self.state().shutdown {
+            return fail("Meeting runtime is closing");
+        }
+        let mut next = self.config();
+        if let Some(model) = &update.ask_model {
+            next.analysis.ask_model = model.clone();
+        }
+        if let Some(knowledge) = &update.knowledge {
+            next.knowledge.mcp_enabled = knowledge.mcp_enabled;
+            next.knowledge.bindings = knowledge.bindings.clone();
+        }
+        let previous = std::mem::replace(&mut self.state().config, next.clone());
+        if let Err(error) = self.save_config() {
+            self.state().config = previous;
+            return Err(error);
+        }
+        self.intelligence.configure(intelligence_settings(&next));
+        Ok(())
     }
 
     fn schedule(&self, work: impl Future<Output = ()> + Send + 'static) {
@@ -1443,7 +1476,13 @@ impl MeetingRuntime {
 fn intelligence_settings(config: &MeetingConfig) -> Settings {
     Settings {
         bindings: if config.knowledge.mcp_enabled {
-            config.knowledge.bindings.clone()
+            config
+                .knowledge
+                .bindings
+                .iter()
+                .filter(|binding| binding.enabled)
+                .cloned()
+                .collect()
         } else {
             Vec::new()
         },

@@ -4,6 +4,7 @@ import path from "node:path"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { captureRoute } from "./capture"
+import { renderScreen } from "./harness"
 
 const parentID = "ses_0a22ce01"
 const sessionID = "ses_0a22ce02"
@@ -30,7 +31,7 @@ test("captures populated subagent chat states at reference terminal dimensions",
       ...viewport,
       args: { sessionID },
       settle: "thinking ·",
-      stable: ["Claude Sonnet 5", "◦ docs-sync", viewport.width >= 120 ? "18.4K / 200K · 9%" : "$0.41"],
+      stable: ["Claude Sonnet 5", "◦ docs-sync", viewport.width >= 120 ? "18.4K / 200K · 9%" : "docs-sync (1 of 3)"],
       route,
     })
     expect(lines).toHaveLength(viewport.height)
@@ -90,6 +91,79 @@ test("captures populated subagent chat states at reference terminal dimensions",
     )
   }
 }, 120_000)
+
+const speed = { model: child.model, recent: [], latest: { model: child.model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true } }
+
+function withChildSpeed(onEconomics?: () => void) {
+  return async (url: URL) => {
+    if (url.pathname === `/api/session/${parentID}/team/economics`) onEconomics?.()
+    const response = route(url)
+    if (url.pathname !== `/api/session/${sessionID}/diagnostics` || !response) return response
+    const body = await response.json()
+    return json({ ...body, data: { ...body.data, generationSpeed: speed } })
+  }
+}
+
+for (const viewport of [{ width: 80, height: 24 }, DESIGN_VIEWPORT]) {
+  test(`the viewed child's own speed reaches the economics panel and footer at ${viewport.width}×${viewport.height}`, async () => {
+    const lines = await captureRoute({ ...viewport, args: { sessionID }, settle: "≈ 100 tok/s", stable: ["docs-sync (1 of 3)", "≈ 100 tok/s"], route: withChildSpeed() })
+    expect(lines.findLast((line) => line.includes("docs-sync (1 of 3)"))).toContain("≈ 100 tok/s")
+    if (viewport.width >= 120) {
+      expect(lines.join("\n").match(/≈ 100 tok\/s/g)?.length).toBeGreaterThanOrEqual(2)
+      const labelRow = lines.findIndex((line) => line.includes("Speed") && line.includes("Cache hit"))
+      expect(labelRow).toBeGreaterThan(-1)
+      expect(lines[labelRow + 2]?.indexOf("≈ 100 tok/s")).toBe(lines[labelRow]?.indexOf("Speed"))
+    }
+    expect(lines.every((line) => line.length <= viewport.width)).toBe(true)
+  })
+}
+
+test.each([90, 99, 100, 109, 110, 120])("the subagent footer keeps speed and adds spend from 100 columns and context and cache hit from 110 at %i columns", async (width) => {
+  let served = false
+  const screen = await renderScreen({
+    width, height: 40, args: { sessionID }, route: withChildSpeed(() => { served = true }),
+    settle: (view) => served && ["docs-sync (1 of 3)", "≈ 100 tok/s"].every((text) => view.captureCharFrame().includes(text)),
+  })
+  try {
+    const lines = screen.lines()
+    const footer = lines.findLast((line) => line.includes("docs-sync (1 of 3)")) ?? ""
+    expect(footer.length).toBeLessThanOrEqual(width)
+    expect(footer).toContain("→ next")
+    expect(footer).toContain("≈ 100 tok/s")
+    expect(footer.includes("$0.41 · durable · resumable")).toBe(width >= 100)
+    expect(footer.includes("18.4K (9%)")).toBe(width >= 110)
+    expect(footer.includes("74% hit")).toBe(width >= 110)
+    const order = ["docs-sync (1 of 3)", ...(width >= 110 ? ["18.4K (9%)", "74% hit"] : []), "≈ 100 tok/s", ...(width >= 100 ? ["$0.41"] : []), "→ next"].map((text) => footer.indexOf(text))
+    expect(order.every((index) => index >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  } finally { await screen.dispose() }
+})
+
+test.each(["empty", "failed"] as const)("the subagent footer keeps the child's own speed when team economics is %s and invents no context, cache or spend", async (economics) => {
+  const served = { economics: false, diagnostics: false }
+  const childSpeed = withChildSpeed()
+  const screen = await renderScreen({
+    width: 110, height: 40, args: { sessionID },
+    route: async (url) => {
+      if (url.pathname === `/api/session/${parentID}/team/economics`) {
+        served.economics = true
+        return economics === "empty"
+          ? json({ data: [] })
+          : json({ code: "internal_error", message: "unavailable" }, { status: 500 })
+      }
+      if (url.pathname === `/api/session/${sessionID}/diagnostics`) served.diagnostics = true
+      return childSpeed(url)
+    },
+    settle: (view) => served.economics && served.diagnostics &&
+      ["docs-sync (1 of 3)", "≈ 100 tok/s"].every((text) => view.captureCharFrame().includes(text)),
+  })
+  try {
+    const footer = screen.lines().findLast((line) => line.includes("docs-sync (1 of 3)")) ?? ""
+    expect(footer).toContain("→ next")
+    expect(footer).toContain("≈ 100 tok/s")
+    for (const invented of ["18.4K", "74% hit", "$0.41"]) expect(footer).not.toContain(invented)
+  } finally { await screen.dispose() }
+}, 40_000)
 
 function session(id: string, title: string, agent: string, parentID: string | undefined, cost: number) {
   return {

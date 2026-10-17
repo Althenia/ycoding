@@ -210,6 +210,7 @@ pub enum Failure {
     PermissionNotFound(String),
     GuardrailRequestNotFound(String),
     FormNotFound(String),
+    ReviewItemNotFound(String),
     FormAlreadySettled(String),
     FormInvalidAnswer {
         id: String,
@@ -589,6 +590,7 @@ impl Failure {
                 Failure::Unavailable(_) => (10, "Required backend service unavailable"),
                 Failure::MessageNotFound { .. }
                 | Failure::FormNotFound(_)
+                | Failure::ReviewItemNotFound(_)
                 | Failure::QuestionNotFound(_)
                 | Failure::PermissionNotFound(_)
                 | Failure::GuardrailRequestNotFound(_) => (7, "Requested record not found"),
@@ -857,6 +859,16 @@ impl Failure {
                 })
             }
             Failure::FormNotFound(_) => invalid("Form not found", "not_found"),
+            Failure::ReviewItemNotFound(id)
+                if declared(v5::ReviewItemNotFoundError::full_name()) =>
+            {
+                encoded(v5::ReviewItemNotFoundError {
+                    tag: 1,
+                    item_id: convert::text(&id),
+                    message: convert::text(&format!("Review item not found: {id}")),
+                })
+            }
+            Failure::ReviewItemNotFound(_) => invalid("Review item not found", "not_found"),
             Failure::FormAlreadySettled(id)
                 if declared(v5::FormAlreadySettledError::full_name()) =>
             {

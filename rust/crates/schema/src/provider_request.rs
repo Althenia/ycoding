@@ -15,11 +15,37 @@ literal_type!(Source["step","title","goal","compaction","decision","prediction",
 literal_type!(Invalidation["first-request","compaction-reset","model-switched","model-variant-switched","stable-hit","prefix-changed","system-prefix-changed","tool-prefix-changed","below-minimum","provider-not-reported","cache-disabled","retry-fallback"]);
 literal_type!(Continuation["full","continued","fallback"]);
 literal_type!(CostProvenance["recorded","current_catalog"]);
-literal_type!(ReportGroup["model","hour","day","month","session","project","agent"]);
+literal_type!(ReportGroup["model","hour","day","month","session","project","agent","provider","provider-profile-model","provider-model","model-id","profile","prompt","task"]);
+mod dimensions;
+pub use dimensions::{Attribution, ReportDimensions};
 literal_type!(ReportOrder["asc","desc"]);
 literal_type!(ReportSort["key","tokens","cost","steps","input","output","reasoning","cacheRead","cacheWrite"]);
 #[derive(Clone, Debug, PartialEq)]
+pub struct CostCoverage {
+    pub priced_requests: NonNegativeInt,
+    pub unpriced_requests: NonNegativeInt,
+}
+impl DomainDecode for CostCoverage {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            priced_requests: o.field("pricedRequests")?,
+            unpriced_requests: o.field("unpricedRequests")?,
+        })
+    }
+}
+impl DomainEncode for CostCoverage {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("pricedRequests", &self.priced_requests)
+            .field("unpricedRequests", &self.unpriced_requests)
+            .finish()
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct Timing {
+    pub estimated_tokens: Option<PositiveInt>,
+    pub estimated_generation_duration_ns: Option<PositiveInt>,
     pub first_output_ms: Option<NonNegativeInt>,
     pub total_ms: Option<NonNegativeInt>,
     pub retry_wait_ms: Option<NonNegativeInt>,
@@ -31,6 +57,11 @@ pub struct Timing {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Speed {
+    pub generation_samples: NonNegativeInt,
+    pub provider_timed_samples: NonNegativeInt,
+    pub observed_samples: NonNegativeInt,
+    pub generation_p50_tokens_per_second: Option<f64>,
+    pub generation_p90_tokens_per_second: Option<f64>,
     pub first_output_p50_ms: Option<NonNegativeInt>,
     pub first_output_p95_ms: Option<NonNegativeInt>,
     pub total_p50_ms: Option<NonNegativeInt>,
@@ -40,6 +71,10 @@ pub struct Speed {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportInput {
+    pub provider_id: Option<crate::provider::Id>,
+    pub model_id: Option<model::Id>,
+    pub profile: Option<model::ProfileName>,
+    pub selected_effort: Option<LosslessString>,
     pub group: ReportGroup,
     pub time_zone: Option<LosslessString>,
     pub from: Option<NonNegativeInt>,
@@ -84,6 +119,7 @@ pub struct ModelSpend {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportMetrics {
+    pub cost_coverage: Option<CostCoverage>,
     pub logical: NonNegativeInt,
     pub physical: NonNegativeInt,
     pub helpers: NonNegativeInt,
@@ -111,6 +147,8 @@ pub struct Summary {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportRow {
+    pub model: Option<model::Ref>,
+    pub dimensions: Option<ReportDimensions>,
     pub key: LosslessString,
     pub label: LosslessString,
     pub metrics: ReportMetrics,
@@ -128,6 +166,8 @@ impl DomainDecode for Timing {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
         Ok(Self {
+            estimated_tokens: o.optional("estimatedTokens")?,
+            estimated_generation_duration_ns: o.optional("estimatedGenerationDurationNs")?,
             first_output_ms: o.optional("firstOutputMs")?,
             total_ms: o.optional("totalMs")?,
             retry_wait_ms: o.optional("retryWaitMs")?,
@@ -142,6 +182,11 @@ impl DomainDecode for Timing {
 impl DomainEncode for Timing {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("estimatedTokens", &self.estimated_tokens)
+            .optional(
+                "estimatedGenerationDurationNs",
+                &self.estimated_generation_duration_ns,
+            )
             .optional("firstOutputMs", &self.first_output_ms)
             .optional("totalMs", &self.total_ms)
             .optional("retryWaitMs", &self.retry_wait_ms)
@@ -171,6 +216,19 @@ impl DomainDecode for Speed {
             })
             .transpose()?;
         Ok(Self {
+            generation_samples: o.field("generationSamples")?,
+            provider_timed_samples: o.field("providerTimedSamples")?,
+            observed_samples: o.field("observedSamples")?,
+            generation_p50_tokens_per_second: nonnegative_rate(
+                &o,
+                p,
+                "generationP50TokensPerSecond",
+            )?,
+            generation_p90_tokens_per_second: nonnegative_rate(
+                &o,
+                p,
+                "generationP90TokensPerSecond",
+            )?,
             first_output_p50_ms: o.optional("firstOutputP50Ms")?,
             first_output_p95_ms: o.optional("firstOutputP95Ms")?,
             total_p50_ms: o.optional("totalP50Ms")?,
@@ -183,6 +241,17 @@ impl DomainDecode for Speed {
 impl DomainEncode for Speed {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .field("generationSamples", &self.generation_samples)
+            .field("providerTimedSamples", &self.provider_timed_samples)
+            .field("observedSamples", &self.observed_samples)
+            .optional(
+                "generationP50TokensPerSecond",
+                &self.generation_p50_tokens_per_second,
+            )
+            .optional(
+                "generationP90TokensPerSecond",
+                &self.generation_p90_tokens_per_second,
+            )
             .optional("firstOutputP50Ms", &self.first_output_p50_ms)
             .optional("firstOutputP95Ms", &self.first_output_p95_ms)
             .optional("totalP50Ms", &self.total_p50_ms)
@@ -196,14 +265,11 @@ impl DomainDecode for ReportInput {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
         let result = Self {
-            group: o
-                .tag(
-                    "group",
-                    &[
-                        "model", "hour", "day", "month", "session", "project", "agent",
-                    ],
-                )
-                .map(ReportGroup)?,
+            group: o.field("group")?,
+            provider_id: o.optional("providerID")?,
+            model_id: o.optional("modelID")?,
+            profile: o.optional("profile")?,
+            selected_effort: o.optional("selectedEffort")?,
             time_zone: o.optional("timeZone")?,
             from: o.optional("from")?,
             to: o.optional("to")?,
@@ -218,6 +284,33 @@ impl DomainDecode for ReportInput {
                 .map(|x| ReportOrder::decode_at(&x.encode(), &p.key("order")))
                 .transpose()?,
         };
+        if result
+            .model_id
+            .as_ref()
+            .is_some_and(|value| value.is_empty())
+        {
+            return Err(p
+                .key("modelID")
+                .error(DecodeErrorKind::Expected("nonempty string")));
+        }
+        if result
+            .provider_id
+            .as_ref()
+            .is_some_and(|value| value.0.is_empty())
+        {
+            return Err(p
+                .key("providerID")
+                .error(DecodeErrorKind::Expected("nonempty string")));
+        }
+        if result
+            .selected_effort
+            .as_ref()
+            .is_some_and(|value| value.is_empty())
+        {
+            return Err(p
+                .key("selectedEffort")
+                .error(DecodeErrorKind::Expected("nonempty string")));
+        }
         if let (Some(from), Some(to)) = (result.from, result.to)
             && from.get() >= to.get()
         {
@@ -244,6 +337,10 @@ impl DomainDecode for ReportInput {
 impl DomainEncode for ReportInput {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("providerID", &self.provider_id)
+            .optional("modelID", &self.model_id)
+            .optional("profile", &self.profile)
+            .optional("selectedEffort", &self.selected_effort)
             .field("group", &self.group)
             .optional("timeZone", &self.time_zone)
             .optional("from", &self.from)
@@ -374,6 +471,7 @@ fn cost_fields(o: &ObjectDecoder<'_>, p: &JsonPath) -> Result<CostFields, Decode
 fn metrics(o: &ObjectDecoder<'_>, p: &JsonPath) -> Result<ReportMetrics, DecodeError> {
     let (cost, cost_provenance, cache_read_reported) = cost_fields(o, p)?;
     Ok(ReportMetrics {
+        cost_coverage: o.optional("costCoverage")?,
         logical: o.field("logical")?,
         physical: o.field("physical")?,
         helpers: o.field("helpers")?,
@@ -393,6 +491,7 @@ impl DomainDecode for ReportMetrics {
 impl DomainEncode for ReportMetrics {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("costCoverage", &self.cost_coverage)
             .field("logical", &self.logical)
             .field("physical", &self.physical)
             .field("helpers", &self.helpers)
@@ -479,6 +578,8 @@ impl DomainDecode for ReportRow {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
         Ok(Self {
+            model: o.optional("model")?,
+            dimensions: o.optional("dimensions")?,
             key: o.field("key")?,
             label: o.field("label")?,
             metrics: metrics(&o, p)?,
@@ -489,6 +590,9 @@ impl DomainDecode for ReportRow {
 impl DomainEncode for ReportRow {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("model", &self.model)
+            .optional("dimensions", &self.dimensions)
+            .optional("costCoverage", &self.metrics.cost_coverage)
             .field("key", &self.key)
             .field("label", &self.label)
             .field("logical", &self.metrics.logical)
@@ -507,20 +611,35 @@ impl DomainEncode for ReportRow {
 impl DomainDecode for Report {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
-        Ok(Self {
-            group: o
-                .tag(
-                    "group",
-                    &[
-                        "model", "hour", "day", "month", "session", "project", "agent",
-                    ],
-                )
-                .map(ReportGroup)?,
+        let result = Self {
+            group: o.field("group")?,
             rows: o.field("rows")?,
             total: o.field("total")?,
             row_count: o.field("rowCount")?,
             next_offset: o.optional("nextOffset")?,
-        })
+        };
+        if matches!(
+            result.group.0.as_str(),
+            Some(
+                "provider"
+                    | "provider-profile-model"
+                    | "provider-model"
+                    | "model-id"
+                    | "profile"
+                    | "prompt"
+                    | "task"
+            )
+        ) && result.rows.iter().any(|row| {
+            row.model.is_some()
+                || row.dimensions.as_ref().is_none_or(|dimensions| {
+                    dimensions.group() != result.group.0.as_str().unwrap_or_default()
+                })
+        }) {
+            return Err(p.error(DecodeErrorKind::Expected(
+                "matching usage dimensions without a representative model",
+            )));
+        }
+        Ok(result)
     }
 }
 impl DomainEncode for Report {
@@ -533,4 +652,14 @@ impl DomainEncode for Report {
             .optional("nextOffset", &self.next_offset)
             .finish()
     }
+}
+
+fn nonnegative_rate(
+    o: &ObjectDecoder<'_>,
+    p: &JsonPath,
+    key: &str,
+) -> Result<Option<f64>, DecodeError> {
+    o.optional::<f64>(key)?
+        .map(|value| domain::number_range(&JsonValue::Number(value), 0.0, f64::MAX, &p.key(key)))
+        .transpose()
 }

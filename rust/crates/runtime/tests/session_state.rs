@@ -456,7 +456,11 @@ async fn diagnostics_report_the_latest_measured_assistant_step() {
         assert_eq!(data.estimated_cost, Some(0.5));
         assert_eq!(units(&data.model.id), "m1");
         assert_eq!(data.requests.as_ref().unwrap().logical, 0);
-        assert!(data.generation_speed.is_none());
+        let unsampled = data.generation_speed.as_ref().unwrap();
+        assert_eq!(units(&unsampled.model.as_ref().unwrap().id), "m1");
+        assert!(unsampled.latest.is_none());
+        assert!(unsampled.recent.items.is_empty());
+        assert!(unsampled.unreported_reason.is_none());
 
         ycoding_core::session::store::Service::new(world().store.clone()).publish(
             ycoding_core::ycoding_store::session::NewEvent {

@@ -1,58 +1,127 @@
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 
-export type YoloLevel = 0 | 1 | 2 | 3
+export type AutonomyState = Omit<SessionAutonomyView, "effective">
 
-export function yoloLevel(state: { yolo?: unknown }): YoloLevel {
+export type YoloLevel = 0 | 1 | 2
+
+export function yoloLevel(state: { yolo?: unknown }): YoloLevel | undefined {
   const raw = state.yolo
   if (raw === true) return 2
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0
-  const level = Math.max(0, Math.min(3, Math.trunc(raw)))
-  if (level === 1) return 1
-  if (level === 2) return 2
-  if (level === 3) return 3
+  if (raw === false) return 0
+  if (raw === 0 || raw === 1 || raw === 2) return raw
+  return undefined
+}
+
+export function parseApprovalLevel(token: string | undefined): YoloLevel | undefined {
+  if (token === "0") return 0
+  if (token === "1") return 1
+  if (token === "2") return 2
+  return undefined
+}
+
+export function nextApprovalLevel(level: YoloLevel): YoloLevel {
+  if (level === 0) return 1
+  if (level === 1) return 2
   return 0
 }
 
-export type AutonomyDecision = "you" | "yolo" | "goal"
+export function approvalLevelLabel(level: YoloLevel) {
+  return ["Ask first", "Allow tools", "Tools + reviews"][level]
+}
 
-export function autonomyDecision(
-  state: SessionAutonomyState,
-  action: "permissions" | "guardrails" | "questions",
-): AutonomyDecision {
-  const level = yoloLevel(state)
-  const activeGoal = state.goal?.status === "active"
-  const automatedByYolo =
-    action === "permissions" || action === "guardrails" ? level >= 1 : level >= 2
-  if (automatedByYolo) return "yolo"
-  if (activeGoal && action !== "guardrails") return "goal"
-  return "you"
+export function parseAutoAnswerArg(token: string | undefined): boolean | undefined | null {
+  if (token === undefined || token === "") return undefined
+  if (token === "on") return true
+  if (token === "off") return false
+  return null
+}
+
+export function autoAnswerOn(state: { autoAnswer?: unknown } | undefined): boolean {
+  return state?.autoAnswer === true
+}
+
+export function isAsleep(state: { sleep?: unknown }): boolean {
+  return state.sleep !== undefined && state.sleep !== null
+}
+
+export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
+  return {
+    ...state,
+    effective: {
+      yolo: yoloLevel(state) ?? 0,
+      asleep: isAsleep(state),
+      ordinaryReviewsAuto: yoloLevel(state) === 2 && !isAsleep(state),
+      guardrailsEnabled: false,
+      modelReviews: false,
+      hardModelReviews: false,
+    },
+  }
+}
+
+export type AutonomyAction = "permissions" | "guardrails" | "questions" | "auto-answer"
+export type AutonomyDecisionKind = "you" | "automated" | "unknown"
+
+export function autonomyDecisionKind(view: SessionAutonomyView | undefined, action: AutonomyAction): AutonomyDecisionKind {
+  if (!view?.effective) return "unknown"
+  const effective = view.effective
+  if (action === "auto-answer") return autoAnswerOn(view) ? "automated" : "you"
+  if (action === "permissions") {
+    if (effective.yolo >= 1) return "automated"
+    return effective.asleep ? "automated" : "you"
+  }
+  if (action === "guardrails") {
+    if (!effective.guardrailsEnabled) return "you"
+    if (effective.ordinaryReviewsAuto) return "automated"
+    if (effective.modelReviews || effective.asleep) return "automated"
+    return "you"
+  }
+  if (autoAnswerOn(view)) return "automated"
+  return effective.asleep ? "automated" : "you"
 }
 
 export function autonomyLevelDescription(level: YoloLevel) {
   return [
-    "manual",
-    "permissions and ordinary guardrails",
-    "permissions, ordinary guardrails, and questions/forms",
-    "permissions, ordinary guardrails, and questions/forms (same as YOLO 2)",
+    "ask before ask-permission tools and ordinary reviews",
+    "auto-approve ask-permission tools; ordinary reviews still ask",
+    "auto-approve ask-permission tools and ordinary reviews while awake; hard reviews never auto-approve by level",
   ][level]
 }
 
-export function autonomyDecisionLabel(
-  state: SessionAutonomyState,
-  action: "permissions" | "guardrails" | "questions",
-) {
-  const decision = autonomyDecision(state, action)
-  if (decision === "you") return "ask you"
-  return decision === "goal" ? "auto · goal" : "auto"
+export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
+  if (action === "guardrails") {
+    if (!view?.effective) return "ordinary · unknown"
+    const effective = view.effective
+    if (!effective.guardrailsEnabled) return "ordinary · disabled"
+    if (effective.ordinaryReviewsAuto) return "ordinary · auto"
+    if (effective.modelReviews) return effective.asleep ? "ordinary · model, then review box" : "ordinary · model, then you"
+    return effective.asleep ? "ordinary · review box" : "ordinary · you"
+  }
+  if (!view?.effective) return "unknown"
+  const effective = view.effective
+  if (action === "auto-answer") return autoAnswerOn(view) ? "On" : "Off"
+  if (action === "permissions") {
+    if (effective.yolo >= 1) return "auto"
+    return effective.asleep ? "review box" : "you"
+  }
+  if (autoAnswerOn(view)) return "auto · this Session"
+  return effective.asleep ? "review box" : "you"
 }
 
-export function autonomyModeLabel(state: SessionAutonomyState) {
-  const level = yoloLevel(state)
-  const active = state.goal?.status === "active"
-  return `${level === 0 ? "Manual" : `YOLO ${level}`}${active ? " · goal" : ""}`
+export function autonomyModeParts(view: SessionAutonomyView | undefined) {
+  if (!view?.effective) return ["unknown"] as const
+  return [
+    approvalLevelLabel(view.effective.yolo),
+    ...(view.goal?.status === "active" ? ["goal"] : []),
+    ...(view.effective.asleep ? ["asleep"] : []),
+    ...(autoAnswerOn(view) ? ["answers auto"] : []),
+  ] as const
 }
 
-export function autonomyProgressLabel(state: SessionAutonomyState) {
+export function autonomyModeLabel(view: SessionAutonomyView | undefined) {
+  return autonomyModeParts(view).join(" · ")
+}
+
+export function autonomyProgressLabel(state: AutonomyState) {
   const goal = state.goal
   if (!goal) return undefined
   if (goal.status === "active") return `${goal.iteration} · no progress ${goal.noProgress}/${goal.maxNoProgress}`
@@ -126,7 +195,7 @@ export function restoreSessionSubmission<T>(
 
 export type SessionAutonomyResponse = {
   sessionID: string
-  state: SessionAutonomyState
+  state: SessionAutonomyView
 }
 
 export function createSessionAutonomyRefreshGuard() {
@@ -149,9 +218,8 @@ export function currentSessionAutonomy(
   sessionID: string,
   connected: boolean,
   response: SessionAutonomyResponse | undefined,
-): SessionAutonomyState {
-  if (!connected || response?.sessionID !== sessionID)
-    return { mode: "normal", yolo: 0 } as unknown as SessionAutonomyState
+): SessionAutonomyView | undefined {
+  if (!connected || response?.sessionID !== sessionID) return undefined
   return response.state
 }
 
@@ -165,18 +233,18 @@ export type GoalToggleAction =
  * a retained goal (any terminal status) resumes its existing text without recalculation;
  * with no retained text the UI must ask the user for an explicit objective.
  */
-export function goalToggleAction(state: SessionAutonomyState): GoalToggleAction {
+export function goalToggleAction(state: AutonomyState): GoalToggleAction {
   if (state.goal?.status === "active") return { type: "stop" }
   const retained = state.goal?.text.trim()
   if (retained) return { type: "resume", text: retained }
   return { type: "request-objective" }
 }
 
-export async function activateGoal(input: {
+export async function activateGoal<T extends AutonomyState>(input: {
   sessionID: string
   goal: string
-  get: () => Promise<SessionAutonomyState>
-  set: (input: { goal: string }) => Promise<SessionAutonomyState>
+  get: () => Promise<T>
+  set: (input: { goal: string }) => Promise<T>
 }) {
   const current = await input.get()
   const sameActive =

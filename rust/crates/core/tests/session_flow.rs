@@ -572,6 +572,10 @@ async fn test015_work_completion_receipt_requires_completed_goal_declaration_and
 
 struct NoExecution;
 impl ycoding_core::session::orchestration::Execution for NoExecution {
+    fn resume(&self, _: &session::Id) -> ycoding_core::session::run_coordinator::RunFuture {
+        panic!("unexpected explicit resumption")
+    }
+
     fn wake(&self, _: &session::Id) -> ycoding_core::session::run_coordinator::Outcome {
         Ok(())
     }
@@ -1623,6 +1627,10 @@ async fn test016_orchestration_restart_pin_question_btw_limits() {
     use ycoding_schema::{model, permission, session_orchestration::State};
     struct Recorder(Arc<std::sync::Mutex<Vec<String>>>);
     impl Execution for Recorder {
+        fn resume(&self, _: &session::Id) -> ycoding_core::session::run_coordinator::RunFuture {
+            panic!("unexpected explicit resumption")
+        }
+
         fn wake(&self, id: &session::Id) -> ycoding_core::session::run_coordinator::Outcome {
             self.0
                 .lock()
@@ -1670,6 +1678,8 @@ async fn test016_orchestration_restart_pin_question_btw_limits() {
                 subagents: 8,
                 ..Limits::default()
             },
+            decide_reviews: false,
+            decide_hard_reviews: true,
         },
         publisher,
     );

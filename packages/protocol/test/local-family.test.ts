@@ -89,6 +89,6 @@ test("M7 widens exactly three connector reads without adding remote operations",
       .filter((item) => item.operationId >= 5000 && item.roles.includes(PeerRole.LOCAL_CLIENT))
       .map((item) => item.operationId),
   ).toEqual([5008, 5013, 5018])
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(70)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(66)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
 })

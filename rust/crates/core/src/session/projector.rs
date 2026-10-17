@@ -201,6 +201,7 @@ fn fold_decoded(
                     time_archived: None,
                     time_pinned: None,
                     time_suspended: None,
+                    usage_pruned_through: None,
                 },
             )?;
             RevisionTable::insert(
@@ -458,7 +459,10 @@ fn fold_decoded(
         Some(
             "session.compaction.replaced.1"
             | "session.work.completed.1"
-            | "session.guardrail.approved.1",
+            | "session.guardrail.approved.1"
+            | "session.review.deferred.1"
+            | "session.review.decided.1"
+            | "session.review.consumed.1",
         ) => {}
         _ => return super::message_updater::fold(tx, event, &decoded.0),
     }

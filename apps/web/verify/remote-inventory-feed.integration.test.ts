@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { launchBrowser } from "./cdp"
+import { listPage, parseListQuery } from "../test/session-list-double"
+import { startRelayDouble } from "../test/relay-double"
 
 const port = 4377
 const browserPath = process.env.YCODING_WEB_CHROME
@@ -36,7 +38,241 @@ afterAll(async () => {
   if (server) await server.exited
 })
 
+async function orderedRelay() {
+  const sessions = Array.from({ length: 100 }, (_, index) => ({
+    id: `ses_ordered_${index}`,
+    title: `Ordered Session ${index}`,
+    projectID: "prj_ordered",
+    location: { directory: "/workspace/ordered" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 1_000 - index, active: 1_000 - index },
+  }))
+  const state = { waiting: new Set([sessions[0]!.id]), rejectAnchor: false }
+  const relay = await startRelayDouble({
+    handler: (request) => {
+      if (request.operation === "workspace.list")
+        return {
+          ok: true,
+          value: {
+            data: [{ id: "wsp_ordered", name: "Ordered", projectID: "prj_ordered", directory: "/workspace/ordered" }],
+          },
+        }
+      if (request.operation === "session.status")
+        return { ok: true, value: { running: [], attention: [...state.waiting] } }
+      if (request.operation !== "session.list") return "default"
+      if (state.rejectAnchor && request.input?.around !== undefined)
+        return { ok: false, code: "invalid_message", message: 'Unknown input field "around"' }
+      return {
+        ok: true,
+        value: listPage(sessions, parseListQuery({ ...request.input, workspace: undefined }), new Set(), state.waiting),
+      }
+    },
+  })
+  return { sessions, state, relay }
+}
+
 describe("remote inventory feed", () => {
+  test("restores an unfocused interior anchor moved outside overscan behind an existing Waiting leader", async () => {
+    for (const width of [390, 1440]) {
+      const fixture = await orderedRelay()
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(
+          `http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&relaySessions=1&relay=${encodeURIComponent(fixture.relay.wsURL("dev_studio"))}`,
+        )
+        for (
+          let attempt = 0;
+          attempt < 80 &&
+          !(await page.evaluate<boolean>(
+            `window.providerAuthState?.().sessions.length === 25 && window.providerAuthState().carouselStatus === 'ready'`,
+          ));
+          attempt++
+        )
+          await Bun.sleep(25)
+        for (const count of [50, 75]) {
+          await page.evaluate(
+            `(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = root.scrollHeight; root.dispatchEvent(new WheelEvent('wheel', { deltaY: 250, bubbles: true })); })()`,
+          )
+          for (
+            let attempt = 0;
+            attempt < 100 &&
+            !(await page.evaluate<boolean>(
+              `window.providerAuthState().sessions.length === ${count} && !window.providerAuthState().sessionPageLoading`,
+            ));
+            attempt++
+          )
+            await Bun.sleep(25)
+        }
+        await page.evaluate(
+          `(() => { const root = document.querySelector('.workspace__scroll'); const body = document.querySelector('.sessions-table__body'); const rows = [...body.querySelectorAll('.sessions-table__row')]; const step = (rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top) / (Number(rows[1].dataset.index) - Number(rows[0].dataset.index)); root.tabIndex = 0; root.focus(); root.scrollTop += body.getBoundingClientRect().top - root.getBoundingClientRect().top + 40 * step + 4; root.dispatchEvent(new Event('scroll')); })()`,
+        )
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        const before = await page.evaluate<{
+          id: string
+          offset: number
+          first: string
+          last: string
+          index: number
+          focused: boolean
+        }>(
+          `(() => { const root = document.querySelector('.workspace__scroll').getBoundingClientRect(); const row = [...document.querySelectorAll('.sessions-table__row')].find(row => row.getBoundingClientRect().bottom > root.top && row.getBoundingClientRect().top < root.bottom); window.anchorID = row.dataset.sessionId; const sessions = window.providerAuthState().sessions; return { id: window.anchorID, offset: row.getBoundingClientRect().top - root.top, first: sessions[0].id, last: sessions.at(-1).id, index: sessions.findIndex(item => item.id === window.anchorID), focused: Boolean(document.activeElement?.closest('.sessions-table__row')) } })()`,
+        )
+        expect(before.index).toBe(40)
+        expect(before.focused).toBe(false)
+        fixture.state.waiting.add(before.id)
+        fixture.relay.pushStatus([], [...fixture.state.waiting])
+        for (
+          let attempt = 0;
+          attempt < 100 &&
+          !(await page.evaluate<boolean>(
+            `window.providerAuthState().sessions[1]?.id === window.anchorID && !window.providerAuthState().sessionPageLoading`,
+          ));
+          attempt++
+        )
+          await Bun.sleep(25)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        const after = await page.evaluate<{
+          rows: number
+          first: string
+          last: string
+          index: number
+          focused: boolean
+          mounted: number
+          offset: number | null
+        }>(
+          `(() => { const sessions = window.providerAuthState().sessions; const root = document.querySelector('.workspace__scroll'); const row = [...document.querySelectorAll('.sessions-table__row')].find(row => row.dataset.sessionId === window.anchorID); return { rows: sessions.length, first: sessions[0].id, last: sessions.at(-1).id, index: sessions.findIndex(item => item.id === window.anchorID), focused: document.activeElement === root, mounted: document.querySelectorAll('.sessions-table__row').length, offset: row ? row.getBoundingClientRect().top - root.getBoundingClientRect().top : null } })()`,
+        )
+        expect(after).toMatchObject({ rows: 75, first: before.first, last: before.last, index: 1, focused: true })
+        expect(after.mounted).toBeLessThan(40)
+        expect(after.offset).not.toBeNull()
+        expect(Math.abs(after.offset! - before.offset)).toBeLessThanOrEqual(2)
+      } finally {
+        await page.close()
+        await fixture.relay.stop()
+      }
+    }
+  }, 30_000)
+
+  test("an unsupported anchored refresh reports an update in the list region without disabling the existing list", async () => {
+    const fixture = await orderedRelay()
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(
+        `http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&relaySessions=1&relay=${encodeURIComponent(fixture.relay.wsURL("dev_studio"))}`,
+      )
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        !(await page.evaluate<boolean>(
+          `window.providerAuthState?.().sessions.length === 25 && window.providerAuthState().carouselStatus === 'ready'`,
+        ));
+        attempt++
+      )
+        await Bun.sleep(25)
+      await page.evaluate(
+        `(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = 700; root.dispatchEvent(new Event('scroll')); })()`,
+      )
+      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      fixture.state.rejectAnchor = true
+      fixture.relay.pushSessions(fixture.sessions.map((session) => session.id))
+      for (
+        let attempt = 0;
+        attempt < 100 && !fixture.relay.requests.some((request) => request.input?.around !== undefined);
+        attempt++
+      )
+        await Bun.sleep(25)
+      for (
+        let attempt = 0;
+        attempt < 100 && (await page.evaluate<boolean>(`window.providerAuthState().sessionPageLoading`));
+        attempt++
+      )
+        await Bun.sleep(25)
+      expect(
+        await page.evaluate<string>(
+          `document.querySelector('.sessions-page [role=status][aria-label="Session list status"]')?.textContent ?? ''`,
+        ),
+      ).toContain("Update YCoding on this machine")
+      expect(
+        await page.evaluate<{ connection: string; status: string; rows: number; next: boolean; enabled: boolean }>(
+          `({ connection: window.providerAuthState().connection.kind, status: window.providerAuthState().sessionListStatus, rows: window.providerAuthState().sessions.length, next: window.providerAuthState().sessionHasNext, enabled: [...document.querySelectorAll('.sessions-table__select')].every(item => !item.disabled) })`,
+        ),
+      ).toEqual({ connection: "connected", status: "ready", rows: 25, next: true, enabled: true })
+    } finally {
+      await page.close()
+      await fixture.relay.stop()
+    }
+  })
+
+  test("status rebasing keeps the scrolled Session anchor and the retained three-page window", async () => {
+    for (const width of [390, 1440]) {
+      const page = await browser!.openPage()
+      try {
+        await page.setViewport(width, 900)
+        await page.navigate(
+          `http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&inventoryCount=240&sessionListDelay=100`,
+        )
+        for (
+          let attempt = 0;
+          attempt < 80 &&
+          !(await page.evaluate<boolean>(
+            `window.remoteInventoryReport?.().rows === 25 && document.querySelectorAll('.running-sessions__item').length === 10`,
+          ));
+          attempt++
+        )
+          await Bun.sleep(25)
+        await page.evaluate(
+          `const root = document.querySelector('.workspace__scroll'); root.tabIndex = 0; root.focus()`,
+        )
+        for (let index = 0; index < 3; index++) {
+          const requests = await page.evaluate<number>(`window.remoteInventoryReport().workspaceRequests`)
+          await page.evaluate(
+            `(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = root.scrollHeight; root.dispatchEvent(new WheelEvent('wheel', { deltaY: 250, bubbles: true })); })()`,
+          )
+          for (
+            let attempt = 0;
+            attempt < 100 &&
+            !(await page.evaluate<boolean>(
+              `window.remoteInventoryReport().workspaceRequests > ${requests} && !window.providerAuthState().sessionPageLoading`,
+            ));
+            attempt++
+          )
+            await Bun.sleep(25)
+        }
+        expect(await page.evaluate<number>(`window.remoteInventoryReport().rows`)).toBe(75)
+        await page.evaluate(
+          `(() => { const root = document.querySelector('.workspace__scroll'); root.scrollTop = Math.max(0, root.scrollHeight - root.clientHeight - 300); root.dispatchEvent(new Event('scroll')); })()`,
+        )
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        const before = await page.evaluate<{ id: string; offset: number; requests: number }>(
+          `(() => { const root = document.querySelector('.workspace__scroll').getBoundingClientRect(); const row = [...document.querySelectorAll('.sessions-table__row')].find(row => row.getBoundingClientRect().bottom > root.top && row.getBoundingClientRect().top < root.bottom); window.anchorID = row.dataset.sessionId; return { id: window.anchorID, offset: row.getBoundingClientRect().top - root.top, requests: window.remoteInventoryReport().workspaceRequests } })()`,
+        )
+        await page.evaluate(`window.remoteStatus(['ses_inventory_14000'], [window.anchorID])`)
+        for (
+          let attempt = 0;
+          attempt < 120 &&
+          !(await page.evaluate<boolean>(
+            `window.remoteInventoryReport().workspaceRequests > ${before.requests} && !window.providerAuthState().sessionPageLoading`,
+          ));
+          attempt++
+        )
+          await Bun.sleep(25)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        const after = await page.evaluate<{ rows: number; offset: number | null; anchored: boolean }>(
+          `(() => { const root = document.querySelector('.workspace__scroll').getBoundingClientRect(); const row = [...document.querySelectorAll('.sessions-table__row')].find(row => row.dataset.sessionId === window.anchorID); return { rows: window.remoteInventoryReport().rows, offset: row ? row.getBoundingClientRect().top - root.top : null, anchored: window.remoteInventoryReport().inputs.some(input => input.around === window.anchorID) } })()`,
+        )
+        expect(after.rows).toBe(75)
+        expect(after.anchored).toBe(true)
+        expect(after.offset).not.toBeNull()
+        expect(Math.abs(after.offset! - before.offset)).toBeLessThanOrEqual(2)
+      } finally {
+        await page.close()
+      }
+    }
+  }, 30_000)
+
   test("keeps sidebar rows enabled on a background read and disables them only for a changed filter", async () => {
     const page = await browser!.openPage()
     try {
@@ -410,6 +646,7 @@ describe("remote inventory feed", () => {
           `window.remoteInventoryReport().inputs.filter(input => input.workspace === undefined).map(input => ({ status: input.status, limit: input.limit }))`,
         ),
       ).toEqual([
+        { status: "waiting", limit: 10 },
         { status: "running", limit: 10 },
         { status: "idle", limit: 10 },
       ])

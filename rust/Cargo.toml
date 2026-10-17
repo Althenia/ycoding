@@ -35,6 +35,7 @@ duckdb = { version = "1.10506", default-features = false, features = ["bundled"]
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 icu_collator = { version = "2.3", default-features = false, features = ["compiled_data"] }
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data", "auto"] }
 oxc_allocator = { version = "0.153", default-features = false }
 oxc_ast = { version = "0.153", default-features = false }
 oxc_parser = { version = "0.153", default-features = false }

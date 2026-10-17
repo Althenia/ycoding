@@ -137,6 +137,7 @@ async fn flow() {
     let mut core = Core::production(
         store.client(),
         Production {
+            analytics: roots.data.join("analytics"),
             configuration: config::LoadOptions {
                 directory: root.join("project"),
                 roots: roots.clone(),

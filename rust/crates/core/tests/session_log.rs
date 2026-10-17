@@ -23,6 +23,8 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<tables::InstructionStateTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::CredentialTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::RequestTable>(),
+        TableDeclaration::of::<ycoding_core::ycoding_store::resources::UsageAnalyticsRequestTable>(
+        ),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::UsageTable>(),
         TableDeclaration::of::<ycoding_core::ycoding_store::resources::ContinuationGenerationTable>(
         ),
@@ -100,6 +102,7 @@ fn store() -> ycoding_core::ycoding_store::Client {
                     time_active: None,
                     time_pinned: None,
                     time_suspended: None,
+                    usage_pruned_through: None,
                 },
             )?;
             Ok(())

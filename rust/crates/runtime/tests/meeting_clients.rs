@@ -36,7 +36,7 @@ async fn packaged_runtime_serves_the_existing_meeting_clients_without_adjacent_a
         std::fs::write(
             meeting.join("settings.json"),
             format!(
-                r#"{{"transcription":{{"pythonExecutable":{},"chunkSeconds":1,"overlapSeconds":0}},"analysis":{{"incremental":false}},"streaming":{{"vad":false}}}}"#,
+                r#"{{"transcription":{{"pythonExecutable":{},"chunkSeconds":1,"overlapSeconds":0}},"analysis":{{"incremental":false,"askModel":{{"providerID":"p","id":"m1","variant":"deep","profile":"acct"}}}},"knowledge":{{"mcpEnabled":true,"bindings":[{{"server":"offline","search":"find","read":"get","write":"put","enabled":false}}]}},"streaming":{{"vad":false}}}}"#,
                 stringify_json(&JsonValue::String(worker.to_str().unwrap().into()))
             ),
         )

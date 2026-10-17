@@ -161,7 +161,7 @@ fn seed(store: &Store, input: Seed) {
                     time_archived: None,
                     time_active: input.active,
                     time_pinned: input.pinned.then_some(input.updated),
-                    time_suspended: input.suspended.then_some(input.updated),
+                    time_suspended: input.suspended.then_some(input.updated), usage_pruned_through: None,
                 },
             )?;
             tables::SequenceTable::put(

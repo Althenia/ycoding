@@ -170,6 +170,8 @@ pub fn world() -> &'static World {
                     custom: Arc::new(Vec::new),
                     enabled: true,
                     limits: Limits::default(),
+                    decide_reviews: false,
+                    decide_hard_reviews: true,
                 },
                 snapshots: SnapshotSettings {
                     git: Arc::new(git::Service::new(1_048_576)),

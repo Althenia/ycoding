@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+use ycoding_schema::mcp::Status;
 use ycoding_store::meeting as records;
 
 const MAX_RESPONSE: usize = 100_000;
@@ -53,8 +54,17 @@ pub struct McpResult {
     pub text: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpServer {
+    pub name: String,
+    pub status: Option<String>,
+}
+
 pub trait Mcp: Send + Sync {
     fn tools(&self) -> BoxFuture<'_, Result<Vec<McpTool>, String>>;
+    fn servers(&self) -> BoxFuture<'_, Result<Vec<McpServer>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     fn call_tool(
         &self,
         server: &str,
@@ -87,6 +97,29 @@ impl ServiceMcp {
 }
 
 impl Mcp for ServiceMcp {
+    fn servers(&self) -> BoxFuture<'_, Result<Vec<McpServer>, String>> {
+        let servers = self.current().servers().map(|servers| {
+            servers
+                .into_iter()
+                .map(|server| McpServer {
+                    name: server.name,
+                    status: Some(
+                        match server.status {
+                            Status::Connected => "connected",
+                            Status::Pending => "pending",
+                            Status::Disabled => "disabled",
+                            Status::Failed(_) => "failed",
+                            Status::NeedsAuth => "needs_auth",
+                            Status::NeedsClientRegistration(_) => "needs_client_registration",
+                        }
+                        .to_owned(),
+                    ),
+                })
+                .collect()
+        });
+        Box::pin(async move { servers.map_err(|error| error.to_string()) })
+    }
+
     fn tools(&self) -> BoxFuture<'_, Result<Vec<McpTool>, String>> {
         let service = self.current();
         Box::pin(async move {

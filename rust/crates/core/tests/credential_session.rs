@@ -81,6 +81,7 @@ async fn durable_binding_rehydrates_and_replacement_requires_explicit_reselectio
                     time_active: None,
                     time_pinned: None,
                     time_suspended: None,
+                    usage_pruned_through: None,
                 },
             )
         })

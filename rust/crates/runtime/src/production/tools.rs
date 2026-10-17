@@ -49,7 +49,7 @@ pub(super) fn compose(
     memory: Arc<memory::Service>,
     platform: &crate::services::PlatformServices,
     handles: Handles<'_>,
-) -> Result<(Arc<Registry>, Registration), Failure> {
+) -> Result<(Arc<Registry>, Registration, QueuedShells), Failure> {
     let directory = std::fs::canonicalize(PathBuf::from(
         services
             .info
@@ -91,6 +91,13 @@ pub(super) fn compose(
         .map_err(|_| unavailable("Project directory"))?,
         configuration.clone(),
     ));
+    let shell = Arc::new(Shell {
+        shell: platform.shell.clone(),
+        configuration: configuration.clone(),
+        paths: paths.clone(),
+        policy: policy.clone(),
+        tool: tokio::sync::OnceCell::new(),
+    });
     let entries: Vec<(String, Arc<dyn Tool>)> = vec![
         (
             "browser".into(),
@@ -109,16 +116,7 @@ pub(super) fn compose(
                 policy: policy.clone(),
             }),
         ),
-        (
-            "shell".into(),
-            Arc::new(Shell {
-                shell: platform.shell.clone(),
-                configuration: configuration.clone(),
-                paths: paths.clone(),
-                policy: policy.clone(),
-                tool: tokio::sync::OnceCell::new(),
-            }),
-        ),
+        ("shell".into(), shell.clone()),
         (
             "read".into(),
             Arc::new(Read {
@@ -243,7 +241,21 @@ pub(super) fn compose(
     let registration = registry
         .register(entries, registry::Options::direct())
         .map_err(|_| unavailable("built-in tool registration"))?;
-    Ok((registry, registration))
+    Ok((registry, registration, QueuedShells(shell)))
+}
+
+pub(crate) struct QueuedShells(Arc<Shell>);
+
+impl QueuedShells {
+    pub(crate) async fn cancel(
+        &self,
+        session: &ycoding_core::ycoding_schema::session::Id,
+    ) -> std::io::Result<usize> {
+        match self.0.tool.get() {
+            Some(tool) => tool.cancel_queued(session).await,
+            None => Ok(0),
+        }
+    }
 }
 
 struct Shell {

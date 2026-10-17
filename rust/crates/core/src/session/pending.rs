@@ -2,7 +2,7 @@ use super::{key, store::Service};
 use std::ops::Bound;
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonPath, ObjectDecoder, ObjectEncoder, event, session,
-    session_event, session_message, session_pending,
+    session_event, session_message, session_pending, usage_anchor,
 };
 use ycoding_store::{
     Error, IndexOrder, IndexQuery, KeyPart, Write,
@@ -26,6 +26,7 @@ pub struct Request {
 pub struct Admitted {
     pub pending: Pending,
     pub wake: bool,
+    pub fresh: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +188,7 @@ impl Service {
         input_id: &ycoding_schema::LosslessString,
         now: i64,
     ) -> Result<Promotion, Error> {
+        let _inbox = super::autonomy::inbox(&self.client, id).await;
         let id = id.as_lossless().clone();
         let input_id = input_id.clone();
         self.client
@@ -252,6 +254,14 @@ impl Service {
     }
 
     pub async fn admit_input(&self, request: Request) -> Result<Admitted, Error> {
+        self.admit_input_attributed(request, None).await
+    }
+
+    pub async fn admit_input_attributed(
+        &self,
+        request: Request,
+        caused_by: Option<usage_anchor::Ref>,
+    ) -> Result<Admitted, Error> {
         let session = self.get(&request.session_id)?.ok_or(Error::Domain {
             kind: "not_found",
             message: "Session not found",
@@ -261,77 +271,105 @@ impl Service {
             super::revert::commit(self, &session, request.created).await?;
         }
         let id = request.session_id.clone();
-        let pending = self.admit(request).await?;
+        let (pending, fresh) = self.admit_record(request, caused_by).await?;
         let wake = user
             || self
                 .get(&id)?
                 .is_some_and(|session| session.revert.is_none());
-        Ok(Admitted { pending, wake })
+        Ok(Admitted {
+            pending,
+            wake,
+            fresh,
+        })
     }
 
     pub async fn admit(&self, request: Request) -> Result<Pending, Error> {
+        self.admit_attributed(request, None).await
+    }
+
+    pub async fn admit_attributed(
+        &self,
+        request: Request,
+        caused_by: Option<usage_anchor::Ref>,
+    ) -> Result<Pending, Error> {
+        self.admit_record(request, caused_by)
+            .await
+            .map(|(pending, _)| pending)
+    }
+
+    async fn admit_record(
+        &self,
+        request: Request,
+        caused_by: Option<usage_anchor::Ref>,
+    ) -> Result<(Pending, bool), Error> {
         self.client
-            .submit(move |tx| {
-                let (type_, data, delivery) = match &request.input {
-                    session_pending::Message::User(input) => {
-                        ("user", input.data.encode(), input.delivery.encode())
-                    }
-                    session_pending::Message::Synthetic(input) => {
-                        ("synthetic", input.data.encode(), input.delivery.encode())
-                    }
-                };
-                let ycoding_schema::JsonValue::String(delivery) = delivery else {
-                    return Err(conflict());
-                };
-                let record = Pending {
-                    id: request.id.as_lossless().clone(),
-                    session_id: request.session_id.as_lossless().clone(),
-                    type_: type_.into(),
-                    data,
-                    delivery: Some(delivery),
-                    admitted_seq: 0,
-                    time_created: request.created,
-                };
-                if tx.get::<PendingTable>(&key(&record.id))?.is_some()
-                    || tx.get::<MessageTable>(&key(&record.id))?.is_some()
-                {
-                    return match tables::admit(tx, &record)? {
-                        Admission::Pending(existing) => validate(existing),
-                        Admission::Promoted(_) => {
-                            promoted(tx, &record)?.ok_or_else(|| tx.reject(conflict()))
-                        }
-                    };
-                }
-                if let Some(original) = pruned(tx, &record)? {
-                    return Ok(original);
-                }
-                let event = tables::append(
-                    tx,
-                    &NewEvent {
-                        id: request.event_id.as_lossless().clone(),
-                        aggregate_id: record.session_id.clone(),
-                        created: request.created,
-                        type_: event::versioned_type(&"session.input.admitted".into(), 1.0),
-                        data: ObjectEncoder::new()
-                            .field("sessionID", &request.session_id)
-                            .field("inputID", &request.id)
-                            .field("input", &request.input)
-                            .finish(),
-                    },
-                    None,
-                )?;
-                let tables::Append::Appended(event) = event else {
-                    return Err(tx.reject(conflict()));
-                };
-                let record = Pending {
-                    admitted_seq: event.seq,
-                    ..record
-                };
-                PendingTable::insert(tx, &record)?;
-                Ok(record)
-            })?
+            .submit(move |tx| admit_in(tx, &request, &caused_by))?
             .await
     }
+}
+
+pub(crate) fn admit_in(
+    tx: &mut Write<'_>,
+    request: &Request,
+    caused_by: &Option<usage_anchor::Ref>,
+) -> Result<(Pending, bool), Error> {
+    let (type_, data, delivery) = match &request.input {
+        session_pending::Message::User(input) => {
+            ("user", input.data.encode(), input.delivery.encode())
+        }
+        session_pending::Message::Synthetic(input) => {
+            ("synthetic", input.data.encode(), input.delivery.encode())
+        }
+    };
+    let ycoding_schema::JsonValue::String(delivery) = delivery else {
+        return Err(conflict());
+    };
+    let record = Pending {
+        id: request.id.as_lossless().clone(),
+        session_id: request.session_id.as_lossless().clone(),
+        type_: type_.into(),
+        data,
+        delivery: Some(delivery),
+        admitted_seq: 0,
+        time_created: request.created,
+    };
+    if tx.get::<PendingTable>(&key(&record.id))?.is_some()
+        || tx.get::<MessageTable>(&key(&record.id))?.is_some()
+    {
+        return match tables::admit(tx, &record)? {
+            Admission::Pending(existing) => validate(existing),
+            Admission::Promoted(_) => promoted(tx, &record)?.ok_or_else(|| tx.reject(conflict())),
+        }
+        .map(|pending| (pending, false));
+    }
+    if let Some(original) = pruned(tx, &record)? {
+        return Ok((original, false));
+    }
+    let event = tables::append(
+        tx,
+        &NewEvent {
+            id: request.event_id.as_lossless().clone(),
+            aggregate_id: record.session_id.clone(),
+            created: request.created,
+            type_: event::versioned_type(&"session.input.admitted".into(), 1.0),
+            data: ObjectEncoder::new()
+                .field("sessionID", &request.session_id)
+                .field("inputID", &request.id)
+                .field("input", &request.input)
+                .optional("causedBy", caused_by)
+                .finish(),
+        },
+        None,
+    )?;
+    let tables::Append::Appended(event) = event else {
+        return Err(tx.reject(conflict()));
+    };
+    let record = Pending {
+        admitted_seq: event.seq,
+        ..record
+    };
+    PendingTable::insert(tx, &record)?;
+    Ok((record, true))
 }
 
 fn validate(row: Pending) -> Result<Pending, Error> {

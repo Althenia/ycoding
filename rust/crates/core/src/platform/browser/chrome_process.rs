@@ -404,10 +404,7 @@ async fn run(launch: Launch) -> Result<(), ExecutorError> {
                     .await
             }
         };
-        if process::tree::send(control.pid(), process::KillSignal::Term, true).is_ok() {
-            tokio::time::sleep(options.exit_grace).await;
-            process::tree::force(control.pid(), true);
-        }
+        let swept = child.reap_group(options.exit_grace).await;
         for task in [writer, reader] {
             task.abort();
             match task.await {
@@ -418,9 +415,8 @@ async fn run(launch: Launch) -> Result<(), ExecutorError> {
                 Err(_) => return Err(error("Chrome control pump failed")),
             }
         }
-        reaped
-            .map(|_| ())
-            .map_err(|_| error("Isolated Chrome could not be reaped"))
+        reaped.map_err(|_| error("Isolated Chrome could not be reaped"))?;
+        swept.map_err(|_| error("Isolated Chrome process group cleanup failed"))
     }
     .await;
     let cleanup = tokio::fs::remove_dir_all(&root)
