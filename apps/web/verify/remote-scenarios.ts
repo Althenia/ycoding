@@ -344,9 +344,9 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     guardrails: viewport === 1440
       ? [
           guardrail("grq_context", "High Context Consumption", "Refactoring involves 48 modules in src/compiler/*.", false, ["src/compiler/*"]),
-          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required, even at YOLO 3.", true, ["ALTER TABLE sessions DROP COLUMN status", "git push -f"]),
+          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required at every YOLO level.", true, ["ALTER TABLE sessions DROP COLUMN status", "git push -f"]),
         ]
-      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required, even at YOLO 3.", true,
+      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required at every YOLO level.", true,
           [viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*"])],
     forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
     expectedText: viewport === 390

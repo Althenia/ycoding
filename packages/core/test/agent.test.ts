@@ -314,7 +314,9 @@ describe("Agent", () => {
         throw new Error("expected maintained built-in prompts")
       }
       expect(god.system).toContain("Denies remain denied.")
-      expect(god.system).toContain("Awake YOLO 1–3 auto-approves ask permissions and ordinary guardrail reviews")
+      expect(god.system).toContain("YOLO 1 auto-approves ask permissions only; awake YOLO 2 also auto-approves ordinary guardrail reviews")
+      expect(god.system).toContain("Goals grant no permission, answer, or review authority")
+      expect(god.system).toContain("Session's auto-answer toggle, default off, independent of YOLO, goals, and sleep")
       expect(god.system).toContain(
         "Model guardrail verification and grading require guardrails.decide_reviews, default false",
       )

@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import type { SessionAutonomyState, SessionTodoInfo } from "@ycoding-ai/client"
+import type { SessionAutonomyView, SessionTodoInfo } from "@ycoding-ai/client"
+import { localAutonomyView } from "../src/util/session-autonomy"
 import { expect, test } from "bun:test"
 import { createEffect, createSignal, type JSX } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -295,12 +296,12 @@ test("omits the MCP failure exception when no server has failed", async () => {
 })
 
 test("keeps the rail top below the header across autonomy modes and retained goals", async () => {
-  const modes: ReadonlyArray<[string, SessionAutonomyState]> = [
-    ["normal", { mode: "normal", yolo: false }],
-    ["active goal", { mode: "normal", yolo: false, goal: { text: "Finish audit", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
-    ["yolo", { mode: "normal", yolo: true }],
-    ["yolo with completed goal", { mode: "normal", yolo: true, goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
-    ["yolo with stopped goal", { mode: "normal", yolo: true, goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
+  const modes: ReadonlyArray<[string, SessionAutonomyView]> = [
+    ["normal", localAutonomyView({ mode: "normal", yolo: false })],
+    ["active goal", localAutonomyView({ mode: "normal", yolo: false, goal: { text: "Finish audit", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
+    ["level 2", localAutonomyView({ mode: "normal", yolo: true })],
+    ["level 2 with completed goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
+    ["level 2 with stopped goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
   ]
   const tops: number[] = []
 
@@ -397,7 +398,7 @@ type McpFixture = {
 async function mountSidebar(
   viewport: { width: number; height: number },
   mcp: ReadonlyArray<McpFixture> = [],
-  autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
+  autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: false }),
   override?: (url: URL) => Response | Promise<Response> | undefined,
 ) {
   const events = createEventStream()

@@ -168,10 +168,10 @@ export type RemoteSessionSummary = {
   readonly agent?: string
   readonly model?: string
   readonly autonomy?: RemoteAutonomyMode
-  readonly yoloLevel?: number
+  readonly yoloLevel?: 0 | 1 | 2
   readonly goalActive?: boolean
   readonly asleep?: boolean
-  readonly guardrailsEnforced?: boolean
+  readonly autoAnswer?: boolean
   readonly updatedAt?: string
 }
 
@@ -350,8 +350,8 @@ export function connectionLabel(state: RemoteConnectionState, transport: RemoteT
   return state.kind === "connected" && transport.kind === "open" && transport.rttMs !== undefined ? `${label} · ${transport.rttMs} ms` : label
 }
 
-export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string> } | undefined): boolean {
-  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id))
+export function hasWaitingSession(status: { readonly attention: ReadonlySet<string>; readonly failed: ReadonlySet<string>; readonly lost: ReadonlySet<string> } | undefined): boolean {
+  return status !== undefined && [...status.attention].some((id) => !status.failed.has(id) && !status.lost.has(id))
 }
 
 export function sessionListRefreshNotice(outcome: Exclude<RemoteRequestOutcome, { status: "ok" }>): string {
@@ -360,12 +360,15 @@ export function sessionListRefreshNotice(outcome: Exclude<RemoteRequestOutcome, 
   return describeOutcome(outcome, "Session list refresh")
 }
 
-export function sessionActivityGroup(session: { readonly attention?: boolean; readonly failed?: boolean; readonly running?: boolean }): "waiting" | "running" | "idle" {
-  if (session.attention && !session.failed) return "waiting"
+export function sessionActivityGroup(session: { readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean; readonly running?: boolean }): "waiting" | "running" | "idle" {
+  if (session.attention && !session.failed && !session.lost) return "waiting"
   return session.running ? "running" : "idle"
 }
 
-export function carouselSessionStatus(session: { readonly attention?: boolean; readonly failed?: boolean; readonly running?: boolean }) {
+export const lostResultLabel = "Background result lost"
+
+export function carouselSessionStatus(session: { readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean; readonly running?: boolean }) {
+  if (session.lost) return lostResultLabel
   const group = sessionActivityGroup(session)
   return group === "waiting" ? "Waiting for you" : group === "running" ? "Running" : undefined
 }
@@ -379,13 +382,12 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
   if (session.autonomy !== undefined) {
-    chips.push(session.yoloLevel === undefined || session.yoloLevel === 0 ? { label: "Manual", tone: "neutral" } : { label: `YOLO ${session.yoloLevel}`, tone: "attention" })
+    chips.push(session.yoloLevel === 1 ? { label: "Allow tools", tone: "attention" } : session.yoloLevel === 2 ? { label: "Tools + reviews", tone: "attention" } : { label: "Ask first", tone: "neutral" })
     if (session.goalActive === true || session.autonomy === "goal") chips.push({ label: "goal", tone: "neutral" })
     if (session.asleep === true) chips.push({ label: "asleep", tone: "success" })
+    if (session.autoAnswer === true) chips.push({ label: "auto-answer", tone: "neutral" })
   }
 
-  if (session.guardrailsEnforced === true) chips.push({ label: "Guardrails enforced", tone: "neutral" })
-  if (session.guardrailsEnforced === false) chips.push({ label: "Guardrails auto", tone: "attention" })
   return chips
 }
 

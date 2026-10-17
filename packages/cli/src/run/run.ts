@@ -24,7 +24,7 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
-  yolo?: 0 | 1 | 2 | 3
+  yolo?: 0 | 1 | 2
 }
 
 type FilePart = {

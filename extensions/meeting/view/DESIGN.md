@@ -95,6 +95,7 @@ Passage is the user-approved direction from the Meeting direct-capture proposal:
 | V6  | approved | Capture MUST show an in-flow Keep this tab open strip, Stop and leave-warning preview; beforeunload MUST warn while recording. Chrome Stop sharing MUST release tracks and stop capture. Retry failed audio MUST NEVER restart capture.                       | `test/view.test.ts`, `test/view.integration.test.ts`        |
 | V7  | approved | Tab playback MUST remain unaffected; microphone MUST NEVER reach speakers. Permission prompt, allowed, denied and blocked states MUST explain site settings and permission ownership per origin including port.                                               | `test/view.test.ts`, `test/view.integration.test.ts`        |
 | V8  | approved | Capture MUST send ordered float32LE PCM frames of at most one second, per-source sequence/startMs, bounded backpressure and 5-second heartbeats. Only explicit unaccepted busy responses MAY retry; unknown outcomes MUST stop without replay or auto-resume. | `test/view.test.ts`, `test/view.integration.test.ts`        |
+| V9  | approved | Owner settings MUST render only when the page holds the separate owner credential from the native-issued owner link; the fragment MUST clear immediately and the credential MUST stay memory-only. Controls MUST cover only future Ask AI model/variant and knowledge connector bindings, with loading, error/retry, availability and saved states in words. Loaded controls MUST be usable; unavailable saved selections MUST stay visible and unchanged when saving other settings. Ordinary view links MUST NOT show or enable them. Knowledge writes MUST keep YCoding approval; owner controls MUST NOT approve, call tools or control capture. | `test/owner-settings.test.ts`, `test/owner-settings.integration.test.ts`, `test/owner-settings-browser.integration.test.ts` |
 
 ## Colors
 
@@ -106,7 +107,7 @@ Use Geist for 16px/1.65 prose, 24px page and 20px section headings; use Geist Mo
 
 ## Layout
 
-Cap the sheet at 1040px; use 16px insets, 8px intra-group gaps, 24px section and 32px large spacing. Capture/runtime uses 2:1 tracks, evidence spans the sheet, and summary/Ask uses equal tracks. Promote advisory before evidence in Review by moving existing regions once at the lifecycle boundary; retain nodes, focus and reader anchor. Cap prose at 70ch. Keep one document scroll owner. Reserve 256px answer and 52px feedback minima, growing for content. Stop, leave-preview and settings-help dialogs cap at 480px.
+Cap the sheet at 1040px; use 16px insets, 8px intra-group gaps, 24px section and 32px large spacing. Capture/runtime uses 2:1 tracks, evidence spans the sheet, and summary/Ask uses equal tracks. Owner settings spans the sheet below advisory as one column; its select rows wrap within the sheet and binding rows stack without a second scroll owner. Promote advisory before evidence in Review by moving existing regions once at the lifecycle boundary; retain nodes, focus and reader anchor. Cap prose at 70ch. Keep one document scroll owner. Reserve 256px answer and 52px feedback minima, growing for content. Stop, leave-preview and settings-help dialogs cap at 480px.
 
 ## Responsive
 
@@ -114,7 +115,7 @@ At or below the 768px container edge, stack capture, runtime, evidence and advis
 
 ## Shapes
 
-Use 6px controls, 14px evidence panels, 1px control-border boundaries, 3px warning/source rules and 2px focus with 2px offset. Keep opaque tonal content, no glass, gradients or shadows; dialog backdrop uses surface at 0.92 opacity. Own 44px checkbox hit targets with native accessible inputs, accent fill and 20px visible boxes.
+Use 6px controls, 14px evidence panels, 1px control-border boundaries, 3px warning/source rules and 2px focus with 2px offset. Selects use base-select for the field and picker, the same control radius, border, height and focus roles, no user-agent arrow, and an owned CSS chevron in muted ink. Picker surfaces use raised/text, selected options use accent/on-accent, and focused options retain the focus ring; forced-colors restores system select rendering. Keep opaque tonal content, no glass, gradients or shadows; dialog backdrop uses surface at 0.92 opacity. Own 44px checkbox hit targets with native accessible inputs, accent fill and 20px visible boxes.
 
 ## Motion
 
@@ -133,17 +134,18 @@ Render the canonical Y mark at 32px in the header. Embed its exact SVG source; n
 | OwnershipStrip | REC words, Keep this tab open, leave preview; warning/surface/text                                                    | In flow during recording; closing or reloading stops recording; preview is not the browser prompt |
 | RuntimeStrip   | Health/sources, exposed metrics and model details; mono/muted                                                         | Use reported audio.bufferedSeconds/backlog/processedSeconds only; never invent rates or lag       |
 | Transcript     | ID, source, timestamp, settlement and text; body/mono/border                                                          | Keyed rows update in place; Follow and original/corrected toggle retain selection                 |
-| Analysis       | latest summary and collapsed findings; surface/text                                                                   | Status and evidence refs shown; no approvals or knowledge controls                                |
+| Analysis       | latest summary and collapsed findings; surface/text                                                                   | Status and evidence refs shown; no approvals or knowledge-write controls                          |
 | AskPanel       | Advisory scope, latest-50 history, field, submit/retry and feedback; surface/text/control roles                       | One pending request, at most 2000 characters, preserve draft/history; no tools/actions or overlay |
+| OwnerSettings  | Ask AI model/variant selects, connector toggle, binding rows with per-binding toggle/remove, add-binding selects, save and feedback; surface/text/control roles | Owner link only; inventory names and availability from the runtime; one save pending at a time; failed save retains edits; reload requires reopening the owner link |
 | Feedback       | connection alert, action status, recovery; danger/warning/success                                                     | Unauthorized blocks API controls; failed audio retry never starts capture                         |
 
 ## Accessibility
 
-Use headings, labelled forms, native details/dialog, Skip to transcript, polite compact status and actionable alerts. Do not announce the entire accumulating transcript. Own focus, selection, caret, cursor, details markers, disabled states, backdrop and fine-pointer scrollbars. Forced colors retains system rendering.
+Use headings, labelled forms, native details/dialog, Skip to transcript, polite compact status and actionable alerts. Do not announce the entire accumulating transcript. Own focus, selection, caret, cursor, details markers, disabled states and backdrop. Scrollbars use a 12px base on both pointer classes, bg tracks and control-border thumbs with 4px bg borders; fine-pointer hover narrows that border to 2px. Picker scrollbars use control-border and raised. Forced colors retains system rendering.
 
 ## Verification
 
-Run `bun test test/view.test.ts test/view-design.test.ts`, strict design lint, CSS audit and package typecheck. Run `test/view.integration.test.ts` with YCODING_TEST_ISOLATED_BROWSER_CHROME for real page-owned capture/bridge/Chrome flows and light/dark renders at 1440/1024/390. Check fresh consent, audio delivered, track end, no audio, mic denied, Stop confirmation, inference retry, Ask, unauthorized key, reader/draft continuity, keyboard/focus/reduced motion. Mutation-probe palette/type/layout drift. Provider doubles prove integration, not real speech accuracy; CDP track stop proves the browser track-end boundary, not native infobar pixels.
+Run `bun test test/view.test.ts test/view-design.test.ts`, strict design lint, CSS audit and package typecheck. Run `test/view.integration.test.ts` with YCODING_TEST_ISOLATED_BROWSER_CHROME for real page-owned capture/bridge/Chrome flows and light/dark renders at 1440/1024/390. Run `test/owner-settings-browser.integration.test.ts` the same way for owner-link, ordinary-link, saving, error and responsive settings flows. Check fresh consent, audio delivered, track end, no audio, mic denied, Stop confirmation, inference retry, Ask, unauthorized key, reader/draft continuity, keyboard/focus/reduced motion. Mutation-probe palette/type/layout drift. Provider doubles prove integration, not real speech accuracy; CDP track stop proves the browser track-end boundary, not native infobar pixels.
 
 ## Maintenance
 

@@ -686,7 +686,7 @@ export function createRelay(deps: RelayDeps) {
             const oldAttention = new Set(before.attention)
             const detailOf = (sessionID: string): RemoteAlertDetail => {
               const detail = message.details?.find((item) => item.sessionID === sessionID)
-              const need = message.failed?.includes(sessionID) ? "failed" : detail?.need
+              const need = message.lost?.includes(sessionID) ? "lost" : message.failed?.includes(sessionID) ? "failed" : detail?.need
               return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
             }
             const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))

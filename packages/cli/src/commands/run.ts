@@ -67,10 +67,9 @@ export const RunCommand = Spec.make("run", {
       ["0", 0],
       ["1", 1],
       ["2", 2],
-      ["3", 3],
     ]).pipe(
       Flag.withDescription(
-        "Set durable Session YOLO level; omitted preserves it (0: off, 1: permissions and ordinary guardrails, 2: +questions/forms, 3: +scope dispatch; explicit denies and hard guardrails still apply)",
+        "Set durable Session YOLO level; omitted preserves it (0: ask first, 1: allow ask permissions, 2: also allow routine reviews while awake; denies and hard reviews still apply)",
       ),
       Flag.optional,
     ),

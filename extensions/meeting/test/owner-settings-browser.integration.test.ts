@@ -1,0 +1,399 @@
+import { expect, test } from "bun:test"
+import { spawn } from "node:child_process"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { Readable, Writable } from "node:stream"
+import { z } from "zod"
+import { connect, type Client } from "../../../packages/core/src/browser/isolated-cdp"
+import { startBridge } from "../src/bridge"
+import { sendControl } from "../src/bridge-client"
+import { meetingConfigSchema } from "../src/config"
+import { createMeetingQuestions, createOwnerSettings } from "../src/plugin"
+import { MeetingRuntime } from "../src/runtime"
+import { MeetingStore } from "../src/store"
+
+test("owner link exposes working Ask model and connector settings while the ordinary link stays readonly", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-owner-browser-"))
+  const store = new MeetingStore(path.join(directory, "meetings.sqlite"))
+  store.createMeeting({ id: "meeting-1", title: "Owner settings browser", sessionID: "analysis-session" })
+  store.putSegment({
+    id: "segment-1",
+    meetingID: "meeting-1",
+    sequence: 1,
+    source: "remote",
+    speakerID: "remote-unknown",
+    startMs: 0,
+    endMs: 900,
+    rawText: "Rollout decision pending",
+    text: "Rollout decision pending",
+    state: "final",
+    model: "speech",
+    createdAt: new Date().toISOString(),
+  })
+  const created: { parentID?: string; model?: unknown }[] = []
+  const variants = [{ id: "fast" }, { id: "deep" }]
+  const runtime = new MeetingRuntime({
+    directory,
+    store,
+    config: meetingConfigSchema.parse({ analysis: { incremental: false } }),
+    createSession: async (parentID, model) => {
+      created.push({ parentID, model })
+      return `session-${created.length}`
+    },
+    generate: async () => "Advisory answer [segment-1]",
+    mcp: {
+      servers: async () => [{ name: "docs", status: { status: "connected" } }],
+      tools: async () => [
+        { server: "docs", name: "search" },
+        { server: "docs", name: "read" },
+        {
+          server: "docs",
+          name: "replace",
+          inputSchema: {
+            type: "object",
+            properties: { id: {}, content: {}, expectedRevision: {} },
+            required: ["id", "content", "expectedRevision"],
+          },
+        },
+      ],
+      callTool: async () => {
+        throw new Error("Settings discovery must not call tools")
+      },
+    },
+    providerFactory: (config) => ({
+      id: config.provider,
+      initialize: async () => undefined,
+      healthCheck: async () => ({ healthy: true, initialized: true }),
+      dispose: async () => undefined,
+      transcribe: async () => [],
+    }),
+  })
+  const questions = createMeetingQuestions(runtime)
+  const ownerSettings = createOwnerSettings(runtime, async () => [
+    { providerID: "p", id: "m1", name: "Model One", enabled: true, status: "active", variants },
+    { providerID: "p", id: "m2", name: "Model Two", enabled: false, status: "active", variants: [] },
+  ])
+  const controller = "o".repeat(64)
+  let failOwnerReply = false
+  let ownerUpdates = 0
+  const bridge = await startBridge({
+    controlToken: controller,
+    onControl: (input) => runtime.control(input),
+    onCapture: (input) => runtime.capture(input),
+    onView: () => questions.state(),
+    onAsk: (question) => questions.ask(question),
+    onOwnerRead: () => ownerSettings.read(),
+    onOwnerUpdate: async (input) => {
+      ownerUpdates++
+      const result = await ownerSettings.update(input)
+      if (failOwnerReply) {
+        failOwnerReply = false
+        throw new Error("Owner reply unavailable")
+      }
+      return result
+    },
+  })
+  let browser: Awaited<ReturnType<typeof launch>> | undefined
+  try {
+    const pageURL = async (action: string) => {
+      const reply = await sendControl(bridge.url, controller, { action })
+      if (typeof reply !== "object" || reply === null || !("url" in reply) || typeof reply.url !== "string")
+        throw new Error("Missing page URL")
+      return reply.url
+    }
+    const ordinaryURL = await pageURL("view")
+    const ownerURL = await pageURL("owner-view")
+    const ownerKey = new URLSearchParams(new URL(ownerURL).hash.slice(1)).get("owner")!
+    browser = await launch()
+    const target = string(record(await browser.cdp.send("Target.createTarget", { url: "about:blank" })).targetId)
+    const session = string(
+      record(await browser.cdp.send("Target.attachToTarget", { targetId: target, flatten: true })).sessionId,
+    )
+    const errors: string[] = []
+    const ownerReads: string[] = []
+    const unsubscribe = browser.cdp.subscribe((event) => {
+      if (event.sessionId !== session) return
+      if (event.method === "Runtime.exceptionThrown") errors.push("Page exception")
+      if (event.method === "Network.requestWillBeSent") {
+        const targetURL = new URL(string(record(event.params?.request).url))
+        if (targetURL.protocol === "data:" || targetURL.href === "about:blank") return
+        if (targetURL.origin !== bridge.url || targetURL.search || targetURL.hash) errors.push("Unexpected network target")
+        if (targetURL.pathname === "/view/owner/settings") ownerReads.push(targetURL.pathname)
+      }
+    })
+    await browser.cdp.send("Runtime.enable", {}, session)
+    await browser.cdp.send("Network.enable", {}, session)
+    await browser.cdp.send("Page.enable", {}, session)
+
+    await navigate(browser.cdp, session, ordinaryURL)
+    await waitDOM(browser.cdp, session, "document.querySelector('#connection')?.textContent.includes('Connected')")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-panel').hidden")).toBe(true)
+    expect(await evaluate(browser.cdp, session, "location.hash")).toBe("")
+    expect(ownerReads).toEqual([])
+
+    await navigate(browser.cdp, session, ownerURL)
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings loaded')",
+    )
+    expect(await evaluate(browser.cdp, session, "location.hash")).toBe("")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-panel').hidden")).toBe(false)
+    expect(await evaluate(browser.cdp, session, "localStorage.length + sessionStorage.length")).toBe(0)
+    expect(await evaluate(browser.cdp, session, `document.body.innerText.includes(${JSON.stringify(ownerKey)})`)).toBe(
+      false,
+    )
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "[...document.querySelector('#owner-model').options].map((option) => option.textContent).join(' | ')",
+      ),
+    ).toContain("Model One")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').disabled")).toBe(true)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-add-server').disabled")).toBe(false)
+    expect(await evaluate(browser.cdp, session, "getComputedStyle(document.querySelector('#owner-model')).appearance")).toBe("base-select")
+
+    await choose(browser.cdp, session, "#owner-model", "Model One")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').disabled")).toBe(false)
+    await choose(browser.cdp, session, "#owner-variant", "deep")
+    await choose(browser.cdp, session, "#owner-add-server", "docs")
+    await choose(browser.cdp, session, "#owner-add-search", "search")
+    await choose(browser.cdp, session, "#owner-add-read", "read")
+    await choose(browser.cdp, session, "#owner-add-write", "replace")
+    await click(browser.cdp, session, "#owner-add")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-bindings')?.textContent.includes('Server connected · write requires approval')",
+    )
+    await click(browser.cdp, session, "#owner-save")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings saved')",
+    )
+    expect(
+      await evaluate(browser.cdp, session, "document.querySelector('#owner-bindings').textContent"),
+    ).toContain("revision-aware")
+    const saved = JSON.parse(await readFile(path.join(directory, "settings.json"), "utf8"))
+    expect(saved.analysis.askModel).toEqual({ providerID: "p", id: "m1", variant: "deep" })
+    expect(saved.knowledge.bindings).toEqual([
+      { server: "docs", search: "search", read: "read", write: "replace", enabled: true },
+    ])
+    expect(saved.knowledge.autoApply).toBe(false)
+    expect(saved.knowledge.requireApproval).toBe(true)
+
+    await fill(browser.cdp, session, "#question", "What is pending?")
+    await click(browser.cdp, session, "#ask")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#chat-history')?.textContent.includes('Advisory answer')",
+    )
+    expect(created.at(-1)).toEqual({ parentID: undefined, model: { providerID: "p", id: "m1", variant: "deep" } })
+    expect(store.getMeeting("meeting-1")?.sessionID).toBe("analysis-session")
+
+    await choose(browser.cdp, session, "#owner-variant", "fast")
+    variants.splice(0, variants.length, { id: "deep" })
+    await click(browser.cdp, session, "#owner-save")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-feedback')?.textContent.includes('choose a reported option')",
+    )
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').value")).toBe("fast")
+    variants.splice(0, variants.length, { id: "fast" }, { id: "deep" })
+    await click(browser.cdp, session, "#owner-save")
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings saved')",
+    )
+
+    variants.splice(0, variants.length, { id: "deep" })
+    await navigate(browser.cdp, session, "about:blank")
+    await navigate(browser.cdp, session, ownerURL)
+    await waitDOM(browser.cdp, session, "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings loaded')")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').disabled")).toBe(false)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').value")).toBe("fast")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').selectedOptions[0].textContent")).toContain("Unavailable")
+    await click(browser.cdp, session, "#owner-mcp")
+    await click(browser.cdp, session, "#owner-save")
+    await waitDOM(browser.cdp, session, "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings saved')")
+    expect(runtime.config.analysis.askModel).toEqual({ providerID: "p", id: "m1", variant: "fast" })
+    expect(runtime.config.knowledge.mcpEnabled).toBe(false)
+
+    await choose(browser.cdp, session, "#owner-variant", "deep")
+    failOwnerReply = true
+    await click(browser.cdp, session, "#owner-save")
+    await waitDOM(browser.cdp, session, "document.querySelector('#owner-feedback')?.textContent.includes('outcome is unknown')")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-retry').hidden")).toBe(false)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').value")).toBe("deep")
+    const savedUpdates = ownerUpdates
+    await click(browser.cdp, session, "#owner-retry")
+    await waitDOM(browser.cdp, session, "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings loaded')")
+    expect(ownerUpdates).toBe(savedUpdates)
+    expect(runtime.config.analysis.askModel).toEqual({ providerID: "p", id: "m1", variant: "deep" })
+
+    await browser.cdp.send(
+      "Emulation.setDeviceMetricsOverride",
+      { width: 390, height: 844, deviceScaleFactor: 1, mobile: true },
+      session,
+    )
+    expect(
+      await evaluate(
+        browser.cdp,
+        session,
+        "document.documentElement.scrollWidth <= innerWidth + 1 && document.querySelector('#owner-save').getBoundingClientRect().height >= 44 && document.querySelector('#owner-model').getBoundingClientRect().height >= 44",
+      ),
+    ).toBe(true)
+    await browser.cdp.send("Emulation.clearDeviceMetricsOverride", {}, session)
+
+    await browser.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false }, session)
+    for (const [theme, background] of [["light", "rgb(255, 255, 255)"], ["dark", "rgb(21, 30, 36)"]] as const) {
+      await browser.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: theme }] }, session)
+      await click(browser.cdp, session, "#owner-model")
+      expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-model').matches(':open')")).toBe(true)
+      expect(await evaluate(browser.cdp, session, "getComputedStyle(document.querySelector('#owner-model'), '::picker(select)').backgroundColor")).toBe(background)
+      await Bun.write(new URL(`../../../.cache/tmp/meeting-owner-${theme}.png`, import.meta.url), Buffer.from(string(record(await browser.cdp.send("Page.captureScreenshot", { format: "png" }, session)).data), "base64"))
+      await browser.cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, session)
+      await browser.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, session)
+      expect(await evaluate(browser.cdp, session, "document.activeElement === document.querySelector('#owner-model') && !document.querySelector('#owner-model').matches(':open')")).toBe(true)
+    }
+
+    const tampered = new URL(ownerURL)
+    tampered.hash = `#key=${new URLSearchParams(tampered.hash.slice(1)).get("key")}&owner=${"f".repeat(64)}`
+    await navigate(browser.cdp, session, tampered.href)
+    await waitDOM(
+      browser.cdp,
+      session,
+      "document.querySelector('#owner-feedback')?.textContent.includes('owner link is invalid')",
+    )
+    await waitDOM(browser.cdp, session, "document.querySelector('#connection')?.textContent.includes('Connected')")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-form').hidden")).toBe(true)
+    expect(errors).toEqual([])
+    unsubscribe()
+  } finally {
+    await browser?.close()
+    await bridge.close()
+    await runtime.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 240000)
+
+async function launch() {
+  const executable = process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME
+  if (!executable || !(await Bun.file(executable).exists()))
+    throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to installed Chrome for Testing")
+  const directory = await mkdtemp(path.join(tmpdir(), "ycoding-meeting-owner-chrome-"))
+  const child = spawn(
+    executable,
+    [
+      "--headless=new",
+      `--user-data-dir=${directory}`,
+      "--remote-debugging-pipe",
+      "--use-mock-keychain",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-breakpad",
+      "about:blank",
+    ],
+    { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+  )
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve())
+    child.once("error", () => resolve())
+  })
+  const readable = child.stdio[4]
+  const writable = child.stdio[3]
+  if (!(readable instanceof Readable) || !(writable instanceof Writable))
+    throw new Error("Chrome control pipe unavailable")
+  const cdp = connect(readable, writable)
+  return {
+    cdp,
+    async close() {
+      cdp.close()
+      if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(-child.pid, "SIGTERM")
+      await exited
+      await rm(directory, { recursive: true, force: true })
+    },
+  }
+}
+
+async function evaluate(cdp: Client, session: string, expression: string) {
+  const result = record(
+    await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, session, undefined, 15000),
+  )
+  if (result.exceptionDetails) throw new Error(`Chrome evaluation failed: ${JSON.stringify(result.exceptionDetails)}`)
+  return record(result.result).value
+}
+
+async function navigate(cdp: Client, session: string, url: string) {
+  const loaded = Promise.withResolvers<void>()
+  const timer = setTimeout(() => loaded.reject(new Error("Meeting view navigation did not load")), 10000)
+  const unsubscribe = cdp.subscribe((event) => {
+    if (
+      event.sessionId === session &&
+      (event.method === "Page.loadEventFired" || event.method === "Page.navigatedWithinDocument")
+    )
+      loaded.resolve()
+  })
+  try {
+    await cdp.send("Page.navigate", { url }, session)
+    await loaded.promise
+  } finally {
+    clearTimeout(timer)
+    unsubscribe()
+  }
+}
+
+function waitDOM(cdp: Client, session: string, expression: string) {
+  return evaluate(
+    cdp,
+    session,
+    `new Promise((resolve,reject)=>{const matches=()=>(${expression});if(matches())return resolve(true);const observer=new MutationObserver(()=>{if(matches()){observer.disconnect();clearTimeout(timer);resolve(true)}});const timer=setTimeout(()=>{observer.disconnect();reject(new Error('Meeting view state did not render'))},10000);observer.observe(document,{subtree:true,attributes:true,childList:true,characterData:true})})`,
+  )
+}
+
+async function choose(cdp: Client, session: string, selector: string, label: string) {
+  await evaluate(
+    cdp,
+    session,
+    `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node||node.disabled)throw new Error('Control unavailable');const usable=[...node.options].filter((item)=>!item.disabled);const option=usable.find((item)=>item.value===${JSON.stringify(label)}||item.textContent.trim()===${JSON.stringify(label)})??usable.find((item)=>item.textContent.includes(${JSON.stringify(label)}));if(!option)throw new Error('Option unavailable');node.focus();node.value=option.value;node.dispatchEvent(new Event('change',{bubbles:true}));return true})()`,
+  )
+}
+
+async function click(cdp: Client, session: string, selector: string) {
+  const point = record(
+    await evaluate(
+      cdp,
+      session,
+      `(async()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node||node.disabled)throw new Error('Control unavailable');node.scrollIntoView({block:'center'});await new Promise(r=>{requestAnimationFrame(r);setTimeout(r,100)});const rect=node.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}})()`,
+    ),
+  )
+  for (const type of ["mousePressed", "mouseReleased"])
+    await cdp.send("Input.dispatchMouseEvent", { type, x: point.x, y: point.y, button: "left", clickCount: 1 }, session)
+}
+
+async function fill(cdp: Client, session: string, selector: string, value: string) {
+  await evaluate(
+    cdp,
+    session,
+    `document.querySelector(${JSON.stringify(selector)}).focus();document.querySelector(${JSON.stringify(selector)}).select();true`,
+  )
+  await cdp.send("Input.insertText", { text: value }, session)
+  expect(await evaluate(cdp, session, `document.querySelector(${JSON.stringify(selector)}).value`)).toBe(value)
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return z.record(z.string(), z.unknown()).parse(value)
+}
+function string(value: unknown) {
+  if (typeof value !== "string") throw new Error("Expected test boundary string")
+  return value
+}

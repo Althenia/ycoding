@@ -700,12 +700,21 @@ try {
   checks.push("explicit skill selection crossed the browser, relay, and connector into the first provider request without a model tool decision")
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
-  for (const level of [1, 2, 3, 0] as const) {
+  for (const level of [1, 2, 0] as const) {
     await store.setYolo(level)
     const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
     expect(isRecord(autonomy) && autonomy.yolo === level, `YOLO ${level} did not persist on the selected Session`)
     expect(store.state().view?.autonomy.yolo === level, `YOLO ${level} did not reach the browser store`)
   }
+  for (const enabled of [true, false]) {
+    expect(await store.setAutoAnswer(enabled), "Session auto-answer update failed")
+    const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
+    expect(isRecord(autonomy) && autonomy.autoAnswer === enabled, "Session auto-answer did not persist")
+    expect(store.state().view?.autonomy.autoAnswer === enabled, "Session auto-answer did not reach the browser store")
+    const unrelated = await local.autonomyGet(sessionID, { directory: workspace })
+    expect(isRecord(unrelated) && unrelated.autoAnswer !== true, "Session auto-answer propagated to another Session")
+  }
+  checks.push("approval levels 0–2 and Session-local auto-answer round-trip through the relay without changing another Session")
   await store.setYolo(2)
   providerFollowUpText = "Reply after the YOLO-approved shell call."
   providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "", prompt: "Run the harmless YOLO approval check" }

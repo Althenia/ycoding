@@ -76,7 +76,7 @@ export type RelayDouble = {
   pushNotices: (frame: RemoteNoticeFrame) => void
   setNoticePage: (page: RemoteNoticePage) => void
   setNoticeError: (error: { readonly code: RemoteErrorCode; readonly message: string } | undefined) => void
-  pushStatus: (running: readonly string[], attention: readonly string[], outstanding?: readonly string[], failed?: readonly string[]) => void
+  pushStatus: (running: readonly string[], attention: readonly string[], outstanding?: readonly string[], failed?: readonly string[], lost?: readonly string[]) => void
   dropConnections: (code: number, reason: string) => void
   stop: () => Promise<void>
 }
@@ -128,6 +128,23 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     },
     { id: "ses_b", title: "Beta session", time: { created: 1, updated: 1 } },
   ]
+
+  const autonomyStates = new Map<string, Record<string, unknown>>()
+  const baseAutonomy = (): Record<string, unknown> => typeof options.autonomy === "object" && options.autonomy !== null && !Array.isArray(options.autonomy)
+    ? { ...(options.autonomy as Record<string, unknown>) } : { mode: "normal", yolo: 0 }
+  const autonomyFor = (sessionID: string | undefined) => {
+    const key = sessionID ?? ""
+    const current = autonomyStates.get(key) ?? baseAutonomy()
+    autonomyStates.set(key, current)
+    return current
+  }
+  const setAutonomy = (sessionID: string | undefined, state: Record<string, unknown>) => autonomyStates.set(sessionID ?? "", state)
+  const autonomyValue = (sessionID: string | undefined) => {
+    const state = autonomyFor(sessionID)
+    const yolo = typeof state.yolo === "number" ? state.yolo : 0
+    const given = typeof state.effective === "object" && state.effective !== null ? state.effective as Record<string, unknown> : undefined
+    return { data: { ...state, effective: given ?? { yolo, asleep: state.sleep !== undefined, guardrailsEnabled: true, ordinaryReviewsAuto: yolo === 2 && state.sleep === undefined, modelReviews: false, hardModelReviews: false } } }
+  }
 
   const builtInHandler = (request: RemoteRequest): ConcreteResult => {
       if (request.operation === "workspace.list") {
@@ -182,7 +199,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
         }
       }
       if (request.operation === "session.autonomy.get") {
-        return { ok: true, value: { data: options.autonomy ?? { mode: "normal", yolo: 0 } } }
+        return { ok: true, value: autonomyValue(request.sessionID) }
       }
       if (request.operation === "session.permission.list") {
         return { ok: true, value: { data: options.permissions ?? [] } }
@@ -210,42 +227,25 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       }
       if (request.operation === "session.goal.set" || request.operation === "session.goal.stop") {
         const text = typeof request.input?.goal === "string" ? request.input.goal : undefined
-        return {
-          ok: true,
-          value: {
-            data: {
-              mode: "normal",
-              yolo: 0,
-              ...(text === undefined
-                ? {}
-                : { goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }),
-            },
-          },
-        }
+        const current = autonomyFor(request.sessionID)
+        setAutonomy(request.sessionID, { mode: "normal", yolo: typeof current.yolo === "number" ? current.yolo : 0,
+          ...(current.sleep === undefined ? {} : { sleep: current.sleep }),
+          ...(current.autoAnswer === undefined ? {} : { autoAnswer: current.autoAnswer }),
+          ...(text === undefined ? {} : { goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }) })
+        return { ok: true, value: autonomyValue(request.sessionID) }
       }
       if (request.operation === "session.autonomy.set") {
-        const yolo = request.input?.yolo
-        const goal = request.input?.goal
-        return {
-          ok: true,
-          value: {
-            data: {
-              mode: "normal",
-              yolo: typeof yolo === "number" ? yolo : 0,
-              ...(typeof goal === "string"
-                ? {
-                    goal: {
-                      text: goal,
-                      status: "active",
-                      iteration: 0,
-                      noProgress: 0,
-                      maxNoProgress: 3,
-                    },
-                  }
-                : {}),
-            },
-          },
+        const input = request.input ?? {}
+        let next: Record<string, unknown> = { ...autonomyFor(request.sessionID),
+          ...(typeof input.yolo === "number" || typeof input.yolo === "boolean" ? { yolo: input.yolo } : {}),
+          ...(typeof input.autoAnswer === "boolean" ? { autoAnswer: input.autoAnswer } : {}),
+          ...(typeof input.goal === "string" ? { goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}),
         }
+        if (input.sleep === true) next = { ...next, sleep: {} }
+        if (input.sleep === false) next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== "sleep"))
+        if (next.effective !== undefined) next = Object.fromEntries(Object.entries(next).filter(([key]) => key !== "effective"))
+        setAutonomy(request.sessionID, next)
+        return { ok: true, value: autonomyValue(request.sessionID) }
       }
     return { ok: true, value: null }
   }
@@ -423,10 +423,11 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     pushNotices: (frame) => {
       for (const socket of sockets) socket.send(serializeNoticeFrame(frame))
     },
-    pushStatus: (running, attention, outstanding, failed) => {
+    pushStatus: (running, attention, outstanding, failed, lost) => {
       for (const socket of sockets) socket.send(serializeStatus({ type: "status", running, attention,
         ...(outstanding === undefined ? {} : { outstanding }),
-        ...(failed === undefined ? {} : { failed }) }))
+        ...(failed === undefined ? {} : { failed }),
+        ...(lost === undefined ? {} : { lost }) }))
     },
     dropConnections: (code, reason) => {
       for (const socket of sockets) socket.close(code, reason)

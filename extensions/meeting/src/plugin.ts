@@ -79,6 +79,9 @@ export function createMeetingQuestions(service: MeetingRuntime) {
         answer?: string
         error?: string
       } = { id: crypto.randomUUID(), question, createdAt: new Date().toISOString(), status: "pending" }
+      const admittedAskModel = service.config.analysis.askModel
+      const admittedModel =
+        admittedAskModel === "inherit" ? service.config.analysis.model : admittedAskModel
       const history = histories.get(meeting.id) ?? []
       history.push(entry)
       if (history.length > 50) history.splice(0, history.length - 50)
@@ -110,7 +113,10 @@ export function createMeetingQuestions(service: MeetingRuntime) {
         }
         if (!transcript.length) throw new Error("transcript_exceeds_budget")
         if (render().length > service.config.analysis.maxCharacters) throw new Error("transcript_exceeds_budget")
-        const sessionID = await service.options.createSession()
+        const sessionID = await service.options.createSession(
+          undefined,
+          admittedModel === "inherit" ? undefined : admittedModel,
+        )
         const answer = await service.options.generate(sessionID, render())
         if (!answer.trim() || answer.length > 16000) throw new Error("invalid_answer")
         entry.answer = answer
@@ -127,6 +133,147 @@ export function createMeetingQuestions(service: MeetingRuntime) {
     },
     async settled() {
       await Promise.all(running.values())
+    },
+  }
+}
+
+export interface OwnerCatalogModel {
+  providerID: string
+  id: string
+  name?: string
+  enabled?: boolean
+  status?: string
+  variants?: ReadonlyArray<{ id: string }>
+  profiles?: ReadonlyArray<{ name: string }>
+}
+
+export function createOwnerSettings(
+  service: MeetingRuntime,
+  listModels: () => Promise<ReadonlyArray<OwnerCatalogModel>>,
+) {
+  const inventory = async () => {
+    const [catalog, tools, servers] = await Promise.all([
+      listModels(),
+      service.options.mcp.tools(),
+      service.options.mcp.servers ? service.options.mcp.servers() : Promise.resolve(undefined),
+    ])
+    const models = catalog
+      .filter(
+        (model) =>
+          typeof model?.providerID === "string" &&
+          model.providerID.length > 0 &&
+          typeof model.id === "string" &&
+          model.id.length > 0,
+      )
+      .map((model) => {
+        const profiles = (model.profiles ?? [])
+          .map((profile) => profile?.name)
+          .filter((name): name is string => typeof name === "string" && name.length > 0)
+        return {
+          providerID: model.providerID,
+          id: model.id,
+          name: typeof model.name === "string" && model.name ? model.name : model.id,
+          ...(typeof model.enabled === "boolean" ? { enabled: model.enabled } : {}),
+          ...(typeof model.status === "string" && model.status ? { status: model.status } : {}),
+          variants: (model.variants ?? [])
+            .map((variant) => variant?.id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+          ...(profiles.length ? { profiles } : {}),
+        }
+      })
+    const usable = tools.filter(
+      (tool) =>
+        typeof tool?.server === "string" &&
+        tool.server.length > 0 &&
+        typeof tool.name === "string" &&
+        tool.name.length > 0,
+    )
+    const names = [
+      ...new Set([...(servers ?? []).map((server) => server.name), ...usable.map((tool) => tool.server)]),
+    ].filter((name) => typeof name === "string" && name.length > 0)
+    const serverList = names.map((name) => {
+      const reported = (servers ?? []).find((server) => server.name === name)
+      const raw = reported?.status
+      const status = typeof raw === "string" ? raw : raw && typeof raw.status === "string" ? raw.status : undefined
+      return {
+        name,
+        ...(status ? { status } : {}),
+        tools: [...new Set(usable.filter((tool) => tool.server === name).map((tool) => tool.name))],
+      }
+    })
+    const writeCapability = (server: string, write?: string) => {
+      if (!write) return undefined
+      const tool = usable.find((item) => item.server === server && item.name === write)
+      if (!tool) return "unavailable"
+      const schema =
+        typeof tool.inputSchema === "object" && tool.inputSchema !== null && !Array.isArray(tool.inputSchema)
+          ? (tool.inputSchema as Record<string, unknown>)
+          : undefined
+      const required = Array.isArray(schema?.required) ? schema.required : []
+      const properties =
+        typeof schema?.properties === "object" && schema.properties !== null && !Array.isArray(schema.properties)
+          ? (schema.properties as Record<string, unknown>)
+          : {}
+      return ["id", "content", "expectedRevision"].every((key) => required.includes(key) && key in properties)
+        ? "revision-aware"
+        : "manual-only"
+    }
+    return { models, serverList, writeCapability, usable }
+  }
+  const read = async () => {
+    const { models, serverList, writeCapability } = await inventory()
+    const payload = {
+      askModel: service.config.analysis.askModel,
+      analysisModel: service.config.analysis.model,
+      models,
+      servers: serverList,
+      knowledge: {
+        mcpEnabled: service.config.knowledge.mcpEnabled,
+        autoApply: false as const,
+        requireApproval: true as const,
+        bindings: service.config.knowledge.bindings.map((binding) => ({
+          ...binding,
+          ...(binding.write ? { writeCapability: writeCapability(binding.server, binding.write) } : {}),
+        })),
+      },
+    }
+    if (Buffer.byteLength(JSON.stringify(payload)) > 1_048_576)
+      throw new Error("Owner settings inventory exceeds the 1 MiB reply bound")
+    return payload
+  }
+  return {
+    read,
+    async update(input: Parameters<MeetingRuntime["updateOwnerSettings"]>[0]) {
+      const { models, usable } = await inventory()
+      const selection = input.askModel
+      if (selection !== undefined && selection !== "inherit") {
+        const model = models.find(
+          (item) =>
+            item.providerID === selection.providerID &&
+            item.id === selection.id,
+        )
+        if (
+          !model ||
+          model.enabled === false ||
+          model.status === "deprecated" ||
+          (selection.variant && !model.variants.includes(selection.variant)) ||
+          (selection.profile && model.profiles?.length && !model.profiles.includes(selection.profile))
+        )
+          return { error: "selection_unavailable" }
+      }
+      if (input.knowledge) {
+        const seen = new Set<string>()
+        for (const binding of input.knowledge.bindings) {
+          if (seen.has(binding.server)) return { error: "selection_unavailable" }
+          seen.add(binding.server)
+          if (!input.knowledge.mcpEnabled || binding.enabled === false) continue
+          const available = (name: string) => usable.some((tool) => tool.server === binding.server && tool.name === name)
+          if (!available(binding.search) || !available(binding.read) || (binding.write && !available(binding.write)))
+            return { error: "selection_unavailable" }
+        }
+      }
+      await service.updateOwnerSettings(input)
+      return read()
     },
   }
 }
@@ -197,14 +344,15 @@ export default Plugin.define({
         store,
         config,
         mcp: context.mcp,
-        createSession: async (parentID) => {
+        createSession: async (parentID, model) => {
           const parent = parentID ? await context.session.get({ sessionID: parentID }) : undefined
           if (parent && parent.location.directory !== location)
             throw new Error("Open the source Session's Location before starting its meeting")
+          const selected = model !== undefined ? model : service.config.analysis.model
           const session = await context.session.create({
             agent: "meeting-intelligence",
             parentID,
-            model: service.config.analysis.model === "inherit" ? undefined : service.config.analysis.model,
+            model: selected === "inherit" ? undefined : selected,
           })
           analysisSessions.add(session.id)
           return session.id
@@ -216,6 +364,7 @@ export default Plugin.define({
       })
       runtime = service
       questions = createMeetingQuestions(service)
+      const ownerSettings = createOwnerSettings(service, async () => (await context.catalog.model.list()).data)
       const view = questions
       const token = randomBytes(32).toString("hex")
       bridge = await startBridge({
@@ -237,6 +386,8 @@ export default Plugin.define({
         onCapture: (input) => service.capture(input),
         onView: () => view.state(),
         onAsk: (question) => view.ask(question),
+        onOwnerRead: () => ownerSettings.read(),
+        onOwnerUpdate: (input) => ownerSettings.update(input),
       })
       await writeFile(descriptor, JSON.stringify({ url: bridge.url, token, pid: process.pid }), { mode: 0o600 })
       await chmod(descriptor, 0o600)

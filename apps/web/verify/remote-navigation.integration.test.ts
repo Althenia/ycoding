@@ -225,6 +225,78 @@ describe("remote navigation", () => {
     }
   }, 180_000)
 
+  test("shows a lost background result as a loss warning that is neither Waiting nor Failed, and clears it", async () => {
+    const page = await requireBrowser().openPage()
+    const title = 'Stream remote output safely'
+    const report = `(() => {
+      const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0
+      const row = [...document.querySelectorAll('.sessions-table__row')].find((candidate) => candidate.querySelector('.sessions-table__name')?.textContent.trim() === '${title}')
+      const card = [...document.querySelectorAll('.running-sessions__item')].find((candidate) => candidate.querySelector('.running-sessions__title')?.textContent === '${title}')
+      return {
+        chips: row ? [...row.querySelectorAll('.sessions-table__status .chip')].map((chip) => chip.textContent.trim()) : null,
+        rowDot: row?.querySelector('.attention-dot') != null,
+        card: card?.querySelector('.running-sessions__status')?.textContent.trim() ?? null,
+        cardColor: card ? getComputedStyle(card.querySelector('.running-sessions__status')).color : null,
+        navDot: visible(document.querySelector('.remote-nav a[href="/remote/sessions"] .attention-dot')) || visible(document.querySelector('.bottom-nav a[href="/remote/sessions"] .attention-dot')),
+        navLabel: [...document.querySelectorAll('.remote-nav a[href="/remote/sessions"], .bottom-nav a[href="/remote/sessions"]')].find(visible)?.getAttribute('aria-label') ?? null,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`
+    type Report = { chips: readonly string[] | null; rowDot: boolean; card: string | null; cardColor: string | null; navDot: boolean; navLabel: string | null; overflow: boolean }
+    const filter = (name: string) => `[...document.querySelectorAll('.session-filters__option')].find((button) => button.textContent.trim() === '${name}').click()`
+    try {
+      for (const theme of themes) {
+        for (const [width, height] of [[390, 844], [1440, 900]] as const) {
+          await page.setViewport(width, height)
+          await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&noSelection=1&theme=${theme}`)
+          await until(page, `window.remoteStatus && document.querySelectorAll(".sessions-table__name").length > 0 && document.querySelectorAll(".running-sessions__item").length > 0`)
+          await page.evaluate(`window.remoteStatus([], ["ses_fixture"])`)
+          await until(page, `(${report}).card === 'Waiting for you'`)
+          const waiting = await page.evaluate<Report>(report)
+          expect(waiting.chips).toEqual(["Waiting for you"])
+          expect(waiting.rowDot).toBe(true)
+          expect(waiting.navDot).toBe(true)
+
+          await page.evaluate(`window.remoteStatus([], ["ses_fixture"], [], ["ses_fixture"])`)
+          await until(page, `(${report}).card === 'Background result lost' && (${report}).chips?.[0] === 'Background result lost'`)
+          const lost = await page.evaluate<Report>(report)
+          expect(lost.chips).toEqual(["Background result lost"])
+          expect(lost.rowDot).toBe(false)
+          expect(lost.navDot).toBe(false)
+          expect(lost.navLabel).not.toMatch(/waiting/)
+          expect(lost.cardColor).toBe(waiting.cardColor)
+          expect(lost.overflow).toBe(false)
+          await capture(page, `lost-session-${width}-${theme}`)
+
+          await page.evaluate(filter("Waiting"))
+          await until(page, `document.querySelector('.session-filters__option--active')?.textContent.trim() === 'Waiting' && !(${report}).chips`)
+          await page.evaluate(filter("Idle"))
+          await until(page, `(${report}).chips?.[0] === 'Background result lost'`)
+          await page.evaluate(filter("All"))
+
+          await page.evaluate(`window.remoteStatus(['ses_fixture'], ["ses_fixture"], [], ["ses_fixture"])`)
+          await until(page, `(${report}).chips?.[0] === 'Background result lost' && (${report}).chips?.[1] === undefined`)
+          const running = await page.evaluate<Report>(report)
+          expect(running.card).toBe("Background result lost")
+          expect(running.rowDot).toBe(false)
+
+          await page.evaluate(`window.remoteStatus([], ["ses_fixture"], ["ses_fixture"])`)
+          await until(page, `(${report}).chips?.[0] === 'Failed'`)
+          expect((await page.evaluate<Report>(report)).card).not.toBe("Background result lost")
+
+          await page.evaluate(`window.remoteStatus([], [])`)
+          await until(page, `!(${report}).chips?.length || (${report}).chips?.[0] === 'Idle'`)
+          const cleared = await page.evaluate<Report>(report)
+          expect(cleared.chips).not.toContain("Background result lost")
+          expect(cleared.card).not.toBe("Background result lost")
+          expect(cleared.rowDot).toBe(false)
+        }
+      }
+    } finally {
+      await page.close()
+    }
+  }, 240_000)
+
   test("collects live Session alerts in the notification center and opens their Session", async () => {
     const page = await requireBrowser().openPage()
     try {

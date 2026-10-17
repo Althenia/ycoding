@@ -263,7 +263,7 @@ export type ProviderRequestTiming = {
 
 export type SessionAutonomyMode = "normal"
 
-export type SessionAutonomyYoloLevel = 0 | 1 | 2 | 3
+export type SessionAutonomyYoloLevel = 0 | 1 | 2
 
 export type SessionAutonomyGoalStatus = "active" | "completed" | "stopped" | "exhausted"
 
@@ -1722,6 +1722,15 @@ export type SessionCompactionEnded = {
   }
 }
 
+export type SessionAutonomyEffective = {
+  yolo: SessionAutonomyYoloLevel
+  asleep: boolean
+  guardrailsEnabled: boolean
+  ordinaryReviewsAuto: boolean
+  modelReviews: boolean
+  hardModelReviews: boolean
+}
+
 export type SessionAutonomyGoal = {
   text: string
   status: SessionAutonomyGoalStatus
@@ -2745,11 +2754,13 @@ export type SessionCompactionHistory = {
   totalSavedTokens: number
 }
 
-export type SessionAutonomyState = {
+export type SessionAutonomyView = {
   mode: SessionAutonomyMode
   yolo: SessionAutonomyYoloLevel | boolean
+  autoAnswer?: boolean | null
   goal?: SessionAutonomyGoal | null
   sleep?: {} | null
+  effective: SessionAutonomyEffective
 }
 
 export type GuardrailEscalation = {
@@ -5033,21 +5044,33 @@ export type SessionDiagnosticsOutput = { data?: SessionCacheDiagnostics | null }
 
 export type SessionAutonomyGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
-export type SessionAutonomyGetOutput = { data: SessionAutonomyState }["data"]
+export type SessionAutonomyGetOutput = { data: SessionAutonomyView }["data"]
 
 export type SessionAutonomySetInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly payload:
     | {
-        readonly yolo?: (0 | 1 | 2 | 3) | boolean | null
+        readonly yolo?: (0 | 1 | 2) | boolean | null
+        readonly autoAnswer?: never | null
         readonly goal: string | true | null
         readonly maxNoProgress?: number | null
       }
-    | { readonly yolo: (0 | 1 | 2 | 3) | boolean; readonly goal?: never | null }
-    | { readonly sleep: boolean; readonly goal?: never | null; readonly yolo?: never | null }
+    | { readonly yolo: (0 | 1 | 2) | boolean; readonly goal?: never | null; readonly autoAnswer?: never | null }
+    | {
+        readonly sleep: boolean
+        readonly goal?: never | null
+        readonly yolo?: never | null
+        readonly autoAnswer?: never | null
+      }
+    | {
+        readonly autoAnswer: boolean
+        readonly goal?: never | null
+        readonly yolo?: never | null
+        readonly sleep?: never | null
+      }
 }
 
-export type SessionAutonomySetOutput = { data: SessionAutonomyState }["data"]
+export type SessionAutonomySetOutput = { data: SessionAutonomyView }["data"]
 
 export type SessionRemoveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

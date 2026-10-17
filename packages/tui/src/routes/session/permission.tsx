@@ -426,7 +426,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
     props.footer ??
     (kind === "guardrail" ? (
       <text fg={theme.text.subdued}>
-        {props.hardReview ? "hard reviews need you while awake" : "ordinary reviews auto-approve from YOLO 1"}
+        {props.hardReview ? "hard reviews need you while awake" : "ordinary reviews auto-approve at level 2 while awake"}
       </text>
     ) : undefined)
   const compact = () => dimensions().height < 30

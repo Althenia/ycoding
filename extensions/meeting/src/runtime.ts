@@ -56,6 +56,18 @@ const controlSchema = z
   })
   .strict()
 
+export interface OwnerSettingsUpdate {
+  askModel?: MeetingConfig["analysis"]["askModel"]
+  knowledge?: {
+    mcpEnabled: boolean
+    bindings: MeetingConfig["knowledge"]["bindings"]
+  }
+}
+
+function activeBindings(config: MeetingConfig) {
+  return config.knowledge.mcpEnabled ? config.knowledge.bindings.filter((binding) => binding.enabled) : []
+}
+
 export class MeetingRuntime {
   config: MeetingConfig
   readonly intelligence: MeetingIntelligence
@@ -80,7 +92,7 @@ export class MeetingRuntime {
       directory: string
       store: MeetingStore
       config: MeetingConfig
-      createSession: (parentID?: string) => Promise<string>
+      createSession: (parentID?: string, model?: MeetingConfig["analysis"]["model"]) => Promise<string>
       generate: (sessionID: string, prompt: string) => Promise<string>
       mcp: MeetingMCP
       providerFactory?: typeof createProvider
@@ -97,7 +109,7 @@ export class MeetingRuntime {
       store: options.store,
       generate: options.generate,
       mcp: options.mcp,
-      bindings: this.config.knowledge.mcpEnabled ? this.config.knowledge.bindings : [],
+      bindings: activeBindings(this.config),
       maxCharacters: this.config.analysis.maxCharacters,
       retrievalTTL: this.config.knowledge.retrievalTTL,
     })
@@ -143,6 +155,39 @@ export class MeetingRuntime {
     )
     this.controlTail = pending
     return pending
+  }
+
+  updateOwnerSettings(update: OwnerSettingsUpdate) {
+    if (this.shutdown) throw new Error("Meeting runtime is closing")
+    const pending = this.controlTail.then(
+      () => this.applyOwnerSettings(update),
+      () => this.applyOwnerSettings(update),
+    )
+    this.controlTail = pending
+    return pending
+  }
+
+  private async applyOwnerSettings(update: OwnerSettingsUpdate) {
+    const previous = this.config
+    const next = meetingConfigSchema.parse({
+      ...previous,
+      analysis: {
+        ...previous.analysis,
+        ...(update.askModel !== undefined ? { askModel: update.askModel } : {}),
+      },
+      knowledge: update.knowledge
+        ? { ...previous.knowledge, mcpEnabled: update.knowledge.mcpEnabled, bindings: update.knowledge.bindings }
+        : previous.knowledge,
+    })
+    this.config = next
+    try {
+      await this.saveConfig()
+    } catch (error) {
+      this.config = previous
+      throw error
+    }
+    this.intelligence.options.bindings = activeBindings(next)
+    this.intelligence.retrieval.clear()
   }
 
   private async mutate(input: z.infer<typeof controlSchema>) {
@@ -613,7 +658,7 @@ export class MeetingRuntime {
         await this.load()
         throw error
       }
-      this.intelligence.options.bindings = next.knowledge.mcpEnabled ? next.knowledge.bindings : []
+      this.intelligence.options.bindings = activeBindings(next)
       this.intelligence.options.maxCharacters = next.analysis.maxCharacters
       this.intelligence.options.retrievalTTL = next.knowledge.retrievalTTL
       this.intelligence.retrieval.clear()

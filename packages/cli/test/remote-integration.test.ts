@@ -634,6 +634,19 @@ test("bridges authorized session operations against an isolated server", async (
     relay.deliver(request("autonomy_4", "session.autonomy.set", sessionID, { yolo: 0 }))
     valueOf(await answer(relay, "autonomy_4"))
 
+    relay.deliver(request("answers_on", "session.autonomy.set", sessionID, { autoAnswer: true }))
+    expect(valueOf(await answer(relay, "answers_on"))).toMatchObject({
+      data: { yolo: 0, autoAnswer: true, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false } },
+    })
+    relay.deliver(request("answers_other", "session.autonomy.get", hiddenSessionID))
+    expect((valueOf(await answer(relay, "answers_other")) as { data: { autoAnswer?: boolean } }).data.autoAnswer ?? false).toBe(false)
+    relay.deliver(request("answers_read", "session.autonomy.get", sessionID))
+    expect(valueOf(await answer(relay, "answers_read"))).toMatchObject({ data: { autoAnswer: true } })
+    relay.deliver(request("answers_off", "session.autonomy.set", sessionID, { autoAnswer: false }))
+    expect(valueOf(await answer(relay, "answers_off"))).toMatchObject({ data: { yolo: 0, autoAnswer: false } })
+    relay.deliver(request("autonomy_rejected", "session.autonomy.set", sessionID, { yolo: 3 }))
+    expect(errorOf(await answer(relay, "autonomy_rejected")).code).toBe("invalid_message")
+
     // Goal set and stop against the real server, with the model boundary served by
     // an opt-in loopback stand-in. Goal activation admits the autonomous
     // continuation by contract, so the assertions below are: the projected goal

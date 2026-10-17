@@ -8,12 +8,13 @@ import { modeChips, ModeChips } from "../src/component/prompt/mode-chips"
 import { ThemeProvider } from "../src/context/theme"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { localAutonomyView } from "../src/util/session-autonomy"
 
 test("sleep chips wait for the machine read", () => {
-  const autonomy = { mode: "normal" as const, yolo: 0 as const, sleep: {} }
+  const autonomy = localAutonomyView({ mode: "normal", yolo: 0, sleep: {} })
   for (const machineAwake of [undefined, true, false]) {
     const chips = modeChips({ autonomy, machineAwake })
-    expect(chips.find((chip) => chip.key === "yolo")).toEqual({ key: "yolo", label: "Manual", tone: "off" })
+    expect(chips.find((chip) => chip.key === "yolo")).toEqual({ key: "yolo", label: "Ask first", tone: "off" })
     expect(chips.find((chip) => chip.key === "sleep")).toEqual({
       key: "sleep",
       label: machineAwake === false ? "asleep · machine may sleep" : "asleep",
@@ -31,7 +32,7 @@ for (const mode of ["dark", "light"] as const) {
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={{ mode: "normal", yolo: 0, sleep: asleep() ? {} : undefined }} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: 0, sleep: asleep() ? {} : undefined })} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -42,67 +43,52 @@ for (const mode of ["dark", "light"] as const) {
     app.renderer.start()
     try {
       await app.waitForFrame((frame) => frame.includes("asleep"))
-      expect(app.captureCharFrame()).toContain("Manual")
+      expect(app.captureCharFrame()).toContain("Ask first")
       expect(app.captureCharFrame()).not.toContain("machine may sleep")
       const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-      const manual = spans.find((span) => span.text.includes("Manual"))
+      const manual = spans.find((span) => span.text.includes("Ask first"))
       const sleep = spans.find((span) => span.text.includes("asleep"))
       expect(manual?.bg.toInts()).not.toEqual(sleep?.bg.toInts())
       setAsleep(false)
-      await app.waitForFrame((frame) => frame.includes("Manual") && !frame.includes("asleep"))
+      await app.waitForFrame((frame) => frame.includes("Ask first") && !frame.includes("asleep"))
     } finally {
       app.renderer.destroy()
     }
   })
 }
 
-test("derives the goal chip from the active goal status and labels YOLO by level", () => {
-  const active = modeChips({
-    autonomy: {
-      mode: "normal",
-      yolo: false,
-      goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
-    },
-  })[0]
+test("derives the goal chip from the active goal status and labels the approval level", () => {
+  const retained = { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 }
+  const active = modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false, goal: retained }) })[0]
   expect(active).toEqual({ key: "goal", label: "goal", tone: "on" })
   expect(active?.label).not.toContain("/")
 
   const completed = { text: "ship", status: "completed" as const, iteration: 3, noProgress: 0, maxNoProgress: 5 }
-  expect(modeChips({ autonomy: { mode: "normal", yolo: false, goal: completed } })).toEqual([
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false, goal: completed }) })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
-    { key: "yolo", label: "Manual", tone: "off" },
+    { key: "yolo", label: "Ask first", tone: "off" },
   ])
 
-  // A retained active goal keeps the goal chip on; `yolo: true` decodes to level 2.
-  const retained = { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 }
-  expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained } })).toEqual([
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true, goal: retained }) })).toEqual([
     { key: "goal", label: "goal", tone: "on" },
-    { key: "yolo", label: "YOLO 2", tone: "danger" },
+    { key: "yolo", label: "Tools + reviews", tone: "danger" },
   ])
-  expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained }, guardrailPending: true })[0]).toEqual({
-    key: "goal",
-    label: "guardrail blocked",
-    tone: "warning",
-  })
-  expect(modeChips({ autonomy: { mode: "normal", yolo: 1 }, guardrailPending: true })[0]).toEqual({
-    key: "goal",
-    label: "guardrail blocked",
-    tone: "warning",
-  })
-  expect(modeChips({ autonomy: { mode: "normal", yolo: 0, goal: retained }, guardrailPending: true })[0]).toEqual({
-    key: "goal",
-    label: "guardrail blocked",
-    tone: "warning",
-  })
-  expect(modeChips({ autonomy: { mode: "normal", yolo: 0 }, guardrailPending: true })[0]).toEqual({
+  expect(
+    modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true, goal: retained }), guardrailPending: true })[0],
+  ).toEqual({ key: "goal", label: "goal", tone: "on" })
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 1 }), guardrailPending: true })[0]).toEqual({
     key: "goal",
     label: "goal off",
     tone: "off",
   })
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 0 }) })).toEqual([
+    { key: "goal", label: "goal off", tone: "off" },
+    { key: "yolo", label: "Ask first", tone: "off" },
+  ])
+  expect(modeChips({})[1]).toEqual({ key: "yolo", label: "unknown", tone: "off" })
 })
 
-test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", async () => {
-  const [guardrailPending] = createSignal(true)
+test("renders the idle, goal, level, and answers-auto footer states at 80 columns", async () => {
   const app = await testRender(
     () => (
       <TestTuiContexts>
@@ -110,28 +96,28 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
             <box flexDirection="column">
               <box>
-                <ModeChips autonomy={{ mode: "normal", yolo: false }} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
               </box>
               <box>
                 <ModeChips
-                  autonomy={{
+                  autonomy={localAutonomyView({
                     mode: "normal",
                     yolo: false,
                     goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
-                  }}
+                  })}
                 />
               </box>
               <box>
-                <ModeChips autonomy={{ mode: "normal", yolo: true }} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: true })} />
               </box>
               <box>
                 <ModeChips
-                  autonomy={{
+                  autonomy={localAutonomyView({
                     mode: "normal",
                     yolo: true,
+                    autoAnswer: true,
                     goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
-                  }}
-                  guardrailPending={guardrailPending()}
+                  })}
                 />
               </box>
             </box>
@@ -139,28 +125,28 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 6 },
+    { width: 80, height: 12 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
+  await app.waitForFrame((frame) => frame.includes("answers auto"))
 
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("Manual")
+    expect(frame).toContain("Ask first")
     expect(frame).toContain("goal")
     expect(frame).not.toContain("goal 3/5")
-    expect(frame).toContain("guardrail blocked")
-    expect(frame).toContain("YOLO")
-    const guardrailChip = app
+    expect(frame).toContain("answers auto")
+    expect(frame).toContain("Tools + reviews")
+    const answersChip = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
-      .find((span) => span.text.trim() === "guardrail blocked")
-    if (!guardrailChip) throw new Error("expected the guardrail-blocked goal chip")
-    expect(guardrailChip.fg.toInts()).toEqual(RGBA.fromHex("#0F1115").toInts())
-    expect(guardrailChip.bg.toInts()).toEqual(RGBA.fromHex("#F0BE62").toInts())
-    expect(modeChips({ autonomy: { mode: "normal", yolo: true } })[1]).toMatchObject({
-      label: "YOLO 2",
+      .find((span) => span.text.trim() === "answers auto")
+    if (!answersChip) throw new Error("expected the answers-auto chip")
+    expect(answersChip.fg.toInts()).toEqual(RGBA.fromHex("#0F1115").toInts())
+    expect(answersChip.bg.toInts()).toEqual(RGBA.fromHex("#F0BE62").toInts())
+    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true }) })[1]).toMatchObject({
+      label: "Tools + reviews",
       tone: "danger",
     })
   } finally {
@@ -168,33 +154,33 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
   }
 })
 
-test("renders readable warning ink on the light theme's filled guardrail chip", async () => {
+test("renders readable warning ink on the light theme's filled answers chip", async () => {
   const app = await testRender(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="light" source={{ discover: () => Promise.resolve({}) }}>
             <ModeChips
-              autonomy={{
+              autonomy={localAutonomyView({
                 mode: "normal",
                 yolo: true,
+                autoAnswer: true,
                 goal: { text: "ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
-              }}
-              guardrailPending
+              })}
             />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 2 },
+    { width: 80, height: 4 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
+  await app.waitForFrame((frame) => frame.includes("answers auto"))
   try {
     const chip = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
-      .find((span) => span.text.trim() === "guardrail blocked")
+      .find((span) => span.text.trim() === "answers auto")
     expect(chip?.bg.toInts()).toEqual(RGBA.fromHex("#d68c27").toInts())
     expect(chip?.fg.toInts()).toEqual(RGBA.fromInts(0, 0, 0).toInts())
   } finally {
@@ -209,26 +195,26 @@ test("pairs the Catppuccin warning band with readable ink instead of focused-pri
         <ConfigProvider config={createTuiResolvedConfig({ theme: { name: "catppuccin", mode: "light" } })}>
           <ThemeProvider mode="light" source={{ discover: () => Promise.resolve({}) }}>
             <ModeChips
-              autonomy={{
+              autonomy={localAutonomyView({
                 mode: "normal",
                 yolo: true,
+                autoAnswer: true,
                 goal: { text: "ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
-              }}
-              guardrailPending
+              })}
             />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 2 },
+    { width: 80, height: 4 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
+  await app.waitForFrame((frame) => frame.includes("answers auto"))
   try {
     const chip = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
-      .find((span) => span.text.trim() === "guardrail blocked")
+      .find((span) => span.text.trim() === "answers auto")
     expect(chip?.bg.toInts()).toEqual([223, 142, 29, 255])
     expect(chip?.fg.toInts()).toEqual([0, 0, 0, 255])
   } finally {
@@ -236,37 +222,38 @@ test("pairs the Catppuccin warning band with readable ink instead of focused-pri
   }
 })
 
-test("clearing a pending guardrail restores the prior YOLO footer state", async () => {
-  const [guardrailPending, setGuardrailPending] = createSignal(true)
-  const autonomy = {
-    mode: "normal" as const,
-    yolo: true,
-    goal: { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 },
-  }
+test("turning auto-answer off removes only the answers chip", async () => {
+  const [autoAnswer, setAutoAnswer] = createSignal(true)
+  const autonomy = () =>
+    localAutonomyView({
+      mode: "normal",
+      yolo: true,
+      autoAnswer: autoAnswer(),
+      goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+    })
   const app = await testRender(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ModeChips autonomy={autonomy} guardrailPending={guardrailPending()} />
+            <ModeChips autonomy={autonomy()} />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 2 },
+    { width: 80, height: 4 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
-  setGuardrailPending(false)
-  await app.waitForFrame((frame) => frame.includes("goal") && !frame.includes("blocked"))
+  await app.waitForFrame((frame) => frame.includes("answers auto"))
+  setAutoAnswer(false)
+  await app.waitForFrame((frame) => frame.includes("goal") && !frame.includes("answers auto"))
 
   try {
     const frame = app.captureCharFrame()
-    // The active goal keeps its own chip; only the guardrail warning clears.
     expect(frame).toContain("goal")
     expect(frame).not.toContain("goal off")
-    expect(frame).not.toContain("blocked")
-    expect(frame).toContain("YOLO 2")
+    expect(frame).not.toContain("answers auto")
+    expect(frame).toContain("Tools + reviews")
   } finally {
     app.renderer.destroy()
   }

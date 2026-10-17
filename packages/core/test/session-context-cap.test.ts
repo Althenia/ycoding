@@ -67,6 +67,7 @@ const compaction = Layer.effect(
   }),
 )
 const guardrails = Layer.mock(SessionGuardrail.Service)({
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   withSnapshot: (_sessionID, use) => use(guardrailSnapshot),
 })
 const location = Layer.merge(compaction, guardrails)

@@ -19,29 +19,59 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Database.layer({ path: ":memory:" }))
 const sessionID = Session.ID.make("ses_autonomy")
 
-for (const yolo of [0, 1, 2, 3] as const) {
-  it.effect(`YOLO ${yolo} grants the new ladder without changing stored levels`, () => Effect.gen(function* () {
+for (const yolo of [0, 1, 2] as const) {
+  it.effect(`YOLO ${yolo} grants permissions from level 1 and ordinary guardrails only at level 2`, () => Effect.gen(function* () {
     const service = yield* setup
     const state = yield* service.setYolo({ sessionID, yolo })
     expect(state.yolo).toBe(yolo)
-    expect(SessionAutonomy.canAutoAnswer(state)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoAnswer(state)).toBe(false)
     expect(SessionAutonomy.canAutoPermission(state)).toBe(yolo >= 1)
-    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 1)
-    expect(yield* service.canAutoAnswer(sessionID)).toBe(yolo >= 2)
+    expect(SessionAutonomy.canAutoGuardrail(state)).toBe(yolo >= 2)
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
     expect(yield* service.canAutoPermission(sessionID)).toBe(yolo >= 1)
-    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 1)
+    expect(yield* service.canAutoGuardrail(sessionID)).toBe(yolo >= 2)
   }))
 }
 
-it.effect("active goal retains answers and permissions but not ordinary guardrail approval at YOLO 0", () => Effect.gen(function* () {
+it.effect("rejected YOLO levels are not accepted or stored", () => Effect.gen(function* () {
+  const service = yield* setup
+  yield* service.setYolo({ sessionID, yolo: 1 })
+  const exit = yield* service.setYolo({ sessionID, yolo: 3 }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  expect((yield* service.get(sessionID)).yolo).toBe(1)
+  const setExit = yield* service.set({ sessionID, yolo: 3 }).pipe(Effect.exit)
+  expect(setExit._tag).toBe("Failure")
+  expect((yield* service.get(sessionID)).yolo).toBe(1)
+}))
+
+it.effect("active goal grants no answers, permissions, or guardrail approvals at YOLO 0", () => Effect.gen(function* () {
   const service = yield* setup
   const state = yield* service.setGoal({ sessionID, text: "Finish safely" })
-  expect(SessionAutonomy.canAutoAnswer(state)).toBe(true)
-  expect(SessionAutonomy.canAutoPermission(state)).toBe(true)
+  expect(SessionAutonomy.canAutoAnswer(state)).toBe(false)
+  expect(SessionAutonomy.canAutoPermission(state)).toBe(false)
   expect(SessionAutonomy.canAutoGuardrail(state)).toBe(false)
-  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
-  expect(yield* service.canAutoPermission(sessionID)).toBe(true)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+  expect(yield* service.canAutoPermission(sessionID)).toBe(false)
   expect(yield* service.canAutoGuardrail(sessionID)).toBe(false)
+}))
+
+it.effect("Session autoAnswer toggle persists across YOLO, goal, and sleep changes", () => Effect.gen(function* () {
+  const service = yield* setup
+  expect((yield* service.get(sessionID)).autoAnswer).toBeUndefined()
+  const enabled = yield* service.set({ sessionID, autoAnswer: true })
+  expect(enabled.autoAnswer).toBe(true)
+  expect(SessionAutonomy.canAutoAnswer(enabled)).toBe(true)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  yield* service.setYolo({ sessionID, yolo: 2 })
+  yield* service.setGoal({ sessionID, text: "Finish safely" })
+  yield* service.set({ sessionID, sleep: true })
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+  const woken = yield* service.set({ sessionID, sleep: false })
+  expect(woken.autoAnswer).toBe(true)
+  const disabled = yield* service.set({ sessionID, autoAnswer: false })
+  expect(disabled.autoAnswer).toBe(false)
+  expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+  expect((yield* service.get(sessionID)).yolo).toBe(2)
 }))
 
 const setup = Effect.gen(function* () {
@@ -113,7 +143,7 @@ it.effect("reminds an active goal's agent that automatic answers and model guard
       yolo: 0,
       goal: { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
     })
-    expect(reminder).toContain("Required answers remain manual unless auto_answer is enabled.")
+    expect(reminder).toContain("Required answers remain manual unless the answering Session's auto-answer toggle is on.")
     expect(reminder).toContain("Model guardrail judgments require guardrails.decide_reviews")
     expect(reminder).toContain("Both automatic answers and model guardrail judgments default off.")
     expect(reminder).toContain("a child Session's questions go to its parent Session.")
@@ -281,7 +311,7 @@ it.effect("applies a guarded goal calculation only at the expected autonomy revi
       expectedSequence: current.sequence,
       text: "Late calculation",
       rawText: "late request",
-      yolo: 3,
+      yolo: 2,
     })
     expect(stale.applied).toBe(false)
     expect(stale.state.yolo).toBe(1)
@@ -469,9 +499,9 @@ it.effect("sleep and wake preserve the existing YOLO level", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.set({ sessionID, sleep: true })
-    yield* service.set({ sessionID, yolo: 3 })
+    yield* service.set({ sessionID, yolo: 2 })
     const woken = yield* service.set({ sessionID, sleep: false })
-    expect(woken.yolo).toBe(3)
+    expect(woken.yolo).toBe(2)
   }),
 )
 
@@ -523,6 +553,13 @@ it.effect("child Sessions inherit sleep from the root family", () =>
     expect(yield* service.isAsleep(childID)).toBe(true)
     yield* service.set({ sessionID, sleep: false })
     expect(yield* service.isAsleep(childID)).toBe(false)
+    yield* service.set({ sessionID, autoAnswer: true })
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(true)
+    expect(yield* service.canAutoAnswer(childID)).toBe(false)
+    yield* service.set({ sessionID: childID, autoAnswer: true })
+    yield* service.set({ sessionID, autoAnswer: false })
+    expect(yield* service.canAutoAnswer(sessionID)).toBe(false)
+    expect(yield* service.canAutoAnswer(childID)).toBe(true)
   }),
 )
 
@@ -542,8 +579,9 @@ it.effect("taskless family members inherit sleep without widening the existing Y
       })
       .run()
       .pipe(Effect.orDie)
-    yield* service.setYolo({ sessionID, yolo: 3 })
+    yield* service.setYolo({ sessionID, yolo: 2 })
     yield* service.setGoal({ sessionID, text: "Parent objective" })
+    yield* service.set({ sessionID, autoAnswer: true })
     expect(yield* service.canAutoPermission(childID)).toBe(false)
     expect(yield* service.canAutoAnswer(childID)).toBe(false)
     yield* service.set({ sessionID, sleep: true })

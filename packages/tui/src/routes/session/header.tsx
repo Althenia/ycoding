@@ -11,7 +11,7 @@ import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
 import { stringWidth } from "../../util/string-width"
-import { autonomyModeParts, yoloLevel } from "../../util/session-autonomy"
+import { approvalLevelLabel } from "../../util/session-autonomy"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -34,8 +34,9 @@ export type SessionHeaderState =
   | SessionHeaderOperationalState
   | {
       type: "autonomy"
-      yolo: number
+      yolo?: 0 | 1 | 2
       goalActive: boolean
+      answersAuto?: boolean
       asleep?: boolean
       machineAwake?: boolean
       review?: number
@@ -150,11 +151,15 @@ export function headerStatusLabel(
   now = Date.now(),
 ): string {
   if (state.type === "autonomy") {
-    const parts = autonomyModeParts({
-      yolo: state.yolo,
-      goal: { status: state.goalActive ? "active" : undefined },
-      sleep: state.asleep ? {} : undefined,
-    })
+    const parts =
+      state.yolo === undefined
+        ? ["unknown"]
+        : [
+            approvalLevelLabel(state.yolo),
+            ...(state.goalActive ? ["goal"] : []),
+            ...(state.asleep ? ["asleep"] : []),
+            ...(state.answersAuto ? ["answers auto"] : []),
+          ]
     const inner = headerStatusLabel(state.state, width, runningShells, now)
     return [
       ...parts,
@@ -313,7 +318,11 @@ export function Header(
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
     if (current.type === "autonomy")
-      return yoloLevel(current) > 0 ? theme.text.feedback.error.default : theme.text.feedback.success.default
+      return current.yolo === undefined
+        ? theme.text.subdued
+        : current.yolo > 0
+          ? theme.text.feedback.error.default
+          : theme.text.feedback.success.default
     if (active.type === "provider-error") return theme.text.feedback.error.default
     if (active.type === "retrying" || active.type === "retry-scheduled") return theme.text.feedback.warning.default
     if (active.type === "awaiting-input") return theme.text.feedback.warning.default

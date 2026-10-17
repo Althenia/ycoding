@@ -84,6 +84,7 @@ const permission = Layer.mock(Permission.Service, {
   ask: () => Effect.die("project_artifact must not publish permission asks"),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) => Effect.sync(() => {
     expect(input.source).toEqual({ messageID, callID: expect.any(String) })
     return { release: Effect.void }

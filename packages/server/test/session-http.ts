@@ -31,7 +31,7 @@ export function sessionHttp(
   const location = Context.makeUnsafe<LocationServices>(options.location?.mapUnsafe ?? new Map())
   const services = Layer.mergeAll(
     Layer.mock(Session.Service, {
-      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
+      autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused"), effective: () => Effect.die("unused") },
       daybreak: { set: () => Effect.die("unused") },
       revert: {
         stage: () => Effect.die("unused"),
@@ -41,7 +41,10 @@ export function sessionHttp(
       ...session,
     }),
     Layer.mock(SessionOrchestration.Service, options.orchestration ?? {}),
-    Layer.mock(SessionGuardrail.Service, options.guardrail ?? {}),
+    Layer.mock(SessionGuardrail.Service, {
+      reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
+      ...options.guardrail,
+    }),
     Layer.mock(SessionReview.Service, options.review ?? {}),
     processIdentityLayer(sessionHttpEpoch),
     Layer.succeed(

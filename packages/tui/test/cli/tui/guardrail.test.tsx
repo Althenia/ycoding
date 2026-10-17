@@ -111,7 +111,7 @@ test("renders a model-escalated human review with ordinary choices", async () =>
     expect(frame).toContain("Destructive Git operation")
     expect(frame).toContain("Decision model escalated")
     expect(frame).toContain("0.2")
-    expect(frame).toContain("ordinary reviews auto-approve from YOLO 1")
+    expect(frame).toContain("ordinary reviews auto-approve at level 2 while awake")
     expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")
     expect(frame).toContain("Allow once")
@@ -362,7 +362,7 @@ for (const decision of ["once", "reject"] as const) {
       expect(frame).toContain("Allow once")
       expect(frame).toContain("pgup/pgdn")
       expect(frame).toContain("hard reviews need you while awake")
-      expect(frame).not.toContain("ordinary reviews auto-approve from YOLO 1")
+      expect(frame).not.toContain("ordinary reviews auto-approve at level 2 while awake")
       expect(frame).not.toContain("Allow for this session")
       expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.reject.band")).toBe(true)
       for (let page = 0; page < 200 && !app.captureCharFrame().includes("NEW_COMMAND_END"); page++) {

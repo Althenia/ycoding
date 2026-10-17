@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test"
-import { readSessionSearch, sessionSearch, sessionURL } from "./alert"
+import { alertCopy, overflowCopy, readSessionSearch, sessionSearch, sessionURL } from "./alert"
+
+test("lost and unclassified attention never claims a pending user request", () => {
+  expect(alertCopy("approval-requested", { title: "Stock audit", need: "lost" })).toEqual({
+    title: "YCoding — background result lost", body: "“Stock audit” has a lost background-work result. Open it to review.",
+  })
+  expect(alertCopy("approval-requested").body).toBe("A session needs attention. Open it to review.")
+  expect(overflowCopy("approval-requested", 2)).toEqual({ title: "YCoding — more sessions need attention", body: "2 more sessions need attention. Open YCoding to see them." })
+  expect(overflowCopy("approval-requested", 1).body).toBe("1 more session needs attention. Open YCoding to see them.")
+})
 
 test("Session query helpers preserve optional device and notice independently", () => {
   expect(sessionSearch("ses_1")).toEqual({ session_id: "ses_1" })

@@ -26,6 +26,7 @@ import {
   createSubscriptions,
   executeRemoteOperation,
   sessionStatus,
+  lossOnly,
   type OperationCache,
   type SessionRegistry,
   type SubscriptionRegistry,
@@ -453,11 +454,13 @@ export class RemoteAgent {
       if (generation === this.attentionGeneration) this.attentionStatus = status.requestNeeds
       const attention = [...new Set([...status.requestAttention, ...this.failedRoots, ...(status.lost ?? [])])].sort()
       if (attention.length > RemoteLimits.maxStatusSessions) throw new Error("Session status exceeds the bounded root count")
-      const failed = [...this.failedRoots].filter((root) => !status.requestAttention.includes(root) && !status.lost?.includes(root)).sort()
+      const lost = lossOnly(status)
+      const failed = [...this.failedRoots].filter((root) => !status.requestAttention.includes(root) && !lost.includes(root)).sort()
       const details = attentionDetails(sessions, attention, status.requestNeeds)
       const frame = serializeStatus({ type: "status", running: status.running, attention,
         ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
         ...(failed.length === 0 ? {} : { failed }),
+        ...(lost.length === 0 ? {} : { lost }),
         ...(details.length === 0 ? {} : { details }) })
       if (frame !== this.lastStatus) {
         if (await this.send(frame, connection)) this.lastStatus = frame

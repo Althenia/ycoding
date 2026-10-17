@@ -32,7 +32,7 @@ const forms = AppNodeBuilder.build(
             [
                   new Config.Document({
                     type: "document",
-                    info: new Config.Info({ auto_answer: true, ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
+                    info: new Config.Info({ ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
                   }),
                 ],
           ),
@@ -98,18 +98,13 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "yolo
 })
 
 describe("Form", () => {
-  for (const yolo of [0, 1, 2, 3] as const) {
-    it.effect(`forms are automatic only at YOLO 2-3: level ${yolo}`, () => Effect.gen(function* () {
+  for (const yolo of [0, 1, 2] as const) {
+    it.effect(`forms are automatic only with the Session autoAnswer toggle: level ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo })
       const service = yield* Form.Service
       const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
-      if (yolo >= 2) {
-        expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true } })
-        expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
-        return
-      }
       const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
       const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
@@ -121,12 +116,17 @@ describe("Form", () => {
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([form])
       yield* service.reply({ id: form.id, answer: { confirm: false } })
       expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { confirm: false } })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      expect(yield* service.ask({ ...settings, id: Form.ID.create("frm_toggle") })).toEqual({ status: "answered", answer: { confirm: true } })
+      expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }))
   }
-  it.effect("auto answers deterministic forms in yolo mode", () =>
+  it.effect("auto answers deterministic forms with the toggle in yolo mode", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
+      const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("yolo")
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
 
       const result = yield* service.ask({
         sessionID: input.sessionID,
@@ -162,10 +162,12 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("auto answers deterministic forms in goal mode", () =>
+  it.effect("auto answers deterministic forms with the toggle in goal mode", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
+      const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("goal")
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
 
       expect(
         yield* service.ask({
@@ -187,10 +189,12 @@ describe("Form", () => {
     }),
   )
 
-  it.effect("auto answers required free-text forms with a safe default in goal mode", () =>
+  it.effect("auto answers required free-text forms with a safe default with the toggle in goal mode", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
+      const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("goal")
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
 
       expect(
         yield* service.ask({
@@ -534,6 +538,7 @@ describe("Form", () => {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       decisionBehavior = decisionChoice("Careful", 0.9)
       const service = yield* Form.Service
@@ -561,6 +566,7 @@ describe("Form", () => {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "provider-failed" }))
       const service = yield* Form.Service
@@ -591,6 +597,7 @@ describe("Form", () => {
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
@@ -618,6 +625,43 @@ describe("Form", () => {
       yield* Deferred.succeed(release, undefined)
       expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { plan: "Careful" } })
       expect(published).toEqual([Form.Event.Created.type, Form.Event.Replied.type])
+    }),
+  )
+
+  it.effect("turning autoAnswer off while a sleeping answer is pending defers instead of applying it", () =>
+    Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      decisionBehavior = (value) => Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(decisionChoice("Careful", 0.9)(value)),
+      )
+      const service = yield* Form.Service
+      const fiber = yield* service.ask({
+        ...input,
+        id: Form.ID.create("frm_sleep_toggle_off"),
+        fields: [
+          {
+            key: "plan",
+            type: "string",
+            required: true,
+            options: [
+              { value: "Fast", label: "Fast" },
+              { value: "Careful", label: "Careful" },
+            ],
+          },
+        ],
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: false })
+      yield* Deferred.succeed(release, undefined)
+      expect((yield* Fiber.join(fiber)).status).toBe("deferred")
+      expect(yield* service.list()).toEqual([])
     }),
   )
 
@@ -773,6 +817,7 @@ describe("Form", () => {
         const service = yield* Form.Service
         const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
         yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 2 })
+        yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
         expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true } })
         yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
         yield* autonomy.set({ sessionID: input.sessionID, sleep: true })

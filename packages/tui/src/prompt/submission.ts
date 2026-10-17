@@ -15,7 +15,7 @@ import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
 import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
-import { createLandingSession, landingAutonomyPayload, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
+import { createLandingSession, landingAutonomyPayloads, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
 import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client"
@@ -28,7 +28,7 @@ export type PromptSubmissionPayload = {
   mode: NonNullable<PromptInfo["mode"]>
   agentID: string
   daybreak?: ModelDaybreak
-  autonomy?: { yolo: YoloLevel; goal?: string }
+  autonomy?: { yolo: YoloLevel; goal?: string; autoAnswer?: boolean }
   model: ModelRef
   modelSelectionPending: boolean
   editor?: { key: string; text: string }
@@ -151,12 +151,13 @@ export function createPromptSubmissions(input: {
       submission.creationConfirmed = true
       entry.createdSession = session
     }
-    const autonomy = landingAutonomyPayload(payload.autonomy)
-    if (autonomy && !entry.completed.has("autonomy")) {
+    const autonomyPayloads = landingAutonomyPayloads(payload.autonomy)
+    if (autonomyPayloads.length > 0 && !entry.completed.has("autonomy")) {
       update(entry, { phase: "Setting autonomy" })
-      await request(entry, "autonomy", (signal) =>
-        persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal }),
-      )
+      await request(entry, "autonomy", async (signal) => {
+        for (const autonomy of autonomyPayloads)
+          await persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal })
+      })
       entry.completed.add("autonomy")
     }
     if (payload.daybreak && !entry.completed.has("daybreak")) {

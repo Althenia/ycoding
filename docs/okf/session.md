@@ -61,7 +61,7 @@ Decision judgments run only when an agent calls decision with provider: "agent",
 
 ## Autonomy Modes
 
-Session autonomy is durable with normal, yolo levels 0-3, and goal modes; yolo 0 is manual, yolo 1 auto-approves ask permissions and ordinary guardrail reviews, yolo 2 also auto-answers questions and forms, and yolo 3 currently behaves like yolo 2. Active goal grants answers and ask permissions at yolo 0, but ordinary guardrail auto-approval requires effective yolo 1-3. Stored numeric levels retain their values without migration or mapping; hard reviews require a fresh human decision.[^runtime-doc]
+Session autonomy is durable with normal, yolo levels 0-2, and goal modes; yolo 0 (Ask first) is manual, yolo 1 (Allow tools) auto-approves ask permissions only, and yolo 2 (Tools + reviews) also auto-approves awake ordinary guardrail reviews. Levels above 2 are rejected and a stored 3 migrates once to 2. An active goal grants no permission, answer, or review authority; automatic answers require the Session's own Session-local /auto-answer toggle on (default off); hard reviews require a fresh human decision.[^runtime-doc]
 
 Goal mode terminates explicitly as completed, stopped, or exhausted; reports are reserved for unresolved blockers after reasonable self-resolution and each accepted report consumes one no-progress attempt.[^runtime-doc]
 

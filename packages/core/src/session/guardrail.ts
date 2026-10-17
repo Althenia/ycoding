@@ -111,7 +111,14 @@ export type AssertError =
   | SessionGuardrailCounter.CapExceededError
   | SessionErrors.NotFoundError
 
+export interface ReviewPolicy {
+  readonly enabled: boolean
+  readonly decideReviews: boolean
+  readonly decideHardReviews: boolean
+}
+
 export interface Interface {
+  readonly reviewPolicy: ReviewPolicy
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
@@ -200,6 +207,11 @@ export const layer = Layer.effect(
       .map((root) => path.resolve(root))
     const entries = yield* config.entries()
     const settings = Config.latest(entries, "guardrails")
+    const reviewPolicy: ReviewPolicy = {
+      enabled: settings?.enabled !== false,
+      decideReviews: settings?.decide_reviews === true,
+      decideHardReviews: settings?.decide_hard_reviews !== false,
+    }
     const counters = SessionGuardrailCounter.make({
       shells: settings?.max_concurrent_shells ?? 8,
       subagents: settings?.max_concurrent_subagents ?? 8,
@@ -986,7 +998,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ evaluate, assert, reply: (input) => reply(input), deferPending, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), deferPending, forSession, status, snapshot, withSnapshot })
   }),
 )
 

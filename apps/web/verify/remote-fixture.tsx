@@ -178,6 +178,7 @@ let statusRunning = new Set(inventoryCount > 0 ? ["ses_inventory_14000"] : sessi
   "parentID" in session && typeof session.parentID === "string" ? session.parentID : session.id))
 let statusAttention = remoteScenarioData?.attention === undefined ? undefined : new Set(remoteScenarioData.attention)
 let statusFailed = new Set<string>()
+let statusLost = new Set<string>()
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -558,7 +559,7 @@ type Fixture = {
   readonly teamCancelled: () => void
   readonly teamPrompt: (id: string) => Promise<string>
   readonly createdSideChatID: () => string | undefined
-  readonly status: (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => void
+  readonly status: (running: readonly string[], attention: readonly string[], failed?: readonly string[], lost?: readonly string[]) => void
   readonly invalidateSessions: () => void
   readonly missTerminal: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
@@ -598,6 +599,7 @@ function createFixtureStore(): Fixture {
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
   let currentYolo = remoteScenarioData?.autonomy.yolo ?? 2
+  let currentAutoAnswer = accountParams.get("autoAnswer") === "1"
   let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
   let keepAwakeManual = accountParams.get("keepAwake") === "on"
   let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; sleepHold?: boolean; manual?: boolean; message?: string } | undefined
@@ -627,6 +629,7 @@ function createFixtureStore(): Fixture {
       payload: { type: "recovery", tools: [{ messageID: "msg_restart", callID: "call_<img src=x onerror=window.recoveryEscape=1>", name: "shell<b>" }, { messageID: "msg_restart", callID: "call_2", name: "edit" }] } },
   ] : []
   const autonomyExtras = () => sleep === undefined ? {} : { sleep }
+  const autonomyResponse = (data: Record<string, unknown>): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, autoAnswer: currentAutoAnswer, effective: { yolo: currentYolo, asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off", ordinaryReviewsAuto: accountParams.has("ordinaryReviewsAuto") ? accountParams.get("ordinaryReviewsAuto") === "1" : currentYolo === 2 && sleep === undefined && accountParams.get("guardrails") !== "off", modelReviews: accountParams.get("modelReviews") === "1", hardModelReviews: accountParams.get("hardModelReviews") === "1" } } } })
   const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
@@ -777,6 +780,7 @@ function createFixtureStore(): Fixture {
       running: emptyBackend ? [] : [...statusRunning],
       attention: [...(statusAttention ?? new Set(unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : []))],
       failed: [...statusFailed],
+      lost: [...statusLost],
     } }
     if (operation === "usage.providers") return { status: "ok", value: { data: fixtureUsageProviders(Date.now()) } }
     if (operation === "usage.summary") return { status: "ok", value: { data: usageMetrics(10, 26.3) } }
@@ -828,7 +832,7 @@ function createFixtureStore(): Fixture {
       if (inventoryCount > 0) {
         if (input?.status === "waiting") {
           const attention = statusAttention ?? new Set(unreplied(permissions).length + unreplied(guardrails).length > 0 ? [sessionID] : [])
-          const data = [...attention].filter((id) => !statusFailed.has(id)).flatMap((id) => {
+          const data = [...attention].filter((id) => !statusFailed.has(id) && !statusLost.has(id)).flatMap((id) => {
             const stored = sessions.find((session) => session.id === id)
             if (stored !== undefined) return [stored]
             const number = Number(id.match(/^ses_inventory_(\d+)$/)?.[1])
@@ -865,14 +869,14 @@ function createFixtureStore(): Fixture {
         .filter((session) => input?.workspace === undefined || groupOf(session).id === input.workspace)
         .filter((session) => input?.parentID !== null || (session as { readonly parentID?: string }).parentID === undefined)
         .filter((session) => {
-          const waiting = (statusAttention?.has(session.id) ?? (session.id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(session.id)
+          const waiting = (statusAttention?.has(session.id) ?? (session.id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(session.id) && !statusLost.has(session.id)
           return input?.status === "waiting" ? waiting : input?.status === "running" ? statusRunning.has(session.id) && !waiting
             : input?.status === "idle" ? !waiting && !statusRunning.has(session.id) && Reflect.get(session.time, "archived") === undefined : true
         })
         .sort((left, right) => {
           if (input?.order === "desc") return right.time.updated - left.time.updated
           if (input?.order !== "active") return 0
-          const group = (id: string) => (statusAttention?.has(id) ?? (id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(id) ? 0 : statusRunning.has(id) ? 1 : 2
+          const group = (id: string) => (statusAttention?.has(id) ?? (id === sessionID && unreplied(permissions).length + unreplied(guardrails).length > 0)) && !statusFailed.has(id) && !statusLost.has(id) ? 0 : statusRunning.has(id) ? 1 : 2
           return group(left.id) - group(right.id) || (Reflect.get(right.time, "active") ?? right.time.updated) - (Reflect.get(left.time, "active") ?? left.time.updated) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
         })
         .slice(0, typeof input?.limit === "number" ? input.limit : undefined) } }
@@ -950,18 +954,13 @@ function createFixtureStore(): Fixture {
       }
     }
     if (operation === "session.autonomy.get") {
-      if (createdSessions.has(targetSessionID)) return { status: "ok", value: { data: { mode: "normal", yolo: 0 } } }
-      return {
-        status: "ok",
-        value: {
-          data: remoteScenarioData?.autonomy ?? {
+      if (createdSessions.has(targetSessionID)) { const held = currentYolo; currentYolo = 0; const created = autonomyResponse({ mode: "normal", yolo: 0 }); currentYolo = held; return created }
+      return autonomyResponse(remoteScenarioData?.autonomy ?? {
             mode: "normal",
             yolo: currentYolo,
             ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
             ...autonomyExtras(),
-          },
-        },
-      }
+          })
     }
     if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions) : [] } }
     if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails).map((item) => accountParams.get("grades") === "1" ? { ...item, escalation: { choice: "escalate", confidence: 0.61, grades: fixtureGrades } } : item) : [] } }
@@ -1016,9 +1015,10 @@ function createFixtureStore(): Fixture {
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.autonomy.set") {
       if (typeof input?.yolo === "number") currentYolo = input.yolo
+      if (typeof input?.autoAnswer === "boolean") currentAutoAnswer = input.autoAnswer
       if (input?.sleep === true) sleep = {}
       if (input?.sleep === false) sleep = undefined
-      return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo, ...autonomyExtras() } } }
+      return autonomyResponse({ mode: "normal", yolo: currentYolo, ...autonomyExtras() })
     }
     if (operation === "session.review.list") {
       if (accountParams.get("reviewList") === "error" && operationCounts.get(operation) === 1) return { status: "failed", error: { code: "internal_error", message: "Review list unavailable" } }
@@ -1039,8 +1039,8 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.goal.set") {
       if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }
-      const active: RemoteRequestOutcome = { status: "ok", value: { data: { mode: "goal", yolo: currentYolo,
-        goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }
+      const active: RemoteRequestOutcome = autonomyResponse({ mode: "goal", yolo: currentYolo,
+        goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } })
       if (!goalGate) return active
       return new Promise((resolve) => {
         releaseGoal = (result) => resolve(result === "ok" ? active : result === "failed"
@@ -1048,7 +1048,7 @@ function createFixtureStore(): Fixture {
           : { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } })
       })
     }
-    if (operation === "session.goal.stop") return { status: "ok", value: { data: { mode: "normal", yolo: currentYolo } } }
+    if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal", yolo: currentYolo })
     return { status: "ok", value: null }
   }
 
@@ -1164,17 +1164,18 @@ function createFixtureStore(): Fixture {
     }, 400)
   }
 
-  const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[]) => {
+  const status = (running: readonly string[], attention: readonly string[], failed?: readonly string[], lost?: readonly string[]) => {
     statusRunning = new Set(running)
     statusAttention = new Set(attention)
     statusFailed = new Set(failed ?? [])
+    statusLost = new Set(lost ?? [])
     const next = { running: new Set(running), attention: new Set(attention) }
     const added = [
       ...attention.filter((id) => !previousStatus.attention.has(id)).map((sessionID) => ({ category: "approval-requested" as const, sessionID })),
       ...[...previousStatus.running].filter((id) => !next.running.has(id) && !next.attention.has(id)).map((sessionID) => ({ category: "agent-completed" as const, sessionID })),
     ].map((notice) => ({ ...notice, id: `ntc_${++noticeSerial}`, createdAt: Date.now() }))
     previousStatus = next
-    handlers?.onSessionStatus?.({ running, attention, ...(failed === undefined ? {} : { failed }) })
+    handlers?.onSessionStatus?.({ running, attention, ...(failed === undefined ? {} : { failed }), ...(lost === undefined ? {} : { lost }) })
     if (added.length === 0) return
     fixtureNotices = [...fixtureNotices, ...added]
     handlers?.onNotices?.({ type: "notice.added", notices: added, total: fixtureNotices.length })

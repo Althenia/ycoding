@@ -1,41 +1,35 @@
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { readableForeground } from "../../theme/component"
-import { autonomyModeParts, yoloLevel } from "../../util/session-autonomy"
+import { autoAnswerOn, autonomyModeParts } from "../../util/session-autonomy"
 
 export type ModeChip = {
-  key: "goal" | "yolo" | "sleep" | "review"
+  key: "goal" | "yolo" | "sleep" | "review" | "answers"
   label: string;
   tone: "off" | "on" | "warning" | "danger"
 }
 
-/**
- * Autonomy chips for the composer status row. Off states stay muted and on states invert, because an
- * active autonomy mode is the most consequential fact on screen. A review still waiting while autonomy is on marks
- * the goal chip as blocked: hard reviews at any level, or ordinary reviews under a goal at YOLO 0.
- */
 export function modeChips(input: {
-  autonomy?: SessionAutonomyState;
+  autonomy?: SessionAutonomyView;
   guardrailPending?: boolean
   machineAwake?: boolean
   review?: number
 }): ModeChip[] {
-  const parts = autonomyModeParts(input.autonomy ?? {})
+  const parts = autonomyModeParts(input.autonomy)
   const active = parts.includes("goal")
-  const level = yoloLevel(input.autonomy ?? { yolo: 0 })
-  const blocked = (level > 0 || active) && !!input.guardrailPending
+  const level = input.autonomy?.effective?.yolo
   const asleep = parts.includes("asleep")
   return [
     {
       key: "goal",
-      label: blocked ? "guardrail blocked" : active ? "goal" : "goal off",
-      tone: blocked ? "warning" : active ? "on" : "off",
+      label: active ? "goal" : "goal off",
+      tone: active ? "on" : "off",
     },
     {
       key: "yolo",
       label: parts[0],
-      tone: level > 0 ? "danger" : "off",
+      tone: level !== undefined && level > 0 ? "danger" : "off",
     },
     ...(asleep
       ? [
@@ -43,6 +37,15 @@ export function modeChips(input: {
             key: "sleep" as const,
             label: input.machineAwake === false ? "asleep · machine may sleep" : "asleep",
             tone: input.machineAwake === false ? ("warning" as const) : ("on" as const),
+          },
+        ]
+      : []),
+    ...(autoAnswerOn(input.autonomy)
+      ? [
+          {
+            key: "answers" as const,
+            label: "answers auto",
+            tone: "warning" as const,
           },
         ]
       : []),
@@ -59,7 +62,7 @@ export function modeChips(input: {
 }
 
 export function ModeChips(props: {
-  autonomy?: SessionAutonomyState;
+  autonomy?: SessionAutonomyView;
   guardrailPending?: boolean
   machineAwake?: boolean
   review?: number

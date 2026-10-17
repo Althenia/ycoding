@@ -21,7 +21,7 @@ export type RunInput = {
   readonly file: string[]
   readonly title?: string
   readonly thinking?: boolean
-  readonly yolo?: 0 | 1 | 2 | 3
+  readonly yolo?: 0 | 1 | 2
 }
 
 export function runCommand(input: RunInput) {

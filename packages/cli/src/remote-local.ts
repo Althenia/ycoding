@@ -55,9 +55,10 @@ export type LocalPrompt = {
 }
 
 export type LocalAutonomy =
-  | { readonly yolo: number | boolean; readonly maxNoProgress?: number | null }
+  | { readonly yolo: 0 | 1 | 2 | boolean; readonly maxNoProgress?: number | null }
   | { readonly goal: string | null; readonly maxNoProgress?: number | null }
   | { readonly sleep: boolean }
+  | { readonly autoAnswer: boolean }
 
 export type LocalFailureKind = "not_found" | "location_unavailable" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 

@@ -193,6 +193,7 @@ type AutonomyInput = {
   maxNoProgress?: number
   mode?: "normal" | "yolo" | "goal"
   sleep?: boolean
+  autoAnswer?: boolean
 }
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
@@ -419,6 +420,7 @@ export interface Interface {
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
     readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error>
+    readonly effective: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.Effective, NotFoundError>
   }
   readonly command: (input: {
     id?: SessionMessage.ID
@@ -2058,6 +2060,31 @@ const layer = Layer.effect(
             .get(sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.fail(new NotFoundError({ sessionID }))))
         }),
+        effective: Effect.fn("Session.autonomy.effective")(function* (sessionID) {
+          const session = yield* result.get(sessionID)
+          const notFound = <A, R>(effect: Effect.Effect<A, SessionAutonomy.NotFoundError, R>) =>
+            effect.pipe(
+              Effect.catchTag("SessionAutonomy.NotFound", (error) =>
+                Effect.fail(new NotFoundError({ sessionID: error.sessionID })),
+              ),
+            )
+          const yolo = yield* autonomy.effectiveYoloLevel(sessionID).pipe(notFound)
+          const asleep = yield* autonomy.isAsleep(sessionID).pipe(notFound)
+          const rootID = yield* rootSessionID(sessionID)
+          const rootAutoGuardrail = yield* autonomy
+            .canAutoGuardrail(rootID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+          const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
+          const policy = guardrail.reviewPolicy
+          return {
+            yolo: yolo as SessionAutonomy.YoloLevel,
+            asleep,
+            ordinaryReviewsAuto: rootAutoGuardrail && !asleep,
+            guardrailsEnabled: policy.enabled,
+            modelReviews: policy.enabled && policy.decideReviews,
+            hardModelReviews: policy.decideReviews && policy.decideHardReviews,
+          }
+        }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
           let yolo = input.yolo
@@ -2125,6 +2152,7 @@ const layer = Layer.effect(
                   goal,
                   maxNoProgress: input.maxNoProgress,
                   sleep: input.sleep,
+                  autoAnswer: input.autoAnswer,
                 })
                 .pipe(notFound)
               yield* applySleepTransition(targetID, before, after)

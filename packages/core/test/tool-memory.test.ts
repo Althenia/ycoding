@@ -34,6 +34,7 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
     }),
   })
   const guardrails = Layer.mock(SessionGuardrail.Service, {
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     assert: (input) => Effect.gen(function* () {
       expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.stringMatching(/^call-/) })
       expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)

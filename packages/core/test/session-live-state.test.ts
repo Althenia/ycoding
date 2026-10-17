@@ -35,6 +35,7 @@ const guardrailDigest = "a".repeat(64)
 const guardrails = Layer.succeed(
   SessionGuardrail.Service,
   SessionGuardrail.Service.of({
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),

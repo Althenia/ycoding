@@ -333,9 +333,21 @@ export type RecoveryToolView = { readonly messageID: string; readonly callID: st
 const reviewReasons = ["disabled", "free_text", "refused", "low_confidence", "escalated", "error", "timeout", "sleep_entry", "restart"] as const
 export type ReviewReason = (typeof reviewReasons)[number]
 
+export type YoloLevel = 0 | 1 | 2
+
+export type EffectiveAutonomyView = {
+  readonly yolo: YoloLevel
+  readonly asleep: boolean
+  readonly guardrailsEnabled: boolean
+  readonly ordinaryReviewsAuto: boolean
+  readonly modelReviews: boolean
+  readonly hardModelReviews: boolean
+}
+
 export type SessionAutonomyView = {
   readonly mode: "normal" | "yolo" | "goal"
-  readonly yolo: 0 | 1 | 2 | 3
+  readonly yolo: YoloLevel
+  readonly autoAnswer?: boolean
   readonly goal?: {
     readonly text: string
     readonly status: "active" | "completed" | "stopped" | "exhausted"
@@ -344,13 +356,36 @@ export type SessionAutonomyView = {
     readonly maxNoProgress: number
   }
   readonly sleep?: Readonly<Record<string, never>>
+  readonly effective?: EffectiveAutonomyView
 }
 
-export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "yolo" | "goal" | "sleep">): readonly string[] {
+export function yoloLevelName(level: YoloLevel): string {
+  return level === 0 ? "Ask first" : level === 1 ? "Allow tools" : "Tools + reviews"
+}
+
+export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "yolo" | "goal" | "sleep" | "autoAnswer" | "effective">): readonly string[] {
+  const asleep = autonomy.effective?.asleep ?? autonomy.sleep !== undefined
   return [
-    autonomy.yolo === 0 ? "Manual" : `YOLO ${autonomy.yolo}`,
+    yoloLevelName(autonomy.effective?.yolo ?? autonomy.yolo),
     ...(autonomy.goal?.status === "active" ? ["goal"] : []),
-    ...(autonomy.sleep === undefined ? [] : ["asleep"]),
+    ...(asleep ? ["asleep"] : []),
+    ...(autonomy.autoAnswer === true ? ["auto-answer"] : []),
+  ]
+}
+
+export type AutonomyDecider = { readonly label: "Tools" | "Routine reviews" | "Hard reviews" | "Auto-answer"; readonly value: string }
+
+export function autonomyDeciders(autonomy: Pick<SessionAutonomyView, "autoAnswer" | "effective"> | undefined): readonly AutonomyDecider[] {
+  const autoAnswer: AutonomyDecider = { label: "Auto-answer", value: autonomy === undefined ? "unreported" : autonomy.autoAnswer === true ? "On · this Session" : "Off" }
+  const effective = autonomy?.effective
+  if (effective === undefined) return [{ label: "Tools", value: "unreported" }, { label: "Routine reviews", value: "unreported" }, { label: "Hard reviews", value: "unreported" }, autoAnswer]
+  const human = effective.asleep ? "Review box" : "Ask you"
+  const modeled = effective.asleep ? "Model or Review box" : "Model or you"
+  return [
+    { label: "Tools", value: effective.yolo >= 1 ? "Auto-approved" : human },
+    { label: "Routine reviews", value: !effective.guardrailsEnabled ? "Off" : effective.ordinaryReviewsAuto ? "Auto-approved" : effective.modelReviews ? modeled : human },
+    { label: "Hard reviews", value: effective.hardModelReviews ? modeled : human },
+    autoAnswer,
   ]
 }
 
@@ -622,7 +657,7 @@ export function noticeSummary(source: string | undefined, text: string): string 
     if (!isRecord(value)) return unavailable
     if (source === "session-state") {
       const count = Array.isArray(value.todos) ? value.todos.length : 0
-      const autonomy = readAutonomy({ data: value.autonomy })
+      const autonomy = readAutonomyState({ data: value.autonomy })
       return ["Session state", ...(autonomy === undefined ? ["autonomy unreported"] : autonomyModeParts(autonomy)), `${count} ${count === 1 ? "task" : "tasks"}`].join(" · ")
     }
     const children = Array.isArray(value.children) ? value.children : []
@@ -862,17 +897,37 @@ export function readMessageList(payload: unknown): readonly RemoteMessageView[] 
   })
 }
 
-export function readAutonomy(payload: unknown): SessionAutonomyView | undefined {
+export function readAutonomyState(payload: unknown): SessionAutonomyView | undefined {
   const data = dataOf(payload)
   if (!isRecord(data)) return undefined
+  const yolo = readYolo(data.yolo)
+  if (yolo === undefined) return undefined
+  if (data.autoAnswer !== undefined && typeof data.autoAnswer !== "boolean") return undefined
   const mode = data.mode === "goal" || data.mode === "yolo" ? data.mode : "normal"
   const goal = isRecord(data.goal) ? readGoal(data.goal) : undefined
   return {
     mode: goal?.status === "active" ? "goal" : mode,
-    yolo: readYolo(data.yolo),
+    yolo,
+    autoAnswer: data.autoAnswer === true,
     ...(goal === undefined ? {} : { goal }),
     ...(isRecord(data.sleep) ? { sleep: {} } : {}),
   }
+}
+
+export function readAutonomy(payload: unknown): SessionAutonomyView | undefined {
+  const data = dataOf(payload)
+  if (!isRecord(data)) return undefined
+  const state = readAutonomyState(payload)
+  const effective = readEffective(data.effective)
+  if (state === undefined || effective === undefined) return undefined
+  return { ...state, effective }
+}
+
+function readEffective(value: unknown): EffectiveAutonomyView | undefined {
+  if (!isRecord(value)) return undefined
+  const yolo = readYolo(value.yolo)
+  if (yolo === undefined || typeof value.asleep !== "boolean" || typeof value.guardrailsEnabled !== "boolean" || typeof value.ordinaryReviewsAuto !== "boolean" || typeof value.modelReviews !== "boolean" || typeof value.hardModelReviews !== "boolean") return undefined
+  return { yolo, asleep: value.asleep, guardrailsEnabled: value.guardrailsEnabled, ordinaryReviewsAuto: value.ordinaryReviewsAuto, modelReviews: value.modelReviews, hardModelReviews: value.hardModelReviews }
 }
 
 export function applySessionEvent(view: SessionView, payload: unknown, now: number): SessionView {
@@ -1791,10 +1846,11 @@ function readGoal(value: Record<string, unknown>): NonNullable<SessionAutonomyVi
   }
 }
 
-function readYolo(value: unknown): 0 | 1 | 2 | 3 {
+function readYolo(value: unknown): YoloLevel | undefined {
   if (value === true) return 2
-  if (value === 1 || value === 2 || value === 3) return value
-  return 0
+  if (value === false) return 0
+  if (value === 0 || value === 1 || value === 2) return value
+  return undefined
 }
 
 function deliveryField(value: unknown): "steer" | "queue" {

@@ -287,7 +287,7 @@ describe("opening a Session", () => {
     const test = await harness((request) => {
       if (request.operation === "session.subscribe") return { ok: false, code: "session_not_allowed", message: "refused" }
       if (request.operation === "session.snapshot") return snapshot(request.sessionID ?? "ses_a")
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "goal", yolo: 2 } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "goal", yolo: 2, effective: { yolo: 2, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false } } } }
       return "default"
     })
     try {

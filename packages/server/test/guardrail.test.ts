@@ -39,6 +39,7 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
   const snapshot = (sessionID: Session.ID) =>
     Effect.succeed({ sequence: 0, digest: sessionID === childID ? parentID : sessionID })
   const service = SessionGuardrail.Service.of({
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),

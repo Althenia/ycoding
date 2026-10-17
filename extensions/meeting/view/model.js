@@ -1,7 +1,69 @@
-export function readViewKey(hash) {
+export function readCredentials(hash) {
   const values = new URLSearchParams(hash.replace(/^#/, ""))
+  const fields = [...values.keys()]
+  const credential = /^[0-9a-f]{64}$/
+  if (new Set(fields).size !== fields.length || fields.some((field) => !["key", "owner"].includes(field))) return undefined
   const key = values.get("key")
-  return [...values.keys()].length === 1 && /^[0-9a-f]{64}$/.test(key ?? "") ? key : undefined
+  if (!credential.test(key ?? "")) return undefined
+  const owner = values.get("owner")
+  if (owner !== null && !credential.test(owner)) return undefined
+  return owner ? { key, owner } : { key }
+}
+
+export function encodeModelChoice(providerID, id) {
+  return JSON.stringify([providerID, id])
+}
+
+export function decodeModelChoice(value) {
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      parsed.every((part) => typeof part === "string" && part.length > 0)
+      ? { providerID: parsed[0], id: parsed[1] }
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function resolveAskSelection(selected, loaded) {
+  if (
+    selected === "inherit" ||
+    !loaded ||
+    typeof loaded !== "object" ||
+    typeof loaded.profile !== "string" ||
+    !loaded.profile ||
+    selected.providerID !== loaded.providerID
+  )
+    return selected
+  return { ...selected, profile: loaded.profile }
+}
+
+export function ownerModelStatus(model) {
+  if (!model || (typeof model.enabled !== "boolean" && typeof model.status !== "string")) return "Unreported"
+  if (model.enabled === false) return "Unavailable · disabled in catalog"
+  if (model.status === "deprecated") return "Unavailable · deprecated"
+  return "Available"
+}
+
+export function ownerBindingStatus(binding, servers) {
+  const server = (Array.isArray(servers) ? servers : []).find((item) => item?.name === binding?.server)
+  const state = !server?.status
+    ? "Server unreported"
+    : server.status === "connected"
+      ? "Server connected"
+      : `Server ${server.status}`
+  if (!binding?.write) return state
+  const capability =
+    binding.writeCapability === "revision-aware"
+      ? " · revision-aware"
+      : binding.writeCapability === "manual-only"
+        ? " · manual proposals only"
+        : binding.writeCapability === "unavailable"
+          ? " · write tool unavailable"
+          : ""
+  return `${state} · write requires approval${capability}`
 }
 
 export function formatSeconds(value) {

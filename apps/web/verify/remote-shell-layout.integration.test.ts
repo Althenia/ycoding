@@ -209,21 +209,21 @@ describe("remote shell layout", () => {
     const page = await fixture("view=chat", 1440, "Stream remote output safely")
     try {
       await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('YOLO 3'))?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('YOLO 3') === true`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('Allow tools'))?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('Allow tools') === true`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await page.evaluate(`(() => { const input = document.querySelector('.session-status__goal-popover input[aria-label="Goal"]'); input.value = 'Ship a reliable Session'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.closest('form')?.requestSubmit(); })()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.set')`)).toEqual({ operation: "session.goal.set", input: { goal: "Ship a reliable Session" } })
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-count')?.textContent === '0'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: string; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "0", yolo: "YOLO 3" })
+      expect(await page.evaluate<{ readonly goal: string; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "0", yolo: "Allow tools" })
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent ?? ''`)).toContain("Ship a reliable Session")
       await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.stop')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.stop')`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') === 'Goal off'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", count: false, yolo: "YOLO 3" })
+      expect(await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", count: false, yolo: "Allow tools" })
       expect(await page.evaluate<number>(labelAsymmetry(".workspace__main .session-status__goal-trigger"))).toBeLessThanOrEqual(1)
     } finally { await page.close() }
   }, 15_000)
@@ -316,13 +316,14 @@ describe("remote shell layout", () => {
       const page = await browser!.openPage()
       try {
         await page.setViewport(width, height)
-        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=1800`)
+        await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=sessions&inventoryCount=80&sessionListDelay=1800&sessionListGate=1`)
+        await page.evaluate(`window.remoteReleaseSessionList()`)
         for (let attempt = 0; attempt < 80 && await page.evaluate<number>(`(Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1)`) < 25; attempt += 1) await Bun.sleep(50)
         const before = await page.evaluate<{ readonly rows: number; readonly title: string; readonly requests: number }>(`({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', requests: window.remoteInventoryReport().workspaceRequests })`)
         expect(before.rows).toBeGreaterThanOrEqual(25)
-        await page.evaluate(`window.remoteInvalidateSessions()`)
-        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`window.remoteInventoryReport().listStatus === 'loading' && window.remoteInventoryReport().workspaceRequests > ${before.requests}`); attempt += 1) await Bun.sleep(25)
-        expect(await page.evaluate<{ readonly rows: number; readonly title: string; readonly loading: boolean; readonly placeholder: boolean; readonly fits: boolean }>(`({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', loading: window.remoteInventoryReport().listStatus === 'loading', placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`)).toEqual({ rows: before.rows, title: before.title, loading: true, placeholder: false, fits: true })
+        await page.evaluate(`window.remoteHoldSessionLists(); window.remoteInvalidateSessions()`)
+        for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`window.remotePendingSessionLists() > 0 && window.remoteInventoryReport().workspaceRequests > ${before.requests}`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<{ readonly rows: number; readonly title: string; readonly inFlight: boolean; readonly listStatus: string; readonly placeholder: boolean; readonly fits: boolean }>(`({ rows: (Number(document.querySelector('.sessions-table')?.getAttribute('aria-rowcount') ?? 1) - 1), title: document.querySelector('.sessions-table__row')?.textContent?.trim() ?? '', inFlight: window.remotePendingSessionLists() > 0, listStatus: window.remoteInventoryReport().listStatus, placeholder: document.querySelector('.sessions-results .loading-placeholder') !== null, fits: document.documentElement.scrollWidth <= innerWidth })`)).toEqual({ rows: before.rows, title: before.title, inFlight: true, listStatus: "ready", placeholder: false, fits: true })
       } finally { await page.close() }
     }
   }, 15_000)
@@ -801,7 +802,7 @@ describe("remote shell layout", () => {
         expect(details.contained, `${label} details contained`).toBe(true)
         expect(details.description.length, `${label} task description`).toBeGreaterThan(0)
         expect(details.metrics.length, `${label} metric cells`).toBeGreaterThan(0)
-        expect(details.metrics.every((metric) => /^(Model|Tokens|Cache|Cost|Context):.+/.test(metric)), `${label} metric labels ${details.metrics.join("|")}`).toBe(true)
+        expect(details.metrics.every((metric) => /^(Model|Tokens \(inclusive\)|Cache|Cost \(inclusive\)|Context):.+/.test(metric)), `${label} metric labels ${details.metrics.join("|")}`).toBe(true)
         expect(details.rollup, `${label} roll-up`).toContain("Rolls up to")
         expect(details.dockHeight, `${label} details do not consume transcript height`).toBeCloseTo(bar.height, 2)
         await page.pressEscape()
@@ -958,6 +959,7 @@ describe("remote shell layout", () => {
       await page.evaluate(`document.querySelector('.new-session-composer button[aria-label="Create session"]').click()`)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb strong')?.textContent?.includes('New session') ?? false`); attempt += 1) await Bun.sleep(50)
       for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-row--active') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() === 'other'`); attempt += 1) await Bun.sleep(50)
       const result = await page.evaluate<{ readonly breadcrumb: string; readonly heading: string; readonly active: string }>(`(() => ({ breadcrumb: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '', heading: document.querySelector('.workspace__rail .session-panel__workspace h3')?.textContent?.trim() ?? '', active: document.querySelector('.workspace__rail .session-row--active .session-row__name')?.textContent?.trim() ?? '' }))()`)
       expect(result).toEqual({ breadcrumb: "New session", heading: "other", active: "New session" })
     } finally { await page.close() }
@@ -1116,7 +1118,7 @@ describe("remote shell layout", () => {
         expect((await paged())?.output).toBe(first + second + third)
         expect((await paged())?.buttons).not.toContain("Load more output")
         expect(relay.rejectedFrames).toEqual([])
-        expect(relay.requests.map((request) => ({ operation: request.operation, sessionID: request.sessionID, input: request.input }))).toEqual([
+        expect(relay.requests.filter((request) => request.operation === "session.shell.output" && request.input?.shellID === "sh_paged").map((request) => ({ operation: request.operation, sessionID: request.sessionID, input: request.input }))).toEqual([
           { operation: "session.shell.output", sessionID: "ses_fixture", input: { shellID: "sh_paged", cursor: firstBytes, limit: 65_536 } },
           { operation: "session.shell.output", sessionID: "ses_fixture", input: { shellID: "sh_paged", cursor: firstBytes + secondBytes, limit: 65_536 } },
         ])

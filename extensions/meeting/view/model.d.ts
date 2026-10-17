@@ -11,7 +11,18 @@ export type ViewInput = {
   summary?: Partial<NonNullable<MeetingView["summary"]>>
 }
 
-export function readViewKey(hash: string): string | undefined
+export function readCredentials(hash: string): { key: string; owner?: string } | undefined
+export function encodeModelChoice(providerID: string, id: string): string
+export function decodeModelChoice(value: string): { providerID: string; id: string } | undefined
+export function resolveAskSelection(
+  selected: "inherit" | { providerID: string; id: string; variant?: string },
+  loaded: unknown,
+): "inherit" | { providerID: string; id: string; variant?: string; profile?: string }
+export function ownerModelStatus(model?: { enabled?: unknown; status?: unknown }): string
+export function ownerBindingStatus(
+  binding?: { server?: string; write?: string; writeCapability?: string },
+  servers?: Array<{ name?: string; status?: string }>,
+): string
 export function formatSeconds(value: unknown): string
 export function describeView(view: ViewInput): {
   status: string

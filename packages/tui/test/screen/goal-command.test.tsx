@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { SessionAutonomyState, YCodingEvent } from "@ycoding-ai/client"
+import type { SessionAutonomyView, YCodingEvent } from "@ycoding-ai/client"
 import { materializeClipboardImage } from "../../src/clipboard"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
@@ -26,17 +26,33 @@ const session = {
   time: { created: 1, updated: 2 },
 }
 
+const withEffective = (state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }): SessionAutonomyView => {
+  const level = state.yolo === true ? 2 : state.yolo === 1 || state.yolo === 2 ? state.yolo : 0
+  const asleep = state.sleep !== undefined && state.sleep !== null
+  return {
+    ...state,
+    effective: state.effective ?? {
+      yolo: level as 0 | 1 | 2,
+      asleep,
+      ordinaryReviewsAuto: level === 2 && !asleep,
+      guardrailsEnabled: true,
+      modelReviews: false,
+      hardModelReviews: false,
+    },
+  }
+}
+
 const goalState = (
-  status: NonNullable<SessionAutonomyState["goal"]>["status"],
+  status: NonNullable<SessionAutonomyView["goal"]>["status"],
   text: string,
-): SessionAutonomyState => ({
+): SessionAutonomyView => withEffective({
   mode: "normal",
   yolo: 0,
   goal: { text, status, iteration: 2, noProgress: 1, maxNoProgress: 3 },
 })
 
-let autonomyState: SessionAutonomyState = { mode: "normal", yolo: 0 }
-let autonomyAfterSet: SessionAutonomyState | undefined
+let autonomyState: SessionAutonomyView = withEffective({ mode: "normal", yolo: 0 })
+let autonomyAfterSet: (Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }) | undefined
 let releaseAutonomySet: (() => void) | undefined
 let autonomySets: Array<Record<string, unknown>> = []
 let promptRequests: Array<{ id: string; text: string; resume?: boolean }> = []
@@ -47,8 +63,8 @@ let switchRequests: unknown[] = []
 let requestOrder: string[] = []
 let landingCreates = 0
 
-function resetFixture(state: SessionAutonomyState) {
-  autonomyState = state
+function resetFixture(state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }) {
+  autonomyState = withEffective(state)
   autonomyAfterSet = undefined
   releaseAutonomySet = undefined
   autonomySets = []
@@ -90,7 +106,7 @@ const route: FetchHandler = async (url, request) => {
         failNextAutonomySet = false
         return json({ error: "simulated goal calculation failure" }, { status: 500 })
       }
-      autonomyState = autonomyAfterSet ?? autonomyState
+      autonomyState = autonomyAfterSet ? withEffective(autonomyAfterSet) : autonomyState
       return json({ data: autonomyState })
     }
     return json({ data: autonomyState })
@@ -256,7 +272,7 @@ test("clears the composer after an explicit /goal starts goal mode from normal",
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     await waitFor(() => !screen.lines().some((line) => line.includes("/goal finish product.")), "cleared composer")
-    await waitFor(() => screen.frame().includes("Manual · goal"), "live goal status")
+    await waitFor(() => screen.frame().includes("Ask first · goal"), "live goal status")
 
     expect(autonomySets).toEqual([{ goal: "finish product." }])
     expect(promptRequests).toEqual([])
@@ -567,10 +583,10 @@ test("the command palette exposes the goal action and applies it to the active S
 
 test("execution settlement refreshes a completed goal before the header reports readiness", async () => {
   resetFixture(goalState("active", "Ship the patch"))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Manual · goal" })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Ask first · goal" })
   try {
     await screen.waitForEventStream()
-    expect(screen.frame()).toContain("Manual · goal")
+    expect(screen.frame()).toContain("Ask first · goal")
     autonomyState = goalState("completed", "Ship the patch")
     screen.events.emit({
       id: "evt_goal_settled",
@@ -581,9 +597,9 @@ test("execution settlement refreshes a completed goal before the header reports 
       data: { sessionID },
     } satisfies YCodingEvent)
     const deadline = Date.now() + 4_000
-    while (screen.frame().includes("Manual · goal") && Date.now() < deadline)
+    while (screen.frame().includes("Ask first · goal") && Date.now() < deadline)
       await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(screen.frame()).not.toContain("Manual · goal")
+    expect(screen.frame()).not.toContain("Ask first · goal")
     expect(screen.frame()).not.toContain("GOAL")
   } finally {
     await screen.dispose()

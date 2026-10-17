@@ -99,7 +99,7 @@ for (const mode of ["dark", "light"] as const) {
           height: 36,
           args: { sessionID },
           route,
-          settle: "Manual · ready",
+          settle: "Ask first · ready",
           config: { animations: false, theme: { mode } },
           keepAwake: {
             get: async () => item.status,
@@ -146,7 +146,7 @@ for (const mode of ["dark", "light"] as const) {
         height: 36,
         args: { sessionID },
         route,
-        settle: "Manual · ready",
+        settle: "Ask first · ready",
         config: { animations: false, theme: { mode } },
         keepAwake: {
           get: () => (++reads === 1 ? initial.promise : new Promise<KeepAwakeStatus>(() => {})),
@@ -160,7 +160,7 @@ for (const mode of ["dark", "light"] as const) {
         expect(screen.frame()).not.toContain("keep awake")
         await saveScreenCapture(`keep-awake-loading-${width}-${mode}`, screen)
         initial.resolve({ state: "off", manual: false, lid: "off" })
-        await frame(screen, (value) => value.includes("Manual"))
+        await frame(screen, (value) => value.includes("Ask first"))
         await screen.input.typeText("/keep-awake")
         screen.input.pressEnter()
         await frame(screen, (value) => value.includes("keep awake on"))

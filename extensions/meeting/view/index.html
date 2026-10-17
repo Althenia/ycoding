@@ -163,6 +163,58 @@
             </form>
           </section>
         </section>
+        <section id="owner-panel" class="owner-panel" hidden aria-labelledby="owner-title">
+          <p class="eyebrow">Owner link · this device</p>
+          <h2 id="owner-title">Owner settings</h2>
+          <p class="hint">
+            Shown only on the owner link issued by YCoding. The owner credential stays in this page's memory and is
+            never stored; after a reload, reopen the owner link. Knowledge writes still require approval in YCoding.
+          </p>
+          <p id="owner-feedback" class="feedback" role="status" aria-live="polite">
+            Owner settings have not loaded yet.
+          </p>
+          <button id="owner-retry" type="button" hidden>Retry loading owner settings</button>
+          <form id="owner-form" hidden>
+            <fieldset id="owner-model-fieldset">
+              <legend>Ask AI model</legend>
+              <p class="hint">
+                Applies to future Ask AI questions only. Meeting analysis keeps the model of its existing session.
+              </p>
+              <label class="field" for="owner-model">Model</label>
+              <span class="select-wrap"><select id="owner-model"></select></span>
+              <label class="field" for="owner-variant">Variant</label>
+              <span class="select-wrap"><select id="owner-variant"></select></span>
+              <p id="owner-model-status" class="hint">Model availability unreported</p>
+              <p id="owner-profile" class="hint" hidden></p>
+            </fieldset>
+            <fieldset id="owner-knowledge-fieldset">
+              <legend>Knowledge connectors</legend>
+              <label class="check"
+                ><input id="owner-mcp" type="checkbox" /><span
+                  >Use knowledge connectors <small>Retrieval is read-only here · writes require approval</small></span
+                ></label
+              >
+              <div id="owner-bindings"></div>
+              <p id="owner-bindings-status" class="hint">No connector bindings loaded yet.</p>
+              <div class="owner-add">
+                <label class="field" for="owner-add-server">Server</label>
+                <span class="select-wrap"><select id="owner-add-server"></select></span>
+                <label class="field" for="owner-add-search">Search tool</label>
+                <span class="select-wrap"><select id="owner-add-search"></select></span>
+                <label class="field" for="owner-add-read">Read tool</label>
+                <span class="select-wrap"><select id="owner-add-read"></select></span>
+                <label class="field" for="owner-add-write">Write tool</label>
+                <span class="select-wrap"><select id="owner-add-write"></select></span>
+                <button id="owner-add" type="button">Add connector binding</button>
+              </div>
+            </fieldset>
+            <div class="actions">
+              <button id="owner-save" type="submit" class="primary" aria-describedby="owner-feedback">
+                Save owner settings
+              </button>
+            </div>
+          </form>
+        </section>
       </main>
       <footer class="footer">
         Audio capture stays on this page; transcription and durable evidence stay in YCoding. Unknown values remain

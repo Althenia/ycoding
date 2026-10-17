@@ -227,6 +227,8 @@ test("paged classification keeps waiting-first order when the global status read
     await waitFor(() => store.state().carouselStatus === "ready")
     expect(store.state().sessions.map((row) => row.id)).toEqual(inventory.map((row) => row.id))
     expect(store.state().sessions[0]?.attention).toBe(true)
+    expect(store.state().sessions.every((row) => row.failed === undefined)).toBe(true)
+    expect(store.state().carouselSessions?.every((row) => row.failed === undefined)).toBe(true)
   } finally { store.dispose(); await relay.stop() }
 })
 
@@ -267,4 +269,66 @@ test.each([
     expect(store.state()).toMatchObject({ sessionListNotice: undefined })
     expect(relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined)).toHaveLength(reads + 1)
   } finally { store.dispose(); await relay.stop() }
+})
+
+const flags = (items: readonly { readonly id: string; readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean }[] | undefined) =>
+  items?.map((item) => [item.id, item.attention === true, item.failed === true, item.lost === true])
+
+test("lost-only attention is a loss warning in the Session list and carousel that never joins or outranks the waiting group", async () => {
+  const h = await harness((request) => {
+    if (request.operation === "session.status") return { ok: true, value: { running: ["ses_running"], attention: ["ses_a", "ses_edited", "ses_running"], lost: ["ses_edited", "ses_running"] } }
+    if (request.operation === "session.list" && request.input?.status === "waiting") return { ok: true, value: { data: rows.filter((item) => item.id === "ses_a") } }
+    return "default"
+  })
+  try {
+    const expected = [["ses_a", true, false, false], ["ses_running", false, false, true], ["ses_recent", false, false, false], ["ses_missing", false, false, false],
+      ["ses_Z", false, false, false], ["ses_edited", false, false, true], ["ses_pinned", false, false, false]]
+    await waitFor(() => flags(h.store.state().carouselSessions)?.length === rows.length && h.store.state().carouselSessions?.[0]?.id === "ses_a")
+    expect(flags(h.store.state().sessions)).toEqual(expected)
+    expect(flags(h.store.state().carouselSessions)).toEqual(expected)
+    expect(h.store.state().sessionStatus?.lost).toEqual(new Set(["ses_edited", "ses_running"]))
+  } finally { await h.close() }
+})
+
+test("a lost-only status requests no Waiting carousel page", async () => {
+  const h = await harness((request) => request.operation === "session.status"
+    ? { ok: true, value: { running: [], attention: ["ses_edited"], lost: ["ses_edited"] } } : "default")
+  try {
+    expect(h.relay.requests.some((request) => request.operation === "session.list" && request.input?.status === "waiting")).toBe(false)
+    expect(flags(h.store.state().carouselSessions)?.find((item) => item[0] === "ses_edited")).toEqual(["ses_edited", false, false, true])
+  } finally { await h.close() }
+})
+
+test("pushed status frames add, replace, and clear loss on the rows", async () => {
+  const h = await harness()
+  try {
+    const row = (id: string) => flags(h.store.state().sessions)?.find((item) => item[0] === id)
+    h.relay.pushStatus([], ["ses_a", "ses_edited"], undefined, undefined, ["ses_edited"])
+    await waitFor(() => row("ses_edited")?.[3] === true)
+    expect(row("ses_edited")).toEqual(["ses_edited", false, false, true])
+    expect(row("ses_a")).toEqual(["ses_a", true, false, false])
+    expect(h.store.state().sessions[0]?.id).toBe("ses_a")
+    h.relay.pushStatus([], ["ses_a", "ses_edited"])
+    await waitFor(() => row("ses_edited")?.[3] === false)
+    expect(row("ses_edited")).toEqual(["ses_edited", true, false, false])
+    h.relay.pushStatus([], [])
+    await waitFor(() => row("ses_edited")?.[1] === false)
+    expect(h.store.state().sessions.every((item) => item.lost !== true)).toBe(true)
+  } finally { await h.close() }
+})
+
+test("a Session list status snapshot carries loss into list and carousel rows when no status read settled", async () => {
+  const h = await harness((request) => {
+    if (request.operation === "session.status") return { ok: false, code: "internal_error", message: "Status unavailable" }
+    if (request.operation === "session.list") return { ok: true, value: { data: rows, status: { running: [], attention: ["ses_edited"], lost: ["ses_edited"] } } }
+    return "default"
+  })
+  try {
+    await waitFor(() => h.store.state().sessions.some((item) => item.lost === true))
+    expect(h.store.state().sessionStatus).toBeUndefined()
+    await waitFor(() => h.store.state().carouselSessions?.some((item) => item.lost === true) === true)
+    for (const items of [h.store.state().sessions, h.store.state().carouselSessions]) {
+      expect(flags(items)?.filter((item) => item[1] || item[3])).toEqual([["ses_edited", false, false, true]])
+    }
+  } finally { await h.close() }
 })

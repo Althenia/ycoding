@@ -6,6 +6,11 @@ import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/rem
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
+const autonomyData = (state: Record<string, unknown>) => ({
+  ...state,
+  effective: { yolo: typeof state.yolo === "number" ? state.yolo : 0, asleep: state.sleep !== undefined, guardrailsEnabled: true, ordinaryReviewsAuto: (typeof state.yolo === "number" ? state.yolo : 0) === 2 && state.sleep === undefined, modelReviews: false, hardModelReviews: false },
+})
+
 type Harness = {
   readonly store: RemoteStore
   readonly relay: RelayDouble
@@ -2260,12 +2265,12 @@ describe("remote store integration", () => {
     let autonomy: Record<string, unknown> = { mode: "normal", yolo: 0 }
     const test = await harness({
       handler: (request) => {
-        if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomy } }
+        if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(autonomy) } }
         if (request.operation !== "session.autonomy.set") return "default" as const
         const input = request.input ?? {}
         if (input.sleep === true) autonomy = { ...autonomy, sleep: {} }
         if (input.sleep === false) autonomy = Object.fromEntries(Object.entries(autonomy).filter(([key]) => key !== "sleep"))
-        return { ok: true, value: { data: autonomy } }
+        return { ok: true, value: { data: autonomyData(autonomy) } }
       },
     })
     const sets = () => test.relay.requests.filter((request) => request.operation === "session.autonomy.set").map((request) => ({ sessionID: request.sessionID, input: request.input }))
@@ -2437,7 +2442,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
 
-      const pending = test.store.setYolo(3)
+      const pending = test.store.setYolo(2)
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.set"))
 
       // The user moves to another session while the reply is still in flight.
@@ -2899,10 +2904,10 @@ describe("remote store integration", () => {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      await test.store.setYolo(3)
+      await test.store.setYolo(2)
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.set"))
-      expect(test.relay.requests.find((request) => request.operation === "session.autonomy.set")?.input).toEqual({ yolo: 3 })
-      expect(test.store.state().view?.autonomy).toMatchObject({ yolo: 3 })
+      expect(test.relay.requests.find((request) => request.operation === "session.autonomy.set")?.input).toEqual({ yolo: 2 })
+      expect(test.store.state().view?.autonomy).toMatchObject({ yolo: 2, effective: { yolo: 2 } })
 
       expect(await test.store.setGoal("Ship the remote workspace")).toBe(true)
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
@@ -2920,12 +2925,53 @@ describe("remote store integration", () => {
     }
   })
 
+  test("sets auto-answer as a standalone Session-local autonomy payload", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      expect(test.store.state().view?.autonomy).toMatchObject({ autoAnswer: false, effective: { yolo: 0, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } })
+
+      expect(await test.store.setAutoAnswer(true)).toBe(true)
+      const sets = test.relay.requests.filter((request) => request.operation === "session.autonomy.set")
+      expect(sets).toHaveLength(1)
+      expect(sets[0]).toMatchObject({ sessionID: "ses_a", input: { autoAnswer: true } })
+      expect(Object.keys(sets[0]?.input ?? {})).toEqual(["autoAnswer"])
+      expect(test.store.state().view?.autonomy?.autoAnswer).toBe(true)
+      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
+
+      await test.store.selectSession("ses_b")
+      await waitFor(() => test.store.state().view?.id === "ses_b" && test.store.state().view?.autonomy !== undefined)
+      expect(test.store.state().view?.autonomy?.autoAnswer).toBe(false)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("an autonomy answer without the required effective values stays unreported", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.autonomy.get"
+      ? { ok: true, value: { data: { mode: "normal", yolo: 2, autoAnswer: true } } }
+      : "default" as const })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.get"))
+      await test.flush()
+      expect(test.store.state().view?.autonomy).toBeUndefined()
+    } finally {
+      await test.stop()
+    }
+  })
+
   test("shows the goal an unknown outcome left active without claiming the request succeeded", async () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return { ok: false, code: "outcome_unknown", message: "Request timed out" } }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "normal", yolo: 0,
-        ...(goal ? { goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}) } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData({ mode: "normal", yolo: 0,
+        ...(goal ? { goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}) }) } }
       return "default"
     } })
     try {
@@ -2946,8 +2992,8 @@ describe("remote store integration", () => {
     const test = await harness({ requestTimeoutMs: 30, handler: async (request) => {
       if (request.operation !== "session.goal.set") return "default"
       await Bun.sleep(65)
-      return { ok: true, value: { data: { mode: "goal", yolo: 0,
-        goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }
+      return { ok: true, value: { data: autonomyData({ mode: "goal", yolo: 0,
+        goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }) } }
     } })
     try {
       await test.store.load()
@@ -2985,7 +3031,7 @@ describe("remote store integration", () => {
     const test = await harness({ handler: async (request) => {
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
-      return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("Ship the workspace")) } }
     } })
     try {
       await test.store.load()
@@ -3006,7 +3052,7 @@ describe("remote store integration", () => {
     const test = await harness({ handler: async (request) => {
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
-      return { ok: true, value: { data: activeGoal("First objective") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("First objective")) } }
     } })
     try {
       await test.store.load()
@@ -3083,7 +3129,7 @@ describe("remote store integration", () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: 0 } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: 0 }) } }
       return "default"
     } })
     try {
@@ -3106,7 +3152,7 @@ describe("remote store integration", () => {
     const test = await harness({ now: () => clock++, handler: (request) => {
       if (request.operation !== "session.goal.set") return "default"
       requests += 1
-      return requests === 1 ? { ok: false, code: "outcome_unknown", message: "Request timed out" } : { ok: true, value: { data: activeGoal("Second objective") } }
+      return requests === 1 ? { ok: false, code: "outcome_unknown", message: "Request timed out" } : { ok: true, value: { data: autonomyData(activeGoal("Second objective")) } }
     } })
     try {
       await test.store.load()
@@ -3125,7 +3171,7 @@ describe("remote store integration", () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return "silent" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: 0 } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: 0 }) } }
       return "default"
     } })
     try {
@@ -3147,11 +3193,11 @@ describe("remote store integration", () => {
     const test = await harness({ handler: async (request) => {
       if (request.operation === "session.autonomy.get") {
         await autonomy.promise
-        return { ok: true, value: { data: activeGoal("Existing objective") } }
+        return { ok: true, value: { data: autonomyData(activeGoal("Existing objective")) } }
       }
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
-      return { ok: true, value: { data: activeGoal("Replacement objective") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("Replacement objective")) } }
     } })
     try {
       await test.store.load()
@@ -3175,10 +3221,10 @@ describe("remote store integration", () => {
     const calculation = Promise.withResolvers<void>()
     let other = false
     const test = await harness({ handler: async (request) => {
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 }) } }
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
-      return { ok: true, value: { data: activeGoal("Requested objective") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("Requested objective")) } }
     } })
     try {
       await test.store.load()
@@ -3204,7 +3250,7 @@ describe("remote store integration", () => {
     let other = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", yolo: 0 }) } }
       return "default"
     } })
     try {
@@ -3223,8 +3269,8 @@ describe("remote store integration", () => {
 
   test("reports a replacement goal whose text equals the goal it replaced from its own response", async () => {
     const test = await harness({ handler: (request) => {
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
-      if (request.operation === "session.goal.set") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(activeGoal("Ship the workspace")) } }
+      if (request.operation === "session.goal.set") return { ok: true, value: { data: autonomyData(activeGoal("Ship the workspace")) } }
       return "default"
     } })
     try {
@@ -3241,7 +3287,7 @@ describe("remote store integration", () => {
 
   test("keeps a replacement goal unknown when its response is lost and the active goal has the replaced text", async () => {
     const test = await harness({ handler: (request) => {
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(activeGoal("Ship the workspace")) } }
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
       return "default"
     } })
@@ -3264,7 +3310,7 @@ describe("remote store integration", () => {
       if (request.operation !== "session.autonomy.get") return "default"
       reads += 1
       if (reads > 1) await read.promise
-      return { ok: true, value: { data: { mode: "normal", yolo: 0 } } }
+      return { ok: true, value: { data: autonomyData({ mode: "normal", yolo: 0 }) } }
     } })
     try {
       await test.store.load()
@@ -3288,7 +3334,7 @@ describe("remote store integration", () => {
     const test = await harness({ handler: async (request) => {
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
-      return { ok: true, value: { data: activeGoal("Ship the workspace") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("Ship the workspace")) } }
     } })
     try {
       await test.store.load()
@@ -3317,7 +3363,7 @@ describe("remote store integration", () => {
       goals += 1
       if (goals === 1) return "silent"
       await second.promise
-      return { ok: true, value: { data: activeGoal("New connection objective") } }
+      return { ok: true, value: { data: autonomyData(activeGoal("New connection objective")) } }
     } })
     try {
       await test.store.load()

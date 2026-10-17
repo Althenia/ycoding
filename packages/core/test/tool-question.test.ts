@@ -57,7 +57,7 @@ const configured = (info: unknown) =>
   [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)(info) })]) })] as const
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode]), [...overrides, configured({}), [Form.node, form]]))
 const withForms = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Decision.node]), [...overrides, configured({})]))
-const autonomous = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Database.node, SessionAutonomy.node, Decision.node]), [...overrides, configured({ auto_answer: true })]))
+const autonomous = testEffect(AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, questionToolNode, Form.node, EventRuntime.node, Database.node, SessionAutonomy.node, Decision.node]), [...overrides, configured({})]))
 const seedSession = Effect.gen(function* () {
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp/ycoding-question"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
@@ -180,12 +180,13 @@ describe("QuestionTool", () => {
     expect(capturedInput()?.fields[0]).toMatchObject({ options: [{ label: "Fast (Recommended)" }, { label: "Careful" }] })
   }))
 
-  autonomous.effect("autonomous questions retain the first-option answer without helper suggestions", () => Effect.gen(function* () {
+  autonomous.effect("autoAnswer questions retain the first-option answer without helper suggestions", () => Effect.gen(function* () {
     deny = false
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    for (const yolo of [2, 3] as const) {
+    yield* autonomy.set({ sessionID, autoAnswer: true })
+    for (const yolo of [0, 2] as const) {
       yield* autonomy.setYolo({ sessionID, yolo })
       expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
     }

@@ -58,6 +58,7 @@ function harness(f: Awaited<ReturnType<typeof memoryFixture>>, state: State) {
       }),
   })
   const guardrails = Layer.mock(SessionGuardrail.Service, {
+    reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
     assert: (input) =>
       Effect.gen(function* () {
         const metadata = (input.metadata ?? {}) as Record<string, unknown>

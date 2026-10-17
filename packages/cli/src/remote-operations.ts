@@ -99,7 +99,7 @@ type CapturedResult = { readonly groups: readonly CapturedGroup[]; readonly dige
 type SessionActivity = { clock: number; epoch: number; floor: number; readonly at: Map<string, number> }
 
 export type OperationCache = {
-  listStatus?: { readonly expiresAt: number; readonly value: Promise<{ readonly running: ReadonlySet<string>; readonly waiting: ReadonlySet<string> }> }
+  listStatus?: { readonly expiresAt: number; readonly value: Promise<{ readonly running: ReadonlySet<string>; readonly waiting: ReadonlySet<string>; readonly lost: ReadonlySet<string> }> }
   readonly providerAuth: Map<string, ProviderAuthEntry>
   readonly now: () => number
   readonly capturedChanges: Map<string, CapturedEntry>
@@ -803,13 +803,13 @@ async function run(input: OperationInput) {
       const observation = { expiresAt: Infinity, value: (async () => {
         const work = await input.local.outstandingSessions(false)
         const status = await sessionStatus(input.local, sessions, undefined, new Set(), work, false)
-        return { running: new Set(work.running), waiting: new Set([...status.requestAttention, ...(status.lost ?? [])]) }
+        return { running: new Set(work.running), waiting: new Set(status.requestAttention), lost: new Set(lossOnly(status)) }
       })() }
       cache.listStatus = observation
       void observation.value.then(() => { observation.expiresAt = cache.now() + 5_000 }, () => { if (cache.listStatus === observation) cache.listStatus = undefined })
     }
     const status = await cache.listStatus.value
-    return listPage(sessions, validated.query, status.running, status.waiting)
+    return listPage(sessions, validated.query, status.running, status.waiting, status.lost)
   }
   if (validated.kind === "active") {
     const allowed = new Set(input.sessions.ids())
@@ -818,10 +818,12 @@ async function run(input: OperationInput) {
   }
   if (validated.kind === "status") {
     const status = await sessionStatus(input.local, input.sessions.snapshot())
-    const failed = status.failed.filter((id) => !status.requestAttention.includes(id) && !status.lost?.includes(id)).sort()
+    const lost = lossOnly(status)
+    const failed = status.failed.filter((id) => !status.requestAttention.includes(id) && !lost.includes(id)).sort()
     return { running: status.running, attention: status.attention,
       ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
-      ...(failed.length === 0 ? {} : { failed }) }
+      ...(failed.length === 0 ? {} : { failed }),
+      ...(lost.length === 0 ? {} : { lost }) }
   }
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
@@ -1799,6 +1801,10 @@ export async function sessionStatus(local: LocalServer, sessions: readonly Sessi
     ...(lost.size === 0 ? {} : { lost: [...lost].sort() }) }
 }
 
+export function lossOnly(status: { readonly requestAttention: readonly string[]; readonly lost?: readonly string[] }): string[] {
+  return (status.lost ?? []).filter((id) => !status.requestAttention.includes(id)).sort()
+}
+
 const attentionNeeds: readonly RemoteAttentionNeed[] = ["permission", "question", "review"]
 
 export function attentionDetails(sessions: readonly SessionInfo[], attention: readonly string[], needs: Readonly<Record<string, RemoteAttentionNeed>>): RemoteAttentionDetail[] {
@@ -1869,7 +1875,7 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
 }
 
 /** Page the complete backend Session list without truncation. */
-export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>, waiting?: ReadonlySet<string>) {
+export function listPage(sessions: readonly SessionInfo[], query: ListQuery, running?: ReadonlySet<string>, waiting?: ReadonlySet<string>, lost?: ReadonlySet<string>) {
   const { order, search, parentID, limit, anchor } = query
   const direction = anchor?.direction ?? "next"
   const effectiveOrder = order === "pinned" || order === "active" ? order : direction === "previous" ? (order === "asc" ? "desc" : "asc") : order
@@ -1877,6 +1883,7 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
   const runningRoots = new Set(sessions.filter((session) => running?.has(session.id)).map((session) => rootSessionID(session, byID)).filter((id): id is string => id !== undefined))
   const isRunning = (session: SessionInfo) => session.parentID === undefined ? runningRoots.has(session.id) : running?.has(session.id) === true
   const isWaiting = (session: SessionInfo) => session.parentID === undefined && waiting?.has(session.id) === true
+  const isLost = (session: SessionInfo) => session.parentID === undefined && lost?.has(session.id) === true && !isWaiting(session)
   const activeKey = (session: SessionInfo) => ({ id: session.id, time: session.time.active ?? session.time.updated,
     waiting: isWaiting(session), running: !isWaiting(session) && session.parentID === undefined && runningRoots.has(session.id) })
   const needle = search?.toLowerCase()
@@ -1908,7 +1915,8 @@ export function listPage(sessions: readonly SessionInfo[], query: ListQuery, run
   const last = data.at(-1)
   return {
     data,
-    ...(running === undefined ? {} : { status: { running: data.filter(isRunning).map((session) => session.id), attention: data.filter(isWaiting).map((session) => session.id) } }),
+    ...(running === undefined ? {} : { status: { running: data.filter(isRunning).map((session) => session.id), attention: data.filter((session) => isWaiting(session) || isLost(session)).map((session) => session.id),
+      ...(data.some(isLost) ? { lost: data.filter(isLost).map((session) => session.id) } : {}) } }),
     cursor: {
       previous: first && (direction === "next" ? anchor !== undefined || windowStart > 0 : remaining > 0)
         ? encodeCursor({ id: first.id, time: order === "active" ? activeKey(first).time : first.time.updated, direction: "previous", ...(order === "pinned" ? { pinned: first.time.pinned ?? null } : {}), ...(order === "active" ? { running: activeKey(first).running, waiting: activeKey(first).waiting, epoch } : {}) })
@@ -2048,7 +2056,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
-  "session.autonomy.set": ["yolo", "maxNoProgress", "sleep"],
+  "session.autonomy.set": ["yolo", "maxNoProgress", "sleep", "autoAnswer"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
   "session.create": ["id", "workspace", "agent", "model"],
@@ -2178,21 +2186,26 @@ function reviewDecision(value: unknown): ReviewDecision {
 }
 
 function autonomyPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
+  if (fields.autoAnswer !== undefined) {
+    if (fields.yolo !== undefined || fields.maxNoProgress !== undefined || fields.sleep !== undefined)
+      throw new OperationError("invalid_message", "Set auto-answer separately from other autonomy settings")
+    return { autoAnswer: requireBoolean(fields.autoAnswer, "autoAnswer") }
+  }
   if (fields.yolo !== undefined || fields.maxNoProgress !== undefined) {
     if (fields.sleep !== undefined)
       throw new OperationError("invalid_message", "Set the YOLO level separately from sleep")
     return yoloPayload(fields)
   }
   if (fields.sleep !== undefined) return { sleep: requireBoolean(fields.sleep, "sleep") }
-  throw new OperationError("invalid_message", "Autonomy changes require yolo or sleep")
+  throw new OperationError("invalid_message", "Autonomy changes require yolo, sleep, or autoAnswer")
 }
 
-function yoloPayload(fields: Readonly<Record<string, unknown>>) {
+function yoloPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
   const yolo = fields.yolo
   if (typeof yolo === "boolean") return { yolo, ...maxNoProgress(fields) }
-  if (typeof yolo === "number" && Number.isInteger(yolo) && yolo >= 0 && yolo <= 3)
+  if (yolo === 0 || yolo === 1 || yolo === 2)
     return { yolo, ...maxNoProgress(fields) }
-  throw new OperationError("invalid_message", 'The "yolo" field must be 0-3 or a boolean')
+  throw new OperationError("invalid_message", 'The "yolo" field must be 0-2 or a boolean')
 }
 
 function maxNoProgress(fields: Readonly<Record<string, unknown>>) {

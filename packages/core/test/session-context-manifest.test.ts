@@ -41,6 +41,7 @@ const decodeJSON = Schema.decodeUnknownSync(Schema.Json)
 const guardrailSnapshots = new Map<SessionSchema.ID, SessionGuardrail.Snapshot>()
 const guardrailBeforeUse = new Map<SessionSchema.ID, Effect.Effect<void>>()
 const guardrails = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   withSnapshot: (sessionID, use) =>
     (guardrailBeforeUse.get(sessionID) ?? Effect.void).pipe(
       Effect.andThen(

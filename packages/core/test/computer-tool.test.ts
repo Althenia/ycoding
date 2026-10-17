@@ -86,6 +86,7 @@ const permission = Layer.mock(Permission.Service, {
   },
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) => {
     expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
     calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)

@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { KeyEvent } from "@opentui/core"
-import type { SessionAutonomyState, SessionMessageInfo } from "@ycoding-ai/client"
+import type { SessionAutonomyView, SessionMessageInfo } from "@ycoding-ai/client"
 import { json, sessionSnapshot } from "../fixture/tui-client"
+import { localAutonomyView } from "../../src/util/session-autonomy"
 import { renderScreen } from "./harness"
 import { saveScreenCapture } from "../fixture/screen-capture"
 
@@ -89,7 +90,7 @@ const messages: SessionMessageInfo[] = [
 ]
 
 function routeFor(state: {
-  autonomy: SessionAutonomyState
+  autonomy: SessionAutonomyView
   items: unknown[]
   decisions: unknown[]
   decide?: () => Promise<Response>
@@ -131,7 +132,7 @@ function routeFor(state: {
     if (url.pathname === `/api/session/${sessionID}/autonomy`) {
       if (request.method === "PUT") {
         const value = (await request.json()) as { sleep?: boolean }
-        if (value.sleep === false) state.autonomy = { ...state.autonomy, sleep: undefined }
+        if (value.sleep === false) state.autonomy = localAutonomyView({ mode: "normal", yolo: 0 })
         if (value.sleep === true)
           state.autonomy = {
             ...state.autonomy,
@@ -239,7 +240,7 @@ function pageDown(screen: Awaited<ReturnType<typeof renderScreen>>) {
 
 test("review box lists deferred items with counts and decides a hard guardrail item", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [guardrailItem, questionItem] as unknown[],
     decisions: [] as unknown[],
   }
@@ -287,7 +288,7 @@ test("review box lists deferred items with counts and decides a hard guardrail i
 
 test("long grades remain scrollable with hard-review controls at 80 by 24", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [
       {
         ...guardrailItem,
@@ -334,7 +335,7 @@ test("long grades remain scrollable with hard-review controls at 80 by 24", asyn
 
 test("waking with open review items expands the box and notifies once", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0, sleep: {} } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }),
     items: [guardrailItem, questionItem] as unknown[],
     decisions: [] as unknown[],
   }
@@ -350,7 +351,7 @@ test("waking with open review items expands the box and notifies once", async ()
     expect(screen.frame()).toContain("asleep")
     expect(screen.frame()).not.toContain("Guardrail review")
     await screen.waitForEventStream()
-    state.autonomy = { ...state.autonomy, sleep: undefined }
+    state.autonomy = localAutonomyView({ mode: "normal", yolo: 0 })
     screen.events.emit({
       id: "evt_family_wake",
       created: 100,
@@ -368,7 +369,7 @@ test("waking with open review items expands the box and notifies once", async ()
 
 test("review items rehydrate after remount without making decisions", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [guardrailItem, questionItem],
     decisions: [],
   }
@@ -394,7 +395,7 @@ test("review items rehydrate after remount without making decisions", async () =
 test("an uncertain review decision stays visible and repeated input never replays it", async () => {
   const pending = Promise.withResolvers<Response>()
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [guardrailItem],
     decisions: [] as unknown[],
     decide: () => pending.promise,
@@ -432,7 +433,7 @@ test("an uncertain review decision stays visible and repeated input never replay
 for (const exit of ["escape", "not-now", "header"] as const) {
   test(`failed review keeps its ${exit} exit without replaying the decision`, async () => {
     const state = {
-      autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+      autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
       items: [guardrailItem],
       decisions: [] as unknown[],
       decide: async () => json({ message: "Decision outcome unknown" }, { status: 503 }),
@@ -489,7 +490,7 @@ for (const exit of ["escape", "not-now", "header"] as const) {
 
 test("failed child review answer can close without resubmission", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [
       {
         ...guardrailItem,
@@ -527,7 +528,7 @@ test("failed child review answer can close without resubmission", async () => {
 test("focused review owner opens by keyboard without editing or deciding", async () => {
   const child = { ...session, id: "ses_review_owner", parentID: sessionID, title: "Review owner child" }
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [{ ...guardrailItem, sessionID: child.id, sessionTitle: child.title }],
     decisions: [] as unknown[],
   }
@@ -567,7 +568,7 @@ test("focused review owner opens by keyboard without editing or deciding", async
 
 test("a full review box preserves the composer at a short viewport", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: Array.from({ length: 16 }, (_, index) => ({
       ...guardrailItem,
       itemID: `rvw_${index}`,
@@ -640,7 +641,7 @@ const recoveryItem = {
 test("a recovery item decides Continue exactly once and never replays an uncertain decision", async () => {
   const pending = Promise.withResolvers<Response>()
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [recoveryItem] as unknown[],
     decisions: [] as unknown[],
     decide: () => pending.promise,
@@ -674,7 +675,7 @@ test("a recovery item decides Continue exactly once and never replays an uncerta
 
 test("a recovery item hydrates from the durable review list and Stop settles it out of the open list", async () => {
   const state = {
-    autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0 }),
     items: [recoveryItem] as unknown[],
     decisions: [] as unknown[],
   }
@@ -704,7 +705,7 @@ test("an asleep family shows a disabled guardrail review with its configuration 
     grades: undefined,
   }
   const state = {
-    autonomy: { mode: "normal", yolo: 0, sleep: {} } as SessionAutonomyState,
+    autonomy: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }),
     items: [disabledItem] as unknown[],
     decisions: [] as unknown[],
   }
@@ -718,7 +719,7 @@ test("an asleep family shows a disabled guardrail review with its configuration 
       durable: { aggregateID: sessionID, seq: 100, version: 1 },
       data: { sessionID, source: "session-state", text: "The user is back. Sleep mode is off." },
     } as never)
-    state.autonomy = { ...state.autonomy, sleep: undefined }
+    state.autonomy = localAutonomyView({ mode: "normal", yolo: 0 })
     await waitFor(() => screen.frame().includes("automatic decisions are disabled"), "disabled reason")
     expect(screen.frame()).toContain("Guardrail review")
     expect(screen.frame()).not.toContain("decision model")
@@ -736,7 +737,7 @@ test("an asleep family shows a disabled guardrail review with its configuration 
 }, 30_000)
 
 test("the Sleep palette title and notice keep their review-box qualifier fully visible at 80 by 24", async () => {
-  const state = { autonomy: { mode: "normal", yolo: 0 } as SessionAutonomyState, items: [] as unknown[], decisions: [] as unknown[] }
+  const state = { autonomy: localAutonomyView({ mode: "normal", yolo: 0 }), items: [] as unknown[], decisions: [] as unknown[] }
   const screen = await renderScreen({ width: 80, height: 24, args: { sessionID }, settle: "Message YCoding…", route: routeFor(state) })
   try {
     await screen.waitForEventStream()

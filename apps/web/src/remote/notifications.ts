@@ -31,7 +31,7 @@ type SyncedNotice = {
  */
 export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: string; readonly body: string }> = {
   "agent-completed": { title: "YCoding — work finished", body: "A session finished all its work." },
-  "approval-requested": { title: "YCoding — needs your attention", body: "A session is waiting for you." },
+  "approval-requested": { title: "YCoding — needs your attention", body: "A session needs attention. Open it to review." },
   "machine-offline": { title: "YCoding — machine offline", body: "The connected machine stopped reporting." },
 }
 

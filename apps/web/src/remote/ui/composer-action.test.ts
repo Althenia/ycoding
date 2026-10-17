@@ -17,7 +17,9 @@ test("slash goal and YOLO use autonomy actions, server commands run, slash skill
   expect(optionsForTrigger("/", "go", catalog, []).map((option) => option.label)).toContain("/goal")
   expect(optionsForTrigger("/", "yo", catalog, []).map((option) => option.label)).toContain("/yolo")
   expect(submission("/goal keep progress. Ship this safely", [], catalog, "steer")).toEqual({ kind: "goal", input: { goal: "keep progress. Ship this safely" } })
-  expect(submission("/yolo 3", [], catalog, "steer")).toEqual({ kind: "yolo", input: { level: 3 } })
+  expect(submission("/yolo 2", [], catalog, "steer")).toEqual({ kind: "yolo", input: { level: 2 } })
+  expect(submission("/yolo 3", [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /yolo with a level from 0 to 2." })
+  expect(submission("/yolo", [], catalog, "steer")).toEqual({ kind: "yolo", input: {} })
   expect(submission("/plan now", [], catalog, "queue")).toEqual({ kind: "command", input: { command: "plan", arguments: "now", delivery: "queue" } })
   expect(submission("/research", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
   expect(optionsForTrigger("/", "editor", catalog, [])).toEqual([])
@@ -37,6 +39,18 @@ test("sleep, wake, and keep-awake are Session actions that never become prompts"
   }
   expect(submission("/sleepy", [], catalog, "steer")).toMatchObject({ kind: "prompt" })
   expect(optionsForTrigger("/", "guardrail-decision", catalog, [])).toEqual([])
+})
+
+test("auto-answer toggles only this Session and never becomes a prompt", () => {
+  expect(optionsForTrigger("/", "auto", catalog, []).map((option) => option.label)).toContain("/auto-answer")
+  expect(optionsForTrigger("/", "auto", catalog, [], false).map((option) => option.label)).not.toContain("/auto-answer")
+  expect(submission("/auto-answer", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: {} })
+  expect(submission("/auto-answer on", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: { enabled: true } })
+  expect(submission("/auto-answer off", [], catalog, "queue")).toEqual({ kind: "autoAnswer", input: { enabled: false } })
+  expect(submission("/auto-answer yes", [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /auto-answer, /auto-answer on, or /auto-answer off." })
+  const configured = { ...catalog, commands: [...catalog.commands, { name: "auto-answer" }] }
+  expect(submission("/auto-answer", [], configured, "steer")).toEqual({ kind: "autoAnswer", input: {} })
+  expect(optionsForTrigger("/", "auto-answer", configured, []).filter((option) => option.label === "/auto-answer")).toHaveLength(1)
 })
 
 test("unmatched slash heads, including paths, remain complete ordinary prompts", () => {

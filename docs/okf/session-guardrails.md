@@ -40,7 +40,7 @@ Recognized catastrophic shell commands are denied before process creation, while
 
 ## Review Behavior
 
-Ordinary guardrail reviews auto-approve at effective yolo 1-3; yolo 0, including an active goal, keeps ordinary reviews enforced. Hard reviews require a fresh human decision at every level and cannot reuse an always approval.[^runtime-doc]
+Ordinary guardrail reviews auto-approve at effective yolo 2; yolo 0-1, including an active goal, keeps ordinary reviews enforced. Hard reviews require a fresh human decision at every level and cannot reuse an always approval.[^runtime-doc]
 
 Outside-repository ordinary reviews use deterministic rules and the normal review/effective YOLO path without helper-model classification. Deterministic denies, hard reviews, custom rules, disabled ordinary guardrails, and skipReview retain their gates. Historical risk fields remain valid for replay, but current evaluation neither produces them nor uses them to allow an action.[^spec-v2][^guardrail-core]
 

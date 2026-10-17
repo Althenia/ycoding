@@ -969,7 +969,7 @@ const layer = Layer.effect(
             const asleep = yield* autonomy
               .isAsleep(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            const canAuto = yield* autonomy
+            const autoAnswer = yield* autonomy
               .canAutoAnswer(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
             const child = yield* sessions.get(childID).pipe(
@@ -979,10 +979,14 @@ const layer = Layer.effect(
               Effect.provide(locations.get(child.location)),
               Effect.flatMap((config) => config.entries()),
             )
-            const autoAnswer = Config.latest(entries, "auto_answer") === true
-            const sleepOutcome: SleepAnswerOutcome | undefined = !asleep ? undefined : autoAnswer
+            const settled: SleepAnswerOutcome | undefined = !asleep ? undefined : autoAnswer
               ? yield* sleepAnswer({ childID, text, data })
               : { type: "defer" as const, reason: "disabled" as const }
+            const sleepOutcome: SleepAnswerOutcome | undefined = settled?.type === "answer" && !(yield* autonomy
+              .canAutoAnswer(childID)
+              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID }))))
+              ? { type: "defer" as const, reason: "disabled" as const }
+              : settled
             if (sleepOutcome?.type === "defer") {
               const limit = Config.latest(entries, "guardrails")?.max_pending_reviews ?? 16
               yield* SessionReviewFold.open(db, events, {
@@ -1003,7 +1007,7 @@ const layer = Layer.effect(
               yield* publish(childID, { type: "question_asked", question: deferredQuestion })
               return { question: deferredQuestion, autoAnswered: false }
             }
-            if (autoAnswer && (asleep || canAuto)) {
+            if (autoAnswer) {
               const answerText = sleepOutcome?.type === "answer" ? sleepOutcome.text : SessionAutonomy.AutomaticAnswer
               yield* sessions
                 .synthetic({

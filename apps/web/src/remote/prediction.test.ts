@@ -52,7 +52,7 @@ test("a replacement connection drops the old prediction and ignores late old-tra
         connect: () => callbacks.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
         request: async (operation) => operation === "session.snapshot"
           ? { status: "ok", value: { sourceEpoch: "epoch_prediction", session: { id: base.id, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: base.id, seq: 0 } } }
-          : { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", yolo: 0 } : [] } },
+          : { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } : [] } },
       }
     },
   })
@@ -171,7 +171,7 @@ function predictionStore(
         const answered = await prediction(operation)
         if (answered) return answered
         if (operation === "session.snapshot") return { status: "ok" as const, value: { sourceEpoch: "epoch_prediction", session: { id: request?.sessionID, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: request?.sessionID ?? "ses_prediction", seq: 0 } } }
-        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0 } } }
+        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } } }
         return { status: "ok" as const, value: { data: [] } }
       },
     }),

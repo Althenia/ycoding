@@ -271,7 +271,7 @@ test("phone status shows the Session state, never the autonomy level shown besid
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__mobile') !== null`)
       const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__yolo-trigger .session-status__yolo-full')?.textContent ?? '' }))()`)
-      expect(shown.trigger).toBe("YOLO 3")
+      expect(shown.trigger).toBe("Tools + reviews")
       expect(shown.mobile).toBe(expected)
     } finally { await page.close() }
   }
@@ -365,22 +365,37 @@ test("Conversation status controls change this Session's YOLO level and goal at 
       await wait(page, `document.querySelector('.session-status__yolo-popover [role="radiogroup"]') !== null`)
       await page.evaluate(`Promise.all(document.querySelector('.session-status__yolo-popover').getAnimations().map(animation => animation.finished))`)
       await Bun.write(new URL(`../../../.cache/tmp/composer-autonomy-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('strong')?.textContent)`)).toEqual(["Manual", "YOLO 1", "YOLO 2", "YOLO 3"])
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('strong')?.textContent)`)).toEqual(["Ask first", "Allow tools", "Tools + reviews"])
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('span')?.textContent)`)).toEqual([
-        "Manual questions and approval requests.", "Automatically approves tool permissions and ordinary guardrail reviews.", "Answers questions/forms if enabled.", "Same as YOLO 2; keeps level 3.",
+        "Asks you for tool permissions and routine reviews.", "Auto-approves ask-level tool permissions. Routine reviews still ask.", "Also auto-approves routine reviews while awake.",
       ])
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__yolo-popover')?.textContent`)).toContain("Hard reviews follow configured policy, not YOLO. Unsettled reviews defer during sleep.")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`)).toEqual([
+        "Tools=Ask you", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off",
+      ])
+      expect(await page.evaluate<string>(`document.querySelector('.session-status__yolo-popover')?.textContent`)).toContain("Hard reviews never follow YOLO.")
+      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === false`)).toBe(true)
+      await page.evaluate(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.click()`)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
+      await wait(page, `document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === true`)
+      expect(await page.evaluate<string>(`document.querySelector('#session-status-auto-answer-detail')?.textContent ?? ''`)).toContain("Off while asleep sends requests to Review")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dd')?.textContent)`)).toEqual(["Ask you", "Ask you", "Ask you", "On · this Session"])
+      if (width === 390) expect(await page.evaluate<boolean>(`(() => { const panel=document.querySelector('.session-status__yolo-popover').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth && panel.left >= 0 && panel.right <= innerWidth })()`)).toBe(true)
       if (width === 390) expect(await page.evaluate<boolean>(`(() => { const panel=document.querySelector('.session-status__yolo-popover').getBoundingClientRect(), note=document.querySelector('.session-status__guardrail-note').getBoundingClientRect(); return note.bottom<=panel.bottom+1 })()`)).toBe(true)
       await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
       await page.pressKey("ArrowRight", "ArrowRight", 39)
       expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 1 } })
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('YOLO 3'))?.click()`)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Tools + reviews'))?.click()`)
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
+      for (const modeled of [false, true]) {
+        await page.evaluate(`window.composerSetHardReviewPolicy(${modeled})`)
+        await wait(page, `[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === 'Hard reviews')?.querySelector('dd')?.textContent === ${JSON.stringify(modeled ? "Model or you" : "Ask you")}`)
+        expect(await page.evaluate<string>(`[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === 'Routine reviews')?.querySelector('dd')?.textContent`)).toBe("Off")
+      }
       await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
       await page.pressKey("Home", "Home", 36)
       expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
       await page.pressKey("End", "End", 35)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
       await page.pressEscape()
       expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Autonomy level")
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
@@ -460,7 +475,7 @@ test("a Session switch closes its autonomy picker without carrying a goal draft 
   } finally { await page.close() }
 }, 30_000)
 
-test("unreported Session autonomy does not appear as a Manual selection", async () => {
+test("unreported Session autonomy does not appear as a level selection", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
@@ -478,7 +493,7 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       const composer = ".workspace__main .mini-composer__mount"
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger')?.textContent?.includes('YOLO 2') === true`)
+      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger')?.textContent?.includes('Tools + reviews') === true`)
       expect(await page.evaluate<number>(`document.querySelectorAll('${composer} .session-status__mode').length`)).toBe(0)
       await type(page, `${composer} textarea`, "/sle")
       await wait(page, `[...document.querySelectorAll('${composer} [role="option"]')].some(option => option.textContent.includes('/sleep'))`)
@@ -507,8 +522,8 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await wait(page, `document.querySelector('${composer}')?.textContent?.includes('Use /sleep without arguments.') === true`)
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(item => item.operation !== 'session.prompt')`)).toBe(true)
       await page.evaluate(`document.querySelector('${composer} .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Manual'))?.click()`)
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger .session-status__yolo-full')?.textContent === 'Manual'`)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Ask first'))?.click()`)
+      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger .session-status__yolo-full')?.textContent === 'Ask first'`)
     } finally { await page.close() }
   }
 
@@ -522,6 +537,20 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
   } finally { await held.close() }
 }, 120_000)
 
+test("a level 2 Session without root ordinary-review authority shows routine reviews asking", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(390, 844)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&ordinaryReviewsAuto=0`)
+    await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger')?.textContent?.includes('Tools + reviews') === true`)
+    await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
+    await wait(page, `document.querySelector('.session-status__decider') !== null`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`))
+      .toEqual(["Tools=Auto-approved", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off"])
+    expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+  } finally { await page.close() }
+}, 30_000)
+
 test("Conversation autonomy controls issue Session-scoped relay operations", async () => {
   for (const width of [1440, 390]) {
     const page = await browser!.openPage()
@@ -530,9 +559,12 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
       await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger') !== null`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('YOLO 2'))?.click()`)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Tools + reviews'))?.click()`)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set')`)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toMatchObject({ operation: "session.autonomy.set", input: { yolo: 2 } })
+      await page.evaluate(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.click()`)
+      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set' && item.input?.autoAnswer === true)`)
+      await wait(page, `document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === true`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
       await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship a reliable Session")
@@ -1129,14 +1161,22 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     await wait(page, `window.composerRequests().length >= 9`)
     expect((await operations())[8]).toMatchObject({ operation: "session.prompt", input: { text: "/Users/me/file.ts explain" } })
 
-    await type(page, input, "/yolo 3")
+    await type(page, input, "/yolo 2")
     await send()
     await wait(page, `window.composerRequests().length >= 10`)
-    expect((await operations())[9]).toEqual({ operation: "session.autonomy.set", input: { yolo: 3 } })
+    expect((await operations())[9]).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
     await type(page, input, "/yolo")
     await send()
     await wait(page, `window.composerRequests().length >= 11`)
     expect((await operations())[10]).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
+    await type(page, input, "/yolo 3")
+    await send()
+    await wait(page, `document.querySelector('.mini-composer__mount')?.textContent?.includes('Use /yolo with a level from 0 to 2.') === true`)
+    expect((await operations())).toHaveLength(11)
+    await type(page, input, "/auto-answer")
+    await send()
+    await wait(page, `window.composerRequests().length >= 12`)
+    expect((await operations())[11]).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
     expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(6)
 
     await type(page, ".new-session-composer textarea", "/go")

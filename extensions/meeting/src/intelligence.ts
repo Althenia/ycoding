@@ -142,9 +142,11 @@ export interface KnowledgeBinding {
   search: string
   read: string
   write?: string
+  enabled?: boolean
 }
 
 export interface MeetingMCP {
+  servers?: () => Promise<ReadonlyArray<{ name: string; status: { status: string } | string }>>
   tools(): Promise<ReadonlyArray<{ server: string; name: string; inputSchema?: unknown }>>
   callTool(input: {
     server: string

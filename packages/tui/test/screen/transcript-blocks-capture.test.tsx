@@ -143,7 +143,7 @@ const route: FetchHandler = (url) => {
   )
     return json({ data: [] })
   if (/^\/api\/session\/ses_(docs_sync|cache_audit)\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
   if (url.pathname === `/api/session/${sessionID}/todo`)
     return json({
       data: [
@@ -356,7 +356,7 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("bun typecheck")
     expect(text).toContain("2 errors")
     expect(text).toContain("goal off")
-    expect(text).toContain("Manual")
+    expect(text).toContain("Ask first")
 
 
     await mkdir(renders, { recursive: true })

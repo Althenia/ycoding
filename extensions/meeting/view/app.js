@@ -1,7 +1,18 @@
-import { describeView, questionError, readViewKey } from "/view/model.js"
+import {
+  decodeModelChoice,
+  describeView,
+  encodeModelChoice,
+  ownerBindingStatus,
+  ownerModelStatus,
+  questionError,
+  readCredentials,
+  resolveAskSelection,
+} from "/view/model.js"
 import { createCapture } from "/view/capture.js"
 
-const key = readViewKey(location.hash)
+const credentials = readCredentials(location.hash)
+const key = credentials?.key
+let ownerKey = credentials?.owner
 history.replaceState(null, "", location.pathname)
 const node = (id) => document.getElementById(id)
 const text = (id, value) => {
@@ -21,6 +32,12 @@ let retryQuestion,
   closed = false
 let original = false,
   follow = true
+let ownerData,
+  ownerDraft = [],
+  ownerLoadedAskValue,
+  ownerLoadedKnowledge,
+  ownerPending = false,
+  ownerDenied = false
 const requests = new Set()
 const segments = new Map()
 const chats = new Map()
@@ -490,6 +507,288 @@ async function ask(question) {
   }
 }
 
+async function ownerRequest(body) {
+  const abort = new AbortController()
+  requests.add(abort)
+  const timeout = setTimeout(() => abort.abort(), 30000)
+  try {
+    const response = await fetch("/view/owner/settings", {
+      method: body ? "POST" : "GET",
+      headers: { authorization: `Bearer ${ownerKey}`, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      signal: abort.signal,
+    })
+    const value = await response.json()
+    if (response.status === 401) {
+      ownerDenied = true
+      node("owner-form").hidden = true
+      node("owner-retry").hidden = true
+      text(
+        "owner-feedback",
+        "This owner link is invalid. The meeting view is unaffected. Reopen the owner link from YCoding to change settings.",
+      )
+      throw new Error("unauthorized")
+    }
+    if (!response.ok) throw new Error(typeof value?.error === "string" ? value.error : "request_failed")
+    return value
+  } finally {
+    clearTimeout(timeout)
+    requests.delete(abort)
+  }
+}
+
+function ownerOption(value, label, disabled = false) {
+  const option = document.createElement("option")
+  option.value = value
+  option.textContent = label
+  option.disabled = disabled
+  return option
+}
+
+function selectedOwnerModel() {
+  const choice = decodeModelChoice(node("owner-model").value)
+  return records(ownerData?.models).find(
+    (model) => choice && model.providerID === choice.providerID && model.id === choice.id,
+  )
+}
+
+function renderOwnerVariants(selected) {
+  const model = selectedOwnerModel()
+  const variants = Array.isArray(model?.variants) ? model.variants.filter((id) => typeof id === "string") : []
+  node("owner-variant").replaceChildren(
+    ownerOption("", "Default variant"),
+    ...variants.map((id) => ownerOption(id, id)),
+    ...(selected && !variants.includes(selected) ? [ownerOption(selected, `${selected} · Unavailable`, true)] : []),
+  )
+  node("owner-variant").value = selected ?? ""
+  node("owner-variant").disabled = !model || ownerPending
+  const inherited = ownerData?.analysisModel
+  text(
+    "owner-model-status",
+    model
+      ? `Model availability · ${ownerModelStatus(model)}`
+      : node("owner-model").value === "inherit"
+        ? inherited && typeof inherited === "object"
+          ? `Ask AI inherits the analysis model · ${inherited.providerID} · ${inherited.id}${inherited.variant ? ` · variant ${inherited.variant}` : ""}${inherited.profile ? ` · profile ${inherited.profile}` : ""}`
+          : "Ask AI inherits the analysis model setting."
+        : "Model availability unreported",
+  )
+}
+
+function renderOwnerBindings() {
+  const servers = records(ownerData?.servers)
+  const known = new Map(
+    records(ownerData?.knowledge?.bindings).map((binding) => [`${binding.server}:${binding.write ?? ""}`, binding]),
+  )
+  node("owner-bindings").replaceChildren(
+    ...ownerDraft.map((binding, index) => {
+      const row = document.createElement("article")
+      row.className = "owner-binding"
+      const title = document.createElement("h3")
+      title.textContent = binding.server
+      const tools = document.createElement("p")
+      tools.className = "mono"
+      tools.textContent = `search · ${binding.search} / read · ${binding.read}${binding.write ? ` / write · ${binding.write}` : " / no write tool"}`
+      const status = document.createElement("p")
+      status.className = "hint"
+      status.textContent = ownerBindingStatus(
+        { ...binding, writeCapability: known.get(`${binding.server}:${binding.write ?? ""}`)?.writeCapability },
+        servers,
+      )
+      const toggle = document.createElement("label")
+      toggle.className = "check"
+      const box = document.createElement("input")
+      box.type = "checkbox"
+      box.checked = binding.enabled !== false
+      box.disabled = ownerPending
+      box.setAttribute("aria-label", `Use connector ${binding.server}`)
+      box.addEventListener("change", () => {
+        binding.enabled = box.checked
+      })
+      const label = document.createElement("span")
+      label.textContent = "Use this connector"
+      toggle.append(box, label)
+      const remove = document.createElement("button")
+      remove.type = "button"
+      remove.textContent = `Remove ${binding.server} binding`
+      remove.disabled = ownerPending
+      remove.addEventListener("click", () => {
+        ownerDraft.splice(index, 1)
+        renderOwnerBindings()
+        renderOwnerAdd()
+      })
+      row.append(title, tools, status, toggle, remove)
+      return row
+    }),
+  )
+  text(
+    "owner-bindings-status",
+    ownerDraft.length
+      ? `${ownerDraft.length} of 4 connector bindings · saved bindings are checked against the live registry on every use.`
+      : "No connector bindings. Analysis runs without canonical knowledge retrieval.",
+  )
+}
+
+function renderOwnerAdd() {
+  const servers = records(ownerData?.servers)
+  const unbound = servers.filter((server) => !ownerDraft.some((binding) => binding.server === server.name))
+  const current = node("owner-add-server").value
+  node("owner-add-server").replaceChildren(
+    ownerOption("", unbound.length ? "Choose a server" : "No unbound server reported"),
+    ...unbound.map((server) =>
+      ownerOption(server.name, `${server.name} · ${server.status ? `server ${server.status}` : "server unreported"}`),
+    ),
+  )
+  if (unbound.some((server) => server.name === current)) node("owner-add-server").value = current
+  const server = unbound.find((item) => item.name === node("owner-add-server").value)
+  const tools = Array.isArray(server?.tools) ? server.tools.filter((name) => typeof name === "string") : []
+  for (const [id, empty] of [
+    ["owner-add-search", "Choose the search tool"],
+    ["owner-add-read", "Choose the read tool"],
+  ])
+    node(id).replaceChildren(ownerOption("", tools.length ? empty : "No tools reported"), ...tools.map((name) => ownerOption(name, name)))
+  node("owner-add-write").replaceChildren(
+    ownerOption("", "No write tool"),
+    ...tools.map((name) => ownerOption(name, name)),
+  )
+  const full = ownerDraft.length >= 4
+  for (const id of ["owner-add-server", "owner-add-search", "owner-add-read", "owner-add-write", "owner-add"])
+    node(id).disabled = ownerPending || full || !servers.length
+  if (full) text("owner-bindings-status", "4 of 4 connector bindings · remove one before adding another.")
+}
+
+function renderOwner(data) {
+  if (!data || typeof data !== "object" || !Array.isArray(data.models) || !data.knowledge)
+    throw new Error("invalid_owner_settings")
+  ownerData = data
+  ownerLoadedAskValue = data.askModel ?? "inherit"
+  const savedBindings = records(data.knowledge.bindings).map((binding) => ({
+    server: binding.server,
+    search: binding.search,
+    read: binding.read,
+    ...(binding.write ? { write: binding.write } : {}),
+    enabled: binding.enabled !== false,
+  }))
+  ownerLoadedKnowledge = JSON.stringify({ mcpEnabled: data.knowledge.mcpEnabled === true, bindings: savedBindings })
+  ownerDraft = savedBindings.map((binding) => ({ ...binding }))
+  node("owner-mcp").checked = data.knowledge.mcpEnabled === true
+  const ask = data.askModel && typeof data.askModel === "object" ? data.askModel : undefined
+  node("owner-model").replaceChildren(
+    ownerOption("inherit", "Inherit analysis model"),
+    ...records(data.models).map((model) => {
+      const status = ownerModelStatus(model)
+      const unavailable = status.startsWith("Unavailable")
+      return ownerOption(
+        encodeModelChoice(model.providerID, model.id),
+        `${model.providerID} · ${model.name || model.id}${unavailable ? ` · ${status}` : ""}`,
+        unavailable && !(ask && ask.providerID === model.providerID && ask.id === model.id),
+      )
+    }),
+  )
+  node("owner-model").value = ask ? encodeModelChoice(ask.providerID, ask.id) : "inherit"
+  if (ask && !selectedOwnerModel()) {
+    node("owner-model").append(
+      ownerOption(encodeModelChoice(ask.providerID, ask.id), `${ask.providerID} · ${ask.id} · Unreported`),
+    )
+    node("owner-model").value = encodeModelChoice(ask.providerID, ask.id)
+  }
+  node("owner-profile").hidden = !ask?.profile
+  if (ask?.profile)
+    text(
+      "owner-profile",
+      `Profile ${ask.profile} is set for this provider. It carries across model and variant changes while the provider stays the same; choosing another provider drops it.`,
+    )
+  renderOwnerVariants(ask?.variant)
+  renderOwnerBindings()
+  renderOwnerAdd()
+  node("owner-form").hidden = false
+  node("owner-retry").hidden = true
+}
+
+async function loadOwner() {
+  if (!ownerKey || ownerPending || ownerDenied || closed) return
+  ownerPending = true
+  text("owner-feedback", "Loading owner settings from the local runtime…")
+  node("owner-retry").hidden = true
+  try {
+    const data = await ownerRequest()
+    ownerPending = false
+    renderOwner(data)
+    text("owner-feedback", "Owner settings loaded. Nothing is saved until you choose Save owner settings.")
+  } catch {
+    if (!closed && !ownerDenied) {
+      text("owner-feedback", "Owner settings could not load. The meeting view is unaffected; retry when the runtime is ready.")
+      node("owner-retry").hidden = false
+    }
+  } finally {
+    ownerPending = false
+  }
+}
+
+async function saveOwner() {
+  if (!ownerKey || ownerPending || ownerDenied || !ownerData) return
+  const choice = decodeModelChoice(node("owner-model").value)
+  const selected = choice
+    ? { ...choice, ...(node("owner-variant").value ? { variant: node("owner-variant").value } : {}) }
+    : "inherit"
+  const askModel = resolveAskSelection(selected, ownerLoadedAskValue)
+  const loaded = ownerLoadedAskValue
+  const sameAsk =
+    askModel === loaded ||
+    (askModel !== "inherit" &&
+      loaded &&
+      typeof loaded === "object" &&
+      askModel.providerID === loaded.providerID &&
+      askModel.id === loaded.id &&
+      (askModel.variant ?? "") === (loaded.variant ?? "") &&
+      (askModel.profile ?? "") === (loaded.profile ?? ""))
+  const knowledge = {
+    mcpEnabled: node("owner-mcp").checked,
+    bindings: ownerDraft.map((binding) => ({ ...binding, enabled: binding.enabled !== false })),
+  }
+  const update = {}
+  if (!sameAsk) update.askModel = askModel
+  if (JSON.stringify(knowledge) !== ownerLoadedKnowledge) update.knowledge = knowledge
+  if (!Object.keys(update).length) {
+    text("owner-feedback", "No owner setting changes to save.")
+    return
+  }
+  ownerPending = true
+  node("owner-model-fieldset").disabled = true
+  node("owner-knowledge-fieldset").disabled = true
+  node("owner-save").disabled = true
+  text("owner-feedback", "Saving owner settings…")
+  try {
+    renderOwner(await ownerRequest(update))
+    text(
+      "owner-feedback",
+      "Owner settings saved. The Ask AI model applies to future questions; connector changes apply to new retrieval.",
+    )
+    void refresh()
+  } catch (error) {
+    if (!closed && !ownerDenied) {
+      text(
+        "owner-feedback",
+        error instanceof Error && error.message === "selection_unavailable"
+          ? "A selected model, variant or connector tool is no longer available. Your edits are retained; choose a reported option and save again."
+          : "Owner settings could not be saved or the outcome is unknown. Your edits are retained; retry loading before saving again.",
+      )
+      node("owner-retry").hidden = false
+    }
+  } finally {
+    ownerPending = false
+    node("owner-model-fieldset").disabled = false
+    node("owner-knowledge-fieldset").disabled = false
+    node("owner-save").disabled = false
+    renderOwnerVariants(node("owner-variant").value || undefined)
+    renderOwnerBindings()
+    renderOwnerAdd()
+  }
+}
+
 function updateFollow() {
   node("follow").setAttribute("aria-pressed", String(follow))
   text("follow", follow ? "Follow newest · on" : "Follow paused")
@@ -563,6 +862,34 @@ node("chat-form").addEventListener("submit", (event) => {
 node("retry-question").addEventListener("click", () => {
   if (retryQuestion) void ask(retryQuestion)
 })
+node("owner-retry").addEventListener("click", () => void loadOwner())
+node("owner-model").addEventListener("change", () => renderOwnerVariants())
+node("owner-add-server").addEventListener("change", () => renderOwnerAdd())
+node("owner-add").addEventListener("click", () => {
+  const binding = {
+    server: node("owner-add-server").value,
+    search: node("owner-add-search").value,
+    read: node("owner-add-read").value,
+    ...(node("owner-add-write").value ? { write: node("owner-add-write").value } : {}),
+    enabled: true,
+  }
+  if (!binding.server || !binding.search || !binding.read) {
+    text("owner-feedback", "Choose a server, its search tool and its read tool before adding a binding.")
+    return
+  }
+  if (ownerDraft.length >= 4 || ownerDraft.some((item) => item.server === binding.server)) {
+    text("owner-feedback", "Each server can be bound once, up to 4 bindings. Remove a binding before adding another.")
+    return
+  }
+  ownerDraft.push(binding)
+  renderOwnerBindings()
+  renderOwnerAdd()
+  text("owner-feedback", "Binding added. Save owner settings to apply it; nothing was written externally.")
+})
+node("owner-form").addEventListener("submit", (event) => {
+  event.preventDefault()
+  void saveOwner()
+})
 window.addEventListener("pagehide", () => {
   closed = true
   clearTimeout(polling)
@@ -587,3 +914,17 @@ if (!key) {
 } else {
   poll()
 }
+if (ownerKey) {
+  node("owner-panel").hidden = false
+  void loadOwner()
+}
+window.addEventListener("hashchange", () => {
+  const next = readCredentials(location.hash)
+  history.replaceState(null, "", location.pathname)
+  if (!next?.owner || next.key !== key || next.owner === ownerKey) return
+  ownerKey = next.owner
+  ownerDenied = false
+  ownerData = undefined
+  node("owner-panel").hidden = false
+  void loadOwner()
+})

@@ -59,10 +59,16 @@ import {
   createSessionID,
   goalToggleAction,
   isAsleep,
+  approvalLevelLabel,
+  autoAnswerOn,
+  nextApprovalLevel,
+  parseApprovalLevel,
+  parseAutoAnswerArg,
   parseGoalCommand,
   restoreSessionSubmission,
   retainSessionSubmission,
   yoloLevel,
+  type AutonomyState,
   type YoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
@@ -71,7 +77,7 @@ import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from
 import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
 import { establishLandingSession } from "../../util/landing-session"
-import type { ModelDaybreak, ModelRef, SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelRef, SessionAutonomyView } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
 
@@ -80,9 +86,10 @@ export type PromptProps = {
   branch?: string
   landing?: boolean
   onOverlayChange?: (open: boolean) => void
-  autonomy?: SessionAutonomyState
-  onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyState) => void
+  autonomy?: SessionAutonomyView
+  onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyView) => void
   onLandingYoloToggle?: (next: YoloLevel) => void
+  onLandingAutoAnswerToggle?: (next: boolean) => void
   onLandingGoalToggle?: (next: string | null) => void
   landingDaybreak?: ModelDaybreak
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
@@ -137,7 +144,7 @@ export function PromptYoloHint() {
         {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} interrupt</text>}
       </Show>
       <Show when={disableYoloShortcut()}>
-        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} disable YOLO</text>}
+        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} ask first</text>}
       </Show>
     </>
   )
@@ -304,7 +311,7 @@ export function Prompt(props: PromptProps) {
   const keymap = Keymap.use()
   const yoloGoalActive = createMemo(
     () =>
-      yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState)) > 0 ||
+      (props.autonomy?.effective?.yolo ?? 0) > 0 ||
       props.autonomy?.goal?.status === "active",
   )
   const renderer = useRenderer()
@@ -878,39 +885,84 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Toggle YOLO",
+        title: "Approval level",
         name: "session.autonomy.yolo.toggle",
         category: "Session",
         palette: true,
         slash: { name: "yolo" },
         run: async (input?: string) => {
           const token = input?.trim().split(/\s+/)[0]
-          const parsed = token ? Number.parseInt(token, 10) : Number.NaN
-          const explicit = parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : undefined
-          const currentLevel = yoloLevel(props.autonomy ?? { yolo: 0 })
-          const nextLevel = explicit ?? (currentLevel === 3 ? 0 : currentLevel === 2 ? 3 : currentLevel === 1 ? 2 : 1)
+          const explicit = parseApprovalLevel(token)
+          if (token && explicit === undefined) {
+            toast.show({ message: "Use /yolo with a level from 0 to 2", variant: "error", duration: 3000 })
+            return
+          }
+          const currentLevel = props.autonomy ? yoloLevel(props.autonomy) : undefined
+          if (explicit === undefined && currentLevel === undefined) {
+            toast.show({ message: "Approval level unknown; reloading", variant: "info", duration: 3000 })
+            return
+          }
+          const nextLevel = explicit ?? nextApprovalLevel(currentLevel!)
           const sessionID = props.sessionID
           if (!sessionID && landingTransferred) return
           if (sessionID) {
             try {
               const result = await client.api.session.autonomy.set({ sessionID, payload: { yolo: nextLevel } })
-              const state =
-                (result as unknown as { data: SessionAutonomyState }).data ??
-                (result as unknown as SessionAutonomyState)
-              props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+              props.onAutonomyUpdated?.(sessionID, result)
               toast.show({
-                message: nextLevel > 0 ? `YOLO ${nextLevel} enabled` : "YOLO disabled",
+                message: `Approval level ${nextLevel} · ${approvalLevelLabel(nextLevel)}`,
                 variant: "success",
                 duration: 3000,
               })
             } catch (error) {
-              toast.show({ title: "Failed to toggle YOLO", message: errorMessage(error), variant: "error" })
+              toast.show({ title: "Failed to set approval level", message: errorMessage(error), variant: "error" })
             }
             return
           }
           props.onLandingYoloToggle?.(nextLevel)
           toast.show({
-            message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)",
+            message: `Approval level ${nextLevel} · ${approvalLevelLabel(nextLevel)} (landing)`,
+            variant: "success",
+            duration: 2000,
+          })
+        },
+      },
+      {
+        title: "Toggle auto-answer (this Session)",
+        name: "session.autonomy.auto-answer.toggle",
+        category: "Session",
+        palette: true,
+        slash: { name: "auto-answer" },
+        run: async (input?: string) => {
+          const parsed = parseAutoAnswerArg(input?.trim().split(/\s+/)[0])
+          if (parsed === null) {
+            toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
+            return
+          }
+          if (parsed === undefined && !props.autonomy) {
+            toast.show({ message: "Auto-answer state unknown; reloading", variant: "info", duration: 3000 })
+            return
+          }
+          const nextValue = parsed ?? !autoAnswerOn(props.autonomy)
+          const sessionID = props.sessionID
+          if (!sessionID && landingTransferred) return
+          if (sessionID) {
+            try {
+              const result = await client.api.session.autonomy.set({ sessionID, payload: { autoAnswer: nextValue } })
+              props.onAutonomyUpdated?.(sessionID, result)
+              toast.show({
+                message: `Auto-answer ${autoAnswerOn(result) ? "on" : "off"} for this Session`,
+                variant: "success",
+                duration: 3000,
+              })
+            } catch (error) {
+              toast.show({ title: "Failed to set auto-answer", message: errorMessage(error), variant: "error" })
+            }
+            return
+          }
+          props.onLandingAutoAnswerToggle?.(nextValue)
+          toast.show({
+            message: `Auto-answer ${nextValue ? "on" : "off"} for this Session (landing)`,
             variant: "success",
             duration: 2000,
           })
@@ -1741,8 +1793,9 @@ export function Prompt(props: PromptProps) {
         ...(selectedModel.profile === undefined ? {} : { profile: selectedModel.profile }),
       },
       autonomy: {
-        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }),
+        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }) ?? 0,
         ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
+        ...(autoAnswerOn(props.autonomy) ? { autoAnswer: true } : {}),
       },
       daybreak: props.landingDaybreak,
     }
@@ -1908,31 +1961,71 @@ export function Prompt(props: PromptProps) {
       return true
     }
     if (normalized === "/yolo" || normalized.startsWith("/yolo ") || normalized.startsWith("/yolo\n")) {
-      clearPrompt()
       const arg = normalized.slice(5).trim()
-      const parsed = arg ? Number.parseInt(arg, 10) : NaN
-      const explicit = parsed === 0 || parsed === 1 || parsed === 2 || parsed === 3 ? parsed : undefined
-      const currentLevel = yoloLevel(props.autonomy ?? { yolo: 0 })
-      const nextLevel = explicit ?? (currentLevel === 3 ? 0 : currentLevel === 2 ? 3 : currentLevel === 1 ? 2 : 1)
+      const explicit = parseApprovalLevel(arg.split(/\s+/)[0])
+      if (arg && explicit === undefined) {
+        toast.show({ message: "Use /yolo with a level from 0 to 2", variant: "error", duration: 3000 })
+        return true
+      }
+      const currentLevel = props.autonomy ? yoloLevel(props.autonomy) : undefined
+      if (explicit === undefined && currentLevel === undefined) {
+        toast.show({ message: "Approval level unknown; reloading", variant: "info", duration: 3000 })
+        return true
+      }
+      clearPrompt()
+      const nextLevel = explicit ?? nextApprovalLevel(currentLevel!)
       const sessionID = props.sessionID
       if (sessionID) {
         try {
           const result = await client.api.session.autonomy.set({ sessionID, payload: { yolo: nextLevel } })
-          const state =
-            (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
-          props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+          props.onAutonomyUpdated?.(sessionID, result)
           toast.show({
-            message: nextLevel > 0 ? `YOLO ${nextLevel} enabled` : "YOLO disabled",
+            message: `Approval level ${nextLevel} · ${approvalLevelLabel(nextLevel)}`,
             variant: "success",
             duration: 3000,
           })
         } catch (error) {
-          toast.show({ title: "Failed to toggle YOLO", message: errorMessage(error), variant: "error" })
+          toast.show({ title: "Failed to set approval level", message: errorMessage(error), variant: "error" })
         }
       } else {
         props.onLandingYoloToggle?.(nextLevel)
         toast.show({
-          message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)",
+          message: `Approval level ${nextLevel} · ${approvalLevelLabel(nextLevel)} (landing)`,
+          variant: "success",
+          duration: 2000,
+        })
+      }
+      return true
+    }
+    if (normalized === "/auto-answer" || normalized.startsWith("/auto-answer ") || normalized.startsWith("/auto-answer\n")) {
+      const parsed = parseAutoAnswerArg(normalized.slice(12).trim().split(/\s+/)[0])
+      if (parsed === null) {
+        toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
+        return true
+      }
+      if (parsed === undefined && !props.autonomy) {
+        toast.show({ message: "Auto-answer state unknown; reloading", variant: "info", duration: 3000 })
+        return true
+      }
+      clearPrompt()
+      const nextValue = parsed ?? !autoAnswerOn(props.autonomy)
+      const sessionID = props.sessionID
+      if (sessionID) {
+        try {
+          const result = await client.api.session.autonomy.set({ sessionID, payload: { autoAnswer: nextValue } })
+          props.onAutonomyUpdated?.(sessionID, result)
+          toast.show({
+            message: `Auto-answer ${autoAnswerOn(result) ? "on" : "off"} for this Session`,
+            variant: "success",
+            duration: 3000,
+          })
+        } catch (error) {
+          toast.show({ title: "Failed to set auto-answer", message: errorMessage(error), variant: "error" })
+        }
+      } else {
+        props.onLandingAutoAnswerToggle?.(nextValue)
+        toast.show({
+          message: `Auto-answer ${nextValue ? "on" : "off"} for this Session (landing)`,
           variant: "success",
           duration: 2000,
         })
@@ -2031,8 +2124,9 @@ export function Prompt(props: PromptProps) {
       agentID,
       daybreak: props.sessionID ? undefined : props.landingDaybreak,
       autonomy: props.sessionID ? undefined : {
-        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }),
+        yolo: yoloLevel(props.autonomy ?? { yolo: 0 }) ?? 0,
         ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
+        ...(autoAnswerOn(props.autonomy) ? { autoAnswer: true } : {}),
       },
       model: {
         providerID: selectedModel.providerID,
@@ -2159,15 +2253,22 @@ export function Prompt(props: PromptProps) {
       session = created
     }
 
-    if (!props.sessionID && submission.payload.autonomy &&
-      (submission.payload.autonomy.yolo > 0 || submission.payload.autonomy.goal !== undefined)) {
+    const landingAutonomy = submission.payload.autonomy
+    if (!props.sessionID && landingAutonomy &&
+      (landingAutonomy.yolo > 0 || landingAutonomy.goal !== undefined || landingAutonomy.autoAnswer)) {
       updateOperation(currentOperation.id, "Setting autonomy…")
-      const error = await client.api.session.autonomy.set({
-        sessionID,
-        payload: submission.payload.autonomy.goal === undefined
-          ? { yolo: submission.payload.autonomy.yolo }
-          : { yolo: submission.payload.autonomy.yolo, goal: submission.payload.autonomy.goal },
-      }, requestOptions(currentOperation)).then(() => undefined, (error) => error)
+      const error = await (async () => {
+        if (landingAutonomy.yolo > 0 || landingAutonomy.goal !== undefined) {
+          await client.api.session.autonomy.set({
+            sessionID,
+            payload: landingAutonomy.goal === undefined
+              ? { yolo: landingAutonomy.yolo }
+              : { yolo: landingAutonomy.yolo, goal: landingAutonomy.goal },
+          }, requestOptions(currentOperation))
+        }
+        if (landingAutonomy.autoAnswer)
+          await client.api.session.autonomy.set({ sessionID, payload: { autoAnswer: true } }, requestOptions(currentOperation))
+      })().then(() => undefined, (error) => error)
       if (error) {
         finishOperation(currentOperation.id, { message: "Autonomy selection failed · draft retained", error: true })
         toast.show({ title: "Failed to set autonomy", message: errorMessage(error), variant: "error" })
@@ -2450,8 +2551,9 @@ export function Prompt(props: PromptProps) {
             agent: agentID,
             model: modelRef,
           })
-          const level = yoloLevel(props.autonomy ?? { yolo: 0 })
+          const level = yoloLevel(props.autonomy ?? { yolo: 0 }) ?? 0
           if (level > 0) await client.api.session.autonomy.set({ sessionID: created.id, payload: { yolo: level } })
+          if (autoAnswerOn(props.autonomy)) await client.api.session.autonomy.set({ sessionID: created.id, payload: { autoAnswer: true } })
           if (daybreak) await client.api.session.daybreak.set({ sessionID: created.id, daybreak })
           await client.api.session.autonomy.set({
             sessionID: created.id,
@@ -2482,7 +2584,7 @@ export function Prompt(props: PromptProps) {
     }
     const action = candidate
       ? ({ type: "replace", text: candidate } as const)
-      : goalToggleAction(props.autonomy ?? ({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState))
+      : goalToggleAction(props.autonomy ?? ({ mode: "normal", yolo: 0 } as unknown as AutonomyState))
     if (action.type === "request-objective") {
       clearPrompt()
       DialogSessionGoal.show(dialog, sessionID, undefined, (state) => props.onAutonomyUpdated?.(sessionID, state))
@@ -2514,9 +2616,7 @@ export function Prompt(props: PromptProps) {
             ? ({ goal: true } as const)
             : ({ goal: action.text } as const)
       const result = await client.api.session.autonomy.set({ sessionID, payload })
-      const state =
-        (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
-      props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+      props.onAutonomyUpdated?.(sessionID, result)
       clearPrompt()
       toast.show({
         message:
@@ -2576,9 +2676,11 @@ export function Prompt(props: PromptProps) {
           borderColor={
             props.landing
               ? borderHighlight()
-              : yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState)) > 0
-                ? theme.text.feedback.error.default
-                : theme.text.feedback.success.default
+              : props.autonomy?.effective === undefined
+                ? theme.text.subdued
+                : props.autonomy.effective.yolo > 0
+                  ? theme.text.feedback.error.default
+                  : theme.text.feedback.success.default
           }
         >
           <box

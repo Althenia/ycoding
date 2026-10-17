@@ -11,13 +11,20 @@ test("summarizes Session state", () => {
       "session-state",
       `${sessionPrefix}{"autonomy":{"mode":"normal","yolo":0},"todos":[{"content":"Task","status":"pending"}]}`,
     ),
-  ).toBe("Session state · Manual · 1 task")
+  ).toBe("Session state · Ask first · 1 task")
 })
 
 test("summarizes active autonomy modes", () => {
-  const autonomy = { mode: "normal", yolo: 1, sleep: {}, goal: { status: "active" } }
+  const autonomy = { mode: "normal", yolo: 1, sleep: {}, autoAnswer: true, goal: { status: "active" } }
   expect(noticeSummary("session-state", `${sessionPrefix}${JSON.stringify({ autonomy, todos: [] })}`)).toBe(
-    "Session state · YOLO 1 · goal · asleep · 0 tasks",
+    "Session state · Allow tools · goal · asleep · answers auto · 0 tasks",
+  )
+})
+
+test("summarizes missing or unsupported autonomy without inventing a level", () => {
+  expect(noticeSummary("session-state", `${sessionPrefix}{"todos":[]}`)).toBe("Session state · autonomy unreported · 0 tasks")
+  expect(noticeSummary("session-state", `${sessionPrefix}{"autonomy":{"mode":"normal","yolo":3},"todos":[]}`)).toBe(
+    "Session state · unknown · 0 tasks",
   )
 })
 

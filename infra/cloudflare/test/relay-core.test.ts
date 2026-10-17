@@ -384,6 +384,17 @@ describe("relay core: role separation", () => {
     ])
   })
 
+  test("lost background results retain their reason in status and alerts", async () => {
+    const h = harness()
+    await attachBoth(h)
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify({ type: "status", running: [], attention: [] }))
+    const frame = { type: "status", running: [], attention: ["ses_lost"], lost: ["ses_lost"] }
+    await h.relay.handleAgentMessage("agent-1", JSON.stringify(frame))
+    expect(h.messagesTo("client-1").at(-1)).toEqual(frame)
+    expect(h.storedStatus()).toEqual(frame)
+    expect(h.pushed).toEqual([{ accountID: "usr_1", category: "approval-requested", sessionID: "ses_lost", deviceID: "dev_1", noticeID: "ntc_1", need: "lost" }])
+  })
+
   test("alerts carry the Session title and what each Session needs from the frame that admitted them", async () => {
     const h = harness({ withoutPush: true })
     await attachBoth(h)

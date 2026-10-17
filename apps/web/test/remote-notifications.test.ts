@@ -227,7 +227,7 @@ describe("remote notification delivery", () => {
       await test.runUntil(() => test.relay.requests.some((request) => request.operation === "session.get" && request.sessionID === "ses_far"))
       await raised(test, "approval-requested", "ses_far")
       expect(test.store.state().notifications.filter((entry) => entry.sessionID === "ses_far").map((entry) => [entry.sessionTitle, entry.body])).toEqual([
-        [undefined, "A session is waiting for you."], [undefined, "A session finished all its work."],
+        [undefined, "A session needs attention. Open it to review."], [undefined, "A session finished all its work."],
       ])
       expect(test.relay.requests.filter((request) => request.operation === "session.get" && request.sessionID === "ses_far")).toHaveLength(1)
     } finally { await test.stop() }

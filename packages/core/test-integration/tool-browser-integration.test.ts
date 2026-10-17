@@ -46,6 +46,7 @@ const recordingPermissionFixture = Layer.mock(Permission.Service, {
     }),
 })
 const recordingGuardrailFixture = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) =>
     Effect.sync(() => {
       guardrailChecks.push({ action: input.action, resource: input.resources[0] ?? "" })

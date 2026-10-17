@@ -1186,7 +1186,43 @@ describe("operation mapping", () => {
       sessions: registry,
       subscriptions,
     })
-    expect(valueOf(outcome)).toEqual({ running: [], attention: ["ses_failed", "ses_lost"], failed: ["ses_failed"] })
+    expect(valueOf(outcome)).toEqual({ running: [], attention: ["ses_failed", "ses_lost"], failed: ["ses_failed"], lost: ["ses_lost"] })
+  })
+
+  test("status reports a loss-only idle root in lost and never in failed, with no request to answer", async () => {
+    const sessions = [sessionInfo("ses_eval", { updated: 1 }), sessionInfo("ses_child", { updated: 2, parentID: "ses_eval" })]
+    const { local, registry, subscriptions } = await harness({ sessions, results: {
+      outstandingSessions: { data: [], running: [], failed: [], lost: ["ses_child"] },
+    } })
+    const outcome = await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })
+    expect(valueOf(outcome)).toEqual({ running: [], attention: ["ses_eval"], lost: ["ses_eval"] })
+  })
+
+  test("status gives a genuine request precedence over loss, loss precedence over failure, and keeps lost disjoint from failed", async () => {
+    const directory = process.cwd()
+    const sessions = ["asked", "asked_lost_failed", "lost_failed", "failed", "lost"].map((id, index) => sessionInfo(`ses_${id}`, { updated: index + 1, directory }))
+    const { local, registry, subscriptions } = await harness({ sessions, results: {
+      permissionRequests: async () => [{ id: "per_1", sessionID: "ses_asked" }, { id: "per_2", sessionID: "ses_asked_lost_failed" }],
+      formRequests: async () => [], guardrailRequestList: async () => [],
+      outstandingSessions: { data: [], running: ["ses_asked", "ses_asked_lost_failed"], failed: ["ses_asked_lost_failed", "ses_lost_failed", "ses_failed"], lost: ["ses_asked_lost_failed", "ses_lost_failed", "ses_lost"] },
+    } })
+    const outcome = valueOf(await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions })) as { attention: string[]; failed?: string[]; lost?: string[] }
+    expect(outcome.attention).toEqual(["ses_asked", "ses_asked_lost_failed", "ses_failed", "ses_lost", "ses_lost_failed"])
+    expect(outcome.lost).toEqual(["ses_lost", "ses_lost_failed"])
+    expect(outcome.failed).toEqual(["ses_failed"])
+    expect(outcome.lost!.filter((id) => outcome.failed!.includes(id))).toEqual([])
+    expect(outcome.lost!.every((id) => outcome.attention.includes(id))).toBe(true)
+  })
+
+  test("status omits lost when the only unresolved work is a request or a failure", async () => {
+    const directory = process.cwd()
+    const sessions = [sessionInfo("ses_asked", { updated: 1, directory }), sessionInfo("ses_failed", { updated: 2, directory })]
+    const { local, registry, subscriptions } = await harness({ sessions, results: {
+      permissionRequests: async () => [{ id: "per_1", sessionID: "ses_asked" }], formRequests: async () => [], guardrailRequestList: async () => [],
+      outstandingSessions: { data: [], running: ["ses_asked"], failed: ["ses_failed"], lost: ["ses_asked"] },
+    } })
+    const outcome = valueOf(await executeRemoteOperation({ request: request("session.status"), local, sessions: registry, subscriptions }))
+    expect(outcome).toEqual({ running: ["ses_asked"], attention: ["ses_asked", "ses_failed"], failed: ["ses_failed"] })
   })
 
   test("catalog and file finder read only the verified Location and project workspace", async () => {
@@ -1531,6 +1567,7 @@ describe("operation mapping", () => {
       ["session.compact", { id: "cmp_child" }],
       ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
       ["session.autonomy.set", { yolo: 2 }], ["session.autonomy.set", { sleep: true }],
+      ["session.autonomy.set", { autoAnswer: true }],
       ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
     expect(test.calls.some((call) => ["prompt", "command", "compact", "skill", "switchModel", "switchAgent", "autonomySet"].includes(call.method))).toBe(false)
@@ -1689,22 +1726,24 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({ method: "formCancel", args: ["ses_1", { directory: "/work" }, "frm_2"] })
 
     await executeRemoteOperation({
-      request: request("session.autonomy.set", { yolo: 3, maxNoProgress: 2 }),
+      request: request("session.autonomy.set", { yolo: 2, maxNoProgress: 2 }),
       sessions: registry,
       subscriptions,
       local,
     })
     expect(calls.at(-1)).toEqual({
       method: "autonomySet",
-      args: ["ses_1", { directory: "/work" }, { yolo: 3, maxNoProgress: 2 }],
+      args: ["ses_1", { directory: "/work" }, { yolo: 2, maxNoProgress: 2 }],
     })
 
-    for (const payload of [{ sleep: true }, { sleep: false }]) {
+    for (const payload of [{ sleep: true }, { sleep: false }, { autoAnswer: true }, { autoAnswer: false }]) {
       await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })
       expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, payload] })
     }
 
-    for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, sleep: true }]) {
+    for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, sleep: true },
+      { yolo: 3 }, { autoAnswer: "true" }, { autoAnswer: null }, { autoAnswer: true, yolo: 1 },
+      { autoAnswer: false, sleep: false }, { autoAnswer: true, maxNoProgress: 2 }]) {
       const before = calls.length
       expect(errorOf(await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })).code).toBe("invalid_message")
       expect(calls.length).toBe(before)
@@ -2606,7 +2645,7 @@ describe("session list paging", () => {
       expect(() => parseListQuery({ order: "active", cursor: Buffer.from(JSON.stringify({ id: "ses_wait_a", time: 2, direction: "next", ...key })).toString("base64url") })).toThrow()
   })
 
-  test("list status uses request and lost attention but excludes failure-only roots from waiting", async () => {
+  test("list status keeps loss-only roots out of Waiting and reports them as lost attention beside genuine requests", async () => {
     const directory = process.cwd()
     const sessions = ["waiting", "both", "lost", "failed", "running", "idle"].map((id, index) => sessionInfo(`ses_${id}`, { updated: index, directory }))
     const h = await harness({ sessions, results: {
@@ -2616,9 +2655,40 @@ describe("session list paging", () => {
     const ids = async (status: "waiting" | "running" | "idle") => recordOf(valueOf(await executeRemoteOperation({
       request: request("session.list", { status, order: "active", parentID: null }), local: h.local, sessions: h.registry, subscriptions: h.subscriptions,
     }))).data
-    expect(await ids("waiting")).toEqual([sessions[2], sessions[1], sessions[0]])
+    expect(await ids("waiting")).toEqual([sessions[1], sessions[0]])
     expect(await ids("running")).toEqual([sessions[4]])
-    expect(await ids("idle")).toEqual([sessions[5], sessions[3]])
+    expect(await ids("idle")).toEqual([sessions[5], sessions[3], sessions[2]])
+    const all = recordOf(valueOf(await executeRemoteOperation({
+      request: request("session.list", { order: "active", parentID: null }), local: h.local, sessions: h.registry, subscriptions: h.subscriptions,
+    })))
+    expect(all.data).toEqual([sessions[1], sessions[0], sessions[4], sessions[5], sessions[3], sessions[2]])
+    expect(all.status).toEqual({ running: ["ses_both", "ses_waiting", "ses_running"], attention: ["ses_both", "ses_waiting", "ses_lost"], lost: ["ses_lost"] })
+  })
+
+  test("listPage orders and filters Waiting by genuine requests only and snapshots loss-only roots in status.lost", () => {
+    const sessions = [sessionInfo("ses_ask", { updated: 1 }), sessionInfo("ses_lost", { updated: 9 }), sessionInfo("ses_idle", { updated: 5 }),
+      sessionInfo("ses_child", { updated: 20, parentID: "ses_lost" }), sessionInfo("ses_ask_lost", { updated: 2 })]
+    const running = new Set<string>()
+    const waiting = new Set(["ses_ask", "ses_ask_lost"])
+    const lost = new Set(["ses_lost", "ses_ask_lost", "ses_child"])
+    const page = (status?: "waiting" | "running" | "idle") => listPage(sessions, parseListQuery({ order: "active", parentID: null, ...(status === undefined ? {} : { status }) }), running, waiting, lost)
+    expect(page("waiting").data.map((row) => row.id)).toEqual(["ses_ask_lost", "ses_ask"])
+    expect(page("idle").data.map((row) => row.id)).toEqual(["ses_lost", "ses_idle"])
+    expect(page().data.map((row) => row.id)).toEqual(["ses_ask_lost", "ses_ask", "ses_lost", "ses_idle"])
+    expect(page()).toHaveProperty("status", { running: [], attention: ["ses_ask_lost", "ses_ask", "ses_lost"], lost: ["ses_lost"] })
+    expect(page("waiting")).toHaveProperty("status", { running: [], attention: ["ses_ask_lost", "ses_ask"] })
+    expect(listPage(sessions, parseListQuery({ order: "active", parentID: null }), running, waiting)).toHaveProperty("status", { running: [], attention: ["ses_ask_lost", "ses_ask"] })
+  })
+
+  test("a loss clears from list status once the owed notice is gone, without moving any root", async () => {
+    const sessions = [sessionInfo("ses_lost", { updated: 1, directory: process.cwd() }), sessionInfo("ses_idle", { updated: 2, directory: process.cwd() })]
+    let work = { data: [] as string[], running: [] as string[], failed: [] as string[], lost: ["ses_lost"] }
+    const h = await harness({ sessions, results: { outstandingSessions: () => work } })
+    const list = async () => recordOf(valueOf(await executeRemoteOperation({ request: request("session.list", { order: "active", parentID: null, status: "idle" }),
+      local: h.local, sessions: h.registry, subscriptions: h.subscriptions, cache: createOperationCache(() => 0) })))
+    expect((await list()).status).toEqual({ running: [], attention: ["ses_lost"], lost: ["ses_lost"] })
+    work = { ...work, lost: [] }
+    expect((await list()).status).toEqual({ running: [], attention: [] })
   })
 
   test("live background shell owners make their family running; settled notices remain outstanding only", async () => {

@@ -1,4 +1,4 @@
-import type { LocationRef, SessionAutonomyState } from "@ycoding-ai/client"
+import type { LocationRef, SessionAutonomyView } from "@ycoding-ai/client"
 import type { TuiAttentionNotifyInput, TuiAttentionSoundName } from "../../plugin/host-api"
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { onTuiAttentionAvailable } from "../../attention"
@@ -22,7 +22,7 @@ type RequestEpisode = {
 }
 type TerminalEpisode = {
   readonly sessionID: string
-  readonly initial: Promise<SessionAutonomyState | undefined>
+  readonly initial: Promise<SessionAutonomyView | undefined>
   state: "active" | "waiting" | "terminal"
   readonly completionCalls: Set<string>
   completed: boolean
@@ -205,7 +205,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         if (terminals.get(episode.sessionID) === episode) terminals.delete(episode.sessionID)
       }
 
-      function goalNotification(state: SessionAutonomyState): Pick<TuiAttentionNotifyInput, "message" | "sound"> {
+      function goalNotification(state: SessionAutonomyView): Pick<TuiAttentionNotifyInput, "message" | "sound"> {
         const status = state.goal?.status
         if (status === "completed") return { message: "Session done", sound: { name: "done", when: "always" } }
         if (status === "stopped") return { message: "Goal stopped", sound: { name: "error", when: "always" } }

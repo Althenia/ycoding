@@ -130,7 +130,7 @@ const locationFor = (directory: string) => Location.Ref.make({ directory: Absolu
 const tmpLocation = Effect.gen(function* () {
   const directory = yield* Effect.promise(() => tmpdir("ycoding-sleep-"))
   yield* Effect.addFinalizer(() => Effect.promise(() => directory[Symbol.asyncDispose]()))
-  yield* Effect.promise(() => Bun.write(`${directory.path}/ycoding.json`, JSON.stringify({ auto_answer: true, guardrails: { decide_reviews: true } })))
+  yield* Effect.promise(() => Bun.write(`${directory.path}/ycoding.json`, JSON.stringify({ guardrails: { decide_reviews: true } })))
   return locationFor(directory.path)
 })
 
@@ -259,6 +259,7 @@ describe("Session sleep", () => {
       )
       yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
       yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+      yield* sessions.autonomy.set({ sessionID: child.id, autoAnswer: true })
       const orchestration = yield* SessionOrchestration.Service
       decisionConfidence = 0.9
       expect(

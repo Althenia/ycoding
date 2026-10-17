@@ -146,6 +146,7 @@ const permissions = Layer.mock(Permission.Service, { assert: (input) => Effect.s
   if (typeof input.metadata?.operationDigest === "string") state.permissionDigests.push(input.metadata.operationDigest)
 }) })
 const guardrails = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) => Effect.sync(() => {
     expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
     expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)

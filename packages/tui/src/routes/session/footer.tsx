@@ -7,12 +7,12 @@ import { KeepAwakeIndicator, useKeepAwake } from "../../keep-awake"
 import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 
 export function Footer(props: {
   branch?: string
   sessionID: string
-  autonomy: SessionAutonomyState
+  autonomy?: SessionAutonomyView
   subagent?: boolean
 }) {
   const { theme } = useTheme()

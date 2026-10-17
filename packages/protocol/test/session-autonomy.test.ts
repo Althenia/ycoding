@@ -48,10 +48,7 @@ test("session autonomy state maps legacy boolean yolo", () => {
     mode: "normal",
     yolo: 1,
   })
-  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: 3 })).toEqual({
-    mode: "normal",
-    yolo: 3,
-  })
+  expect(() => Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: 3 })).toThrow()
 })
 
 test("session autonomy set accepts modes and rejects empty goals", () => {
@@ -60,7 +57,7 @@ test("session autonomy set accepts modes and rejects empty goals", () => {
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: false })).toEqual({ yolo: 0 })
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 0 })).toEqual({ yolo: 0 })
   expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 1 })).toEqual({ yolo: 1 })
-  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 3 })).toEqual({ yolo: 3 })
+  expect(() => Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: 3 })).toThrow()
   expect(
     Schema.decodeUnknownSync(SessionAutonomySet)({
       goal: "Finish the migration",
@@ -100,4 +97,41 @@ test("family autonomy accepts explicit switches without accepting empty or inval
     sleep: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", yolo: 0, sleep: {} })
   for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: true }])
     expect(() => decode(value)).toThrow()
+})
+
+test("auto-answer is an independent Session switch", () => {
+  const decode = Schema.decodeUnknownSync(SessionAutonomySet)
+  for (const autoAnswer of [false, true]) {
+    expect(decode({ autoAnswer })).toEqual({ autoAnswer })
+    for (const yolo of [0, 1, 2] as const) {
+      expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo, autoAnswer }))
+        .toEqual({ mode: "normal", yolo, autoAnswer })
+    }
+  }
+  for (const input of [{ autoAnswer: "true" }, { autoAnswer: 1 }, { autoAnswer: null },
+    { autoAnswer: true, sleep: true }, { autoAnswer: true, goal: "Run checks" }, { autoAnswer: true, yolo: 2 }]) {
+    expect(() => decode(input)).toThrow()
+  }
+})
+
+test("autonomy responses publish effective policy separately from stored state", () => {
+  const document = OpenApi.fromApi(HttpApi.make("autonomy-policy-test").add(makeSessionGroup(SessionLocationMiddleware)))
+  expect(document.components?.schemas?.SessionAutonomyEffective).toMatchObject({
+    type: "object",
+    required: ["yolo", "asleep", "guardrailsEnabled", "ordinaryReviewsAuto", "modelReviews", "hardModelReviews"],
+    properties: {
+      asleep: { type: "boolean" },
+      guardrailsEnabled: { type: "boolean" },
+      ordinaryReviewsAuto: { type: "boolean" },
+      modelReviews: { type: "boolean" },
+      hardModelReviews: { type: "boolean" },
+    },
+  })
+  expect(document.components?.schemas?.SessionAutonomyView).toMatchObject({
+    type: "object",
+    required: ["mode", "yolo", "effective"],
+    properties: {
+      effective: { $ref: "#/components/schemas/SessionAutonomyEffective" },
+    },
+  })
 })

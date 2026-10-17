@@ -164,11 +164,13 @@ export function RailSection(
 function fitSummary(value: string, width: number) {
   if (!value) return ""
   const parts = value.split(" · ")
-  for (let count = parts.length; count >= 0; count--) {
+  for (let count = parts.length; count >= 1; count--) {
     const summary = [...parts.slice(0, count), ...(count < parts.length ? [`+${parts.length - count}`] : [])].join(" · ")
     if (stringWidth(summary) <= width) return summary
   }
-  return ""
+  if (parts[0] && stringWidth(parts[0]) <= width) return parts[0]
+  const omitted = `+${parts.length}`
+  return stringWidth(omitted) <= width ? omitted : ""
 }
 
 export function RailSubheading(props: ParentProps) {

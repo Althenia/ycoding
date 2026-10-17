@@ -180,7 +180,6 @@ export const SessionAutonomyYoloLevel = Schema.Union([
   Schema.Literal(0),
   Schema.Literal(1),
   Schema.Literal(2),
-  Schema.Literal(3),
 ]).annotate({
   identifier: "SessionAutonomyYoloLevel",
 })
@@ -188,11 +187,11 @@ export const SessionAutonomyYolo = Schema.Union([SessionAutonomyYoloLevel, Schem
   .pipe(
     Schema.decodeTo(SessionAutonomyYoloLevel, {
       decode: SchemaGetter.transform((value: unknown) => {
-        if (typeof value === "boolean") return (value ? 2 : 0) as 0 | 1 | 2 | 3
-        if (value === 0 || value === 1 || value === 2 || value === 3) return value as 0 | 1 | 2 | 3
+        if (typeof value === "boolean") return value ? 2 : 0
+        if (value === 0 || value === 1 || value === 2) return value
         throw new Error(`Invalid yolo level: ${String(value)}`)
       }),
-      encode: SchemaGetter.transform((value: 0 | 1 | 2 | 3) => value),
+      encode: SchemaGetter.transform((value: 0 | 1 | 2) => value),
     }),
   )
   .annotate({ identifier: "SessionAutonomyYolo" })
@@ -203,20 +202,45 @@ export const SessionAutonomySleep = Schema.Struct({}).pipe(Schema.decodeTo(Schem
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
   yolo: SessionAutonomyYolo,
+  autoAnswer: Schema.Boolean.pipe(Schema.optional),
   goal: SessionAutonomyGoal.pipe(Schema.optional),
   sleep: SessionAutonomySleep.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
+export const SessionAutonomyEffective = Schema.Struct({
+  yolo: SessionAutonomyYoloLevel,
+  asleep: Schema.Boolean,
+  guardrailsEnabled: Schema.Boolean,
+  ordinaryReviewsAuto: Schema.Boolean,
+  modelReviews: Schema.Boolean,
+  hardModelReviews: Schema.Boolean,
+}).annotate({ identifier: "SessionAutonomyEffective" })
+export const SessionAutonomyView = Schema.Struct({
+  ...SessionAutonomyState.fields,
+  effective: SessionAutonomyEffective,
+}).annotate({ identifier: "SessionAutonomyView" })
 export const SessionAutonomySet = Schema.Union([
   Schema.Struct({
     yolo: SessionAutonomyYolo.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
     goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Literal(true), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
-  Schema.Struct({ yolo: SessionAutonomyYolo, goal: Schema.Never.pipe(Schema.optional) }),
+  Schema.Struct({
+    yolo: SessionAutonomyYolo,
+    goal: Schema.Never.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
+  }),
   Schema.Struct({
     sleep: Schema.Boolean,
     goal: Schema.Never.pipe(Schema.optional),
     yolo: Schema.Never.pipe(Schema.optional),
+    autoAnswer: Schema.Never.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    autoAnswer: Schema.Boolean,
+    goal: Schema.Never.pipe(Schema.optional),
+    yolo: Schema.Never.pipe(Schema.optional),
+    sleep: Schema.Never.pipe(Schema.optional),
   }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 
@@ -442,7 +466,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.autonomy.get", "/api/session/:sessionID/autonomy", {
         params: { sessionID: Session.ID },
-        success: Schema.Struct({ data: SessionAutonomyState }),
+        success: Schema.Struct({ data: SessionAutonomyView }),
         error: SessionNotFoundError,
       })
         .middleware(sessionLocationMiddleware)
@@ -450,7 +474,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           OpenApi.annotations({
             identifier: "session.autonomy.get",
             summary: "Get session autonomy",
-            description: "Retrieve the durable Normal, YOLO, or Goal execution mode for a session.",
+            description: "Retrieve Session approval, auto-answer, goal and sleep state with effective approval and review policy.",
           }),
         ),
     )
@@ -458,7 +482,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.put("session.autonomy.set", "/api/session/:sessionID/autonomy", {
         params: { sessionID: Session.ID },
         payload: SessionAutonomySet,
-        success: Schema.Struct({ data: SessionAutonomyState }),
+        success: Schema.Struct({ data: SessionAutonomyView }),
         error: [SessionNotFoundError, InvalidRequestError, ConflictError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)

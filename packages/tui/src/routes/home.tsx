@@ -22,7 +22,8 @@ import { useToast } from "../ui/toast"
 import { DialogChromeConnection } from "../component/dialog-session-browser"
 import { errorMessage } from "../util/error"
 import { modelDaybreak } from "../util/session-daybreak"
-import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, SessionAutonomyView } from "@ycoding-ai/client"
+import { localAutonomyView, type YoloLevel } from "../util/session-autonomy"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -64,7 +65,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
   return <Show when={!props.overlay}>{props.children}</Show>
 }
 
-function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
+function LandingFooter(props: { autonomy?: SessionAutonomyView }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const shortcut = Keymap.useShortcut("command.palette.show")
@@ -91,7 +92,7 @@ function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
     >
       <box flexDirection="row" gap={3} flexShrink={0}>
         <text fg={theme.text.subdued}>main</text>
-        <ModeChips autonomy={props.autonomy} keys={["goal", "yolo"]} />
+        <ModeChips autonomy={props.autonomy} keys={["goal", "yolo", "answers"]} />
         <text fg={theme.text.subdued}>subagents 0</text>
       </box>
       <box flexDirection="row" gap={3} flexShrink={0} alignSelf={dimensions().width < 120 ? "flex-end" : undefined}>
@@ -121,7 +122,8 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
   const client = useClient()
   const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
-  const [landingYolo, setLandingYolo] = createSignal<0 | 1 | 2 | 3>(0)
+  const [landingYolo, setLandingYolo] = createSignal<YoloLevel>(0)
+  const [landingAutoAnswer, setLandingAutoAnswer] = createSignal(false)
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
   const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
   Keymap.createLayer(() => ({
@@ -141,7 +143,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
       },
     }],
   }))
-  const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
+  const landingAutonomy = createMemo(() => localAutonomyView({ mode: "normal", yolo: landingYolo(), autoAnswer: landingAutoAnswer(), goal: landingGoal() ? { text: landingGoal()!, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }))
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
@@ -247,6 +249,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
               landingDaybreak={landingDaybreak()}
               onLandingDaybreakChange={setLandingDaybreak}
               onLandingYoloToggle={(next) => setLandingYolo(next)}
+              onLandingAutoAnswerToggle={(next) => setLandingAutoAnswer(next)}
               onLandingGoalToggle={(next) => setLandingGoal(next ?? undefined)}
               onOverlayChange={setPromptOverlay}
               disabled={forms().length > 0}

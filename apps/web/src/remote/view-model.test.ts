@@ -71,6 +71,22 @@ test("Session list refresh notices identify unsupported anchor fields without mi
   expect(sessionListRefreshNotice({ status: "failed", error: { code: "invalid_message", message: "Invalid cursor" } })).toBe("Session list refresh: Invalid cursor")
 })
 
+test("carousel status shows lost background results as a loss warning that waiting still outranks", () => {
+  expect(carouselSessionStatus({ lost: true })).toBe("Background result lost")
+  expect(carouselSessionStatus({ lost: true, running: true })).toBe("Background result lost")
+  expect(carouselSessionStatus({ attention: true, lost: true })).toBe("Background result lost")
+  expect(carouselSessionStatus({ attention: true })).toBe("Waiting for you")
+  expect(sessionActivityGroup({ attention: true, lost: true })).toBe("idle")
+  expect(sessionActivityGroup({ attention: true, lost: true, running: true })).toBe("running")
+})
+
+test("only attention that is neither failed nor lost counts as a waiting Session", () => {
+  const status = (attention: string[], failed: string[], lost: string[]) => ({ attention: new Set(attention), failed: new Set(failed), lost: new Set(lost) })
+  expect(hasWaitingSession(status(["ses_a"], [], ["ses_a"]))).toBe(false)
+  expect(hasWaitingSession(status(["ses_a", "ses_b"], ["ses_a"], ["ses_b"]))).toBe(false)
+  expect(hasWaitingSession(status(["ses_a", "ses_b"], [], ["ses_b"]))).toBe(true)
+})
+
 test("prompt receipts distinguish sending from failed and unknown delivery", () => {
   expect(promptReceipt("pending", "steer", { state: "sending" }).label).toBe("Sending prompt")
   expect(promptReceipt("pending", "queue", { state: "unknown" }).label).toBe("Outcome unknown")
@@ -229,49 +245,48 @@ describe("sessionStateChips", () => {
     title: "Migrate the storage layer",
     status: "idle",
     autonomy: "normal",
-    guardrailsEnforced: true,
     ...overrides,
   })
 
-  test("always reports mode and guardrail state when it is known", () => {
+  test("always reports the level name when autonomy is known and never invents a guardrail chip", () => {
     const labels = sessionStateChips(session({})).map((chip) => chip.label)
-    expect(labels).toContain("Manual")
-    expect(labels).toContain("Guardrails enforced")
+    expect(labels).toContain("Ask first")
     expect(labels).not.toContain("goal")
+    expect(labels.some((label) => label.startsWith("Guardrails"))).toBe(false)
   })
 
   test("uses the TUI autonomy vocabulary in heading order", () => {
-    expect(sessionStateChips(session({ autonomy: "goal", yoloLevel: 2, goalActive: true, asleep: true, guardrailsEnforced: undefined })))
-      .toEqual([{ label: "YOLO 2", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }])
-    expect(sessionStateChips(session({ asleep: true, guardrailsEnforced: undefined })).map((chip) => chip.label)).toEqual(["Manual", "asleep"])
-    expect(sessionStateChips(session({ autonomy: undefined, guardrailsEnforced: undefined }))).toEqual([])
+    expect(sessionStateChips(session({ autonomy: "goal", yoloLevel: 2, goalActive: true, asleep: true, autoAnswer: true })))
+      .toEqual([{ label: "Tools + reviews", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }, { label: "auto-answer", tone: "neutral" }])
+    expect(sessionStateChips(session({ asleep: true })).map((chip) => chip.label)).toEqual(["Ask first", "asleep"])
+    expect(sessionStateChips(session({ autonomy: undefined }))).toEqual([])
   })
 
   test("keeps session state chips separate from agent and model metadata", () => {
     const labels = sessionStateChips(
-      session({ autonomy: "yolo", yoloLevel: 3, agent: "god", model: "openai/gpt-5", status: "running" }),
+      session({ autonomy: "yolo", yoloLevel: 1, agent: "god", model: "openai/gpt-5", status: "running" }),
     ).map((chip) => chip.label)
-    expect(labels).toContain("YOLO 3")
+    expect(labels).toContain("Allow tools")
     expect(labels).not.toContain("god")
     expect(labels).not.toContain("openai/gpt-5")
     expect(labels).toContain("Running")
     expect(sessionStateChips(session({ autonomy: "goal" })).map((chip) => chip.label)).toContain("goal")
   })
 
-  test("marks automatic guardrails and blocked sessions as attention", () => {
-    const chips = sessionStateChips(session({ guardrailsEnforced: false, status: "blocked" }))
-    expect(chips.find((chip) => chip.label === "Guardrails auto")?.tone).toBe("attention")
+  test("marks blocked sessions as attention without a guardrail chip", () => {
+    const chips = sessionStateChips(session({ status: "blocked" }))
     expect(chips.find((chip) => chip.label === "Waiting for approval")?.tone).toBe("attention")
+    expect(chips.some((chip) => chip.label.startsWith("Guardrails"))).toBe(false)
   })
 
   test("leads a failed Session with a neutral Failed chip", () => {
     const chips = sessionStateChips(session({ status: "failed", autonomy: "goal" }))
     expect(chips[0]).toEqual({ label: "Failed", tone: "neutral" })
-    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Manual", "goal", "Guardrails enforced"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Ask first", "goal"])
   })
 
   test("only attention roots outside the failed set make the Sessions navigation wait", () => {
-    const status = (attention: readonly string[], failed: readonly string[]) => ({ attention: new Set(attention), failed: new Set(failed) })
+    const status = (attention: readonly string[], failed: readonly string[]) => ({ attention: new Set(attention), failed: new Set(failed), lost: new Set<string>() })
     expect(hasWaitingSession(undefined)).toBe(false)
     expect(hasWaitingSession(status([], []))).toBe(false)
     expect(hasWaitingSession(status(["ses_a", "ses_b"], ["ses_a", "ses_b"]))).toBe(false)

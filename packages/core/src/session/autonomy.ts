@@ -29,12 +29,21 @@ export const Goal = Schema.Struct({
 })
 export type Goal = typeof Goal.Type
 
-export const YoloLevel = Schema.Literals([0, 1, 2, 3])
+export const YoloLevel = Schema.Literals([0, 1, 2])
 export type YoloLevel = typeof YoloLevel.Type
 
 export const YOLO_LEVEL_OFF = 0 as const
 export const YOLO_LEVEL_APPROVALS = 1 as const
-export const YOLO_LEVEL_ANSWERS = 2 as const
+export const YOLO_LEVEL_GUARDRAILS = 2 as const
+
+export interface Effective {
+  readonly yolo: YoloLevel
+  readonly asleep: boolean
+  readonly ordinaryReviewsAuto: boolean
+  readonly guardrailsEnabled: boolean
+  readonly modelReviews: boolean
+  readonly hardModelReviews: boolean
+}
 
 export const Sleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
   decode: SchemaGetter.transform(() => ({})),
@@ -47,6 +56,7 @@ export const State = Schema.Struct({
   yolo: YoloLevel,
   goal: Goal.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
+  autoAnswer: Schema.Boolean.pipe(Schema.optional),
 })
 export type State = typeof State.Type
 
@@ -58,6 +68,7 @@ const LegacyState = Schema.Struct({
   yolo: Schema.optional(Schema.Unknown),
   goal: Goal.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
+  autoAnswer: Schema.Boolean.pipe(Schema.optional),
 })
 const decodeLegacy = Schema.decodeUnknownOption(LegacyState)
 
@@ -69,9 +80,18 @@ export function normalizeYolo(input: unknown): number {
   if (typeof input === "boolean") return input ? 2 : 0
   if (typeof input === "number" && Number.isFinite(input)) {
     const truncated = Math.trunc(input)
-    if (truncated >= 0 && truncated <= 3) return truncated
+    if (truncated >= 0 && truncated <= 2) return truncated
   }
   return 0
+}
+
+function requireYoloLevel(input: number | boolean): YoloLevel {
+  if (typeof input === "boolean") return input ? 2 : 0
+  if (Number.isFinite(input)) {
+    const truncated = Math.trunc(input)
+    if (truncated >= 0 && truncated <= 2) return truncated as YoloLevel
+  }
+  throw new Error(`Invalid yolo level: ${String(input)}`)
 }
 
 export function yoloLevel(state: State): number {
@@ -79,15 +99,15 @@ export function yoloLevel(state: State): number {
 }
 
 export function canAutoAnswer(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_ANSWERS || state.goal?.status === "active"
+  return state.autoAnswer === true
 }
 
 export function canAutoPermission(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS || state.goal?.status === "active"
+  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS
 }
 
 export function canAutoGuardrail(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS
+  return yoloLevel(state) >= YOLO_LEVEL_GUARDRAILS
 }
 
 export function isAsleep(state: State): boolean {
@@ -141,6 +161,7 @@ export interface Interface {
     rawText?: string
     maxNoProgress?: number
     sleep?: boolean
+    autoAnswer?: boolean
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly report: (input: { sessionID: SessionSchema.ID }) => Effect.Effect<State, NotFoundError>
@@ -167,6 +188,7 @@ export const read = (value: unknown): State => {
     const level = v.yolo === undefined ? 0 : normalizeYolo(v.yolo)
     const extras = {
       ...(v.sleep ? { sleep: v.sleep } : {}),
+      ...(v.autoAnswer === undefined ? {} : { autoAnswer: v.autoAnswer }),
     }
     if (v.mode === "yolo")
       return { mode: "normal", yolo: 2 as YoloLevel, ...(v.goal ? { goal: v.goal } : {}), ...extras }
@@ -175,19 +197,22 @@ export const read = (value: unknown): State => {
     return { mode: "normal", yolo: level as YoloLevel, ...(v.goal ? { goal: v.goal } : {}), ...extras }
   }
   if (value && typeof value === "object" && "yolo" in (value as Record<string, unknown>)) {
-    const maybe = value as { yolo?: unknown; goal?: unknown; mode?: unknown }
+    const maybe = value as { yolo?: unknown; goal?: unknown; mode?: unknown; autoAnswer?: unknown }
     const level = normalizeYolo(maybe.yolo)
+    const flag = typeof maybe.autoAnswer === "boolean" ? { autoAnswer: maybe.autoAnswer } : {}
     if (maybe.goal && typeof (maybe.goal as Goal).text === "string") {
       return {
         mode: "normal",
         yolo: level as YoloLevel,
         goal: maybe.goal as Goal,
+        ...flag,
       }
     }
     return {
       mode: "normal",
       yolo: level as YoloLevel,
       ...(maybe.goal && typeof (maybe.goal as Goal).text === "string" ? { goal: maybe.goal as Goal } : {}),
+      ...flag,
     }
   }
   if (value && typeof value === "object" && "mode" in (value as Record<string, unknown>)) {
@@ -331,13 +356,13 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const yoloLevelEffect: Interface["yoloLevel"] = (sessionID) => effectiveYoloLevel(sessionID)
 
   const canAutoAnswerEffect: Interface["canAutoAnswer"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_ANSWERS || v.goalActive))
+    load(sessionID).pipe(Effect.map(canAutoAnswer))
 
   const canAutoPermissionEffect: Interface["canAutoPermission"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS || v.goalActive))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS))
 
   const canAutoGuardrailEffect: Interface["canAutoGuardrail"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_GUARDRAILS))
 
   const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
 
@@ -346,13 +371,14 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       Effect.flatMap((v) => (v.yolo > 0 || v.goalActive ? Effect.succeed(true) : isAsleepEffect(sessionID))),
     )
 
-  const setYolo: Interface["setYolo"] = ({ sessionID, yolo }) => {
-    const level = normalizeYolo(yolo) as YoloLevel
-    return apply(sessionID, (state) => {
-      if (state.yolo === level) return undefined
-      return { ...state, mode: "normal", yolo: level }
+  const setYolo: Interface["setYolo"] = ({ sessionID, yolo }) =>
+    Effect.suspend(() => {
+      const level = requireYoloLevel(yolo)
+      return apply(sessionID, (state) => {
+        if (state.yolo === level) return undefined
+        return { ...state, mode: "normal", yolo: level }
+      })
     })
-  }
 
   const setMode: Interface["setMode"] = ({ sessionID, mode }) => setYolo({ sessionID, yolo: mode === "yolo" })
 
@@ -378,7 +404,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       sessionID,
       (state) => ({
         ...goalState(state, text, rawText, maxNoProgress),
-        yolo: yolo === undefined ? state.yolo : (normalizeYolo(yolo) as YoloLevel),
+        yolo: yolo === undefined ? state.yolo : requireYoloLevel(yolo),
       }),
       expectedSequence,
     )
@@ -391,7 +417,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         return {
           ...state,
           mode: "normal",
-          yolo: yolo === undefined ? state.yolo : (normalizeYolo(yolo) as YoloLevel),
+          yolo: yolo === undefined ? state.yolo : requireYoloLevel(yolo),
           goal: { ...state.goal, status: "active" as const },
         }
       },
@@ -410,7 +436,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       }
     })
 
-  const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress, sleep }) =>
+  const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress, sleep, autoAnswer }) =>
     apply(sessionID, (state) => {
       let next: State = { ...state, mode: "normal" }
       let changed = false
@@ -425,11 +451,15 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         }
       }
       if (yolo !== undefined) {
-        const level = normalizeYolo(yolo) as YoloLevel
+        const level = requireYoloLevel(yolo)
         if (next.yolo !== level) {
           next = { ...next, yolo: level }
           changed = true
         }
+      }
+      if (autoAnswer !== undefined && next.autoAnswer !== autoAnswer) {
+        next = { ...next, autoAnswer }
+        changed = true
       }
       if (goal !== undefined) {
         if (goal === null) {

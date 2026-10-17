@@ -181,7 +181,8 @@ describe("structured decision documentation", () => {
     expect(text).toContain("during /sleep")
     expect(text).not.toContain("/guardrail-decision")
     expect(text).toContain("confidence 0.8 or higher")
-    expect(text).toContain("auto_answer: true (default false)")
+    expect(text).toContain("auto-answer on (default off)")
+    expect(text).not.toContain("auto_answer")
     expect(text).toContain("guardrails.decide_reviews: true (default false)")
     expect(text).not.toContain("automatic fallback")
     expect(text).toContain("permission ceilings")
@@ -222,7 +223,8 @@ describe("structured decision documentation", () => {
     expect(guardrails).toContain("While awake")
     expect(guardrails).not.toContain("guardrail-decision")
     expect(guardrails).toContain("case-sensitive")
-    expect(guardrails).toContain("YOLO 1–3")
+    expect(guardrails).toContain("YOLO 2")
+    expect(guardrails).not.toContain("YOLO 3")
     expect(guardrails).toContain("human handoff")
     expect(guardrails).toContain("decision model")
     expect(guardrails).toContain("one graded call")
@@ -247,18 +249,20 @@ describe("structured decision documentation", () => {
     expect(master?.[3]).toContain("review box while asleep")
     const options = findDocPage("configuration")?.sections.flatMap((section) => section.blocks) ?? []
     const answer = options.flatMap((block) => (block.kind === "table" ? block.rows : [])).find((row) => row[0] === "`auto_answer`")
-    expect(answer?.slice(0, 3)).toEqual(["`auto_answer`", "boolean", "`false`"])
+    expect(answer).toBeUndefined()
   })
 
-  test("current usage docs call level zero Manual and distinguish hard reviews from YOLO automation", () => {
+  test("current usage docs name levels Ask first, Allow tools, and Tools + reviews and distinguish hard reviews from YOLO automation", () => {
     const remote = findDocPage("usage/remote")
     const control = remote?.sections.flatMap((section) => section.blocks).find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
-    expect(control?.kind === "table" ? control.rows[0]?.[0] : undefined).toBe("Manual")
+    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual(["Ask first", "Allow tools", "Tools + reviews", "Goal"])
     for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/yolo", "configuration/guardrails", "configuration/tools"]) {
       const text = JSON.stringify(findDocPage(slug)?.sections)
       expect(text).not.toMatch(/hard reviews (?:always |still )?require a (?:fresh )?human/i)
       expect(text).not.toContain("unless /sleep delegates")
       expect(text).not.toContain("when /sleep is on")
+      expect(text).not.toContain("YOLO 3")
+      expect(text).not.toContain("auto_answer")
     }
   })
 })
@@ -291,7 +295,7 @@ describe("page structure", () => {
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
     expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[1]) : [])).toEqual([
       "Get notified after the agent declares its requested work finished and verified, its final reply settles, and no input, subagent, shell or goal work remains pending. An ordinary reply or idle status alone does not trigger an alert. Reconnecting does not repeat an accepted completion.",
-      "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
+      "Get notified when a Session needs your decision, a guardrail blocks an action, a run fails, or a background-work result is lost. Lost results are identified separately from requests for your input. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
       "Get notified when a paired machine stays disconnected from the relay for 40 seconds, so a routine reconnect raises no alert. An open workspace alerts for its selected machine, and Push to this device alerts a closed browser or app; each browser shows one System alert per outage. A browser-only relay disconnect does not establish that the machine is offline.",
     ])
     expect(text).toContain("System switch also decides whether Push to this device")

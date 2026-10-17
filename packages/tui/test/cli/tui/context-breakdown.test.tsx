@@ -6,6 +6,7 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { ContextBreakdownContent, contextBarCells } from "../../../src/routes/session/context-breakdown"
 import { Footer } from "../../../src/routes/session/footer"
+import { localAutonomyView } from "../../../src/util/session-autonomy"
 
 const session = {
   title: "Demo session", model: { providerID: "openai", id: "gpt" },
@@ -127,7 +128,7 @@ test("palette command opens the context route for the current session", async ()
     palette = Keymap.useCommands()
     dispatch = (id) => keymap.dispatch(id)
     const route = useRoute()
-    return <box flexDirection="column"><Footer sessionID="ses_context" autonomy={{ mode: "normal", yolo: false }} />
+    return <box flexDirection="column"><Footer sessionID="ses_context" autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
       <text>{route.data.type === "session-context" ? `${route.data.type}:${route.data.sessionID}` : route.data.type}</text>
     </box>
   }

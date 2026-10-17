@@ -357,18 +357,15 @@ describe("Config", () => {
     }),
   )
 
-  it.effect("decodes automation opt-ins as omitted-by-default booleans and rejects other types", () =>
+  it.effect("decodes guardrail review opt-ins as omitted-by-default booleans and rejects other types", () =>
     Effect.sync(() => {
       const decode = Schema.decodeUnknownSync(Config.Info)
-      expect(decode({}).auto_answer).toBeUndefined()
       expect(decode({ guardrails: {} }).guardrails?.decide_reviews).toBeUndefined()
       expect(decode({ guardrails: {} }).guardrails?.decide_hard_reviews).toBeUndefined()
-      expect(decode({ auto_answer: true }).auto_answer).toBe(true)
-      expect(decode({ auto_answer: false }).auto_answer).toBe(false)
+      expect(decode({ auto_answer: true })).not.toHaveProperty("auto_answer")
       expect(decode({ guardrails: { decide_reviews: true } }).guardrails?.decide_reviews).toBe(true)
       expect(decode({ guardrails: { decide_reviews: false } }).guardrails?.decide_reviews).toBe(false)
       for (const invalid of ["true", 1, null, {}]) {
-        expect(() => decode({ auto_answer: invalid })).toThrow()
         expect(() => decode({ guardrails: { decide_reviews: invalid } })).toThrow()
       }
     }),

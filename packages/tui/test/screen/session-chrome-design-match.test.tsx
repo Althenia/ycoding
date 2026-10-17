@@ -124,12 +124,12 @@ function route(url: URL) {
 async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
   const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: (screen) => {
     const frame = screen.captureCharFrame()
-    return frame.includes("Message YCoding…") && frame.includes("Manual · ready")
+    return frame.includes("Message YCoding…") && frame.includes("Ask first · ready")
   } })
   try {
     const lines = screen.lines()
     const ruleRow = lines.findIndex((line) => line.includes("─") && line.indexOf("─") < viewport.width / 2)
-    const footerRow = lines.findIndex((line) => line.includes("goal off") && line.includes("Manual"))
+    const footerRow = lines.findIndex((line) => line.includes("goal off") && line.includes("Ask first"))
     // A resting chat composer occupies only its rule and input row.
     // Its surrounding surface is six rows tall, matching the landing composer before the shared footer row.
     expect(ruleRow).toBe(58)
@@ -152,7 +152,7 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
 async function expectComposerSurface(viewport: typeof DESIGN_VIEWPORT) {
   const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: (screen) => {
     const frame = screen.captureCharFrame()
-    return frame.includes("Message YCoding…") && frame.includes("Manual · ready")
+    return frame.includes("Message YCoding…") && frame.includes("Ask first · ready")
   } })
   try {
     const lines = screen.lines()

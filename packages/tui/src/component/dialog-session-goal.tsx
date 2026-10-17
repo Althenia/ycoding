@@ -1,4 +1,4 @@
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { useClient } from "../context/client"
 import { type DialogContext, useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
@@ -9,7 +9,7 @@ import { activateGoal, retainSessionSubmission, type SessionSubmissionRetry } fr
 export function DialogSessionGoal(props: {
   sessionID: string
   currentGoal?: string
-  onUpdated?: (state: SessionAutonomyState) => void
+  onUpdated?: (state: SessionAutonomyView) => void
 }) {
   const dialog = useDialog()
   const client = useClient()
@@ -67,5 +67,5 @@ DialogSessionGoal.show = (
   dialog: DialogContext,
   sessionID: string,
   currentGoal?: string,
-  onUpdated?: (state: SessionAutonomyState) => void,
+  onUpdated?: (state: SessionAutonomyView) => void,
 ) => dialog.replace(() => <DialogSessionGoal sessionID={sessionID} currentGoal={currentGoal} onUpdated={onUpdated} />)

@@ -1,3 +1,4 @@
+import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import type { RemoteStoppedRecovery, RemoteUsageTaskCost, RemoteUsagePromptCost } from "@ycoding-ai/remote"
@@ -123,6 +124,7 @@ export type SessionInfoView = {
   readonly running?: boolean
   readonly attention?: boolean
   readonly failed?: boolean
+  readonly lost?: boolean
 }
 
 export type TeamTaskView = {
@@ -217,7 +219,7 @@ export type RemoteStoreState = {
   readonly sessions: readonly SessionInfoView[]
   readonly carouselSessions?: readonly (SessionInfoView & { readonly workspaceName: string })[]
   readonly carouselStatus?: "idle" | "loading" | "ready" | "error"
-  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string>; readonly failed: ReadonlySet<string> }
+  readonly sessionStatus?: { readonly running: ReadonlySet<string>; readonly attention: ReadonlySet<string>; readonly outstanding: ReadonlySet<string>; readonly failed: ReadonlySet<string>; readonly lost: ReadonlySet<string> }
   readonly catalogs: Readonly<Record<string, CatalogView>>
   readonly sessionGroups: readonly RemoteWorkspaceInfo[]
   readonly selectedWorkspaceID?: string
@@ -364,7 +366,8 @@ export type RemoteStore = {
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
-  readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<boolean>
+  readonly setYolo: (level: 0 | 1 | 2) => Promise<boolean>
+  readonly setAutoAnswer: (enabled: boolean) => Promise<boolean>
   readonly setSleep: (sleep: boolean) => Promise<boolean>
   readonly decideReview: (itemID: string, decision: ReviewDecision) => Promise<boolean>
   readonly reloadReview: () => Promise<void>
@@ -1708,7 +1711,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       setState({
         view:
           autonomy.status === "ok"
-            ? { ...withDecisions, autonomy: readAutonomy(autonomy.value) ?? withDecisions.autonomy }
+            ? { ...withDecisions, autonomy: readAutonomy(autonomy.value) }
             : withDecisions,
         ...(notice === undefined
           ? failure === undefined
@@ -2074,8 +2077,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     return sortSessions([{ ...root, ...(status ? rowStatus(status, root.id) : {}) }, ...rows])
   }
 
-  const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string) => ({
-    running: status.running.has(id), attention: status.attention.has(id) && !status.failed.has(id), failed: status.failed.has(id),
+  const rowStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>, id: string, failures = true) => ({
+    running: status.running.has(id), attention: status.attention.has(id) && !status.failed.has(id) && !status.lost.has(id), lost: status.lost.has(id),
+    ...(failures ? { failed: status.failed.has(id) } : {}),
   })
 
   const publishSessionStatus = (status: NonNullable<RemoteStoreState["sessionStatus"]>) => {
@@ -2115,17 +2119,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     void reloadStatusFirstPage(owner)
   }
 
-  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[] }) => {
+  const applyStatusFrame = (owner: RemoteTransport, frame: { readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[]; readonly lost?: readonly string[] }) => {
     if (!isCurrentConnection(owner)) return
     signalRecovery()
     statusFrameRevision += 1
-    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []), failed: new Set(frame.failed ?? []) }
+    const status = { running: new Set(frame.running), attention: new Set(frame.attention), outstanding: new Set(frame.outstanding ?? []), failed: new Set(frame.failed ?? []), lost: new Set(frame.lost ?? []) }
     const previous = container.state.sessionStatus
     const runningChanged = previous === undefined || previous.running.size !== status.running.size ||
       [...status.running].some((id) => !previous.running.has(id))
     const changed = previous === undefined || previous.running.size !== status.running.size || previous.attention.size !== status.attention.size ||
       previous.outstanding.size !== status.outstanding.size || [...status.outstanding].some((id) => !previous.outstanding.has(id)) ||
       previous.failed.size !== status.failed.size || [...status.failed].some((id) => !previous.failed.has(id)) ||
+      previous.lost.size !== status.lost.size || [...status.lost].some((id) => !previous.lost.has(id)) ||
       [...status.running].some((id) => !previous.running.has(id)) || [...status.attention].some((id) => !previous.attention.has(id))
     statusBaseline = true
     publishSessionStatus(status)
@@ -2173,11 +2178,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
 
   const loadCarouselSessions = async (owner: RemoteTransport, revision: number) => {
     if (container.state.carouselSessions?.length === 0 && container.state.carouselStatus !== "loading" && container.state.carouselStatus !== "ready") setState({ carouselStatus: "loading" })
-    const rows = (value: unknown, group: "waiting" | "running" | "idle") => readSessionInfoList(value).flatMap((entry) => {
-      const session = readSessionInfo(entry)
-      return session !== undefined && session.parentID === undefined ? [{ ...session, running: group === "running", attention: group === "waiting",
-        ...(container.state.sessionStatus === undefined ? {} : rowStatus(container.state.sessionStatus, session.id)) }] : []
-    })
+    const rows = (value: unknown, group: "waiting" | "running" | "idle") => {
+      const status = container.state.sessionStatus ?? (typeof value === "object" && value !== null ? parseSessionStatus(Reflect.get(value, "status")) : undefined)
+      return readSessionInfoList(value).flatMap((entry) => {
+        const session = readSessionInfo(entry)
+        return session !== undefined && session.parentID === undefined ? [{ ...session, running: group === "running", attention: group === "waiting",
+          ...(status === undefined ? {} : rowStatus(status, session.id, container.state.sessionStatus !== undefined)) }] : []
+      })
+    }
     const withWorkspaceNames = (sessions: readonly (SessionInfoView & { readonly running: boolean })[]) => sessions.map((row) => ({ ...row,
       workspaceName: container.state.sessionGroups.find((group) => group.projectID === row.projectID && group.directory === row.directory && group.workspaceID === row.workspaceID)?.name
         ?? row.directory?.split("/").filter(Boolean).at(-1) ?? row.projectID ?? "Workspace" }))
@@ -2240,7 +2248,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
         const info = readSessionInfo(entry,
           typeof id !== "string" ? {} : container.state.sessionStatus !== undefined ? rowStatus(container.state.sessionStatus, id)
-            : pageStatus === undefined ? {} : { running: pageStatus.running.has(id), attention: pageStatus.attention.has(id) })
+            : pageStatus === undefined ? {} : rowStatus(pageStatus, id, false))
         return info ? [info] : []
       })
       const value = typeof listed.value === "object" && listed.value !== null ? listed.value : undefined
@@ -2298,7 +2306,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       : [...settled, ...sessionPages].slice(0, retainedSessionPages)
     const sessions = withOpenRoot(sortSessions(sessionPages.flatMap((item) => item.rows))).map((item) => {
       const previous = container.state.sessions.find((row) => row.id === item.id)
-      return previous !== undefined && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
+      return replaceEqualDeep(previous, item)
     })
     setState({
       ...recoveredConnection(active),
@@ -3857,11 +3865,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         {
           id: `autonomy_${level}_${now()}`,
           kind: "autonomy",
-          label: level === 0 ? "Manual" : `YOLO ${level}`,
+          label: level === 0 ? "Ask first" : level === 1 ? "Allow tools" : "Tools + reviews",
           state: "sending",
           sessionID,
           operation: "session.autonomy.set",
           input: { yolo: level },
+        },
+        { sessionID },
+      )
+      applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+    },
+    setAutoAnswer: async (enabled) => {
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined) return false
+      const outcome = await request(
+        {
+          id: `autonomy_auto_answer_${now()}`,
+          kind: "autonomy",
+          label: enabled ? "Auto-answer on" : "Auto-answer off",
+          state: "sending",
+          sessionID,
+          operation: "session.autonomy.set",
+          input: { autoAnswer: enabled },
         },
         { sessionID },
       )
@@ -4104,7 +4131,7 @@ export function notificationSessionTitle(state: {
     (state.selectedSessionInfo?.id === sessionID ? state.selectedSessionInfo.title : undefined)
 }
 
-export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean } = {}): SessionInfoView | undefined {
+export function readSessionInfo(value: unknown, options: { readonly running?: boolean; readonly attention?: boolean; readonly failed?: boolean; readonly lost?: boolean } = {}): SessionInfoView | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
   const id = typeof record.id === "string" && record.id.length > 0 ? record.id : undefined
@@ -4130,6 +4157,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(options.running === undefined ? {} : { running: options.running }),
     ...(options.attention === undefined ? {} : { attention: options.attention }),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
+    ...(options.lost === undefined ? {} : { lost: options.lost }),
   }
 }
 
@@ -4241,11 +4269,13 @@ export function parseSessionStatus(payload: unknown): RemoteStoreState["sessionS
   const attention = Reflect.get(body, "attention")
   const outstanding = Reflect.get(body, "outstanding")
   const failed = Reflect.get(body, "failed")
+  const lost = Reflect.get(body, "lost")
   if (!Array.isArray(running) || !running.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
     !Array.isArray(attention) || !attention.every((id) => typeof id === "string" && id.startsWith("ses_")) ||
     (outstanding !== undefined && (!Array.isArray(outstanding) || !outstanding.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
-    (failed !== undefined && (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
-  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []) }
+    (failed !== undefined && (!Array.isArray(failed) || !failed.every((id) => typeof id === "string" && id.startsWith("ses_")))) ||
+    (lost !== undefined && (!Array.isArray(lost) || !lost.every((id) => typeof id === "string" && id.startsWith("ses_"))))) return undefined
+  return { running: new Set(running), attention: new Set(attention), outstanding: new Set(outstanding ?? []), failed: new Set(failed ?? []), lost: new Set(lost ?? []) }
 }
 
 function validTelemetryConsent(value: unknown): value is RemoteTelemetryConsent {

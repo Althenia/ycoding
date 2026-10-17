@@ -260,7 +260,11 @@ export const layer = Layer.effect(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
-          const autoAnswer = Config.latest(yield* config.entries(), "auto_answer") === true
+          const autoAnswer = sessionID
+            ? yield* autonomy
+                .canAutoAnswer(sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            : false
           const asleep = sessionID
             ? yield* autonomy
                 .isAsleep(sessionID)
@@ -283,6 +287,13 @@ export const layer = Layer.effect(
               const item = yield* openReview(form, sessionID, outcome)
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
+            const stillEnabled = yield* autonomy
+              .canAutoAnswer(sessionID)
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            if (!stillEnabled) {
+              const item = yield* openReview(form, sessionID, { reason: "disabled" })
+              return { status: "deferred", itemID: item.itemID } as TerminalState
+            }
             const created = yield* createPending({ ...input, id: form.id }, true)
             yield* reply({ id: created.id, answer: outcome.answer }).pipe(Effect.orDie)
             return { status: "answered", answer: outcome.answer } as TerminalState
@@ -290,12 +301,7 @@ export const layer = Layer.effect(
           const form = yield* createPending(input, true)
           const entry = yield* find(form.id).pipe(Effect.orDie)
           return yield* restore(Effect.gen(function* () {
-            const autonomous = sessionID
-              ? yield* autonomy
-                  .canAutoAnswer(sessionID)
-                  .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              : false
-            const answer = autoAnswer && autonomous ? automaticAnswer(form) : undefined
+            const answer = autoAnswer ? automaticAnswer(form) : undefined
             if (answer) {
               yield* reply({ id: form.id, answer }).pipe(
                 Effect.catchTag("Form.AlreadySettledError", () => Effect.void),

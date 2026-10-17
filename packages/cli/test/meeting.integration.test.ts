@@ -24,12 +24,28 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
   await writeFile(path.join(meeting, "settings.json"), JSON.stringify({ transcription: { pythonExecutable: worker } }))
   const first = run(["meeting", project, "--no-open"], env)
   try {
-    const url = await line(
-      first,
-      (text) => /^Live page: (http:\/\/127\.0\.0\.1:\d+\/view#key=[0-9a-f]{64})$/.exec(text)?.[1],
-    )
-    const view = new URL(url)
-    const key = view.hash.slice("#key=".length)
+    const links: { view?: string; owner?: string } = {}
+    await line(first, text => {
+      const view = /^Live page: (http:\/\/127\.0\.0\.1:\d+\/view#key=[0-9a-f]{64})$/.exec(text)?.[1]
+      const owner = /^Owner settings: (http:\/\/127\.0\.0\.1:\d+\/view#key=[0-9a-f]{64}&owner=[0-9a-f]{64})$/.exec(text)?.[1]
+      if (view) links.view = view
+      if (owner) links.owner = owner
+      return text.startsWith("Start recording from the live page") ? true : undefined
+    })
+    expect(links.view).toBeDefined()
+    expect(links.owner).toBeDefined()
+    const view = new URL(links.view!)
+    const owner = new URL(links.owner!)
+    const key = new URLSearchParams(view.hash.slice(1)).get("key")!
+    const ownerKey = new URLSearchParams(owner.hash.slice(1)).get("owner")!
+    expect(owner.origin).toBe(view.origin)
+    expect(new URLSearchParams(view.hash.slice(1)).has("owner")).toBe(false)
+    expect(ownerKey).not.toBe(key)
+    const settings = (credential: string) => fetch(new URL("/view/owner/settings", view), {
+      headers: { origin: view.origin, authorization: `Bearer ${credential}` },
+    })
+    expect((await settings(key)).status).toBe(401)
+    expect((await settings(ownerKey)).status).toBe(200)
     const state = await fetch(new URL("/view/state", view), { headers: { authorization: `Bearer ${key}` } })
     expect(state.status).toBe(200)
     const body = (await state.json()) as {
@@ -39,6 +55,7 @@ test("ycoding meeting starts the runtime, arms a meeting, serves the live view a
     expect(body.meeting?.status).toBe("ready")
     expect(body.health?.status).toBe("ready")
     expect(body).not.toHaveProperty("pairing")
+    expect(JSON.stringify(body)).not.toContain(ownerKey)
     expect((await fetch(new URL("/view/state", view))).status).toBe(401)
 
     const capture = (payload: unknown) =>

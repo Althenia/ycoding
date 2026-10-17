@@ -23,7 +23,8 @@ describe("shipped TUI command surface", () => {
     expect(result.stdout).toContain("Run YCoding with a message")
     expect(result.stdout).toContain("--model")
     expect(result.stdout).toContain("--yolo")
-    expect(result.stdout).toContain("choices: 0, 1, 2, 3")
+    expect(result.stdout).toContain("choices: 0, 1, 2")
+    expect(result.stdout).not.toContain("choices: 0, 1, 2, 3")
     expect(result.stdout).toContain("Set durable Session YOLO level")
     expect(result.stdout).toContain("omitted preserves it")
     expect(result.stdout).not.toContain("--auto")
@@ -84,7 +85,13 @@ describe("shipped TUI command surface", () => {
     expect(result.stdout + result.stderr).toContain("--auto")
   })
 
-  test.each([0, 1, 2, 3] as const)("run persists --yolo %d before prompt admission", async (level) => {
+  test("run rejects level 3 before contacting the server", async () => {
+    const result = await runTransport(["--yolo", "3"])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.calls).toEqual([])
+  })
+
+  test.each([0, 1, 2] as const)("run persists --yolo %d before prompt admission", async (level) => {
     const result = await runTransport(["--yolo", String(level)])
     expect(result.exitCode).toBe(1)
     expect(result.calls.filter((call) => call.path.endsWith("/autonomy"))).toEqual([
@@ -178,7 +185,9 @@ async function runTransport(args: string[], options: { autonomyStatus?: number }
       if (url.pathname === "/api/session/ses_yolo/autonomy") {
         if (options.autonomyStatus)
           return Response.json({ error: "autonomy update failed" }, { status: options.autonomyStatus })
-        return Response.json({ data: { mode: "normal", yolo: Reflect.get(body ?? {}, "yolo") } })
+        const yolo = Reflect.get(body ?? {}, "yolo")
+        return Response.json({ data: { mode: "normal", yolo,
+          effective: { yolo, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: yolo === 2, modelReviews: false, hardModelReviews: false } } })
       }
       if (url.pathname === "/api/event")
         return new Response(

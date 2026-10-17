@@ -1,16 +1,15 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { Portal } from "solid-js/web"
 import { useRemote } from "../context"
-import { reviewItemsInScope, sessionExecutionLabel, sessionStatusTimed } from "../projection"
+import { autonomyDeciders, reviewItemsInScope, sessionExecutionLabel, sessionStatusTimed, yoloLevelName } from "../projection"
 import { createRemoteQuery } from "../query"
 import { DotTrail } from "./dot-trail"
 import "./status-bar.css"
 
 const levels = [
-  { level: 0 as const, label: "Manual", detail: "Manual questions and approval requests." },
-  { level: 1 as const, label: "YOLO 1", detail: "Automatically approves tool permissions and ordinary guardrail reviews." },
-  { level: 2 as const, label: "YOLO 2", detail: "Answers questions/forms if enabled." },
-  { level: 3 as const, label: "YOLO 3", detail: "Same as YOLO 2; keeps level 3." },
+  { level: 0 as const, label: "Ask first", detail: "Asks you for tool permissions and routine reviews." },
+  { level: 1 as const, label: "Allow tools", detail: "Auto-approves ask-level tool permissions. Routine reviews still ask." },
+  { level: 2 as const, label: "Tools + reviews", detail: "Also auto-approves routine reviews while awake." },
 ]
 
 export function ComposerStatus() {
@@ -44,8 +43,10 @@ export function ComposerStatus() {
   const goal = () => view()?.autonomy?.goal
   const goalActive = () => goal()?.status === "active"
   const goalSetting = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.goal.set" && mutation.state === "sending")
-  const yolo = () => view()?.autonomy?.yolo ?? 0
-  const asleep = () => view()?.autonomy?.sleep !== undefined
+  const yolo = () => view()?.autonomy?.effective?.yolo ?? view()?.autonomy?.yolo ?? 0
+  const autoAnswer = () => view()?.autonomy?.autoAnswer === true
+  const autoAnswerBusy = () => remote.state().mutations.some((mutation) => mutation.sessionID === view()?.id && mutation.operation === "session.autonomy.set" && "autoAnswer" in mutation.input && mutation.state === "sending")
+  const asleep = () => view()?.autonomy?.effective?.asleep ?? view()?.autonomy?.sleep !== undefined
   const reachable = () => remote.state().transport.kind === "open" && remote.state().connection.kind === "connected"
   const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), asleep() && reachable()))
   const machineMaySleep = () => {
@@ -54,6 +55,7 @@ export function ComposerStatus() {
   }
   const review = () => { const selected = view(); return selected === undefined ? 0 : reviewItemsInScope(selected).length }
   const modes = () => [
+    ...(autoAnswer() ? [{ key: "auto-answer", label: "auto-answer", compact: "AA", tone: "on" }] : []),
     ...(asleep() ? [machineMaySleep() ? { key: "sleep", label: "asleep · machine may sleep", compact: "Zz!", tone: "attention" } : { key: "sleep", label: "asleep", compact: "Zz", tone: "on" }] : []),
     ...(review() > 0 ? [{ key: "review", label: `review ${review()}`, compact: `R${review()}`, tone: "attention" }] : []),
   ]
@@ -118,7 +120,7 @@ export function ComposerStatus() {
       <Show when={visible()}><Show when={timed()}><DotTrail /></Show><span class="session-status__label">{stateText()}</span><span class="session-status__mobile" aria-hidden="true">{elapsed() || (/awaiting input/i.test(label()) ? "Wait" : stateText().split(" · ")[0])}</span></Show>
     </span>
     <Show when={view()?.autonomy}>
-    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yolo() ? `YOLO ${yolo()}` : "Manual"}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
+    <button ref={yoloTrigger} type="button" class="session-status__yolo-trigger" aria-label="Autonomy level" aria-haspopup="dialog" aria-expanded={open() === "yolo" && !leaving()} onClick={() => toggle("yolo")}><span class="session-status__yolo-full">{yoloLevelName(yolo())}</span><span class="session-status__yolo-compact" aria-hidden="true">Y{yolo()}</span></button>
     <button ref={goalTrigger} type="button" class="session-status__goal-trigger" classList={{ "session-status__goal-trigger--active": goalActive() || goalSetting() }} aria-label={goalSetting() ? "Setting goal" : goalActive() ? "Goal active" : "Goal off"} aria-busy={goalSetting() ? "true" : undefined} aria-haspopup="dialog" aria-expanded={open() === "goal" && !leaving()} onClick={() => toggle("goal")}>Goal<Show when={goalActive()}>{" "}<span class="session-status__goal-count" aria-hidden="true">{goal()?.iteration}</span></Show></button>
     <For each={modes()}>{(mode) => <span class={`session-status__mode session-status__mode--${mode.tone}`} data-mode={mode.key} title={mode.label}><span class="session-status__mode-full">{mode.label}</span><span class="session-status__mode-compact" aria-hidden="true">{mode.compact}</span></span>}</For>
     <Show when={goalActive()}><span class="session-status__active-goal" role="status" title={goal()?.text}>Goal active · {goal()?.text}</span></Show>
@@ -129,7 +131,7 @@ export function ComposerStatus() {
         event.preventDefault()
         void remote.store.setYolo(levels[next]!.level)
         queueMicrotask(() => popover?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus())
-      }}><strong>{option.label}</strong><span>{option.detail}</span></button>}</For></div><p class="session-status__guardrail-note">Hard reviews follow configured policy, not YOLO. Unsettled reviews defer during sleep.</p></Show>
+      }}><strong>{option.label}</strong><span>{option.detail}</span></button>}</For></div><dl class="session-status__deciders"><For each={autonomyDeciders(view()?.autonomy)}>{(row) => <div class="session-status__decider"><dt>{row.label}</dt><dd>{row.value}</dd></div>}</For></dl><div class="session-status__auto-answer"><span class="session-status__auto-answer-text"><strong id="session-status-auto-answer-label">Auto-answer</strong><span id="session-status-auto-answer-detail">On permits automatic answers in this Session. Off while asleep sends requests to Review. Existing items stay yours.</span></span><label class="switch"><input type="checkbox" aria-labelledby="session-status-auto-answer-label" aria-describedby="session-status-auto-answer-detail" checked={autoAnswer()} disabled={autoAnswerBusy()} onChange={(event) => { void remote.store.setAutoAnswer(event.currentTarget.checked); event.currentTarget.checked = autoAnswer() }} /><span>{autoAnswer() ? "On" : "Off"}</span></label></div><p class="session-status__guardrail-note">Hard reviews never follow YOLO. Model reviews follow this machine's guardrail settings, shown above as reported.</p></Show>
       <Show when={open() === "goal"}><Show when={goal()?.status === "active"} fallback={<form onSubmit={(event) => { event.preventDefault(); if (!draft().trim()) return; void remote.store.setGoal(draft().trim()).then((accepted) => { if (!accepted) return; setDraft(""); close(true) }) }}><label for="session-status-goal">Goal</label><input id="session-status-goal" type="text" aria-label="Goal" placeholder="Describe the objective" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} /><button type="submit" disabled={!draft().trim() || goalSetting()}>Set goal</button></form>}><p>{goal()?.text}</p><span>{goal()?.status} · iteration {goal()?.iteration} · no progress {goal()?.noProgress}/{goal()?.maxNoProgress}</span><button type="button" onClick={() => { close(true); void remote.store.stopGoal() }}>Stop goal</button></Show></Show>
     </div></Portal></Show>
     </Show>

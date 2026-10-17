@@ -74,7 +74,7 @@ test("service worker shows one notification per push including malformed and foc
     expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { tag: "ycoding-ses_1-approval-requested", data: { sessionID: "ses_1", deviceID: "dev_1" } } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1" }) } })
     expect(shown[4]).toMatchObject({ title: "YCoding — work finished", options: { body: "A session finished all its work.", tag: "ycoding-ses_1-agent-completed" } })
-    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { body: "A session is waiting for you." } })
+    expect(shown[3]).toMatchObject({ title: "YCoding — needs your attention", options: { body: "A session needs attention. Open it to review." } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_3" }) } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_4" }) } })
     expect(shown.slice(5).map((entry) => entry.options.tag)).toEqual(["ycoding-dev_1-ntc_3", "ycoding-dev_1-ntc_4"])
@@ -92,7 +92,7 @@ test("service worker shows one notification per push including malformed and foc
     await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
     expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1")
     const specific = shown.length
-    for (const need of ["permission", "question", "review", "failed", "blocked", undefined])
+    for (const need of ["permission", "question", "review", "failed", "blocked", "lost", undefined])
       await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", title: "Fix login", need }) } })
     await emit("push", { data: { json: () => ({ category: "agent-completed", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_10", title: "Fix login" }) } })
     await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_11", title: "two\nlines", need: "unknown" }) } })
@@ -102,9 +102,10 @@ test("service worker shows one notification per push including malformed and foc
       ["YCoding — guardrail review", "“Fix login” is waiting for you to approve or reject a guarded action."],
       ["YCoding — session failed", "“Fix login” stopped with an error. Open it to review and retry."],
       ["YCoding — action blocked", "A guardrail blocked an action in “Fix login”. Open it to review."],
-      ["YCoding — needs your attention", "“Fix login” is waiting for you."],
+      ["YCoding — background result lost", "“Fix login” has a lost background-work result. Open it to review."],
+      ["YCoding — needs your attention", "“Fix login” needs attention. Open it to review."],
       ["YCoding — work finished", "“Fix login” finished all its work."],
-      ["YCoding — needs your attention", "A session is waiting for you."],
+      ["YCoding — needs your attention", "A session needs attention. Open it to review."],
     ])
     expect(shown.slice(specific).some((entry) => "renotify" in entry.options)).toBe(false)
     await emit("push", { data: { json: () => ({ category: "approval-requested", sessionID: "ses_1", deviceID: "dev_1", noticeID: "ntc_9", need: "failed", repeat: true }) } })
@@ -122,7 +123,7 @@ test("service worker shows one notification per push including malformed and foc
     await emit("push", { data: { json: () => ({ category: "agent-completed", deviceID: "dev_1", overflow: 1 }) } })
     await emit("push", { data: { json: () => ({ category: "approval-requested", deviceID: "dev_1", overflow: 0 }) } })
     expect(shown.slice(overflowStart).map((entry) => [entry.title, entry.options.body, entry.options.tag, entry.options.renotify])).toEqual([
-      ["YCoding — more sessions need you", "5 more sessions are waiting for you. Open YCoding to see them.", "ycoding-dev_1-overflow-approval-requested", true],
+      ["YCoding — more sessions need attention", "5 more sessions need attention. Open YCoding to see them.", "ycoding-dev_1-overflow-approval-requested", true],
       ["YCoding — more work finished", "1 more session finished its work. Open YCoding to see them.", "ycoding-dev_1-overflow-agent-completed", true],
       ["YCoding — update", "Open YCoding to check your work.", "ycoding-update", undefined],
     ])

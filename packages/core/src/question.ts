@@ -143,7 +143,9 @@ const layer = Layer.effect(
     const ask = Effect.fn("Question.ask")((input: AskInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const autoAnswer = Config.latest(yield* config.entries(), "auto_answer") === true
+          const autoAnswer = yield* autonomy
+            .canAutoAnswer(input.sessionID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           const asleep = yield* autonomy
             .isAsleep(input.sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
@@ -180,14 +182,18 @@ const layer = Layer.effect(
                 const item = yield* openReview(input, ID.ascending(), outcome)
                 return { status: "deferred", itemID: item.itemID } as const
               }
+              const stillEnabled = yield* autonomy
+                .canAutoAnswer(input.sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+              if (!stillEnabled) {
+                const item = yield* openReview(input, ID.ascending(), { reason: "disabled" })
+                return { status: "deferred", itemID: item.itemID } as const
+              }
               answers.push([outcome.value])
             }
             return { status: "answered", answers } as const
           }
-          const autonomous = yield* autonomy
-            .canAutoAnswer(input.sessionID)
-            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-          if (autoAnswer && autonomous) {
+          if (autoAnswer) {
             return {
               status: "answered",
               answers: input.questions.map((question) => {

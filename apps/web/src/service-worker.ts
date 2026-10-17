@@ -139,7 +139,7 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
     !isAlertDeviceID(value.deviceID) || (value.noticeID !== undefined && !isNoticeID(value.noticeID)))
     return { title: "YCoding — update", options: { body: "Open YCoding to check your work.", tag: "ycoding-update" } }
   const title = isAlertTitle(value.title) ? value.title : undefined
-  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" || value.need === "blocked" ? value.need : undefined
+  const need = value.need === "permission" || value.need === "question" || value.need === "review" || value.need === "failed" || value.need === "blocked" || value.need === "lost" ? value.need : undefined
   const copy = alertCopy(value.category, { ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
   return { title: copy.title, options: {
     body: copy.body,

@@ -20,6 +20,7 @@ import { createApi, createFetch } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "./viewport"
+import { localAutonomyView } from "../src/util/session-autonomy"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
 const mint = RGBA.fromHex("#67D7A4").toInts()
@@ -65,7 +66,7 @@ describe("session footer identity", () => {
                 <ClientProvider api={createApi(calls.fetch)}>
                   <DataProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_0085fc701234567" }}>
-                      <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal", yolo: false }} />
+                      <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
                     </RouteProvider>
                   </DataProvider>
                 </ClientProvider>
@@ -83,7 +84,7 @@ describe("session footer identity", () => {
       const frame = app.captureCharFrame()
       expect(frame).toContain("main")
       expect(frame).toContain("goal off")
-      expect(frame).toContain("Manual")
+      expect(frame).toContain("Ask first")
       expect(frame).toContain("subagents 0")
       expect(frame).toContain("shells 0")
       expect(frame).not.toContain("ses_")

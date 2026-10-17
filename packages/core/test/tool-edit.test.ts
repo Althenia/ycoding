@@ -43,6 +43,7 @@ let denyAction: string | undefined
 let afterRead = (_target: string, _content: Uint8Array): Effect.Effect<void> => Effect.void
 
 const guardrail = Layer.mock(SessionGuardrail.Service, {
+  reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
   assert: (input) => Effect.sync(() => {
     expect(input.source).toEqual({ messageID: toolIdentity.messageID, callID: expect.any(String) })
     return { release: Effect.void }

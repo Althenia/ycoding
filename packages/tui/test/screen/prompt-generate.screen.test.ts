@@ -183,7 +183,7 @@ async function landingFixture() {
       if (createdID && url.pathname === `/api/session/${createdID}/snapshot`) return sessionSnapshot(createdID, [], { session: info() })
       if (createdID && url.pathname === `/api/session/${createdID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) return json({ data: { mode: "normal", yolo: autonomy.length ? 1 : 0 } })
+      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) return json({ data: { mode: "normal", yolo: autonomy.length ? 1 : 0, effective: { yolo: autonomy.length ? 1 : 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
       if (createdID && url.pathname === `/api/session/${createdID}/guardrail`)
         return json({ data: { rootSessionID: createdID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
       if (createdID && url.pathname === `/api/session/${createdID}/diagnostics`)
@@ -397,12 +397,12 @@ test("a nonempty draft keeps its text and discards the generated prompt", async 
   }
 }, 30000)
 
-test("the landing screen creates a Session, keeps the YOLO draft, and fills the new composer", async () => {
+test("the landing screen creates a Session, keeps the approval-level draft, and fills the new composer", async () => {
   const view = await landingFixture()
   try {
     await view.screen.input.typeText("/yolo 1 ")
     view.screen.input.pressEnter()
-    await view.wait(() => view.screen.frame().includes("YOLO 1 enabled (landing)"))
+    await view.wait(() => view.screen.frame().includes("Approval level 1 · Allow tools (landing)"))
     await view.screen.input.typeText("/prompt Draft the landing task ")
     view.screen.input.pressEnter()
     await view.wait(() => view.screen.frame().includes("Generate prompt") && !view.screen.frame().includes("Steer"))

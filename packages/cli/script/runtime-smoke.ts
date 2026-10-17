@@ -766,12 +766,26 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (yoloRead.yolo !== 2) throw new Error(`YOLO level did not round-trip: ${yoloRead.yolo}`)
     const normal = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: 0 } })
     if (normal.yolo !== 0) throw new Error(`Normal level was not restored: ${normal.yolo}`)
+    if (normal.autoAnswer === true || normal.effective.ordinaryReviewsAuto)
+      throw new Error("Manual approvals unexpectedly enabled automatic answers or ordinary reviews")
 
-    phase = "goal autonomous continuation"
+    phase = "Session-local automatic answer API"
+    const autoAnswer = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoAnswer: true } })
+    if (autoAnswer.autoAnswer !== true || autoAnswer.yolo !== 0 || autoAnswer.effective.ordinaryReviewsAuto)
+      throw new Error("The answer toggle changed approval authority or was not persisted")
+    if ((await client.session.autonomy.get({ sessionID: yoloSession.id })).autoAnswer !== true)
+      throw new Error("The answer toggle did not round-trip")
+
     const goalSession = await client.session.create({
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
+    if ((await client.session.autonomy.get({ sessionID: goalSession.id })).autoAnswer === true)
+      throw new Error("Automatic answers leaked into another Session")
+    if ((await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoAnswer: false } })).autoAnswer !== false)
+      throw new Error("The answer toggle did not turn off")
+
+    phase = "goal autonomous continuation"
     const goalText = "Choose the safest database default and finish the task"
     const goalSet = await client.session.autonomy.set({
       sessionID: goalSession.id,

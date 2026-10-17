@@ -44,6 +44,6 @@ export const reviewLayer = (database?: ReturnType<typeof Database.layer>, includ
 export const reviewLocation = Effect.gen(function* () {
   const directory = yield* Effect.promise(() => tmpdir("ycoding-review-"))
   yield* Effect.addFinalizer(() => Effect.promise(() => directory[Symbol.asyncDispose]()))
-  yield* Effect.promise(() => Bun.write(`${directory.path}/ycoding.json`, JSON.stringify({ auto_answer: true, guardrails: { decide_reviews: true } })))
+  yield* Effect.promise(() => Bun.write(`${directory.path}/ycoding.json`, JSON.stringify({ guardrails: { decide_reviews: true } })))
   return Location.Ref.make({ directory: AbsolutePath.make(directory.path) })
 })

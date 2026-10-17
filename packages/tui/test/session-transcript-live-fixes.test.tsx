@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type {
-  SessionAutonomyState,
+  SessionAutonomyView,
   SessionMessageInfo,
   SessionPendingInfo,
   SessionTodoInfo,
@@ -14,6 +14,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { Effect, FileSystem } from "effect"
 import { createEffect } from "solid-js"
 import type { useData } from "../src/context/data"
+import { localAutonomyView } from "../src/util/session-autonomy"
 import { SPINNER_FRAMES } from "../src/component/spinner-frames"
 import { DEFAULT_THEMES } from "../src/theme"
 import { resolveThemeFile } from "../src/theme/resolve"
@@ -69,8 +70,7 @@ const guardrailRequest = {
   standard: true,
 }
 
-const yoloGoal: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
-}
+const yoloGoal: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } })
 const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
 const transcript = [
@@ -644,7 +644,7 @@ function routeFor(
   messages: SessionMessageInfo[],
   guardrails: unknown[] = [],
   pending: SessionPendingInfo[] = [],
-  autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
+  autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: false }),
   todos: SessionTodoInfo[] = [],
 ) {
   return (url: URL) => {
@@ -673,7 +673,7 @@ function routeFor(
     )
       return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/todo`) return json({ location, data: todos })
-    if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ location, data: autonomy })
+    if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ location, data: localAutonomyView(autonomy) })
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
       return json({
@@ -755,7 +755,7 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
     width: 200, height: 50, args: { sessionID }, settle: "asleep",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
     route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: { mode: "normal", yolo: 0, sleep: {} } })
+      ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }) })
       : base(url),
   })
   try {
@@ -840,7 +840,7 @@ test("restart retains the escalation notice without restoring a pending review, 
 })
 
 test("family slash commands update autonomy, rehydrate indicators, and render durable decision provenance", async () => {
-  let autonomy: SessionAutonomyState = { mode: "normal", yolo: 0 }
+  let autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: 0 })
   const writes: unknown[] = []
   const awakeWrites: boolean[] = []
   const dismissals: Array<{
@@ -895,7 +895,7 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
           if (value.sleep === false && autonomy.sleep)
             autonomy = { ...autonomy, sleep: undefined }
         }
-        return json({ data: autonomy })
+        return json({ data: localAutonomyView(autonomy) })
       }
       if (url.pathname === `/api/session/${sessionID}/guardrail`)
         return json({

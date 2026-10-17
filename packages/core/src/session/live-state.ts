@@ -83,7 +83,7 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
-    "Choose safe implementation options and continue independent work. Required answers remain manual unless auto_answer is enabled. Model guardrail judgments require guardrails.decide_reviews; hard-review grading also respects guardrails.decide_hard_reviews. Both automatic answers and model guardrail judgments default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
+    "Choose safe implementation options and continue independent work. Required answers remain manual unless the answering Session's auto-answer toggle is on. Model guardrail judgments require guardrails.decide_reviews; hard-review grading also respects guardrails.decide_hard_reviews. Both automatic answers and model guardrail judgments default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
@@ -96,7 +96,7 @@ export const sleepReminder = (autonomy: SessionAutonomy.State, machineAwake?: bo
     return undefined
   return [
     "The user is asleep and cannot interact. Make decisions independently, do not wait for user input, and keep working until the task is done.",
-    "Automatic answers require auto_answer and model guardrail judgments require guardrails.decide_reviews; both default off, including during sleep. Disabled or unsettled requests wait in the user's review box. Continue independent work without guessing answers or replaying deferred actions.",
+    "Automatic answers require the answering Session's auto-answer toggle and model guardrail judgments require guardrails.decide_reviews; both default off, including during sleep. Disabled or unsettled requests wait in the user's review box. Continue independent work without guessing answers or replaying deferred actions.",
     machineAwake === undefined
       ? undefined
       : machineAwake

@@ -133,9 +133,6 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description:
       "Seconds an unanswered question, form, or subagent question stays open before it times out (default: 300, 0 disables, max: 86400)",
   }),
-  auto_answer: Schema.Boolean.pipe(Schema.optional).annotate({
-    description: "Allow automatic question, form and subagent answers in eligible autonomy modes (default: false)",
-  }),
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",
   }),

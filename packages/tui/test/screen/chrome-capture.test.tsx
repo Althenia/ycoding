@@ -4,6 +4,7 @@ import { expect, test } from "bun:test"
 import path from "node:path"
 import { For } from "solid-js"
 import { PromptFooterIdentity } from "../../src/component/prompt"
+import { localAutonomyView } from "../../src/util/session-autonomy"
 import { ModeChips } from "../../src/component/prompt/mode-chips"
 import { ConfigProvider } from "../../src/config"
 import { Keymap } from "../../src/context/keymap"
@@ -41,7 +42,7 @@ test("captures the product chrome variants at canonical terminal dimensions", as
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
+    await app.waitForFrame((frame) => frame.includes("answers auto"))
 
     try {
       const rows = rowsOf(app.captureCharFrame())
@@ -53,8 +54,8 @@ test("captures the product chrome variants at canonical terminal dimensions", as
         "ready",
         "? awaiting input",
         "provider error",
-        "YOLO 2",
-        "guardrail blocked",
+        "Tools + reviews",
+        "answers auto",
         "Enter approve",
       ]) expect(frame).toContain(text)
       await Bun.write(path.join(renders, `chrome-components-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
@@ -95,28 +96,28 @@ function ChromeFixture() {
       </For>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "normal", yolo: false }} />
+        <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={localAutonomyView({ mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } })}
         />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "normal", yolo: true }} />
+        <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: true })} />
         <text flexGrow={1} />
         <text>⌃x y disable</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "normal", yolo: true, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={localAutonomyView({ mode: "normal", yolo: true, autoAnswer: true, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } })}
           guardrailPending={true}
         />
         <text flexGrow={1} />

@@ -13,13 +13,13 @@ function Hint() {
     mode: "global",
     commands: [
       { id: "session.interrupt", title: "Interrupt session", run: () => {} },
-      { id: "session.autonomy.normal", title: "Disable YOLO", run: () => {} },
+      { id: "session.autonomy.normal", title: "Ask first (approval level 0)", run: () => {} },
     ],
   }))
   return <PromptYoloHint />
 }
 
-test("renders the restored disable-YOLO composer hint", async () => {
+test("renders the restored ask-first composer hint", async () => {
   const app = await testRender(
     () => (
       <TestTuiContexts>
@@ -39,7 +39,7 @@ test("renders the restored disable-YOLO composer hint", async () => {
   app.renderer.start()
   await app.waitForFrame((value) => value.trim().length > 0)
 
-  expect(app.captureCharFrame()).toContain("⌃x y disable YOLO")
+  expect(app.captureCharFrame()).toContain("⌃x y ask first")
 
   app.renderer.destroy()
 })

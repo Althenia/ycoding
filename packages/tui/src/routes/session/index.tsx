@@ -40,7 +40,7 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageUser,
   SessionInfo,
-  SessionAutonomyState,
+  SessionAutonomyView,
   SessionOrchestrationTask,
   SessionReviewDecision,
   SessionReviewItem,
@@ -130,14 +130,17 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
+  approvalLevelLabel,
+  autoAnswerOn,
   autonomyLevelDescription,
   autonomyModeLabel,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
-  isAsleep,
+  nextApprovalLevel,
+  parseApprovalLevel,
+  parseAutoAnswerArg,
   type SessionAutonomyResponse,
-  yoloLevel,
 } from "../../util/session-autonomy"
 import { useKeepAwake } from "../../keep-awake"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
@@ -459,15 +462,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const autonomy = createMemo(() =>
     currentSessionAutonomy(route.sessionID, client.connection.status() === "connected", autonomyResponse()),
   )
-  const acceptAutonomy = (sessionID: string, state: SessionAutonomyState) => {
+  const acceptAutonomy = (sessionID: string, state: SessionAutonomyView) => {
     if (route.sessionID !== sessionID || client.connection.status() !== "connected") return false
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: { yolo?: number; goal?: string | null; maxNoProgress?: number }) => {
+  const updateAutonomy = (input: { yolo?: 0 | 1 | 2; goal?: string | null; maxNoProgress?: number; autoAnswer?: boolean }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
     const payload = (() => {
+      if (input.autoAnswer !== undefined) return { autoAnswer: input.autoAnswer } as const
       if (input.yolo !== undefined && input.goal !== undefined)
         return { yolo: input.yolo, goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
       if (input.yolo !== undefined) return { yolo: input.yolo } as const
@@ -479,7 +483,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       .set({ sessionID, payload } as never)
       .then((state) => {
         if (!acceptAutonomy(sessionID, state)) return
-        toast.show({ message: `${autonomyModeLabel(state)} mode activated`, variant: "success", duration: 3000 })
+        toast.show({
+          message:
+            input.autoAnswer !== undefined
+              ? `Auto-answer ${autoAnswerOn(state) ? "on" : "off"} for this Session`
+              : `${autonomyModeLabel(state)} mode activated`,
+          variant: "success",
+          duration: 3000,
+        })
         dialog.clear()
       })
       .catch((error) =>
@@ -528,7 +539,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   createEffect(
     on(
-      () => isAsleep(autonomy()),
+      () => autonomy()?.effective?.asleep ?? false,
       (asleep, previous) => {
         if (previous !== true || asleep || reviewItems().length === 0) return
         const count = reviewItems().length
@@ -582,15 +593,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const keepAwake = useKeepAwake()
   const headerState = createMemo<SessionHeaderState>(() => {
     const state = operationalHeaderState()
-    const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
-    const level = typeof raw === "number" ? raw : raw === true ? 2 : 0
-    const goalActive = autonomy().goal?.status === "active"
-    const asleep = isAsleep(autonomy())
+    const current = autonomy()
     return {
       type: "autonomy",
-      yolo: level,
-      goalActive,
-      asleep,
+      yolo: current?.effective?.yolo,
+      goalActive: current?.goal?.status === "active",
+      answersAuto: autoAnswerOn(current),
+      asleep: current?.effective?.asleep ?? false,
       machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
       review: reviewItems().length,
       state,
@@ -1304,22 +1313,59 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     },
     {
       title: (() => {
-        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        return `YOLO ${lvl}: ${autonomyLevelDescription(lvl)} (cycle 0→1→2→3, /yolo 0|1|2|3)`
+        const lvl = autonomy()?.effective?.yolo
+        if (lvl === undefined) return "Approval level: unknown (/yolo 0|1|2)"
+        return `${approvalLevelLabel(lvl)} (${lvl}): ${autonomyLevelDescription(lvl)} (cycle 0→1→2, /yolo 0|1|2)`
       })(),
       id: "session.autonomy.yolo.toggle",
       group: "Session",
       slash: { name: "yolo" },
       run: (input?: string) => {
         const token = input?.trim().split(/\s+/)[0]
-        const parsed = token !== undefined && token !== "" ? Number.parseInt(token, 10) : Number.NaN
-        if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 3) {
-          updateAutonomy({ yolo: parsed as 0 | 1 | 2 | 3 })
+        const explicit = parseApprovalLevel(token)
+        if (explicit !== undefined) {
+          updateAutonomy({ yolo: explicit })
           return
         }
-        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
-        const next = ((lvl + 1) % 4) as 0 | 1 | 2 | 3
-        updateAutonomy({ yolo: next })
+        if (token !== undefined && token !== "") {
+          toast.show({ message: "Use /yolo with a level from 0 to 2", variant: "error", duration: 3000 })
+          return
+        }
+        const lvl = autonomy()?.effective?.yolo
+        if (lvl === undefined) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Approval level unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        updateAutonomy({ yolo: nextApprovalLevel(lvl) })
+      },
+    },
+    {
+      title: (() => {
+        const current = autonomy()
+        if (!current) return "Auto-answer: unknown (this Session)"
+        return `Auto-answer: ${autoAnswerOn(current) ? "on" : "off"} (this Session)`
+      })(),
+      id: "session.autonomy.auto-answer.toggle",
+      group: "Session",
+      slash: { name: "auto-answer" },
+      run: (input?: string) => {
+        const parsed = parseAutoAnswerArg(input?.trim().split(/\s+/)[0])
+        if (parsed === null) {
+          toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
+          return
+        }
+        if (parsed !== undefined) {
+          updateAutonomy({ autoAnswer: parsed })
+          return
+        }
+        const current = autonomy()
+        if (!current) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Auto-answer state unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        updateAutonomy({ autoAnswer: !autoAnswerOn(current) })
       },
     },
     {
@@ -1344,11 +1390,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
-      title: autonomy().goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
+      title: !autonomy() ? "Goal: unknown" : autonomy()?.goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
       id: "session.autonomy.goal.toggle",
       group: "Session",
       run: () => {
-        const action = goalToggleAction(autonomy())
+        const current = autonomy()
+        if (!current) {
+          refreshAutonomy(route.sessionID)
+          toast.show({ message: "Goal state unknown; reloading", variant: "info", duration: 3000 })
+          return
+        }
+        const action = goalToggleAction(current)
         if (action.type === "stop") {
           updateAutonomy({ goal: null })
           return
@@ -2007,7 +2059,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               <ReviewBox
                 items={reviewItems()}
                 currentSessionID={route.sessionID}
-                asleep={isAsleep(autonomy())}
+                asleep={autonomy()?.effective?.asleep ?? false}
                 activeItemID={reviewActiveID()}
                 pendingItemID={reviewPendingID()}
                 failed={reviewFailed}

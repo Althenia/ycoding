@@ -467,10 +467,10 @@ export function isRemoteReviewItemID(value: unknown): value is string {
   return typeof value === "string" && value.length <= 128 && /^rvw_[A-Za-z0-9_-]+$/.test(value)
 }
 export type RemoteAttentionDetail = { readonly sessionID: string; readonly title?: string; readonly need?: RemoteAttentionNeed }
-export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[];
+export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[]; readonly lost?: readonly string[];
   readonly details?: readonly RemoteAttentionDetail[] }
 export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string; readonly title?: string }
-export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" | "blocked"; readonly repeat?: true }
+export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" | "blocked" | "lost"; readonly repeat?: true }
 export type RemoteBlocked = { readonly type: "blocked"; readonly sessionID: string; readonly title?: string }
 export type RemoteCompletions = { readonly type: "completions"; readonly data: readonly RemoteWorkCompletion[]; readonly more: boolean }
 export type RemoteSubscriptions = {
@@ -1019,7 +1019,7 @@ function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessio
 }
 
 function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> {
-  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding", "failed", "details"], frame.type)
+  const keys = withOnlyKeys(frame, ["type", "running", "attention", "outstanding", "failed", "lost", "details"], frame.type)
   if (!keys.ok) return keys
   if (!Array.isArray(frame.running) || !Array.isArray(frame.attention) ||
     frame.running.length > RemoteLimits.maxStatusSessions || frame.attention.length > RemoteLimits.maxStatusSessions ||
@@ -1031,11 +1031,15 @@ function parseStatus(frame: Record<string, unknown>): ParseResult<RemoteStatus> 
   if (frame.failed !== undefined && (!Array.isArray(frame.failed) || frame.failed.length > RemoteLimits.maxStatusSessions ||
     !frame.failed.every(isSessionID) || new Set(frame.failed).size !== frame.failed.length ||
     !frame.failed.every((id) => attention.includes(id)))) return invalid()
+  if (frame.lost !== undefined && (!Array.isArray(frame.lost) || frame.lost.length > RemoteLimits.maxStatusSessions ||
+    !frame.lost.every(isSessionID) || new Set(frame.lost).size !== frame.lost.length ||
+    !frame.lost.every((id) => attention.includes(id) && !(Array.isArray(frame.failed) && frame.failed.includes(id))))) return invalid()
   const details = frame.details === undefined ? undefined : parseAttentionDetails(frame.details, attention)
   if (details === null) return invalid()
   return { ok: true, value: { type: "status", running: frame.running, attention: frame.attention,
     ...(frame.outstanding === undefined ? {} : { outstanding: frame.outstanding }),
     ...(frame.failed === undefined ? {} : { failed: frame.failed }),
+    ...(frame.lost === undefined ? {} : { lost: frame.lost }),
     ...(details === undefined ? {} : { details }) } }
 }
 
@@ -1057,7 +1061,7 @@ function parseAttentionDetails(value: unknown, attention: readonly string[]): re
 function parseAlertDetail(value: unknown): RemoteAlertDetail | undefined {
   if (!isRecord(value) || !withOnlyKeys(value, ["title", "need", "repeat"], value).ok) return undefined
   const title = isAlertTitle(value.title) ? value.title : undefined
-  const need = value.need === "failed" || value.need === "blocked" || isAttentionNeed(value.need) ? value.need : undefined
+  const need = value.need === "failed" || value.need === "blocked" || value.need === "lost" || isAttentionNeed(value.need) ? value.need : undefined
   if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined) || (value.repeat !== undefined && value.repeat !== true)) return undefined
   return alertDetailWire({ title, need, ...(value.repeat === true ? { repeat: true } : {}) })
 }

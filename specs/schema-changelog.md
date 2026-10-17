@@ -2,6 +2,17 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-17: Report lost background results separately
+
+- Add optional `lost: string[]` to `RemoteStatus`, the `session.status` response, and classified list `status` snapshots: unique root Session IDs (at most 500) whose only attention is a lost background-work result. It is a subset of `attention` and disjoint from `failed`; a root with an open permission, Form, or review is omitted.
+- Add `lost` to `RemoteAlertDetail.need`.
+- Additive; a runtime that predates the field omits it and clients treat omission as none.
+
+## 2026-10-17: Three YOLO levels and Session-local auto-answer
+
+- YOLO accepts levels 0–2 (Ask first, Allow tools, Tools + reviews). A stored level 3 migrates once to 2; new requests above 2 fail validation. Goals grant no permission, answer, or review authority.
+- Replace the `auto_answer` configuration key with a durable per-Session auto-answer toggle, default off, independent of YOLO, goals, and sleep, with no family propagation. `guardrails.decide_reviews` and `guardrails.decide_hard_reviews` retain their model-review gates.
+
 ## 2026-10-16: Require explicit automation opt-in
 
 - Add `auto_answer` and `guardrails.decide_reviews`, both default false. Automatic question, form and child-question answers require the first; model standard-match verification and guardrail grading require the second. YOLO permission and awake ordinary-review approvals remain separate. `guardrails.decide_hard_reviews` retains its narrower grading control.

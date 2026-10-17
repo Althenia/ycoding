@@ -912,6 +912,16 @@ describe("remote operations", () => {
     ]) expect(parseAgentMessage(JSON.stringify(frame)).ok).toBe(false)
   })
 
+  test("preserves loss-only attention without treating it as a failed run or a request", () => {
+    const status = { type: "status" as const, running: [], attention: ["ses_lost", "ses_failed"], lost: ["ses_lost"], failed: ["ses_failed"] }
+    expect(parseAgentMessage(JSON.stringify(status))).toEqual({ ok: true, value: status })
+    expect(parseRelayToClientMessage(JSON.stringify(status))).toEqual({ ok: true, value: status })
+    for (const lost of ["ses_lost", ["not-session"], ["ses_other"], ["ses_lost", "ses_lost"], ["ses_failed"], Array.from({ length: 501 }, (_, index) => `ses_${index}`)])
+      expect(parseAgentMessage(JSON.stringify({ ...status, lost })).ok).toBe(false)
+    const frame = { type: "notice.present" as const, items: [{ kind: "notice" as const, notice: { id: "ntc_1", category: "approval-requested" as const, sessionID: "ses_lost", createdAt: 1 }, detail: { need: "lost" as const } }] }
+    expect(parseRelayToClientMessage(JSON.stringify(frame))).toEqual({ ok: true, value: frame })
+  })
+
   test("carries bounded alert details only for attention roots", () => {
     const status = { type: "status" as const, running: [], attention: ["ses_b", "ses_c"], failed: ["ses_c"],
       details: [{ sessionID: "ses_b", title: "Fix login", need: "permission" as const }, { sessionID: "ses_c", title: "Ship release" }] }

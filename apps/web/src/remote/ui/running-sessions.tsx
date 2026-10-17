@@ -97,7 +97,7 @@ export function RunningSessions(props: {
               onClick={() => props.onSelectSession(session.id)}>
               <span class="running-sessions__title">{session.title}</span>
               <span class="running-sessions__workspace">{session.workspaceName}</span>
-              <span class={`running-sessions__status${sessionActivityGroup(session) === "waiting" ? " running-sessions__status--waiting" : ""}`}>
+              <span class={`running-sessions__status${session.lost === true || sessionActivityGroup(session) === "waiting" ? " running-sessions__status--waiting" : ""}`}>
                 <Show when={carouselSessionStatus(session)} fallback={lastActive === undefined ? "Last active not reported" : <time dateTime={lastActive.toISOString()}>Last active {lastActive.toLocaleString()}</time>}>
                   <span aria-hidden="true" class="running-sessions__dot" />{carouselSessionStatus(session)}
                 </Show>

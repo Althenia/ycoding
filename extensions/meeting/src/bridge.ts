@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { viewAssets, viewPolicy } from "../view/assets"
+import type { OwnerSettingsUpdate } from "./runtime"
 
 export type CaptureMessage =
   | { type: "start"; captureID: string; microphone: boolean; consent: true }
@@ -23,6 +24,8 @@ export async function startBridge(options: {
   onDisconnect?: () => void
   onView?: () => unknown
   onAsk?: (question: string) => Promise<unknown>
+  onOwnerRead?: () => Promise<unknown>
+  onOwnerUpdate?: (input: OwnerSettingsUpdate) => Promise<unknown>
 }): Promise<{ url: string; close: () => Promise<void> }> {
   if (!/^[\x21-\x7e]{32,256}$/.test(options.controlToken)) throw new Error("Invalid controller credential")
   if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535))
@@ -30,6 +33,8 @@ export async function startBridge(options: {
   const controlDigest = digest(options.controlToken)
   const viewKey = randomBytes(32).toString("hex")
   const viewDigest = digest(viewKey)
+  const ownerKey = randomBytes(32).toString("hex")
+  const ownerDigest = digest(ownerKey)
   const state: {
     active?: { captureID: string; seenAt: number }
     delivering: boolean
@@ -49,6 +54,7 @@ export async function startBridge(options: {
       const address = new URL(request.url)
       const origin = request.headers.get("origin")
       const viewRoute = ["/view/state", "/view/control", "/view/ask", "/view/capture"].includes(address.pathname)
+      const ownerRoute = address.pathname === "/view/owner/settings"
       const headers: Record<string, string> = {
         "cache-control": "no-store",
         "content-type": "application/json",
@@ -74,16 +80,29 @@ export async function startBridge(options: {
           },
         })
       }
-      if (address.pathname !== "/control" && !viewRoute) return reply(404, { error: "not_found" })
-      if (viewRoute && origin !== null && origin !== `http://127.0.0.1:${server.port}`)
+      if (address.pathname !== "/control" && !viewRoute && !ownerRoute) return reply(404, { error: "not_found" })
+      if ((viewRoute || ownerRoute) && origin !== null && origin !== `http://127.0.0.1:${server.port}`)
         return reply(403, { error: "invalid_origin" })
       if (address.pathname === "/control" && origin !== null) return reply(403, { error: "origin_forbidden" })
-      if (request.method !== (address.pathname === "/view/state" ? "GET" : "POST"))
-        return reply(405, { error: "method_not_allowed" })
+      const methodAllowed = ownerRoute
+        ? request.method === "GET" || request.method === "POST"
+        : request.method === (address.pathname === "/view/state" ? "GET" : "POST")
+      if (!methodAllowed) return reply(405, { error: "method_not_allowed" })
       const authorization = request.headers.get("authorization")
       const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : ""
-      if (token.length > 256 || !timingSafeEqual(digest(token), viewRoute ? viewDigest : controlDigest))
+      if (
+        token.length > 256 ||
+        !timingSafeEqual(digest(token), ownerRoute ? ownerDigest : viewRoute ? viewDigest : controlDigest)
+      )
         return reply(401, { error: "unauthorized" })
+      if (ownerRoute && request.method === "GET") {
+        if (!options.onOwnerRead) return reply(503, { error: "owner_unavailable" })
+        const result = await options.onOwnerRead().then(
+          (value) => ({ value }),
+          () => undefined,
+        )
+        return result ? safeReply(reply, result.value) : reply(500, { error: "owner_failed" })
+      }
       if (address.pathname === "/view/state") {
         if (!options.onView) return reply(503, { error: "view_unavailable" })
         const result = await Promise.resolve()
@@ -119,13 +138,26 @@ export async function startBridge(options: {
       if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get("content-type") ?? ""))
         return reply(415, { error: "invalid_content_type" })
       const length = request.headers.get("content-length")
-      const maxBody = viewRoute && address.pathname !== "/view/capture" ? 16_384 : 1_048_576
+      const maxBody = address.pathname === "/view/capture" || address.pathname === "/control" ? 1_048_576 : 16_384
       if (length && Number(length) > maxBody) return reply(413, { error: "payload_too_large" })
       const text = await request.text().catch(() => undefined)
       if (text === undefined) return reply(400, { error: "invalid_body" })
       if (Buffer.byteLength(text) > maxBody) return reply(413, { error: "payload_too_large" })
       const body = parse(text)
       if (!body.valid) return reply(400, { error: "invalid_json" })
+      if (ownerRoute) {
+        const update = ownerSettingsUpdate(body.value)
+        if (!update) return reply(400, { error: "invalid_settings" })
+        if (!options.onOwnerUpdate) return reply(503, { error: "owner_unavailable" })
+        const result = await options.onOwnerUpdate(update).then(
+          (value) => ({ value }),
+          () => undefined,
+        )
+        if (!result) return reply(500, { error: "owner_failed" })
+        if (record(result.value) && result.value.error === "selection_unavailable")
+          return reply(422, { error: "selection_unavailable" })
+        return safeReply(reply, result.value)
+      }
       if (address.pathname === "/view/control") {
         if (
           !record(body.value) ||
@@ -166,6 +198,12 @@ export async function startBridge(options: {
         if (record(body.value) && body.value.action === "view") {
           if (!keys(body.value, ["action"])) return reply(400, { error: "invalid_action" })
           return reply(200, { url: `http://127.0.0.1:${server.port}/view#key=${viewKey}` })
+        }
+        if (record(body.value) && body.value.action === "owner-view") {
+          if (!keys(body.value, ["action"])) return reply(400, { error: "invalid_action" })
+          return reply(200, {
+            url: `http://127.0.0.1:${server.port}/view#key=${viewKey}&owner=${ownerKey}`,
+          })
         }
         const result = await options.onControl(body.value).then(
           (value) => ({ value }),
@@ -231,6 +269,66 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 function keys(value: Record<string, unknown>, allowed: string[]) {
   return Object.keys(value).length === allowed.length && allowed.every((key) => Object.hasOwn(value, key))
+}
+function keysWithin(value: Record<string, unknown>, allowed: string[]) {
+  return Object.keys(value).every((key) => allowed.includes(key))
+}
+function boundedName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200
+}
+function ownerSettingsUpdate(value: unknown): OwnerSettingsUpdate | undefined {
+  if (!record(value) || !keysWithin(value, ["askModel", "knowledge"]) || !Object.keys(value).length) return undefined
+  const update: OwnerSettingsUpdate = {}
+  if (Object.hasOwn(value, "askModel")) {
+    if (value.askModel === "inherit") update.askModel = "inherit"
+    else if (
+      record(value.askModel) &&
+      keysWithin(value.askModel, ["providerID", "id", "variant", "profile"]) &&
+      boundedName(value.askModel.providerID) &&
+      boundedName(value.askModel.id) &&
+      (value.askModel.variant === undefined || boundedName(value.askModel.variant)) &&
+      (value.askModel.profile === undefined || boundedName(value.askModel.profile))
+    )
+      update.askModel = {
+        providerID: value.askModel.providerID,
+        id: value.askModel.id,
+        ...(value.askModel.variant ? { variant: value.askModel.variant } : {}),
+        ...(value.askModel.profile ? { profile: value.askModel.profile } : {}),
+      }
+    else return undefined
+  }
+  if (Object.hasOwn(value, "knowledge")) {
+    if (
+      !record(value.knowledge) ||
+      !keys(value.knowledge, ["mcpEnabled", "bindings"]) ||
+      typeof value.knowledge.mcpEnabled !== "boolean" ||
+      !Array.isArray(value.knowledge.bindings) ||
+      value.knowledge.bindings.length > 4
+    )
+      return undefined
+    const bindings: NonNullable<OwnerSettingsUpdate["knowledge"]>["bindings"] = []
+    for (const binding of value.knowledge.bindings) {
+      if (
+        !record(binding) ||
+        !keysWithin(binding, ["server", "search", "read", "write", "enabled"]) ||
+        !boundedName(binding.server) ||
+        !boundedName(binding.search) ||
+        !boundedName(binding.read) ||
+        (binding.write !== undefined && !boundedName(binding.write)) ||
+        (binding.enabled !== undefined && typeof binding.enabled !== "boolean")
+      )
+        return undefined
+      bindings.push({
+        server: binding.server,
+        search: binding.search,
+        read: binding.read,
+        ...(binding.write ? { write: binding.write } : {}),
+        enabled: binding.enabled ?? true,
+      })
+    }
+    update.knowledge = { mcpEnabled: value.knowledge.mcpEnabled, bindings }
+  }
+  return update
 }
 function parse(text: string): { valid: true; value: unknown } | { valid: false } {
   try {

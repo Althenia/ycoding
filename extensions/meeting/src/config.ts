@@ -1,6 +1,18 @@
 import { z } from "zod"
 import { transcriptionConfigSchema } from "./transcription"
 
+const modelSelection = z.union([
+  z.literal("inherit"),
+  z
+    .object({
+      id: z.string().min(1),
+      providerID: z.string().min(1),
+      variant: z.string().optional(),
+      profile: z.string().optional(),
+    })
+    .strict(),
+])
+
 export const meetingConfigSchema = z
   .object({
     transcription: transcriptionConfigSchema.default(() => transcriptionConfigSchema.parse({})),
@@ -30,24 +42,13 @@ export const meetingConfigSchema = z
       .default(() => ({ enabled: true, provider: null, model: null })),
     analysis: z
       .object({
-        model: z
-          .union([
-            z.literal("inherit"),
-            z
-              .object({
-                id: z.string().min(1),
-                providerID: z.string().min(1),
-                variant: z.string().optional(),
-                profile: z.string().optional(),
-              })
-              .strict(),
-          ])
-          .default("inherit"),
+        model: modelSelection.default("inherit"),
+        askModel: modelSelection.default("inherit"),
         incremental: z.boolean().default(true),
         maxCharacters: z.number().int().min(8000).max(64000).default(32000),
       })
       .strict()
-      .default(() => ({ model: "inherit" as const, incremental: true, maxCharacters: 32000 })),
+      .default(() => ({ model: "inherit" as const, askModel: "inherit" as const, incremental: true, maxCharacters: 32000 })),
     knowledge: z
       .object({
         mcpEnabled: z.boolean().default(true),
@@ -62,6 +63,7 @@ export const meetingConfigSchema = z
                 search: z.string().min(1).max(200),
                 read: z.string().min(1).max(200),
                 write: z.string().min(1).max(200).optional(),
+                enabled: z.boolean().default(true),
               })
               .strict(),
           )

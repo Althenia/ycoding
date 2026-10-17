@@ -612,7 +612,7 @@ describe("remote bridge", () => {
     try {
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({
-        type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
+        type: "status", running: [], attention: ["ses_1"], lost: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
       })
       lost = []
       test.streams[0].stream.onEvent({ type: "session.execution.started.1", data: { sessionID: "ses_1" } })
@@ -628,8 +628,24 @@ describe("remote bridge", () => {
     try {
       await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.includes("ses_1")))
       expect(sentFrames(test.records[0]).filter((frame) => frame.type === "status").at(-1)).toEqual({
-        type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
+        type: "status", running: [], attention: ["ses_1"], lost: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }],
       })
+    } finally { await test.bridge.close() }
+  })
+
+  test("a pushed status gives a genuine request precedence over loss and loss precedence over failure", async () => {
+    const sessions = ["ses_asked", "ses_lost_failed", "ses_failed", "ses_lost"].map((sessionID) => ({ ...entry, sessionID, title: sessionID }))
+    const test = harness({ sessions, results: {
+      outstandingSessions: () => ({ data: ["ses_asked"], running: ["ses_asked"], failed: ["ses_lost_failed", "ses_failed"], lost: ["ses_asked", "ses_lost_failed", "ses_lost"] }),
+      permissionRequests: () => [{ id: "per_1", sessionID: "ses_asked" }],
+    } })
+    await test.bridge.connect()
+    try {
+      const status = await waitFor(() => sentFrames(test.records[0]).find((frame) => frame.type === "status" && frame.attention.length === 4))
+      expect(status).toMatchObject({ type: "status", running: ["ses_asked"], attention: ["ses_asked", "ses_failed", "ses_lost", "ses_lost_failed"],
+        failed: ["ses_failed"], lost: ["ses_lost", "ses_lost_failed"] })
+      if (status.type !== "status") throw new Error("Expected a status frame")
+      expect(status.lost?.includes("ses_asked")).toBe(false)
     } finally { await test.bridge.close() }
   })
 
@@ -1009,7 +1025,7 @@ describe("remote bridge", () => {
       lost = ["ses_1"]
       test.streams[0].stream.onEvent({ type: "session.execution.interrupted.1", data: { sessionID: "ses_1" } })
       const status = await waitFor(() => sentFrames(test.records[0]).findLast((frame) => frame.type === "status" && frame.running.length === 0))
-      expect(status).toEqual({ type: "status", running: [], attention: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }] })
+      expect(status).toEqual({ type: "status", running: [], attention: ["ses_1"], lost: ["ses_1"], details: [{ sessionID: "ses_1", title: "One" }] })
       expect(test.calls.filter((call) => ["permissionRequests", "formRequests", "guardrailRequestList"].includes(call.method))).toEqual([])
     } finally { await test.bridge.close() }
   })
