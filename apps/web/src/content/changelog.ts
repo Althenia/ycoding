@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.14",
+    date: "2026-10-17",
+    title: "Refreshed Usage, simpler shells, and task MCP",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Expose coding tasks from one Git repository to one approved owner with `ycoding mcp serve`. Connect compatible MCP clients through an OAuth-protected endpoint, start tasks in separate Git worktrees from committed HEAD, and poll status and partial results or cancel active execution. Configure your OAuth provider and stable HTTPS tunnel separately; existing permissions and guardrails still apply." },
+      { tag: "Added", text: "Review pending task questions, forms, permissions and supported guardrails with `list_interactions`, and submit explicit owner decisions with `respond_interaction`. Stale, duplicate and uncertain replies are not replayed; unsupported requests and child-Session interactions require local attention. The gateway does not enable automatic approval or push notifications." },
+      { tag: "Changed", text: "Web Usage leads with estimated spend, followed by account-reported provider quotas, charts and Backend consumption. Transparent provider marks retain their source colors or theme-safe treatment; unknown providers keep their labels without a substitute mark." },
+      { tag: "Changed", text: "The Team shell picker groups compact rows under Running and Archived, newest first within each section. Rows identify their owner, preserve selection through status changes and keep observed archived output accessible during the current connection. The output view retains the full command, working directory and PID." },
+      { tag: "Changed", text: "Automatic question answers retain their automatic attribution in goal continuation. Human replies keep their user attribution, and goal steering respects the Session's auto-answer setting without granting permissions or human approval." },
+      { tag: "Changed", text: "Per-message prompt-cost summaries and expandable cost breakdowns are removed from the web conversation, matching the TUI. Usage reports, Session totals, and backend accounting remain available." },
+      { tag: "Changed", text: "Remove the shell queue channel and machine-wide scheduler. Shell commands run immediately after permission and family-cap checks, with foreground and background execution, timeouts, and memory limits." },
+      { tag: "Fixed", text: "Run `ycoding mcp serve` with either Bun or the Node executable, with streaming responses, pending-request cancellation on disconnect, and clean shutdown of open streams." },
+    ],
+  },
+  {
     version: "0.10.13",
     date: "2026-10-17",
     title: "Selected subagent context, clearer Usage, and Meeting recovery",
