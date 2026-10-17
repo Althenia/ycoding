@@ -228,3 +228,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 - Project artifacts use their validated lifecycle instead of writing directly into source directories.
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
 - Provider usage failures remain isolated from Session startup and model execution.
+
+## Task MCP gateway
+
+Core owns the opt-in task MCP transport, OAuth resource-server verification, and durable ownership/admission index. CLI owns the localhost listener and adapts existing generated Client operations to the gateway. The existing service owns Session execution and transcript persistence. The main HttpApi, remote relay, and generated Client surface are unchanged. See [task contract](../specs/task-mcp.md).

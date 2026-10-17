@@ -79,6 +79,23 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         }),
       )
       .handle(
+        "session.permission.reject",
+        Effect.fn(function* (ctx) {
+          const permission = yield* Permission.Service
+          const request = yield* permission.get(ctx.params.requestID)
+          if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
+          yield* permission
+            .reply({
+              requestID: ctx.params.requestID,
+              reply: "reject",
+              rejectScope: "request",
+              message: ctx.payload.message,
+            })
+            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "permission.saved.list",
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
