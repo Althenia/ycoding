@@ -242,6 +242,8 @@ import type {
   PermissionGetOutput,
   PermissionReplyInput,
   PermissionReplyOutput,
+  PermissionRejectInput,
+  PermissionRejectOutput,
   FileReadInput,
   FileReadOutput,
   FileListInput,
@@ -2118,6 +2120,18 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/permission/${encodeURIComponent(input.requestID)}/reply`,
             body: { reply: input["reply"], message: input["message"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      reject: (input: PermissionRejectInput, requestOptions?: RequestOptions) =>
+        request<PermissionRejectOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/permission/${encodeURIComponent(input.requestID)}/reject`,
+            body: { message: input["message"] },
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

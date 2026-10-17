@@ -134,4 +134,21 @@ export const makePermissionGroup = <
           }),
         ),
     )
+    .add(
+      HttpApiEndpoint.post("session.permission.reject", "/api/session/:sessionID/permission/:requestID/reject", {
+        params: { sessionID: Session.ID, requestID: Permission.ID },
+        payload: Schema.Struct({ message: Schema.String.pipe(Schema.optional) }),
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, PermissionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.permission.reject",
+            summary: "Reject one pending permission request",
+            description:
+              "Reject only the selected permission request owned by a session, leaving other pending requests unchanged.",
+          }),
+        ),
+    )
     .annotateMerge(OpenApi.annotations({ title: "permission", description: "Experimental permission routes." }))

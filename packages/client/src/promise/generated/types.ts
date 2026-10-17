@@ -7977,6 +7977,14 @@ export type PermissionReplyInput = {
 
 export type PermissionReplyOutput = void
 
+export type PermissionRejectInput = {
+  readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
+  readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
+  readonly message?: { readonly message?: string | undefined }["message"]
+}
+
+export type PermissionRejectOutput = void
+
 export type FileReadInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined

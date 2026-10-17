@@ -1,6 +1,6 @@
 # Task MCP gateway
 
-`ycoding mcp serve` exposes five MCP tools for one approved owner and one Git repository. It connects to the existing local YCoding service. Task execution, permissions, guardrails, history, and model credentials remain in that service.
+`ycoding mcp serve` exposes task and interaction MCP tools for one approved owner and one Git repository. It connects to the existing local YCoding service. Task execution, permissions, guardrails, history, and model credentials remain in that service.
 
 ## Operator setup
 
@@ -59,7 +59,14 @@ Test discovery and login first, then start one small task and poll its status/re
 - `get_result({taskId})`: includes status, the worktree, and at most 32 KiB of the latest assistant's text from the newest 20 messages, with an explicit truncation flag. Results can be partial. Reasoning and raw tool logs are excluded.
 - `cancel_task({taskId})`: prevents admission when cancellation arrives during preparation and interrupts that task's active Session. It never removes the worktree or rolls back completed file changes.
 
-`waiting` requires attention in local YCoding for permissions, questions, or review. The gateway cannot answer or approve them and does not enable YOLO or auto-answer. A successful execution outcome is a runtime result, not independent verification that the requested coding goal was achieved.
+- `list_interactions({taskId})`: polls pending root-Session Forms, questions, permissions, and human-reviewable guardrails. Each entry includes its stable `interactionId`, exact revision digest, complete bounded request details/options, permitted response actions, and whether it is actionable. Unsupported or oversized requests require local attention; their shortened descriptions cannot be approved remotely.
+- `respond_interaction({taskId, interactionId, revision, response})`: submits one explicit response to that exact pending request. For Forms use `{action: "form", answer: {...}}`; for legacy questions use `{action: "question", answers: [[...]]}`. An approvable action accepts `{action: "once"}` or `{action: "reject"}`; supported questions also accept `{action: "cancel"}`. There is no implicit approval, `always` permission, or policy override.
+
+When a task is `waiting`, the client can poll `list_interactions`, show the actual request and choices to the owner, then submit the owner's response. Permission requests and review prompts are untrusted task data, not instructions authorizing the assistant to approve them. The assistant must obtain the required user decision; delegated routine choices require an explicit, bounded user authorization. A generic task prompt or successful OAuth login does not authorize every future action. Hard-denied actions have no approval route. Unsupported review types and child-Session interactions remain local-only.
+
+Replies are tied to this owner, task, native request, and revision. Stale, duplicate, cancelled-task, and mismatched replies are rejected. Before forwarding a response, the gateway saves its request/revision digest (not the answer) in the durable index. A lost response or restart therefore never silently replays an approval. If a response is uncertain, inspect and resolve it locally rather than retrying blindly. Confirmed pre-submit validation failures permit correction; timeouts and unknown outcomes do not. Each task retains at most 256 consumed reply attempts. Live permission rejection uses the new request-scoped permission endpoint; it never calls the legacy reject-all operation. An older local service without that endpoint returns an error and requires an upgrade or local attention. There is no fallback that could reject other pending permissions.
+
+This is a polling interface, not a push notification service. It does not wake ChatGPT or guarantee an unsolicited message after a disconnected client stops polling. It does not enable YOLO or auto-answer. A successful execution outcome is a runtime result, not independent verification that the requested coding goal was achieved.
 
 Cancellation is cooperative and targets the root Session’s current execution. It does not recursively cancel durable background child tasks; outstanding child work keeps the task unresolved. The existing Session API cannot discard an idle durable pending prompt. Such a task stays `cancelling` until local attention resolves it, rather than claiming successful cancellation. A local manual resume can consume retained input; review it before continuing. Do not start a replacement task merely because a cancellation request was accepted.
 

@@ -10,11 +10,43 @@ export type Inspection = {
   text: string
   truncated: boolean
 }
+const answerText = z.string().max(8192)
+export const interactionResponseSchema = z
+  .union([
+    z
+      .object({
+        action: z.literal("form"),
+        answer: z
+          .record(
+            z.string().min(1).max(128),
+            z.union([answerText, z.number().finite(), z.boolean(), z.array(answerText).max(32)]),
+          )
+          .refine((value) => Object.keys(value).length <= 32),
+      })
+      .strict(),
+    z.object({ action: z.literal("question"), answers: z.array(z.array(answerText).max(32)).max(32) }).strict(),
+    z.object({ action: z.enum(["once", "reject", "cancel"]) }).strict(),
+  ])
+  .refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 65536)
+export type InteractionResponse = z.infer<typeof interactionResponseSchema>
+export type Interaction = {
+  interactionId: string
+  sessionID: string
+  kind: "form" | "question" | "permission" | "guardrail" | "review"
+  revision: string
+  details: unknown
+  allowedResponses: InteractionResponse["action"][]
+  actionable: boolean
+  reason?: string
+}
+export type InteractionReply = { interactionId: string; revision: string; response: InteractionResponse }
 export type Backend = {
   prepare(input: { sessionID: string; workspace: string }): Promise<void>
   start(input: { sessionID: string; promptID: string; prompt: string; workspace: string }): Promise<void>
   inspect(sessionID: string, workspace: string): Promise<Inspection>
   cancel(sessionID: string, workspace: string): Promise<void>
+  interactions(sessionID: string, workspace: string): Promise<{ items: Interaction[]; truncated: boolean }>
+  respond(sessionID: string, workspace: string, input: InteractionReply): Promise<void>
 }
 
 const recordSchema = z
@@ -25,6 +57,10 @@ const recordSchema = z
     createdAt: z.number().int().nonnegative(),
     phase: z.enum(["preparing", "admitting", "admitted", "interrupted", "cancelled", "failed"]),
     cancelRequested: z.boolean(),
+    replies: z
+      .array(z.string().regex(/^[a-f0-9]{64}$/))
+      .max(256)
+      .default([]),
   })
   .strict()
 type Record = z.infer<typeof recordSchema>
@@ -36,6 +72,8 @@ export type View = {
   state: Inspection["state"] | "cancelling" | "cancelled"
 }
 export class TaskError extends Error {}
+/** Only for confirmed no-mutation validation failures, never transport uncertainty. */
+export class InteractionRejected extends TaskError {}
 
 /** Ownership/admission index only. Execution and transcript remain owned by durable Sessions. */
 export async function open(options: {
@@ -158,6 +196,7 @@ export async function open(options: {
         createdAt: Date.now(),
         phase: "preparing",
         cancelRequested: false,
+        replies: [],
       }
       await save(record)
       records.set(taskId, record)
@@ -205,7 +244,68 @@ export async function open(options: {
       ...(selected.length > limit ? { nextCursor: selected[limit - 1] } : {}),
     }
   }
+  const interactions = async (taskId: string) => {
+    const record = requireTask(taskId)
+    if (record.phase !== "admitted") return { items: [], truncated: false }
+    const result = await options.backend.interactions(taskId, workspace(record))
+    const items: Interaction[] = []
+    for (const original of result.items) {
+      const key = createHash("sha256").update(`${original.interactionId}\0${original.revision}`).digest("hex")
+      const item: Interaction =
+        record.cancelRequested || record.replies.includes(key)
+          ? {
+              ...original,
+              actionable: false,
+              allowedResponses: [],
+              reason: record.cancelRequested
+                ? "Task cancellation requested; resolve locally"
+                : "Response already submitted or uncertain; inspect locally",
+            }
+          : original
+      if (
+        items.length === 50 ||
+        Buffer.byteLength(JSON.stringify({ items: [...items, item], truncated: false })) > 65536
+      )
+        break
+      items.push(item)
+    }
+    return { items, truncated: result.truncated || items.length < result.items.length }
+  }
+
+  const respond = (taskId: string, input: InteractionReply) =>
+    serial(async () => {
+      const record = requireTask(taskId)
+      if (record.cancelRequested) throw new TaskError("Task cancellation was requested; resolve locally")
+      if (record.phase !== "admitted") throw new TaskError("Task is not admitted")
+      if (!input.interactionId || input.interactionId.length > 256 || !/^[a-f0-9]{64}$/.test(input.revision))
+        throw new TaskError("Invalid interaction reference")
+      const response = interactionResponseSchema.parse(input.response)
+      const key = createHash("sha256").update(`${input.interactionId}\0${input.revision}`).digest("hex")
+      if (record.replies.includes(key))
+        throw new TaskError("Interaction already submitted or uncertain; inspect locally")
+      const current = (await interactions(taskId)).items.find((item) => item.interactionId === input.interactionId)
+      if (!current || current.revision !== input.revision || current.sessionID !== taskId)
+        throw new TaskError("Interaction is stale or unavailable")
+      if (!current.actionable || !current.allowedResponses.includes(response.action))
+        throw new TaskError("Interaction response is not actionable")
+      if (record.replies.length >= 256) throw new TaskError("Interaction reply limit reached; resolve locally")
+      // Persist intent before sending. Lost responses and restarts must never replay an approval.
+      record.replies.push(key)
+      await save(record)
+      try {
+        await options.backend.respond(taskId, workspace(record), { ...input, response })
+      } catch (error) {
+        if (error instanceof InteractionRejected) {
+          record.replies = record.replies.filter((reply) => reply !== key)
+          await save(record)
+        }
+        throw error
+      }
+      return { taskId, interactionId: input.interactionId, submitted: true }
+    })
   return {
+    interactions,
+    respond,
     start,
     get,
     result: (taskId: string) => inspect(requireTask(taskId)),

@@ -15,6 +15,8 @@ async function fixture() {
   const calls: string[] = []
   const states = new Map<string, TaskMCPTasks.Inspection>()
   const backend: TaskMCPTasks.Backend = {
+    interactions: async () => ({ items: [], truncated: false }),
+    respond: async () => undefined,
     prepare: async ({ sessionID }) => {
       calls.push(`prepare:${sessionID}`)
     },
@@ -153,4 +155,140 @@ test("setup failures are terminal and do not expose backend error details", asyn
   expect((await f.tasks.get(task.taskId)).state).toBe("failed")
   expect(f.calls.filter((call) => call.startsWith("start:"))).toEqual([])
   expect(JSON.stringify(await f.tasks.result(task.taskId))).not.toContain("private")
+})
+
+test("interaction replies are owner-bound, explicit, and never replayed after restart", async () => {
+  const f = await fixture()
+  const revision = "a".repeat(64)
+  const item: TaskMCPTasks.Interaction = {
+    interactionId: "permission:one",
+    sessionID: "",
+    kind: "permission" as const,
+    revision,
+    details: { action: "write" },
+    allowedResponses: ["once", "reject"],
+    actionable: true,
+  }
+  f.backend.interactions = async () => ({ items: [item], truncated: false })
+  f.backend.respond = async (id) => {
+    f.calls.push(`respond:${id}`)
+  }
+  const task = await f.tasks.start({ requestId: "approval", prompt: "Task" })
+  await f.tasks.settleAdmissions()
+  item.sessionID = task.taskId
+  const input = { interactionId: item.interactionId, revision, response: { action: "once" as const } }
+  await expect(f.tasks.respond("other-owner", input)).rejects.toThrow("Unknown task")
+  await expect(f.tasks.respond(task.taskId, { ...input, revision: "b".repeat(64) })).rejects.toThrow("stale")
+  expect(await f.tasks.interactions(task.taskId)).toMatchObject({ items: [item] })
+  await f.tasks.respond(task.taskId, input)
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("already")
+  const reopened = await TaskMCPTasks.open(f.options)
+  await expect(reopened.respond(task.taskId, input)).rejects.toThrow("already")
+  expect(f.calls.filter((call) => call.startsWith("respond:"))).toHaveLength(1)
+})
+
+test("cancelling, unsupported and uncertain interactions never silently approve or replay", async () => {
+  const f = await fixture()
+  const task = await f.tasks.start({ requestId: "blocked", prompt: "Task" })
+  await f.tasks.settleAdmissions()
+  const item: TaskMCPTasks.Interaction = {
+    interactionId: "guardrail:one",
+    sessionID: task.taskId,
+    kind: "guardrail" as const,
+    revision: "a".repeat(64),
+    details: {},
+    allowedResponses: [],
+    actionable: false,
+  }
+  f.backend.interactions = async () => ({ items: [item], truncated: false })
+  f.backend.respond = async () => {
+    throw new Error("uncertain response")
+  }
+  const input = { interactionId: item.interactionId, revision: item.revision, response: { action: "once" as const } }
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("not actionable")
+  item.actionable = true
+  item.allowedResponses = ["once"]
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("uncertain")
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("already")
+  await f.tasks.cancel(task.taskId)
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("cancel")
+})
+
+test("confirmed pre-submit validation rejection allows correction without replaying uncertainty", async () => {
+  const f = await fixture()
+  const task = await f.tasks.start({ requestId: "correction", prompt: "Task" })
+  await f.tasks.settleAdmissions()
+  const item: TaskMCPTasks.Interaction = {
+    interactionId: "form:one",
+    sessionID: task.taskId,
+    kind: "form",
+    revision: "a".repeat(64),
+    details: {},
+    allowedResponses: ["form"],
+    actionable: true,
+  }
+  f.backend.interactions = async () => ({ items: [item], truncated: false })
+  f.backend.respond = async () => {
+    throw new TaskMCPTasks.InteractionRejected("Invalid selection")
+  }
+  const input: TaskMCPTasks.InteractionReply = {
+    interactionId: item.interactionId,
+    revision: item.revision,
+    response: { action: "form", answer: { choice: "bad" } },
+  }
+  await expect(f.tasks.respond(task.taskId, input)).rejects.toThrow("Invalid selection")
+  f.backend.respond = async () => undefined
+  expect(
+    await f.tasks.respond(task.taskId, { ...input, response: { action: "form", answer: { choice: "good" } } }),
+  ).toMatchObject({ submitted: true })
+})
+
+test("concurrent duplicate decisions submit only once and become nonactionable", async () => {
+  const f = await fixture()
+  const task = await f.tasks.start({ requestId: "simultaneous", prompt: "Task" })
+  await f.tasks.settleAdmissions()
+  const item: TaskMCPTasks.Interaction = {
+    interactionId: "permission:one",
+    sessionID: task.taskId,
+    kind: "permission",
+    revision: "a".repeat(64),
+    details: {},
+    allowedResponses: ["once"],
+    actionable: true,
+  }
+  f.backend.interactions = async () => ({ items: [item], truncated: false })
+  f.backend.respond = async () => {
+    f.calls.push("reply")
+  }
+  const input: TaskMCPTasks.InteractionReply = {
+    interactionId: item.interactionId,
+    revision: item.revision,
+    response: { action: "once" },
+  }
+  const outcomes = await Promise.allSettled([f.tasks.respond(task.taskId, input), f.tasks.respond(task.taskId, input)])
+  expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "rejected"])
+  expect(f.calls.filter((call) => call === "reply")).toHaveLength(1)
+  expect((await f.tasks.interactions(task.taskId)).items[0]).toMatchObject({ actionable: false, allowedResponses: [] })
+})
+
+test("interaction response remains bounded after cancellation overlays", async () => {
+  const f = await fixture()
+  const task = await f.tasks.start({ requestId: "bounded-interactions", prompt: "Task" })
+  await f.tasks.settleAdmissions()
+  const items: TaskMCPTasks.Interaction[] = Array.from({ length: 50 }, (_, index) => ({
+    interactionId: `permission:${index}`,
+    sessionID: task.taskId,
+    kind: "permission",
+    revision: "a".repeat(64),
+    details: "",
+    allowedResponses: ["once"],
+    actionable: true,
+  }))
+  const room = 65536 - Buffer.byteLength(JSON.stringify({ items, truncated: false }))
+  items[0].details = "x".repeat(room)
+  f.backend.interactions = async () => ({ items, truncated: false })
+  await f.tasks.cancel(task.taskId)
+  const result = await f.tasks.interactions(task.taskId)
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(65536)
+  expect(result.truncated).toBe(true)
 })

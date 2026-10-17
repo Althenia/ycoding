@@ -41,7 +41,16 @@ afterEach(async () => {
 
 async function fixture(resource = config.resource) {
   const directory = await mkdtemp(path.join(tmpdir(), "ycoding-mcp-transport-"))
-  const state = { keyFetches: 0, starts: 0, cancelled: false, fail: false }
+  const state = {
+    keyFetches: 0,
+    starts: 0,
+    cancelled: false,
+    fail: false,
+    interactionReads: 0,
+    truncated: false,
+    pending: [] as TaskMCPTasks.Interaction[],
+    replies: [] as Array<{ sessionID: string; workspace: string; input: TaskMCPTasks.InteractionReply }>,
+  }
   const tasks = await TaskMCPTasks.open({
     directory,
     workspaceRoot: path.join(directory, "workspaces"),
@@ -57,6 +66,15 @@ async function fixture(resource = config.resource) {
       },
       cancel: async () => {
         state.cancelled = true
+      },
+      interactions: async () => {
+        state.interactionReads += 1
+        if (state.fail) throw new Error("private upstream credential must not escape")
+        return { items: state.pending, truncated: state.truncated }
+      },
+      respond: async (sessionID, workspace, input) => {
+        if (state.fail) throw new Error("private upstream credential must not escape")
+        state.replies.push({ sessionID, workspace, input })
       },
     },
   })
@@ -120,7 +138,21 @@ async function fixture(resource = config.resource) {
     )
     return { client, seen }
   }
-  return { handler, auth, tasks, state, token, post, connect }
+  const pending = (sessionID: string, input: Partial<TaskMCPTasks.Interaction> = {}) => {
+    const item: TaskMCPTasks.Interaction = {
+      interactionId: "permission:one",
+      sessionID,
+      kind: "permission",
+      revision: "a".repeat(64),
+      details: { permission: "write", targets: ["src/example.ts"] },
+      allowedResponses: ["once", "reject"],
+      actionable: true,
+      ...input,
+    }
+    state.pending.push(item)
+    return item
+  }
+  return { handler, auth, tasks, state, token, post, connect, pending }
 }
 
 describe("task MCP HTTP boundary", () => {
@@ -261,7 +293,7 @@ describe("task MCP HTTP boundary", () => {
   test.each(["legacy", "modern"] as const)(
     "supports SDK discovery and tool lifecycle in %s protocol mode",
     async (era) => {
-      const { connect, tasks, state } = await fixture()
+      const { connect, tasks, state, pending } = await fixture()
       const { client, seen } = await connect(era)
       expect(seen).toContain(era === "legacy" ? "initialize" : "server/discover")
       const catalog = await client.listTools()
@@ -271,8 +303,17 @@ describe("task MCP HTTP boundary", () => {
         "get_status",
         "get_result",
         "cancel_task",
+        "list_interactions",
+        "respond_interaction",
       ])
       expect(catalog.tools.find((tool) => tool.name === "get_result")?.annotations?.readOnlyHint).toBe(true)
+      expect(catalog.tools.find((tool) => tool.name === "list_interactions")?.annotations?.readOnlyHint).toBe(true)
+      expect(catalog.tools.find((tool) => tool.name === "respond_interaction")?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      })
       const started = await client.callTool({
         name: "start_task",
         arguments: { requestId: "task-one", prompt: "Fix the tests" },
@@ -287,6 +328,25 @@ describe("task MCP HTTP boundary", () => {
       expect(result.structuredContent).toMatchObject({ text: "Visible assistant output", truncated: true })
       const listed = await client.callTool({ name: "list_tasks", arguments: { limit: 1 } })
       expect(listed.structuredContent).toMatchObject({ tasks: [{ taskId }] })
+      const item = pending(taskId)
+      const interactions = await client.callTool({ name: "list_interactions", arguments: { taskId } })
+      expect(interactions.structuredContent).toEqual({ items: [item], truncated: false })
+      expect(state.replies).toHaveLength(0)
+      const decision = {
+        taskId,
+        interactionId: item.interactionId,
+        revision: item.revision,
+        response: { action: "once" },
+      }
+      expect((await client.callTool({ name: "respond_interaction", arguments: decision })).structuredContent).toEqual({
+        taskId,
+        interactionId: item.interactionId,
+        submitted: true,
+      })
+      expect(state.replies).toHaveLength(1)
+      expect(state.replies[0]).toMatchObject({ sessionID: taskId, input: { response: { action: "once" } } })
+      expect((await client.callTool({ name: "respond_interaction", arguments: decision })).isError).toBe(true)
+      expect(state.replies).toHaveLength(1)
       expect((await client.callTool({ name: "cancel_task", arguments: { taskId } })).structuredContent).toMatchObject({
         state: "cancelled",
       })
@@ -305,6 +365,203 @@ describe("task MCP HTTP boundary", () => {
     expect(result.isError).toBe(true)
     expect(result.content).toEqual([{ type: "text", text: "Invalid tool arguments" }])
     expect(state.starts).toBe(0)
+  })
+
+  test.each([
+    undefined,
+    {},
+    { action: "always" },
+    { action: "once", persistent: true },
+    { action: "form" },
+    { action: "question", answers: "Approve" },
+    { action: "form", answer: Object.fromEntries(Array.from({ length: 33 }, (_, index) => [String(index), "x"])) },
+    { action: "form", answer: { ["x".repeat(129)]: "x" } },
+    { action: "form", answer: { text: "x".repeat(8193) } },
+    { action: "form", answer: { choices: Array.from({ length: 33 }, () => "x") } },
+    { action: "question", answers: Array.from({ length: 33 }, () => ["x"]) },
+    { action: "question", answers: [Array.from({ length: 33 }, () => "x")] },
+    { action: "question", answers: [["x".repeat(8193)]] },
+    { action: "question", answers: [Array.from({ length: 9 }, () => "x".repeat(8192))] },
+    { action: "form", answer: { first: "界".repeat(8192), second: "界".repeat(8192), third: "界".repeat(8192) } },
+  ])("rejects missing or invalid interaction decisions without a default approval", async (response) => {
+    const { connect, state } = await fixture()
+    const { client } = await connect("modern")
+    const result = await client.callTool({
+      name: "respond_interaction",
+      arguments: { taskId: "owned-task", interactionId: "pending-one", revision: "a".repeat(64), response },
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: "text", text: "Invalid tool arguments" }])
+    expect(state.interactionReads).toBe(0)
+    expect(state.replies).toHaveLength(0)
+  })
+
+  test.each([
+    { interactionId: "" },
+    { interactionId: "x".repeat(257) },
+    { revision: "" },
+    { revision: "a".repeat(63) },
+    { revision: "g".repeat(64) },
+    { revision: undefined },
+    { directory: "/another/workspace" },
+    { sessionID: "another-session" },
+  ])("rejects malformed interaction references and caller-supplied routing fields", async (overrides) => {
+    const { connect, state } = await fixture()
+    const { client } = await connect("modern")
+    const result = await client.callTool({
+      name: "respond_interaction",
+      arguments: {
+        taskId: "owned-task",
+        interactionId: "permission:one",
+        revision: "a".repeat(64),
+        response: { action: "once" },
+        ...overrides,
+      },
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: "text", text: "Invalid tool arguments" }])
+    expect(state.interactionReads).toBe(0)
+    expect(state.replies).toHaveLength(0)
+  })
+
+  test("rejects extra list-interaction arguments instead of expanding its task scope", async () => {
+    const { connect, state } = await fixture()
+    const { client } = await connect("modern")
+    const result = await client.callTool({
+      name: "list_interactions",
+      arguments: { taskId: "owned-task", sessionID: "another-session" },
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: "text", text: "Invalid tool arguments" }])
+    expect(state.interactionReads).toBe(0)
+  })
+
+  test("accepts the Core interaction ID boundary of 256 characters", async () => {
+    const { connect, tasks, state, pending } = await fixture()
+    const { client } = await connect("modern")
+    const task = await tasks.start({ requestId: "long-interaction", prompt: "Task" })
+    await tasks.settleAdmissions()
+    const item = pending(task.taskId, { interactionId: "x".repeat(256) })
+    const result = await client.callTool({
+      name: "respond_interaction",
+      arguments: {
+        taskId: task.taskId,
+        interactionId: item.interactionId,
+        revision: item.revision,
+        response: { action: "once" },
+      },
+    })
+    expect(result.isError).not.toBe(true)
+    expect(state.replies).toHaveLength(1)
+  })
+
+  test.each([
+    { action: "form", answer: { title: "Selected answer", count: 2, accepted: false, labels: ["one", "two"] } },
+    { action: "question", answers: [["First option"], ["Second option", "Third option"]] },
+    { action: "reject" },
+    { action: "cancel" },
+  ] satisfies TaskMCPTasks.InteractionResponse[])(
+    "forwards only the explicit typed interaction response",
+    async (response) => {
+      const { connect, tasks, state, pending } = await fixture()
+      const { client } = await connect("modern")
+      const task = await tasks.start({ requestId: "interaction", prompt: "Task" })
+      await tasks.settleAdmissions()
+      const item = pending(task.taskId, {
+        kind: response.action === "form" ? "form" : response.action === "question" ? "question" : "permission",
+        allowedResponses: [response.action],
+      })
+      const input = { interactionId: item.interactionId, revision: item.revision, response }
+      const result = await client.callTool({
+        name: "respond_interaction",
+        arguments: { taskId: task.taskId, ...input },
+      })
+      expect(result.isError).not.toBe(true)
+      expect(state.replies).toEqual([{ sessionID: task.taskId, workspace: task.workspace, input }])
+    },
+  )
+
+  test("keeps interaction reads and replies within an owned task", async () => {
+    const { connect, tasks, state, pending } = await fixture()
+    const { client } = await connect("modern")
+    const task = await tasks.start({ requestId: "interaction", prompt: "Task" })
+    await tasks.settleAdmissions()
+    const item = pending(task.taskId)
+    const input = { interactionId: item.interactionId, revision: item.revision, response: { action: "once" } }
+    for (const name of ["list_interactions", "respond_interaction"]) {
+      const result = await client.callTool({
+        name,
+        arguments: name === "list_interactions" ? { taskId: "foreign-task" } : { taskId: "foreign-task", ...input },
+      })
+      expect(result.isError).toBe(true)
+      expect(result.content).toEqual([{ type: "text", text: "Unknown task" }])
+    }
+    expect(state.interactionReads).toBe(0)
+    item.sessionID = "another-session"
+    const result = await client.callTool({ name: "respond_interaction", arguments: { taskId: task.taskId, ...input } })
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: "text", text: "Interaction is stale or unavailable" }])
+    expect(state.replies).toHaveLength(0)
+  })
+
+  test("rejects stale interaction IDs and revisions without submitting a response", async () => {
+    const { connect, tasks, state, pending } = await fixture()
+    const { client } = await connect("modern")
+    const task = await tasks.start({ requestId: "interaction", prompt: "Task" })
+    await tasks.settleAdmissions()
+    const item = pending(task.taskId)
+    for (const reference of [
+      { interactionId: "missing", revision: item.revision },
+      { interactionId: item.interactionId, revision: "b".repeat(64) },
+    ]) {
+      const result = await client.callTool({
+        name: "respond_interaction",
+        arguments: { taskId: task.taskId, ...reference, response: { action: "once" } },
+      })
+      expect(result.isError).toBe(true)
+      expect(result.content).toEqual([{ type: "text", text: "Interaction is stale or unavailable" }])
+    }
+    expect(state.replies).toHaveLength(0)
+  })
+
+  test("preserves local-attention and truncation notices without allowing a reply", async () => {
+    const { connect, tasks, state, pending } = await fixture()
+    const { client } = await connect("modern")
+    const task = await tasks.start({ requestId: "interaction", prompt: "Task" })
+    await tasks.settleAdmissions()
+    const item = pending(task.taskId, { actionable: false, allowedResponses: [], reason: "Resolve locally" })
+    state.truncated = true
+    const listed = await client.callTool({ name: "list_interactions", arguments: { taskId: task.taskId } })
+    expect(listed.structuredContent).toEqual({ items: [item], truncated: true })
+    const result = await client.callTool({
+      name: "respond_interaction",
+      arguments: {
+        taskId: task.taskId,
+        interactionId: item.interactionId,
+        revision: item.revision,
+        response: { action: "once" },
+      },
+    })
+    expect(result.isError).toBe(true)
+    expect(state.replies).toHaveLength(0)
+  })
+
+  test.each(["list_interactions", "respond_interaction"])("requires OAuth before %s dispatch", async (name) => {
+    const { handler, post, state } = await fixture()
+    const response = await handler.fetch(
+      post(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: { taskId: "foreign-task" } },
+        }),
+        { authorization: "" },
+      ),
+    )
+    expect(response.status).toBe(401)
+    expect(state.interactionReads).toBe(0)
+    expect(state.replies).toHaveLength(0)
   })
 
   test("sanitizes unexpected backend errors", async () => {
