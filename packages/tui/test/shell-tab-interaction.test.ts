@@ -10,7 +10,7 @@ const child = { ...root, id: "ses_picker_child", parentID: root.id, title: "Chil
 const location = (directory: string) => ({ directory, project: { id: root.projectID, directory } })
 
 function shell(id: string, ownerID: string, started: number, status: ShellInfo["status"] = "running"): ShellInfo {
-  return { id, command: `command ${id}`, status, cwd: "/workspace/commands", shell: "bash", file: `/tmp/${id}`, metadata: { sessionID: ownerID }, time: { started }, ...(status === "queued" ? { queuePosition: 3 } : {}) }
+  return { id, command: `command ${id}`, status, cwd: "/workspace/commands", shell: "bash", file: `/tmp/${id}`, metadata: { sessionID: ownerID }, time: { started } }
 }
 
 async function open(shells: ShellInfo[], override?: FetchHandler) {
@@ -57,8 +57,8 @@ async function open(shells: ShellInfo[], override?: FetchHandler) {
   return { screen, outputReads, kills, data: () => data! }
 }
 
-test("selected queued shell survives insertion, running reorder and archival before Enter opens its owned output", async () => {
-  const target = shell("sh_target", child.id, 20, "queued")
+test("selected running shell survives insertion, reorder and archival before Enter opens its owned output", async () => {
+  const target = shell("sh_target", child.id, 5)
   const values = [shell("sh_main", root.id, 10), target]
   const { screen, outputReads, kills } = await open(values)
   try {
@@ -66,13 +66,10 @@ test("selected queued shell survives insertion, running reorder and archival bef
     const newer = shell("sh_newer", root.id, 30)
     values.push(newer)
     screen.events.emit({ id: "evt_insert", type: "shell.created", created: 30, location: root.location, data: { info: newer } })
-    Object.assign(target, { status: "running", time: { started: 40 } })
-    screen.events.emit({ id: "evt_run", type: "shell.updated", created: 40, location: child.location, data: { info: target } })
-    await until(() => !screen.frame().includes("queued #3"))
     const latest = shell("sh_latest", root.id, 50)
     values.push(latest)
     screen.events.emit({ id: "evt_latest", type: "shell.created", created: 50, location: root.location, data: { info: latest } })
-    Object.assign(target, { status: "exited", time: { started: 40, completed: 100 } })
+    Object.assign(target, { status: "exited", time: { started: target.time.started, completed: 100 } })
     screen.events.emit({ id: "evt_archive", type: "shell.exited", created: 100, location: child.location, data: { id: target.id, status: "exited", exit: 0 } })
     await until(() => screen.frame().includes("Archived"))
     expect(screen.frame()).toContain("command sh_target")
@@ -84,8 +81,8 @@ test("selected queued shell survives insertion, running reorder and archival bef
   } finally { await screen.dispose(); delete process.env.YCODING_ROUTE }
 }, 30_000)
 
-test.each(["running", "queued"] as const)("kill retains the selected %s shell and owner Location while verification is pending across insertion and reorder", async (status) => {
-  const target = shell("sh_target", child.id, 10, status)
+test("kill retains the selected running shell and owner Location while verification is pending across insertion and reorder", async () => {
+  const target = shell("sh_target", child.id, 10)
   const values = [shell("sh_main", root.id, 20), target]
   const verification = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<void>()
@@ -102,16 +99,14 @@ test.each(["running", "queued"] as const)("kill retains the selected %s shell an
     const newer = shell("sh_newer", root.id, 30)
     values.push(newer)
     screen.events.emit({ id: "evt_kill_insert", type: "shell.created", created: 30, location: root.location, data: { info: newer } })
-    Object.assign(target, { status: "running", time: { started: 40 } })
-    screen.events.emit({ id: "evt_kill_reorder", type: "shell.updated", created: 40, location: child.location, data: { info: target } })
-    await until(() => screen.frame().includes("command sh_newer") && !screen.frame().includes("queued #3"))
+    await until(() => screen.frame().includes("command sh_newer"))
     expect(kills).toEqual([])
     expect(screen.frame()).toContain("command sh_target")
     hold = false
     verification.resolve(json({ data: child }))
     await until(() => kills.length === 1)
     expect(kills).toEqual([{ id: target.id, directory: child.location.directory }])
-    Object.assign(target, { status: "killed", time: { started: 40, completed: 100 } })
+    Object.assign(target, { status: "killed", time: { started: target.time.started, completed: 100 } })
     screen.events.emit({ id: "evt_kill_archive", type: "shell.exited", created: 100, location: child.location, data: { id: target.id, status: "killed" } })
     await until(() => screen.frame().includes("Archived"))
     await screen.renderer.idle(); await screen.renderOnce()
@@ -129,7 +124,7 @@ test("observed archive survives live-only sync and picker reopen, ignores Kill a
     if (url.pathname === `/api/session/${child.id}`) ownerLookups++
     if (url.pathname !== "/api/shell") return undefined
     const directory = url.searchParams.get("location[directory]") ?? root.location.directory
-    return json({ location: location(directory), data: values.filter((value) => (value.status === "running" || value.status === "queued") && (value.metadata.sessionID === child.id ? child : root).location.directory === directory) })
+    return json({ location: location(directory), data: values.filter((value) => value.status === "running" && (value.metadata.sessionID === child.id ? child : root).location.directory === directory) })
   })
   try {
     screen.input.pressArrow("down")

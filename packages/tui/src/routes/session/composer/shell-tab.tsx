@@ -13,7 +13,7 @@ import { groupSessionShells, type SessionShellGroup } from "../../../util/sessio
 import { formatDuration } from "../../../util/format"
 import { escapeTerminalText } from "../../../util/terminal-text"
 import { Locale } from "../../../util/locale"
-import { shellStatusLabel, statusColor } from "../../shell-output/util"
+import { statusColor } from "../../shell-output/util"
 import { useComposerTab } from "./index"
 
 type ShellEntry = {
@@ -28,9 +28,9 @@ type ShellRow =
 
 function shellRows(groups: readonly SessionShellGroup[]) {
   const entries = groups.flatMap((group) => group.shells.map((shell) => ({ shell, owner: group.owner })))
-  const sections = ["Running", "Queued", "Archived"].map((label) => ({
+  const sections = ["Running", "Archived"].map((label) => ({
     label,
-    entries: entries.filter((entry) => label === "Running" ? entry.shell.status === "running" : label === "Queued" ? entry.shell.status === "queued" : entry.shell.status !== "running" && entry.shell.status !== "queued")
+    entries: entries.filter((entry) => label === "Running" ? entry.shell.status === "running" : entry.shell.status !== "running")
       .sort((a, b) => {
         const time = (entry: ShellEntry) => label === "Archived" ? entry.shell.time.completed ?? entry.shell.time.started : entry.shell.time.started
         return time(b) - time(a) || (a.shell.id < b.shell.id ? -1 : a.shell.id > b.shell.id ? 1 : 0)
@@ -44,13 +44,13 @@ function shellRows(groups: readonly SessionShellGroup[]) {
 }
 
 export function formatShellElapsed(shell: ShellInfo, now: number) {
-  const completed = shell.status === "running" || shell.status === "queued" ? undefined : shell.time.completed
+  const completed = shell.status === "running" ? undefined : shell.time.completed
   const duration = Math.max(0, (completed ?? now) - shell.time.started)
   return formatDuration(duration / 1_000)
 }
 
 function canKillShell(shell: ShellInfo | undefined) {
-  return shell?.status === "running" || shell?.status === "queued"
+  return shell?.status === "running"
 }
 
 export function ShellRows(props: {
@@ -83,7 +83,7 @@ export function ShellRows(props: {
                 const [width, setWidth] = createSignal(0)
                 let box: BoxRenderable | undefined
                 const ownerWidth = () => Math.min(32, Math.max(12, Math.floor(width() / 4)))
-                const elapsed = () => `${entry().shell.status === "queued" ? "waiting · " : ""}${formatShellElapsed(entry().shell, props.now)}`
+                const elapsed = () => formatShellElapsed(entry().shell, props.now)
                 return (
                     <box
                       id={`shell-picker:${id}`}
@@ -99,7 +99,7 @@ export function ShellRows(props: {
                     >
                       <box width={16} flexShrink={0}>
                         <text fg={active() ? theme.text.action.primary.focused : statusColor(entry().shell.status, theme)} wrapMode="none" truncate>
-                          {shellStatusLabel(entry().shell)}
+                          {entry().shell.status}
                         </text>
                       </box>
                       <box flexGrow={1} flexShrink={1} minWidth={0} paddingRight={2}>
@@ -155,7 +155,7 @@ export function ShellTab(props: { sessionID: string }) {
   })
 
   createEffect(() => {
-    if (!entries().some((entry) => entry.shell.status === "running" || entry.shell.status === "queued")) return
+    if (!entries().some((entry) => entry.shell.status === "running")) return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })

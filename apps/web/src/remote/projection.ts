@@ -7,7 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
-import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory, type RemoteUsagePromptCost } from "@ycoding-ai/remote"
+import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
 import { readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
@@ -406,8 +406,6 @@ export type SessionView = {
   readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
-  readonly promptCosts?: readonly RemoteUsagePromptCost[]
-  readonly promptCostState?: "loading" | "ready" | "unavailable"
   readonly review?: { readonly status: "ready" | "unsupported" | "error"; readonly items: readonly ReviewItemView[] }
   readonly guardrailDecisions?: readonly GuardrailDecisionView[]
   readonly unhandledEvents: number

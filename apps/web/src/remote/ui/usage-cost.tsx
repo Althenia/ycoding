@@ -5,17 +5,6 @@ import { Modal } from "../../ui/modal"
 import { costCoverage, forecastStatus, measuredSpeedLines, unitCostLines, type CostPresentation, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "./usage-accounting"
 import "./usage-cost.css"
 
-export function PromptCostBlock(props: { readonly unit: UnitCostPresentation }) {
-  const lines = () => unitCostLines(props.unit)
-  return <section class="usage-unit-cost" aria-label="Prompt cost" data-input-id={props.unit.inputID}>
-    <strong classList={{ "usage-unit-cost__partial": !props.unit.complete }}>{lines()[0]}</strong>
-    <details class="usage-unit-cost__details"><summary><Icon name="chevron-right" size={12} /> Cost breakdown</summary>
-      <For each={lines().slice(1)}>{(line) => <p>{line}</p>}</For>
-      <Show when={!props.unit.complete}><p>Retained evidence only; this is not a complete historical bill.</p></Show>
-    </details>
-  </section>
-}
-
 export function UsageStatisticsDetails(props: {
   readonly tokens: { readonly input: number; readonly output: number; readonly reasoning: number; readonly cache: { readonly read: number; readonly write: number } }
   readonly cost?: CostPresentation

@@ -19,3 +19,38 @@ describe("Shell", () => {
     expect(Schema.decodeUnknownSync(Shell.Status)("memory-limit")).toBe("memory-limit")
   })
 })
+
+describe("shell lifecycle contract", () => {
+  test("accepts only running and terminal process statuses", () => {
+    const decode = Schema.decodeUnknownSync(Shell.Status)
+    for (const status of ["running", "exited", "timeout", "memory-limit", "killed"] as const) {
+      expect(decode(status)).toBe(status)
+    }
+    expect(() => decode("queued")).toThrow()
+  })
+
+  test("exposes process timing and metadata without scheduler fields", () => {
+    expect(Object.keys(Shell.Time.fields).sort()).toEqual(["completed", "started"])
+    expect(Object.keys(Shell.Info.fields).sort()).toEqual([
+      "command",
+      "cwd",
+      "exit",
+      "file",
+      "id",
+      "metadata",
+      "pid",
+      "shell",
+      "status",
+      "time",
+      "toolCallID",
+    ])
+  })
+
+  test("publishes only process creation, exit, and deletion events", () => {
+    expect(Shell.Event.Definitions.map((event) => event.type).sort()).toEqual([
+      "shell.created",
+      "shell.deleted",
+      "shell.exited",
+    ])
+  })
+})

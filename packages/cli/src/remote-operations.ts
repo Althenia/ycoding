@@ -932,11 +932,11 @@ async function run(input: OperationInput) {
       const locations = await familyLocations(input, verified)
       const shells = (await Promise.all(locations.map(async (memberLocation) => ({ location: memberLocation, items: await input.local.shellList(memberLocation) })))).flatMap((entry) => entry.items.map((item) => ({ item, location: entry.location })))
       const owners = new Map<string, SessionInfo>()
-      const visible: { id: string; ownerID: string; ownerAgent?: string; ownerTitle?: string; command: string; status: string; queuePosition?: number; startedAt: number; completedAt?: number }[] = []
+      const visible: { id: string; ownerID: string; ownerAgent?: string; ownerTitle?: string; command: string; status: string; startedAt: number; completedAt?: number }[] = []
       let chars = serializeResponse({ type: "response", id: request.id, ok: true, value: { data: [], truncated: false } }).length
       for (const { item, location: shellLocation } of shells) {
         if (!item || typeof item !== "object" || !("metadata" in item) || !("id" in item)) continue
-        const shell = item as { id: unknown; command?: unknown; status?: unknown; queuePosition?: number; metadata: unknown; time?: { started?: number; completed?: number } }
+        const shell = item as { id: unknown; command?: unknown; status?: unknown; metadata: unknown; time?: { started?: number; completed?: number } }
         const ownerID = shell.metadata && typeof shell.metadata === "object" && "sessionID" in shell.metadata ? shell.metadata.sessionID : undefined
         if (typeof ownerID !== "string" || typeof shell.id !== "string") continue
         const owner = owners.get(ownerID) ?? await verifiedFamilyOwner(input, verified, ownerID)
@@ -946,7 +946,7 @@ async function run(input: OperationInput) {
         const command = typeof shell.command === "string" ? shell.command : ""
         const row = { id: shell.id, ownerID, ...(owner.agent === undefined ? {} : { ownerAgent: owner.agent }), ...(owner.title === undefined ? {} : { ownerTitle: owner.title }),
           command: command.length > 256 ? `${command.slice(0, 255)}…` : command, status: typeof shell.status === "string" ? shell.status : "exited",
-          ...(shell.status === "queued" && shell.queuePosition !== undefined ? { queuePosition: shell.queuePosition } : {}), startedAt: shell.time?.started ?? 0,
+          startedAt: shell.time?.started ?? 0,
           ...(shell.time?.completed === undefined ? {} : { completedAt: shell.time.completed }) }
         const length = JSON.stringify(row).length + (visible.length === 0 ? 0 : 1)
         if (chars + length > RemoteLimits.maxAgentMessageChars) return { data: visible, truncated: true }

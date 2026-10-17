@@ -14,7 +14,8 @@ test("provider marks cover exactly the built-in account usage adapters", async (
   const component = await Bun.file(new URL("./provider-logo.tsx", import.meta.url)).text()
   expect([...component.matchAll(/\[\s*"([^"]+)"\s*,/g)].map((match) => match[1]).sort()).toEqual([...providers].sort())
   for (const id of providers) expect(providerLogo(id)).toBeDefined()
-  for (const id of ["", "opencode", "google", "runpod", "OpenAI", "custom", "constructor", "__proto__"]) expect(providerLogo(id)).toBeUndefined()
+  const providerID = "opencode"
+  for (const id of ["", providerID, "google", "runpod", "OpenAI", "custom", "constructor", "__proto__"]) expect(providerLogo(id)).toBeUndefined()
 })
 
 test("unknown providers add no markup or whitespace around their existing label", () => {

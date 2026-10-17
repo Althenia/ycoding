@@ -29,7 +29,7 @@ test("cost, measured coverage and per-window forecasts reflow with keyboard disc
       await page.setReducedMotion(reduced)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-accounting-fixture.html`)
       for (let index = 0; index < 100; index++) {
-        if (await page.evaluate<boolean>(`!!document.querySelector('.usage-unit-cost')`)) break
+        if (await page.evaluate<boolean>(`!!document.querySelector('[aria-label="Recursive task cost"]')`)) break
         await Bun.sleep(20)
       }
       await page.evaluate(`document.fonts.ready`)
@@ -51,12 +51,6 @@ test("cost, measured coverage and per-window forecasts reflow with keyboard disc
       expect(await page.evaluate<string>(`document.body.innerText`)).toContain("so far · incomplete")
       expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("Warming up after restart")
       expect(await page.evaluate<string>(`document.body.innerText`)).not.toContain("half-life")
-      await page.evaluate(`document.querySelector('.usage-unit-cost summary').focus()`)
-      await page.pressKey("Enter", "Enter", 13, "\r")
-      for (let index = 0; index < 100 && !await page.evaluate<boolean>(`document.querySelector('.usage-unit-cost details').open`); index++) await Bun.sleep(20)
-      expect(await page.evaluate<boolean>(`document.querySelector('.usage-unit-cost details').open`)).toBe(true)
-      expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Decision unreported")
-      expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Main $0.00 · Children Known $2.00 + unreported")
       await page.evaluate(`document.querySelector('.usage-statistics-details summary').focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
       for (let index = 0; index < 100 && !await page.evaluate<boolean>(`document.querySelector('.usage-statistics-details').open`); index++) await Bun.sleep(20)
@@ -92,6 +86,9 @@ test("cost, measured coverage and per-window forecasts reflow with keyboard disc
       await page.pressKey("Enter", "Enter", 13, "\r")
       await wait(page, `document.querySelector('[aria-label="Recursive task cost"]').open`)
       expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Inclusive task rows overlap; do not add them for a family total.")
+      expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Decision unreported")
+      expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Main $0.00 · Children Known $2.00 + unreported")
+      expect(await page.evaluate<string>(`document.body.innerText`)).toContain("Historical attribution is partial")
       await Bun.write(join(captures, `usage-accounting-task-${width}-${theme}-${reduced ? "reduced" : "normal"}.png`), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`window.scrollTo(0, 0)`)
       await Bun.write(join(captures, `usage-accounting-${width}-${theme}-${reduced ? "reduced" : "normal"}.png`), Buffer.from(await page.screenshot(), "base64"))

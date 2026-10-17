@@ -23,17 +23,17 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("a queued Team shell disappears once its cancellation succeeds", async () => {
+test("a running Team shell disappears once killing succeeds", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
   try {
-    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two&queuedTeamShell`)
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&presentation=conversation&team=two`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Open Team"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('[aria-label="Open Team"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view [data-tab="shell"]') !== null`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`document.querySelector('.team-view [data-tab="shell"]').click()`)
-    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('queued #2') ?? false`); attempt += 1) await Bun.sleep(25)
-    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('queued #2') ?? false`)).toBe(true)
+    for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('running') ?? false`); attempt += 1) await Bun.sleep(25)
+    expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell')?.textContent.includes('running') ?? false`)).toBe(true)
     await page.evaluate(`document.querySelector('.team-view__shell [data-action="kill"]').click(); document.querySelector('dialog[aria-label="Kill shell"] [data-action="confirm"]').click()`)
     for (let attempt = 0; attempt < 80 && !await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`); attempt += 1) await Bun.sleep(25)
     expect(await page.evaluate<boolean>(`document.querySelector('.team-view__shell') === null`)).toBe(true)
@@ -76,7 +76,7 @@ test("an opened Team shell catches final output after its live row disappears", 
   } finally { await page.close() }
 }, 15_000)
 
-test("a completed background shell tool polls its queued, running, and exited shell state", async () => {
+test("a completed background shell tool polls its running and exited shell state", async () => {
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
   try {
@@ -84,7 +84,6 @@ test("a completed background shell tool polls its queued, running, and exited sh
     for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`[...document.querySelectorAll('.transcript-tool__toggle')].some((button) => button.textContent.includes('bun test --watch'))`); attempt += 1) await Bun.sleep(25)
     await page.evaluate(`[...document.querySelectorAll('.transcript-tool__toggle')].find((button) => button.textContent.includes('bun test --watch')).click()`)
     for (let attempt = 0; attempt < 200 && !await page.evaluate<boolean>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent.includes('final-output') ?? false`); attempt += 1) await Bun.sleep(25)
-    expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("queued-output")
     expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("running-output")
     expect(await page.evaluate<string>(`document.querySelector('.transcript-tool__body .transcript-shell-output')?.textContent ?? ''`)).toContain("final-output")
   } finally { await page.close() }

@@ -254,7 +254,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
           episode.state = "terminal"
           if (!work || work[0].summary.active > 0) return
-          if (work[1].data.some((shell) => (shell.status === "running" || shell.status === "queued") && shell.metadata.sessionID === episode.sessionID))
+          if (work[1].data.some((shell) => shell.status === "running" && shell.metadata.sessionID === episode.sessionID))
             return
           const output =
             initial.goal?.status === "active"

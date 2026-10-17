@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { classifyLegacyReference, rewriteBrandText } from "./ycoding-rebrand"
+import { classifyLegacyReference, rewriteBrandPath, rewriteBrandText } from "./ycoding-rebrand"
 
 describe("YCoding rebrand policy", () => {
   test("rewrites canonical product, package, environment, config, and protocol identifiers", () => {
@@ -43,6 +43,17 @@ describe("YCoding rebrand policy", () => {
       ),
     ).toBe(
       'export const OpencodePlugin = "OpenCode provider"\nconst provider = "opencode-go"\nconst key = process.env.OPENCODE_API_KEY\nconst label = "OpenCode Console account"',
+    )
+  })
+
+  test("preserves the exact web external-provider asset path and its source identity", () => {
+    const asset = "apps/web/src/assets/providers/opencode.svg"
+    const content = "<svg><title>opencode</title></svg>"
+    expect(classifyLegacyReference(asset, content)).toBe("external")
+    expect(rewriteBrandText(asset, content)).toBe(content)
+    expect(rewriteBrandPath(asset)).toBe(asset)
+    expect(rewriteBrandPath("apps/web/src/assets/branding/opencode.svg")).toBe(
+      "apps/web/src/assets/branding/ycoding.svg",
     )
   })
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, measuredSpeedLines, promptCostLine, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
+import { consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, measuredSpeedLines, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
 
 const zero = { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }
 const partial = { known: 0, pricedRequests: 1, unpricedRequests: 2 }
@@ -106,14 +106,4 @@ test("recorded consumption details keep exact rates, windows, coverage, observat
   expect(sparse).toContain("Estimated cost rate unreported")
   expect(sparse).toContain("Profile provider default at request time")
   expect(sparse).toContain("0 priced · 7 unpriced")
-})
-
-test("only an admitted prompt shows a cost line, and an unread unit says loading or unreported", () => {
-  expect(promptCostLine("pending", false, "ready")).toBeUndefined()
-  expect(promptCostLine("pending", true, "ready")).toBeUndefined()
-  expect(promptCostLine(undefined, false, "ready")).toBeUndefined()
-  expect(promptCostLine("promoted", true, "ready")).toEqual({ kind: "unit" })
-  expect(promptCostLine("consumed", false, "loading")).toEqual({ kind: "loading" })
-  expect(promptCostLine("consumed", false, "unavailable")).toEqual({ kind: "unreported" })
-  expect(promptCostLine("consumed", false, undefined)).toEqual({ kind: "unreported" })
 })

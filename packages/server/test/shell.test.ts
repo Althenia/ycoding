@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Context, Effect, Fiber, Layer, PlatformError, Scope } from "effect"
@@ -13,7 +13,6 @@ import { Config } from "@ycoding-ai/core/config"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Shell } from "@ycoding-ai/core/shell"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
@@ -26,7 +25,7 @@ import { LocationMiddleware, type LocationServices } from "../src/location"
 const posix = process.platform === "win32" ? test.skip : test
 
 posix(
-  "DELETE /api/shell/:id cancels queued and running commands and rejects unknown IDs",
+  "DELETE /api/shell/:id cancels running commands, preserves failed kills, and rejects unknown IDs",
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "ycoding-shell-http-"))
     try {
@@ -48,7 +47,6 @@ posix(
                     info: new Config.Info({
                       shell: "/bin/sh",
                       shell_sandbox: "disabled",
-                      shell_queue: { max_running: 1 },
                     }),
                   }),
                 ]),
@@ -122,10 +120,7 @@ posix(
               ),
             )
           const command = shellProcess(directory)
-          const running = yield* shell.enqueue(
-            yield* shell.prepare({ command: command.command, timeout: 0 }),
-            SessionSchema.ID.make("ses_http_holder"),
-          )
+          const running = yield* shell.create(yield* shell.prepare({ command: command.command, timeout: 0 }))
           const pid = Number(yield* fileReady(command.ready))
           yield* Effect.addFinalizer(() => cleanGroup(pid))
           yield* Effect.addFinalizer(() =>
@@ -133,21 +128,7 @@ posix(
               termination.denied = false
             }),
           )
-          yield* Effect.gen(function* () {
-            while ((yield* shell.get(running.id)).status !== "running") yield* Effect.sleep(10)
-          }).pipe(Effect.timeout(5_000))
-          const marker = join(directory, "must-not-start")
-          const waiting = yield* shell.enqueue(
-            yield* shell.prepare({ command: `touch '${marker}'`, timeout: 0 }),
-            SessionSchema.ID.make("ses_http_waiting"),
-          )
-          const waitingDone = yield* shell.wait(waiting.id).pipe(Effect.forkScoped({ startImmediately: true }))
-          expect((yield* remove(waiting.id)).status).toBe(204)
-          expect((yield* Fiber.join(waitingDone).pipe(Effect.timeout(5_000))).status).toBe("killed")
-          expect(yield* Effect.promise(() => readdir(join(directory, "state", "shell-queue", "entries")))).toEqual([
-            `${running.id}.json`,
-          ])
-          expect((yield* remove(waiting.id)).status).toBe(404)
+          expect(running.status).toBe("running")
           termination.denied = true
           expect((yield* remove(running.id)).status).toBe(500)
           expect(groupAlive(pid)).toBe(true)
@@ -157,7 +138,7 @@ posix(
           expect((yield* remove(running.id)).status).toBe(204)
           expect(groupAlive(pid)).toBe(false)
           expect((yield* Fiber.join(runningDone).pipe(Effect.timeout(5_000))).status).toBe("killed")
-          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+          expect((yield* remove(running.id)).status).toBe(404)
           expect((yield* remove("sh_unknown")).status).toBe(404)
         }).pipe(Effect.scoped),
       )

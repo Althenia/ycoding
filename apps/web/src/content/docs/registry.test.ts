@@ -82,31 +82,12 @@ describe("public docs allowlist", () => {
 })
 
 describe("documentation index", () => {
-  test("documents slot-index bounds and immediate acknowledgment for the shell queue", () => {
+  test("documents ordinary shell resource limits without a shell queue", () => {
     const resource = findDocPage("configuration/tools")?.sections.find((section) => section.heading === "Resource limits")
-    const text = resource?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
-    expect(text).toContain("identical shell queue limits")
-    expect(text).toContain("slot indices below its own limits")
-    expect(text).toContain("largest recorded corresponding limit")
-    expect(text).toContain("without waiting for resource sampling or admission")
     const rows = resource?.blocks.flatMap((block) => block.kind === "table" ? block.rows : []) ?? []
-    for (const field of ["max_running", "max_running_per_session", "max_queued_per_session"])
-      expect(rows.find((row) => row[0] === `\`shell_queue.${field}\``)?.[3]).toContain("slot range")
-    expect(rows.find((row) => row[0] === "`shell_queue.max_running`")?.[2]).toBe("`10`")
-    expect(rows.find((row) => row[0] === "`shell_queue.memory_reserve_mb`")?.[3]).toContain("unmaterialized")
-    expect(rows.find((row) => row[0] === "`shell_queue.max_load`")?.[3]).toContain("recent starts")
-    expect(text).toContain("exp(−age / 60 seconds)")
-    expect(text).toContain("run-0")
-    expect(text).toContain("even when memory or CPU headroom is insufficient")
-    expect(text).toContain("last five recorded queued runs")
-    expect(text).toContain("periodic memory sample after startup")
-    expect(text).toContain("successful exits with code 0")
-    expect(text).toContain("Nonzero exits")
-    expect(text).toContain("do not evict history")
-    expect(text).toContain("after completion and release of running slots")
-    expect(text).toContain("256 recently recorded keys")
-    expect(text).toContain("full memory limit")
-    expect(text).toContain("reserves a family shell slot only at admission")
+    expect(rows.find((row) => row[0] === "`shell_memory_limit_mb`")?.[3]).toContain("overrides it per call")
+    expect(rows.find((row) => row[0] === "`shell_sandbox`")?.[3]).toContain("isolation")
+    expect(JSON.stringify(DOC_PAGES)).not.toContain("shell_queue")
   })
 
   test("describes release installation without claiming a signature", () => {

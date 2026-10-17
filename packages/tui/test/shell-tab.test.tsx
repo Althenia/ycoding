@@ -49,8 +49,6 @@ test("renders family shells in ordered state sections with inline owners and der
   const external = shell("external", "ses_external", "running", { started: 10_000 })
   const unresolved = shell("unresolved", "ses_missing", "running", { started: 10_000 })
   const recentChild = shell("recent-child", "ses_child", "running", { started: 20_000 })
-  const queued = { ...shell("queued", "ses_main", "queued", { started: 25_000 }), queuePosition: 2 }
-  const queuedChild = shell("queued-child", "ses_child", "queued", { started: 15_000 })
   const killed = shell("killed", "ses_main", "killed", { started: 45_000, completed: 50_000 })
   const memory = shell("memory", "ses_child", "memory-limit", { started: 5_000, completed: 45_000 })
   const tied = shell("a-tie", "ses_child", "exited", { started: 1_000, completed: 40_000 })
@@ -60,13 +58,13 @@ test("renders family shells in ordered state sections with inline owners and der
     session("ses_child", { parentID: "ses_main", agent: "reviewer", title: "Check shell ownership" }),
     session("ses_external", { agent: "builder", title: "Outside lane" }),
   ]
-  const grouped = groupSessionShells([main, child, timedOut, orphan, external, unresolved, recentChild, queued, queuedChild, killed, memory, tied, noCompletion], sessions, "ses_main", { includeSettled: true })
+  const grouped = groupSessionShells([main, child, timedOut, orphan, external, unresolved, recentChild, killed, memory, tied, noCompletion], sessions, "ses_main", { includeSettled: true })
 
   expect(grouped.map((group) => group.owner.label)).toEqual([
     "Main chat",
     "reviewer · Check shell ownership",
   ])
-  expect(grouped.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["main", "queued", "killed", "no-completion", "child", "timeout", "recent-child", "queued-child", "memory", "a-tie"])
+  expect(grouped.flatMap((group) => group.shells.map((item) => item.id))).toEqual(["main", "killed", "no-completion", "child", "timeout", "recent-child", "memory", "a-tie"])
   expect(formatShellElapsed(main, 75_000)).toBe("1m05s")
   expect(formatShellElapsed(child, 75_000)).toBe("20s")
 
@@ -88,8 +86,8 @@ test("renders family shells in ordered state sections with inline owners and der
   try {
     const frame = app.captureCharFrame()
     const lines = frame.split("\n").map((line) => line.trim()).filter(Boolean)
-    expect(lines.filter((line) => /^(Running|Queued|Archived)$/.test(line))).toEqual(["Running", "Queued", "Archived"])
-    expect(lines.filter((line) => line.includes("command ")).map((line) => line.match(/command ([\w-]+)/)?.[1])).toEqual(["recent-child", "main", "queued", "queued-child", "killed", "memory", "a-tie", "timeout", "no-completion", "child"])
+    expect(lines.filter((line) => /^(Running|Archived)$/.test(line))).toEqual(["Running", "Archived"])
+    expect(lines.filter((line) => line.includes("command ")).map((line) => line.match(/command ([\w-]+)/)?.[1])).toEqual(["recent-child", "main", "killed", "memory", "a-tie", "timeout", "no-completion", "child"])
     expect(lines.find((line) => line.includes("command main"))).toContain("Main chat")
     expect(lines.find((line) => line.includes("command recent-child"))).toContain("reviewer · Check")
     expect(frame).not.toContain("UNKNOWN SESSION")
@@ -101,8 +99,6 @@ test("renders family shells in ordered state sections with inline owners and der
     expect(frame).toContain("timeout")
     expect(frame).not.toContain("/workspace")
     expect(frame).not.toContain("pid 104")
-    expect(frame).toContain("queued #2")
-    expect(lines.find((line) => line.includes("command queued "))).toContain("waiting · 50s")
     expect(frame).toContain("1m05s")
     expect(frame).toContain("20s")
   } finally {

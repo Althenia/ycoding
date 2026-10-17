@@ -8,15 +8,6 @@ export type CostPresentation = {
   readonly provenance?: "recorded" | "current_catalog"
 }
 
-export type PromptCostLine = { readonly kind: "unit" } | { readonly kind: "loading" | "unreported" }
-
-/** A prompt that is not yet promoted (queued, sending, or failed to send) has no cost line. */
-export function promptCostLine(state: "pending" | "promoted" | "consumed" | undefined, hasUnit: boolean, readState: "loading" | "ready" | "unavailable" | undefined): PromptCostLine | undefined {
-  if (state === undefined || state === "pending") return undefined
-  if (hasUnit) return { kind: "unit" }
-  return { kind: readState === "loading" ? "loading" : "unreported" }
-}
-
 export function accountingPresentation(unit: RemoteUsagePromptCost | RemoteUsageTaskCost, unavailable = false): UnitCostPresentation {
   return {
     inputID: "anchor" in unit ? unit.anchor.inputID : unit.sessionID,

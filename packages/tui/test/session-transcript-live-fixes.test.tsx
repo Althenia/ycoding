@@ -2551,50 +2551,36 @@ test("truncates a transcript label with an ellipsis instead of overprinting its 
   }
 }, 60_000)
 
-for (const viewport of [DESIGN_VIEWPORT, NARROW_VIEWPORT]) for (const mode of ["dark", "light"] as const) test(`shows a queue-channel shell in ${mode} info ink at ${viewport.width} columns until it starts as a background shell`, async () => {
+for (const viewport of [DESIGN_VIEWPORT, NARROW_VIEWPORT]) for (const mode of ["dark", "light"] as const) test(`shows a running background shell in subdued ${mode} ink at ${viewport.width} columns`, async () => {
   const started = Date.now() - 3_000
-  const shellID = "sh_queued_typecheck"
+  const shellID = "sh_background_typecheck"
   const screen = await renderScreen({
     ...viewport,
     args: { sessionID },
     config: { theme: { name: "ycoding", mode } },
     route: routeFor([
-      { id: "msg_queue_user", type: "user", text: "Typecheck in the queue", time: { created: 1 } },
+      { id: "msg_background_user", type: "user", text: "Typecheck in the background", time: { created: 1 } },
       {
-        id: "msg_queue_assistant", type: "assistant", agent: "build", model: session.model,
+        id: "msg_background_assistant", type: "assistant", agent: "build", model: session.model,
         content: [
-          { type: "tool", id: "call_queue_shell", name: "shell", state: { status: "completed", input: { command: "bun run queue-check", channel: "queue" }, content: [{ type: "text", text: "The command was added to the machine-wide shell queue at position 2." }], structured: { shellID, truncated: false } }, time: { created: started, ran: started, completed: started + 10 } },
+          { type: "tool", id: "call_background_shell", name: "shell", state: { status: "completed", input: { command: "bun run background-check", background: true }, content: [{ type: "text", text: "The command is running in the background." }], structured: { shellID, truncated: false } }, time: { created: started, ran: started, completed: started + 10 } },
         ],
         time: { created: 2 },
       },
     ]),
-    settle: "queue-check",
+    settle: "background-check",
   })
-  const info = { id: shellID, command: "bun run queue-check", cwd: directory, shell: "/bin/sh", file: `/tmp/${shellID}.out`, metadata: { sessionID }, time: { started } }
-  const row = () => transcriptSlice(screen.lines().find((line) => line.includes("queue-check")) ?? "", viewport.width).trimEnd()
+  const info = { id: shellID, command: "bun run background-check", cwd: directory, shell: "/bin/sh", file: `/tmp/${shellID}.out`, metadata: { sessionID }, time: { started } }
+  const row = () => transcriptSlice(screen.lines().find((line) => line.includes("background-check")) ?? "", viewport.width).trimEnd()
   try {
     await screen.waitForEventStream()
     screen.events.emit({
-      id: "evt_queue_created", created: started + 20, type: "shell.created", location: { directory },
-      data: { info: { ...info, status: "queued", queuePosition: 2 } },
+      id: "evt_background_created", created: started + 20, type: "shell.created", location: { directory },
+      data: { info: { ...info, status: "running", pid: 4242 } },
     } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "queued #2")
-    expect(row(), screen.frame()).toMatch(/running · queued #2 · \d+[smhdw]$/)
-    expect(screen.colorOf("queued #2")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.info.default.toInts())
-    screen.events.emit({
-      id: "evt_queue_moved", created: started + 30, type: "shell.updated", location: { directory },
-      data: { info: { ...info, status: "queued", queuePosition: 1 } },
-    } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "queued #1")
-    expect(screen.colorOf("queued #1")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.info.default.toInts())
-    screen.events.emit({
-      id: "evt_queue_started", created: started + 40, type: "shell.updated", location: { directory },
-      data: { info: { ...info, status: "running", pid: 4242, time: { started: started + 40, queued: started } } },
-    } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "background")
+    await waitForFrame(screen.frame, "running · background")
     expect(row()).toMatch(/running · background · \d+[smhdw]$/)
-    expect(screen.colorOf("background")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.subdued.toInts())
-    expect(screen.frame()).not.toContain("queued #")
+    expect(screen.colorOf("running · background")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.subdued.toInts())
   } finally {
     await screen.dispose()
   }

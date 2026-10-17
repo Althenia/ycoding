@@ -22,7 +22,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
           identifier: "shell.list",
           summary: "List live shell commands",
           description:
-            "List queued and running shell commands for a location. Queued commands report their machine-wide queue position. Exited commands are not included.",
+            "List running shell commands for a location. Exited commands are not included.",
         }),
       ),
   )

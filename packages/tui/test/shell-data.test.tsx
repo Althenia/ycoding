@@ -24,13 +24,13 @@ async function setup(initial: ShellInfo[]) {
 
 test("shell sync retains observed settled records, drops missing live records, and lets fetched identities override cached rows", async () => {
   const values = ["exited", "timeout", "memory-limit", "killed"].map((status) => shell(`sh_${status}`))
-  const fixture = await setup([...values, shell("sh_missing_running"), shell("sh_missing_queued", "queued"), shell("sh_override")])
+  const fixture = await setup([...values, shell("sh_missing_running"), shell("sh_override")])
   try {
     for (const [index, status] of (["exited", "timeout", "memory-limit", "killed"] as const).entries()) {
       fixture.events.emit({ id: `evt_exit_${index}`, type: "shell.exited", location: { directory }, created: 100 + index, data: { id: values[index]!.id, status } })
     }
     await until(() => fixture.data().shell.get("sh_killed")?.status === "killed")
-    const next = [{ ...shell("sh_override"), command: "fresh live record" }, shell("sh_new", "queued"), shell("sh_exited")]
+    const next = [{ ...shell("sh_override"), command: "fresh live record" }, shell("sh_new", "running"), shell("sh_exited")]
     fixture.respond(async () => json({ location: { directory, project: { id: "proj_test", directory } }, data: next }))
     fixture.data().shell.invalidate()
     await fixture.data().shell.sync()
@@ -38,7 +38,6 @@ test("shell sync retains observed settled records, drops missing live records, a
     expect(fixture.data().shell.get("sh_override")).toMatchObject({ status: "running", command: "fresh live record" })
     expect(fixture.data().shell.get("sh_exited")?.time.completed).toBe(100)
     expect(fixture.data().shell.get("sh_missing_running")).toBeUndefined()
-    expect(fixture.data().shell.get("sh_missing_queued")).toBeUndefined()
   } finally { fixture.app.renderer.destroy() }
 })
 
@@ -93,12 +92,12 @@ test("invalidated shell sync cannot replace a newer live record or erase the ret
     const old = fixture.data().shell.sync()
     await started.promise
     fixture.data().shell.invalidate()
-    fixture.events.emit({ id: "evt_new_record", type: "shell.created", created: 101, location: { directory }, data: { info: shell("sh_new_live", "queued") } })
-    await until(() => fixture.data().shell.get("sh_new_live")?.status === "queued")
+    fixture.events.emit({ id: "evt_new_record", type: "shell.created", created: 101, location: { directory }, data: { info: shell("sh_new_live", "running") } })
+    await until(() => fixture.data().shell.get("sh_new_live")?.status === "running")
     pending.resolve(json({ location: { directory, project: { id: "proj_test", directory } }, data: [] }))
     await old
     expect(fixture.data().shell.get(value.id)?.status).toBe("timeout")
-    expect(fixture.data().shell.get("sh_new_live")?.status).toBe("queued")
+    expect(fixture.data().shell.get("sh_new_live")?.status).toBe("running")
   } finally { pending.resolve(json({ location: { directory }, data: [] })); fixture.app.renderer.destroy() }
 })
 

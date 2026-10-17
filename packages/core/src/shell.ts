@@ -12,7 +12,6 @@ import {
   Fiber,
   Layer,
   Schema,
-  Scope,
   Semaphore,
   Stream,
 } from "effect"
@@ -23,14 +22,12 @@ import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { makeLocationNode } from "./effect/app-node"
 import { AppProcess } from "./process"
 import { Config } from "./config"
-import { ConfigShell } from "./config/shell"
 import { Database } from "./database/database"
 import { EventRuntime } from "./event"
 import { Location } from "./location"
 import { Global } from "./global"
 import { ShellSandbox } from "./shell-sandbox"
 import { ShellLedger } from "./shell/ledger"
-import { ShellQueue } from "./shell/queue"
 import { ShellSelect } from "./shell/select"
 import type { SessionSchema } from "./session/schema"
 
@@ -115,7 +112,7 @@ function pageEnd(bytes: Buffer, budget: number, flushTail: boolean) {
 
 type Info = Shell.Info
 
-const live = (status: Shell.Status) => status === "running" || status === "queued"
+const live = (status: Shell.Status) => status === "running"
 
 export interface Prepared {
   readonly warnings: readonly string[]
@@ -130,7 +127,6 @@ type PreparedState = {
   readonly memoryLimitMb?: number
   readonly metadata?: Shell.Metadata
   readonly shell: string
-  readonly queueLimits: Required<ConfigShell.Queue>
 }
 
 type Active = {
@@ -146,19 +142,9 @@ type Active = {
   kill?: () => Effect.Effect<void>
   timeoutFiber?: Fiber.Fiber<void>
   memoryFiber?: Fiber.Fiber<void>
-  residentMb?: number
-  peakResidentMb?: number
-  peakRecorded?: boolean
-  periodicSample?: boolean
-  queueMemory?: { readonly memoryLimitMb?: number; readonly reserveMb: number }
   timeout?: (duration: number) => Effect.Effect<void>
-  // Queue-channel commands only: the fiber that waits for admission and then runs the command, and
-  // a timeout replaced while queued, which applies from start.
-  queueFiber?: Fiber.Fiber<void>
-  spawning?: Deferred.Deferred<void>
   processFiber?: Fiber.Fiber<void>
   exitFiber?: Fiber.Fiber<void>
-  pendingTimeout?: number
 }
 
 /**
@@ -174,29 +160,20 @@ export interface Interface {
     input: Shell.CreateInput,
   ) => Effect.Effect<Prepared, ShellSandbox.Unavailable | MemoryLimitUnavailable>
   readonly create: (prepared: Prepared) => Effect.Effect<Shell.Info, SpawnError>
-  // Admits the command to the machine-wide shell queue and returns it as `queued`; it starts once
-  // the queue admits it. A start failure reaches `wait` as a defect.
-  readonly enqueue: (
-    prepared: Prepared,
-    sessionID: SessionSchema.ID,
-    admission?: ShellQueue.Admission,
-  ) => Effect.Effect<Shell.Info, ShellQueue.FullError>
-  // Queued and running commands only; exited shells are retained for get/output but excluded here.
+  // Running commands only; exited shells are retained for get/output but excluded here.
   readonly list: () => Effect.Effect<Shell.Info[]>
   readonly get: (id: Shell.ID) => Effect.Effect<Shell.Info, NotFoundError>
   // Resolves once the command reaches a terminal status, returning its final Info. Fails with
   // NotFoundError only if the command is unknown when the wait starts. Removal and teardown settle
-  // existing waiters with terminal Info after successful process and queue cleanup. Cleanup failures
+  // existing waiters with terminal Info after successful process cleanup. Cleanup failures
   // fail current waiters as defects and keep the live command tracked for another removal attempt.
   readonly wait: (id: Shell.ID) => Effect.Effect<Shell.Info, NotFoundError>
   // Replaces the running command's timeout from now; zero clears it.
   readonly timeout: (id: Shell.ID, duration: number) => Effect.Effect<Shell.Info, NotFoundError>
   readonly output: (id: Shell.ID, input?: Shell.OutputInput) => Effect.Effect<Shell.Output, NotFoundError>
-  // After successful termination, marks live commands killed, releases queue claims, removes output,
+  // After successful termination, marks live commands killed, removes output,
   // and publishes Deleted. A cleanup failure leaves tracking intact and fails as a defect.
   readonly remove: (id: Shell.ID) => Effect.Effect<void, NotFoundError>
-  // Removes the command only while it still waits in the queue; reports whether it did.
-  readonly cancelQueued: (id: Shell.ID) => Effect.Effect<boolean>
   readonly noticeOwed: (id: Shell.ID, sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly noticeAdmitted: (id: Shell.ID) => Effect.Effect<void>
 }
@@ -213,8 +190,6 @@ export const layer = (options?: ShellSelect.Options) =>
       const global = yield* Global.Service
       const appProcess = yield* AppProcess.Service
       const sandbox = yield* ShellSandbox.Service
-      const queue = yield* ShellQueue.Service
-      const serviceScope = yield* Scope.Scope
       const database = (yield* Database.Service).db
       const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
@@ -248,37 +223,12 @@ export const layer = (options?: ShellSelect.Options) =>
         return session
       })
 
-      const rememberPeak = (session: Active) =>
-        Effect.suspend(() => {
-          if (session.peakRecorded || !session.queueMemory || session.peakResidentMb === undefined) return Effect.void
-          session.peakRecorded = true
-          return queue
-            .recordPeak({
-              ...session.queueMemory,
-              command: session.info.command,
-              cwd: session.info.cwd,
-              peakMb: session.peakResidentMb,
-              canLower: session.info.status === "exited" && session.info.exit === 0 && session.periodicSample === true,
-            })
-            .pipe(Effect.forkIn(serviceScope), Effect.asVoid)
-        })
-
       const removeSession = Effect.fnUntraced(function* (id: Shell.ID) {
         const session = sessions.get(id)
         if (!session) return
-        const queued = session.info.status === "queued"
-        if (queued) {
-          sessions.delete(id)
-          session.info = produce(session.info, (draft) => {
-            draft.status = "killed"
-            delete draft.queuePosition
-            draft.time.completed = Date.now()
-          })
-        }
         yield* session.lifecycle.withPermits(1)(
           Effect.gen(function* () {
-            if (queued && session.spawning) yield* Deferred.await(session.spawning)
-            if (session.info.status === "running" || (queued && session.kill)) {
+            if (session.info.status === "running") {
               if (!session.kill) return yield* Effect.die(new Error(`Shell ${id} has no termination handle`))
               yield* session.kill()
               session.info = produce(session.info, (draft) => {
@@ -289,7 +239,6 @@ export const layer = (options?: ShellSelect.Options) =>
             if (session.exitFiber) yield* Fiber.interrupt(session.exitFiber)
             if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
             if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
-            if (session.queueFiber) yield* Fiber.interrupt(session.queueFiber)
             if (session.processFiber) yield* Fiber.interrupt(session.processFiber)
             sessions.delete(id)
             const index = exitOrder.indexOf(id)
@@ -302,12 +251,6 @@ export const layer = (options?: ShellSelect.Options) =>
           }),
         )
       }, Effect.uninterruptible)
-
-      const cancelQueued = Effect.fn("Shell.cancelQueued")(function* (id: Shell.ID) {
-        if (sessions.get(id)?.info.status !== "queued") return false
-        yield* removeSession(id)
-        return true
-      })
 
       const remove = Effect.fn("Shell.remove")(function* (id: Shell.ID) {
         yield* require(id)
@@ -332,10 +275,6 @@ export const layer = (options?: ShellSelect.Options) =>
 
       const timeout = Effect.fn("Shell.timeout")(function* (id: Shell.ID, duration: number) {
         const session = yield* require(id)
-        if (session.info.status === "queued") {
-          session.pendingTimeout = duration
-          return session.info
-        }
         if (session.info.status !== "running" || !session.timeout) return session.info
         yield* session.timeout(duration)
         return session.info
@@ -418,20 +357,8 @@ export const layer = (options?: ShellSelect.Options) =>
                 })
               const root = processes.find((process) => process.processID === pid && process.groupID === pid)
               if (!root) return
-              // Cross-group descendants need an unbroken parent chain in this process snapshot.
-              const tree = new Set([pid])
-              while (true) {
-                const children = processes.filter(
-                  (process) => !tree.has(process.processID) && (process.groupID === pid || tree.has(process.parentID)),
-                )
-                if (children.length === 0) break
-                children.forEach((process) => tree.add(process.processID))
-              }
               return {
                 identity: root.identity,
-                treeResidentKiB: processes
-                  .filter((process) => tree.has(process.processID))
-                  .reduce((total, process) => total + process.residentKiB, 0),
                 residentKiB: processes
                   .filter((process) => process.groupID === pid)
                   .reduce((total, process) => total + process.residentKiB, 0),
@@ -477,7 +404,6 @@ export const layer = (options?: ShellSelect.Options) =>
           memoryLimitMb,
           metadata: input.metadata,
           shell,
-          queueLimits: ConfigShell.queueLimits(Config.latest(entries, "shell_queue")),
         }
         const mode = Config.latest(entries, "shell_sandbox") ?? "disabled"
         if (mode === "disabled") return capability(state, [])
@@ -536,7 +462,6 @@ export const layer = (options?: ShellSelect.Options) =>
                 Effect.tapError((error) =>
                   Effect.gen(function* () {
                     yield* Effect.logError("Shell termination failed", { id, error })
-                    const restore = session.info.status !== "running"
                     session.info = produce(session.info, (draft) => {
                       draft.status = "running"
                       delete draft.time.completed
@@ -545,7 +470,6 @@ export const layer = (options?: ShellSelect.Options) =>
                     const waiting = session.done
                     session.done = Deferred.makeUnsafe<Info, NotFoundError>()
                     yield* Deferred.die(waiting, error)
-                    if (restore) yield* events.publish(Shell.Event.Updated, { info: session.info })
                   }),
                 ),
                 Effect.orDie,
@@ -681,48 +605,29 @@ export const layer = (options?: ShellSelect.Options) =>
                 ),
               )
 
-            if (session.spawning) yield* Deferred.succeed(session.spawning, undefined)
-
             if (
               session.info.status === "running" &&
-              process.platform !== "win32" &&
-              (state.memoryLimitMb !== undefined || session.info.time.queued !== undefined)
+              state.memoryLimitMb !== undefined &&
+              process.platform !== "win32"
             ) {
-              const limitKiB = state.memoryLimitMb === undefined ? undefined : state.memoryLimitMb * 1024
+              const limitKiB = state.memoryLimitMb * 1024
               const initial = yield* processGroupMemory(Number(handle.pid)).pipe(
-                Effect.catch((cause) =>
-                  limitKiB === undefined
-                    ? Effect.succeed(undefined)
-                    : Effect.fail(new SpawnError({ command: state.command, cause })),
-                ),
+                Effect.mapError((cause) => new SpawnError({ command: state.command, cause })),
               )
-              session.residentMb = initial === undefined ? 0 : initial.treeResidentKiB / 1024
-              session.peakResidentMb = initial === undefined ? undefined : initial.treeResidentKiB / 1024
               if (initial)
                 session.memoryFiber = runFork(
                   Effect.gen(function* () {
                     while (session.info.status === "running") {
-                      yield* Effect.sleep(Duration.millis(limitKiB === undefined ? 1_000 : MEMORY_CHECK_INTERVAL_MS))
+                      yield* Effect.sleep(Duration.millis(MEMORY_CHECK_INTERVAL_MS))
                       if (session.info.status !== "running") return
                       const sample = yield* processGroupMemory(Number(handle.pid))
                       if (session.info.status !== "running") return
-                      if (!sample || sample.identity !== initial.identity) {
-                        session.residentMb = 0
-                        return
-                      }
-                      session.residentMb = sample.treeResidentKiB / 1024
-                      session.periodicSample = true
-                      session.peakResidentMb = Math.max(session.peakResidentMb ?? 0, session.residentMb)
-                      if (limitKiB === undefined || sample.residentKiB <= limitKiB) continue
+                      if (!sample || sample.identity !== initial.identity) return
+                      if (sample.residentKiB <= limitKiB) continue
                       yield* finish("memory-limit")
                       return
                     }
-                  }).pipe(
-                    Effect.catch(() => {
-                      session.residentMb = 0
-                      return limitKiB === undefined ? Effect.void : finish("memory-limit")
-                    }),
-                  ),
+                  }).pipe(Effect.catch(() => finish("memory-limit"))),
                 )
             }
 
@@ -744,7 +649,7 @@ export const layer = (options?: ShellSelect.Options) =>
                 )
               })
 
-            yield* session.timeout(session.pendingTimeout ?? state.timeout)
+            yield* session.timeout(state.timeout)
 
             session.exitFiber = runFork(
               handle.exitCode.pipe(
@@ -790,138 +695,15 @@ export const layer = (options?: ShellSelect.Options) =>
         return session.info
       })
 
-      const enqueue = Effect.fn("Shell.enqueue")(function* (
-        prepared: Prepared,
-        sessionID: SessionSchema.ID,
-        admission?: ShellQueue.Admission,
-      ) {
-        const state = yield* take(prepared)
-        const info = initial(Shell.ID.ascending(), state)
-        // Registration is atomic: a failure or interruption before the admission fiber owns the queue
-        // entry releases the entry and unregisters the shell, so nothing can hold a queue position.
-        return yield* Effect.uninterruptibleMask((restore) =>
-          Effect.gen(function* () {
-            const slot = yield* Scope.make()
-            const session: Active = {
-              info: produce(info, (draft) => {
-                draft.status = "queued"
-              }),
-              queueMemory: { memoryLimitMb: state.memoryLimitMb, reserveMb: state.queueLimits.memory_reserve_mb },
-              file: info.file,
-              size: 0,
-              done: Deferred.makeUnsafe<Info, NotFoundError>(),
-              lifetime: Deferred.makeUnsafe<void>(),
-              lifecycle: Semaphore.makeUnsafe(1),
-            }
-            return yield* Effect.gen(function* () {
-              const ticket = yield* restore(
-                queue
-                  .enqueue({
-                    id: info.id,
-                    sessionID,
-                    command: state.command,
-                    cwd: state.cwd,
-                    admission,
-                    memoryLimitMb: state.memoryLimitMb,
-                    limits: state.queueLimits,
-                    residentMb: () => session.residentMb ?? 0,
-                  })
-                  .pipe(Scope.provide(slot)),
-              )
-              session.info = produce(session.info, (draft) => {
-                draft.queuePosition = ticket.position
-              })
-              sessions.set(info.id, session)
-              // A queued command has no process yet; pid 0 records ownership without a process group.
-              if (owner) yield* ShellLedger.record(database, { id: info.id, pid: 0, owner })
-              yield* events.publish(Shell.Event.Created, { info: session.info })
-              session.queueFiber = runFork(admitAndLaunch(state, session, ticket, slot))
-              return session.info
-            }).pipe(
-              Effect.onError(() =>
-                Effect.gen(function* () {
-                  yield* Scope.close(slot, Exit.void)
-                  if (sessions.get(info.id) === session) sessions.delete(info.id)
-                  // The ledger may be the failing dependency; its cleanup must not mask the release.
-                  yield* ShellLedger.release(database, info.id).pipe(Effect.exit)
-                }),
-              ),
-            )
-          }),
-        )
-      })
-
-      const admitAndLaunch = (
-        state: PreparedState,
-        session: Active,
-        ticket: ShellQueue.Ticket,
-        slot: Scope.Closeable,
-      ) =>
-        Effect.gen(function* () {
-          yield* ticket.admitted((position) =>
-            Effect.gen(function* () {
-              if (session.info.status !== "queued") return
-              session.info = produce(session.info, (draft) => {
-                draft.queuePosition = position
-              })
-              yield* events.publish(Shell.Event.Updated, { info: session.info })
-            }),
-          )
-          if (session.info.status !== "queued") return
-          session.spawning = Deferred.makeUnsafe<void>()
-          yield* launch(
-            state,
-            Deferred.makeUnsafe<Active, SpawnError>(),
-            (pid) => {
-              session.info = produce(session.info, (draft) => {
-                draft.pid = pid
-                if (draft.status !== "queued") return
-                draft.status = "running"
-                delete draft.queuePosition
-                draft.time.queued = draft.time.started
-                draft.time.started = Date.now()
-              })
-              return session
-            },
-            (started) =>
-              started.info.status === "running"
-                ? events.publish(Shell.Event.Updated, { info: started.info })
-                : Effect.void,
-          ).pipe(Effect.ensuring(Deferred.succeed(session.spawning, undefined)))
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause) ? Effect.void : abandonQueued(session, Cause.squash(cause)),
-          ),
-          Effect.ensuring(Scope.close(slot, Exit.void)),
-          Effect.ensuring(rememberPeak(session)),
-        )
-
-      // A queued command that cannot be admitted or started leaves no observable shell; its waiters
-      // receive the failure as a defect so the owning tool settles with the error.
-      const abandonQueued = Effect.fnUntraced(function* (session: Active, error: unknown) {
-        const id = Shell.ID.make(session.info.id)
-        yield* Effect.logWarning("Queued shell command could not start", { id, error })
-        const registered = sessions.get(id) === session
-        if (registered) sessions.delete(id)
-        yield* ShellLedger.release(database, id)
-        if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
-        if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
-        yield* Deferred.die(session.done, error)
-        yield* Effect.promise(() => unlink(session.file).catch(() => {}))
-        if (registered) yield* events.publish(Shell.Event.Deleted, { id })
-      })
-
       return Service.of({
         prepare,
         create,
-        enqueue,
         list,
         get,
         wait,
         timeout,
         output,
         remove,
-        cancelQueued,
         noticeOwed: (id, sessionID) => ShellLedger.noticeOwed(database, id, sessionID),
         noticeAdmitted: (id) =>
           ShellLedger.noticeAdmitted(database, id, live(sessions.get(id)?.info.status ?? "exited")),
@@ -941,7 +723,6 @@ export function configured(options?: ShellSelect.Options) {
       AppProcess.node,
       ShellSandbox.node,
       Database.node,
-      ShellQueue.node,
     ],
   })
 }

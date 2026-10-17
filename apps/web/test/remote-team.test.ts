@@ -35,12 +35,29 @@ async function setup(handler: (operation: string, sessionID?: string, cursor?: u
 }
 
 describe("remote team facts", () => {
+  test("unsupported shell states are excluded and cannot be killed", async () => {
+    const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0 }, cursor: {} } }), undefined, (request) => {
+      if (request.operation === "session.team.shell.list") return { ok: true, value: { data: [
+        { id: "sh_running", ownerID: "ses_a", command: "bun test", status: "running", startedAt: 1 },
+        { id: "sh_unsupported", ownerID: "ses_a", command: "bun check", status: "queued", startedAt: 2 },
+      ] } }
+      return "default"
+    })
+    try {
+      h.store.watchTeam(true); await h.store.selectSession("ses_a")
+      await waitFor(() => h.store.state().team?.shellStatus === "ready")
+      expect(h.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_running"])
+      expect(await h.store.killTeamShell("sh_unsupported")).toMatchObject({ status: "failed" })
+      expect(h.relay.requests.filter((request) => request.operation === "session.team.shell.kill")).toHaveLength(0)
+    } finally { await h.stop() }
+  })
+
   test("an inventory invalidation reconciles family shell deletions without a running-status transition", async () => {
     let live = true
     const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0 }, cursor: {} } }), undefined, (request) => {
       if (request.operation === "session.team.shell.list") return { ok: true, value: { data: live ? [
         { id: "sh_external_running", ownerID: "ses_a", command: "bun test", status: "running", startedAt: 1 },
-        { id: "sh_external_queued", ownerID: "ses_a", command: "bun check", status: "queued", queuePosition: 2, startedAt: 2 },
+        { id: "sh_external_check", ownerID: "ses_a", command: "bun check", status: "running", startedAt: 2 },
       ] : [] } }
       return "default"
     })
@@ -168,7 +185,7 @@ describe("remote team facts", () => {
         if (request.operation === "session.team.economics") return { ok: true, value: { data: [{ sessionID: "ses_child", cost: 0.25,
           tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 0 } }, cacheHitRatio: 0.75, contextTotal: 800, contextLimit: 2_000, cacheRead: 3, cacheWrite: 0 }] } }
         if (request.operation === "session.team.shell.list") return { ok: true, value: { data: [{ id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 },
-          { id: "sh_queued", ownerID: "ses_child", command: "bun typecheck", status: "queued", queuePosition: 2, startedAt: 2 }] } }
+          { id: "sh_check", ownerID: "ses_child", command: "bun typecheck", status: "running", startedAt: 2 }] } }
         if (request.operation === "session.side-chat.list") return { ok: true, value: { data: [{ id: "ses_btw", title: "Side question", updatedAt: 3 }], cursor: {} } }
         if (request.operation === "session.subagent.answer") return { ok: true, value: { data: { ...task("ses_child"), state: "running", revision: 2 } } }
         if (request.operation === "session.subagent.cancel") return { ok: true, value: { data: { ...task("ses_child"), state: "cancelling", revision: 3 } } }
@@ -183,16 +200,16 @@ describe("remote team facts", () => {
       await test.store.loadTeamControls()
       await waitFor(() => test.store.state().team?.tasks[0]?.cacheHitRatio === 0.75)
       expect(test.store.state().team?.tasks[0]).toMatchObject({ question: { id: "qst_1" }, tokens: 20, cost: 0.25, contextTotal: 800, cacheRead: 3 })
-      expect(test.store.state().team).toMatchObject({ shellStatus: "ready", sideChatStatus: "ready", shells: [{ id: "sh_child", ownerID: "ses_child" }, { id: "sh_queued", status: "queued", queuePosition: 2 }], sideChats: [{ id: "ses_btw" }] })
+      expect(test.store.state().team).toMatchObject({ shellStatus: "ready", sideChatStatus: "ready", shells: [{ id: "sh_child", ownerID: "ses_child" }, { id: "sh_check", status: "running" }], sideChats: [{ id: "ses_btw" }] })
       expect(await test.store.answerSubagent("ses_child", "qst_1", "staging")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.tasks[0]?.state).toBe("running")
       expect(await test.store.cancelSubagent("ses_child")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.tasks[0]?.state).toBe("cancelling")
       expect(await test.store.killTeamShell("sh_child")).toMatchObject({ status: "ok" })
-      expect(test.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_queued"])
-      expect(await test.store.killTeamShell("sh_queued")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_check"])
+      expect(await test.store.killTeamShell("sh_check")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.shells).toEqual([])
-      expect(test.relay.requests.filter((request) => request.operation === "session.team.shell.kill").map((request) => request.input)).toEqual([{ shellID: "sh_child" }, { shellID: "sh_queued" }])
+      expect(test.relay.requests.filter((request) => request.operation === "session.team.shell.kill").map((request) => request.input)).toEqual([{ shellID: "sh_child" }, { shellID: "sh_check" }])
       expect(await test.store.createSideChat()).toMatchObject({ status: "ok" })
       expect(test.relay.requests.filter((request) => request.operation === "session.side-chat.create")).toHaveLength(1)
       expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])

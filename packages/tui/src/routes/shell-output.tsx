@@ -112,7 +112,7 @@ export function ShellOutput() {
 
   createEffect(() => {
     const s = shell()
-    if (!s || (s.status !== "running" && s.status !== "queued")) return
+    if (!s || s.status !== "running") return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -162,7 +162,7 @@ export function ShellOutput() {
   createEffect(() => {
     const s = shell()
     if (!s) return
-    const live = s.status === "running" || s.status === "queued"
+    const live = s.status === "running"
     const settled = wasLive && !live
     wasLive = live
     void loadOutput(settled)
@@ -170,7 +170,7 @@ export function ShellOutput() {
 
   createEffect(() => {
     const s = shell()
-    if (!s || outputError() || s.status !== "running" && s.status !== "queued") return
+    if (!s || outputError() || s.status !== "running") return
     const interval = setInterval(() => void loadOutput(), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -182,7 +182,7 @@ export function ShellOutput() {
   async function kill() {
     const generation = readGeneration
     const s = shell()
-    if (!s || s.status !== "running" && s.status !== "queued") return
+    if (!s || s.status !== "running") return
     const owner = await data.shell.owner(s, route.sessionID).catch(() => undefined)
     if (generation !== readGeneration) return
     if (!owner || shell()?.metadata.sessionID !== s.metadata.sessionID) { setLookup("error"); return }

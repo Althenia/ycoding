@@ -3,7 +3,6 @@ import fs from "fs/promises"
 import { describe, expect } from "bun:test"
 import { Duration, Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
-import { ConfigShell } from "@ycoding-ai/core/config/shell"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigQuestionTimeout } from "@ycoding-ai/core/config/question-timeout"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
@@ -725,30 +724,8 @@ describe("Config", () => {
         expect(decode({ shell_sandbox: mode }).shell_sandbox).toBe(mode)
       }
       expect(() => decode({ shell_sandbox: "pretend" })).toThrow()
-      const queue = decode({
-        shell_queue: { max_running: 64, max_running_per_session: 1, max_queued_per_session: 1_000, memory_reserve_mb: 0, max_load: 0.5 },
-      }).shell_queue
-      expect(queue).toEqual({ max_running: 64, max_running_per_session: 1, max_queued_per_session: 1_000, memory_reserve_mb: 0, max_load: 0.5 })
-      expect(ConfigShell.queueLimits(undefined)).toEqual({
-        max_running: 10,
-        max_running_per_session: 1,
-        max_queued_per_session: 16,
-        memory_reserve_mb: 2_048,
-        max_load: 1,
-      })
-      expect(ConfigShell.queueLimits({ max_running: 4 })).toMatchObject({ max_running: 4, max_running_per_session: 1 })
-      for (const shell_queue of [
-        { max_running: 0 },
-        { max_running: 65 },
-        { max_running: 1.5 },
-        { max_running_per_session: 0 },
-        { max_queued_per_session: 1_001 },
-        { memory_reserve_mb: -1 },
-        { memory_reserve_mb: 1_048_577 },
-        { max_load: 0 },
-        { max_load: 65 },
-      ])
-        expect(() => decode({ shell_queue })).toThrow()
+      expect(Config.Info.fields).not.toHaveProperty("shell_queue")
+      expect(decode({ shell_queue: { max_running: 1 } })).not.toHaveProperty("shell_queue")
     }),
   )
 

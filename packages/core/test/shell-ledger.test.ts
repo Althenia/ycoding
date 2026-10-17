@@ -151,40 +151,31 @@ posix("reconciles a dead owner's surviving shell group and retains only its owed
   }),
 )
 
-posix("records a queued shell without a process and marks its owed notice lost without signalling", () =>
+posix("retains an exited shell's lost completion notice until admission", () =>
   Effect.gen(function* () {
     const appProcess = yield* AppProcess.Service
     const db = (yield* Database.Service).db
-    const sessionID = SessionSchema.ID.make("ses_queued_owed")
+    const sessionID = SessionSchema.ID.make("ses_exited_owed")
     yield* noticeSession(sessionID)
-    const owner = yield* ShellLedger.identify(appProcess, process.pid)
-    const started = ShellSchema.ID.create()
-    yield* ShellLedger.record(db, { id: started, pid: 0, owner: owner! })
-    yield* ShellLedger.noticeOwed(db, started, sessionID)
-    const child = orphan("sleep 300")
-    yield* ShellLedger.record(db, { id: started, pid: child.pid!, started: "Thu Jan  1 00:00:00 1970", owner: owner! })
-    expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, started)).get()).toMatchObject({
-      pid: child.pid,
-      process_started: "Thu Jan  1 00:00:00 1970",
-      session_id: sessionID,
-      notice_pending: true,
-    })
-
-    const queued = ShellSchema.ID.create()
+    const child = orphan("exit 0")
+    yield* exited(child)
+    expect(child.exitCode).toBe(0)
+    const id = ShellSchema.ID.create()
     yield* ShellLedger.record(db, {
-      id: queued,
-      pid: 0,
+      id,
+      pid: child.pid!,
       owner: { pid: 2_000_000_000, pgid: 2_000_000_000, started: "Thu Jan  1 00:00:00 1970" },
     })
-    yield* ShellLedger.noticeOwed(db, queued, sessionID)
+    yield* ShellLedger.noticeOwed(db, id, sessionID)
     yield* ShellLedger.reconcile(db, appProcess, 100)
-    expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, queued)).get()).toMatchObject({
-      pid: 0,
+    expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, id)).get()).toMatchObject({
+      pid: child.pid,
+      session_id: sessionID,
       notice_pending: true,
       time_lost: expect.any(Number),
     })
-    yield* ShellLedger.noticeAdmitted(db, queued)
-    yield* ShellLedger.noticeAdmitted(db, started)
+    yield* ShellLedger.noticeAdmitted(db, id)
+    expect(yield* db.select().from(ShellTable).where(eq(ShellTable.id, id)).get()).toBeUndefined()
   }),
 )
 

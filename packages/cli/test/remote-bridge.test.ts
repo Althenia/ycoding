@@ -197,7 +197,7 @@ test("ID-only shell deletions invalidate family lists without forwarding shell i
     const connection = test.records[0]!
     await waitFor(() => test.streams[0] && sentFrames(connection).some((frame) => frame.type === "sessions") ? true : undefined)
     connection.sent.length = 0
-    for (const id of ["sh_running_deleted", "sh_queued_deleted"]) {
+    for (const id of ["sh_running_deleted", "sh_exited_deleted"]) {
       const before = sentFrames(connection).filter((frame) => frame.type === "sessions").length
       test.streams[0]!.stream.onEvent({ type: "shell.deleted", data: { id } })
       await waitFor(() => sentFrames(connection).filter((frame) => frame.type === "sessions").length > before ? true : undefined)
@@ -205,7 +205,7 @@ test("ID-only shell deletions invalidate family lists without forwarding shell i
     sentFrames(connection).filter((frame) => frame.type === "sessions").forEach((frame) => expect(frame).toEqual({ type: "sessions" }))
     expect(sentEvents(connection)).toEqual([])
     expect(connection.sent.join("")).not.toContain("sh_running_deleted")
-    expect(connection.sent.join("")).not.toContain("sh_queued_deleted")
+    expect(connection.sent.join("")).not.toContain("sh_exited_deleted")
   } finally { await test.bridge.close() }
 })
 

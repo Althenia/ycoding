@@ -41,7 +41,6 @@ const shells = [
   shell("sh_main_test", parentID, "bun test provider", "running", now - 68_000, 48_213),
   shell("sh_main_dev", parentID, "bun run dev", "running", now - 862_000, 47_990),
   shell("sh_docs_diff", childID, "git diff --check", "running", now - 3_000, 48_307, `${directory}/docs`),
-  { ...shell("sh_queue", childID, "bun run typecheck", "queued", now - 12_000), queuePosition: 3 },
   shell("sh_archived", parentID, "bun test settled", "exited", now - 30_000),
   shell("sh_timeout", childID, "node timed-task", "timeout", now - 40_000),
   shell("sh_killed", parentID, "node stopped-task", "killed", now - 50_000),
@@ -131,8 +130,8 @@ test("captures dense status sections with inline owners at narrow and wide width
       const frame = app.captureCharFrame()
       const lines = frame.split("\n").map((line) => line.trimEnd())
       const populated = lines.filter((line) => line.trim())
-      expect(populated.filter((line) => /^(Running|Queued|Archived)$/.test(line))).toEqual(["Running", "Queued", "Archived"])
-      expect(populated).toHaveLength(12)
+      expect(populated.filter((line) => /^(Running|Archived)$/.test(line))).toEqual(["Running", "Archived"])
+      expect(populated).toHaveLength(10)
       expect(lines.find((line) => line.includes("bun test provider"))).toContain("Main chat")
       expect(lines.find((line) => line.includes("git diff --check"))).toContain("docs-sync ·")
       expect(lines.find((line) => line.includes("bun inspect"))).toContain("…")
@@ -147,10 +146,7 @@ test("captures dense status sections with inline owners at narrow and wide width
       expect(lines.every((line) => line.length <= viewport.width)).toBe(true)
       const color = (label: string) => app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.trim() === label)?.fg.toInts()
       expect(color("running")).toBeDefined()
-      expect(color("queued #3")).toBeDefined()
       expect(color("running")).toEqual(color("exited"))
-      expect(color("queued #3")).not.toEqual(color("running"))
-      expect(color("timeout")).not.toEqual(color("queued #3"))
       expect(color("memory-limit")).toEqual(color("killed"))
       expect(color("killed")).not.toEqual(color("running"))
       await app.mockMouse.moveTo(3, lines.findIndex((line) => line.includes("git diff --check")))
@@ -185,37 +181,6 @@ test("short rows preserve distinct child agent starts instead of a generic attri
   }
 })
 
-test("shows a queued shell's queue position and waiting time instead of a PID", async () => {
-  const queued = { ...shell("sh_queued", parentID, "bun run typecheck", "queued", now - 12_000), queuePosition: 3 }
-  const app = await testRender(
-    () => (
-      <TestTuiContexts directory={directory}>
-        <ConfigProvider config={createTuiResolvedConfig()}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <Keymap.Provider>
-              <ShellRows groups={[{ owner: { label: "Main chat" }, shells: [queued, shells[0]] }]} now={now} selected={undefined} onSelect={() => {}} />
-            </Keymap.Provider>
-          </ThemeProvider>
-        </ConfigProvider>
-      </TestTuiContexts>
-    ),
-    DESIGN_VIEWPORT_WIDE,
-  )
-  app.renderer.start()
-  try {
-    await app.waitForFrame((frame) => frame.includes("bun run typecheck"))
-    const lines = app.captureCharFrame().split("\n")
-    const row = lines.find((line) => line.includes("bun run typecheck")) ?? ""
-    expect(row).toMatch(/^queued #3\s+bun run typecheck/)
-    expect(row).toContain("waiting · 12s")
-    expect(row).not.toContain("pid")
-    expect(lines.find((line) => line.includes("bun test provider"))).toContain("1m08s")
-    expect(lines.find((line) => line.includes("bun test provider"))).not.toContain("pid")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
 function shellGroups() {
   return [
     { owner: { label: "Main chat" }, shells: shells.filter((shell) => shell.metadata.sessionID === parentID) },
@@ -228,5 +193,5 @@ function session(id: string, title: string, agent: string) {
 }
 
 function shell(id: string, sessionID: string | undefined, command: string, status: ShellInfo["status"], started: number, pid?: number, cwd = directory) {
-  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" || status === "queued" ? { started } : { started, completed: now } }
+  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" ? { started } : { started, completed: now } }
 }
