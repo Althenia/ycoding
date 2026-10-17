@@ -1266,7 +1266,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ),
         ...Object.values(store.location).flatMap((location) =>
           Object.values(location.shell ?? {}).flatMap((shell) =>
-            (shell.status === "running" || shell.status === "queued") && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
+            shell.status === "running" && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
           ),
         ),
         ...submissions
@@ -1350,6 +1350,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: YCodingEvent) {
+      if (event.type === "shell.exited" || event.type === "shell.deleted") {
+        const keys = event.location ? [locationKey(event.location)] : Object.keys(store.location)
+        keys.forEach((key) => sync.invalidate(`location.shell:${key}`))
+      }
       switch (event.type) {
         case "session.created": {
           // The event already carries the creation-time record, including the
@@ -2132,7 +2136,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           break
         case "shell.created":
-        case "shell.updated":
           setStore("location", locationKey(event.location ?? defaultLocation()), (data) => ({
             ...data,
             shell: { ...data?.shell, [event.data.info.id]: event.data.info },
@@ -2141,8 +2144,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             void syncShellOwners([event.data.info])
           break
         case "shell.exited":
-          // Keep the settled shell resident so its tab row and output view survive the
-          // exit; the next shell list sync replaces the record with live shells only.
           setStore(
             "location",
             produce((draft) => {
@@ -2716,7 +2717,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const key = locationKey(response.location)
             setStore("location", key, {
               ...store.location[key],
-              shell: Object.fromEntries(response.data.map((info) => [info.id, info])),
+              shell: Object.fromEntries([
+                ...response.data.map((info) => [info.id, info]),
+                ...Object.entries(store.location[key]?.shell ?? {}).filter(([, info]) => info.status !== "running"),
+              ]),
             })
             await syncShellOwners(response.data, isCurrent)
           })

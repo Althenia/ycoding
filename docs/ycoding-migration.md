@@ -19,7 +19,7 @@ Local OAuth callback pages show the YCoding name and canonical mark from `assets
 
 ## External provider exception
 
-OpenCode Zen and OpenCode Go are external model-provider identities. Their provider IDs, URLs, API-key environment variable, integration labels, and provider-specific OAuth identifiers remain unchanged where required to connect to that provider.
+OpenCode Zen and OpenCode Go are external model-provider identities. Their provider IDs, URLs, API-key environment variable, integration labels, and provider-specific OAuth identifiers remain unchanged where required to connect to that provider. The web provider mark at `apps/web/src/assets/providers/opencode.svg` retains its source filename and `opencode` title. This exact provider-asset path is an external identity exception; application branding and other asset paths remain subject to replacement.
 
 This exception does not permit old product branding in YCoding-owned CLI help, TUI copy, paths, environment variables, package names, protocol headers, logs, tests, or documentation.
 

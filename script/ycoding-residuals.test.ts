@@ -33,6 +33,25 @@ describe("YCoding brand residual scanner", () => {
     ])
   })
 
+  test("preserves the web external-provider mark while rejecting product branding beside it", () => {
+    expect(
+      scanBrandResiduals([
+        { path: "apps/web/src/assets/providers/opencode.svg", content: "<svg><title>opencode</title></svg>" },
+        { path: "apps/web/src/assets/branding/opencode.svg", content: "<svg><title>OpenCode</title></svg>" },
+        { path: "apps/web/src/remote/ui/provider-logo.tsx", content: 'const title = "OpenCode App"' },
+      ]),
+    ).toEqual([
+      {
+        path: "apps/web/src/assets/branding/opencode.svg",
+        line: 0,
+        value: "apps/web/src/assets/branding/opencode.svg",
+        disposition: "replace",
+      },
+      { path: "apps/web/src/assets/branding/opencode.svg", line: 1, value: "OpenCode", disposition: "replace" },
+      { path: "apps/web/src/remote/ui/provider-logo.tsx", line: 1, value: "OpenCode App", disposition: "replace" },
+    ])
+  })
+
   test("reports active legacy names in filenames", () => {
     expect(scanBrandResiduals([{ path: "packages/cli/bin/opencode.cjs", content: "" }])).toEqual([
       {

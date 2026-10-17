@@ -1432,7 +1432,6 @@ describe("operation mapping", () => {
       { id: "sh_child", command: "bun lint", status: "running", metadata: { sessionID: "ses_child" }, time: { started: 2 } },
       { id: "sh_foreign", command: "private", status: "running", metadata: { sessionID: "ses_foreign" }, time: { started: 3 } },
       { id: "sh_unknown", command: "unknown", status: "running", metadata: {}, time: { started: 4 } },
-      { id: "sh_queued", command: "bun typecheck", status: "queued", queuePosition: 2, metadata: { sessionID: "ses_child" }, time: { started: 5 } },
     ]
     const test = await harness({ sessions, results: { shellList: async () => shells, shellGet: async (id: string) => shells.find((shell) => shell.id === id), shellRemove: async () => undefined } })
     const run = (operation: RemoteRequest["operation"], input?: Record<string, unknown>) => executeRemoteOperation({
@@ -1441,7 +1440,6 @@ describe("operation mapping", () => {
     expect(valueOf(await run("session.team.shell.list"))).toEqual({ truncated: false, data: [
       { id: "sh_root", ownerID: "ses_root", ownerTitle: "ses_root", command: "bun test", status: "running", startedAt: 1 },
       { id: "sh_child", ownerID: "ses_child", ownerAgent: "general", ownerTitle: "ses_child", command: "bun lint", status: "running", startedAt: 2 },
-      { id: "sh_queued", ownerID: "ses_child", ownerAgent: "general", ownerTitle: "ses_child", command: "bun typecheck", status: "queued", queuePosition: 2, startedAt: 5 },
     ] })
     expect(valueOf(await run("session.team.shell.kill", { shellID: "sh_child" }))).toEqual(null)
     for (const shellID of ["sh_foreign", "sh_unknown"])

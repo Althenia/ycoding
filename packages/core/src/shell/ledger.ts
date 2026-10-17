@@ -186,7 +186,7 @@ export const reconcile = Effect.fn("ShellLedger.reconcile")(function* (
 })
 
 function survivors(row: Row, snapshot: readonly Process[]) {
-  // A queued command records pid 0 until it starts and has no process group to signal.
+  // Never signal an invalid process ID: zero targets the caller's own process group.
   if (row.pid <= 0) return false
   const leader = snapshot.find((item) => item.pid === row.pid)
   if (leader) return row.process_started !== null && leader.started === row.process_started

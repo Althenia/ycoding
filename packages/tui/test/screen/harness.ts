@@ -12,6 +12,7 @@ import type { KeepAwakeStatus } from "../../src/keep-awake"
 import type { RemoteStatus } from "../../src/remote-connector"
 import type { PackageResolver } from "../../src/plugin/context"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
+import { useRoute } from "../../src/context/route"
 
 /**
  * Boots the REAL application against a deterministic fixture server and returns
@@ -34,6 +35,7 @@ export async function renderScreen(input: {
   kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
   settle: string | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
+  sessionReady?: boolean
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
@@ -42,6 +44,10 @@ export async function renderScreen(input: {
   packages?: PackageResolver
   builtins?: readonly Plugin.Definition[]
 }) {
+  const sessionID = input.args?.sessionID
+  if (input.sessionReady && !sessionID) throw new Error("Session readiness requires args.sessionID")
+  let observedData: ReturnType<typeof useData> | undefined
+  let observedRoute: ReturnType<typeof useRoute> | undefined
   const { resetRailExpansion } = await import("../../src/routes/session/rail-section")
   resetRailExpansion()
   const setup = await createTestRenderer({
@@ -65,7 +71,7 @@ export async function renderScreen(input: {
       packages: input.packages ?? { resolve: async () => undefined },
       pluginRuntime,
       clipboard: input.clipboard,
-      onData: input.data,
+      onData: (data) => { observedData = data; if (input.sessionReady) observedRoute = useRoute(); input.data?.(data) },
       builtins: input.builtins,
       args: input.args ?? {},
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
@@ -78,9 +84,24 @@ export async function renderScreen(input: {
     ),
   )
 
-  const settled = () => typeof input.settle === "string"
+  async function dispose() {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await task.catch(() => {})
+    await server.stop()
+  }
+  const requestedFrame = () => typeof input.settle === "string"
     ? setup.captureCharFrame().includes(input.settle)
     : input.settle(setup)
+  const sessionReady = () => {
+    if (!input.sessionReady) return true
+    if (!sessionID || !observedData || observedRoute?.data.type !== "session" || observedRoute.data.sessionID !== sessionID) return false
+    const session = observedData.session.get(sessionID)
+    if (!session || !observedData.location.info(session.location) || observedData.session.message.history(sessionID)?.status !== "ready") return false
+    if (!findScrollBox(setup.renderer.root)) return false
+    const header = setup.captureCharFrame().split("\n").find((line) => line.trim()) ?? ""
+    return !/Loading session|Connecting…|Reconnecting…/.test(header)
+  }
+  const settled = () => requestedFrame() && sessionReady()
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     await Bun.sleep(50)
@@ -89,6 +110,11 @@ export async function renderScreen(input: {
     // Commit pending layout and hit-grid work before callers inspect or click the frame.
     await setup.renderOnce()
     if (settled()) break
+  }
+  if (input.sessionReady && !settled()) {
+    const frame = setup.captureCharFrame()
+    await dispose()
+    throw new Error(`Session ${sessionID} did not reach the requested ready frame:\n${frame}`)
   }
 
   return {
@@ -126,11 +152,7 @@ export async function renderScreen(input: {
         .lines.flatMap((line) => line.spans)
         .find((span) => span.text.includes(text))
         ?.fg.toInts(),
-    async dispose() {
-      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-      await task.catch(() => {})
-      await server.stop()
-    },
+    dispose,
   }
 }
 

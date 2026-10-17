@@ -14,10 +14,8 @@ import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Shell } from "@ycoding-ai/core/shell"
 import { Database } from "@ycoding-ai/core/database/database"
-import { ShellQueue } from "@ycoding-ai/core/shell/queue"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
 import { ShellTable } from "@ycoding-ai/core/shell/sql"
-import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { location } from "./fixture/location"
 import { cleanGroup, escapedProcess, fileReady, groupAlive, groupGone, shellProcess } from "./fixture/shell-process"
 import { testEffect } from "./lib/effect"
@@ -31,7 +29,6 @@ class Fixture extends Context.Service<
       deny?: boolean
       kills: number
       killed?: Deferred.Deferred<void>
-      hook?: (pid: number) => Effect.Effect<void>
     }
   }
 >()("ShellKillFixture") {}
@@ -71,7 +68,6 @@ const it = testEffect(
           EventRuntime.node,
           Global.node,
           Database.node,
-          ShellQueue.node,
           ShellSandbox.node,
         ]),
         [
@@ -88,7 +84,6 @@ const it = testEffect(
                       .spawn(command)
                       .pipe(
                         Effect.tap(() => (spawning.ready ? fileReady(spawning.ready) : Effect.void)),
-                        Effect.tap((handle) => (spawning.hook ? spawning.hook(Number(handle.pid)) : Effect.void)),
                         Effect.map((handle) =>
                           ChildProcessSpawner.makeHandle({
                             ...handle,
@@ -259,46 +254,6 @@ for (const reason of ["timeout", "memory-limit"] as const) {
     15_000,
   )
 }
-
-posix(
-  "EPERM during queued spawn cancellation retains the started process",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* Fixture
-      const shell = yield* Shell.Service
-      const admitted = yield* Deferred.make<Effect.Success<ReturnType<typeof shell.create>>>()
-      const removed = yield* Deferred.make<Exit.Exit<void, Shell.NotFoundError>>()
-      const spawned = { pid: 0 }
-      yield* Effect.addFinalizer(() => (spawned.pid ? cleanGroup(spawned.pid) : Effect.void))
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          fixture.spawning.deny = false
-        }),
-      )
-      fixture.spawning.hook = (pid) =>
-        Effect.gen(function* () {
-          spawned.pid = pid
-          const info = yield* Deferred.await(admitted)
-          fixture.spawning.deny = true
-          yield* shell.remove(info.id).pipe(
-            Effect.exit,
-            Effect.flatMap((exit) => Deferred.succeed(removed, exit)),
-            Effect.forkDetach({ startImmediately: true }),
-          )
-        })
-      const info = yield* shell.enqueue(
-        yield* shell.prepare({ command: "sleep 60", timeout: 0 }),
-        SessionSchema.ID.make("ses_queued_eperm"),
-      )
-      yield* Deferred.succeed(admitted, info)
-      expect(Exit.isFailure(yield* Deferred.await(removed).pipe(Effect.timeout(5_000)))).toBe(true)
-      expect((yield* shell.get(info.id)).status).toBe("running")
-      expect(groupAlive(spawned.pid)).toBe(true)
-      fixture.spawning.deny = false
-      yield* shell.remove(info.id)
-    }),
-  15_000,
-)
 
 for (const reason of ["remove", "timeout", "memory-limit", "output-failure", "teardown"] as const) {
   posix(

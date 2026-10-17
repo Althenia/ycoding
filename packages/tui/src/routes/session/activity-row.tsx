@@ -18,7 +18,6 @@ export type ToolLifecycleInput = {
   error?: { type?: string; message?: string }
   failed?: boolean
   cancelled?: boolean
-  queued?: boolean
   summary?: string
   now?: number
 }
@@ -93,7 +92,6 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
   const color = createMemo(() => {
     if (presentation().variant === "error") return theme.text.feedback.error.default
     if (presentation().variant === "warning") return theme.text.feedback.warning.default
-    if (props.lifecycle.queued) return theme.text.feedback.info.default
     return theme.text.subdued
   })
   return <text flexShrink={0} fg={color()}>{presentation().status}</text>
@@ -372,9 +370,7 @@ export function SessionToolActivityRow(props: {
           flexShrink={0}
           fg={variant() === "error" || variant() === "warning"
             ? color()
-            : props.lifecycle?.queued
-              ? theme.text.feedback.info.default
-              : theme.text.subdued}
+            : theme.text.subdued}
         >
           {status()}
         </text>

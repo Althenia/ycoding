@@ -140,7 +140,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
         expect(result.providerColumns).toBe(result.content >= 1280 ? 3 : result.content >= 768 ? 2 : 1)
         expect(result.tileColumns).toBe(result.content >= 1024 ? 3 : 1)
         expect(result.visualColumns).toBe(result.content >= 1024 ? 2 : 1)
-        expect(result.cardRadius).toBe("16px")
+        expect(result.cardRadius).toBe("0px")
         expect(result.innerBorder).toBe("0px")
         if (width! >= 768) expect(result.headHeight).toBeLessThan(100)
         expect(result.mobileRows).toBe(width! < 768 ? 25 : 0)

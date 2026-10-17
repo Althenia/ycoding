@@ -30,7 +30,6 @@ import { SessionGuardrailMatch } from "./guardrail-match"
 import { SessionGuardrailStandard } from "./guardrail-standard"
 import { SessionReviewFold } from "./review-fold"
 import { ModelIncident } from "../model-incident/index"
-import type { ShellQueue } from "../shell/queue"
 
 export const RequestID = Guardrail.RequestID
 
@@ -43,7 +42,6 @@ export interface EvaluateInput {
   /** Admit ordinary and hard review decisions without a request; deny decisions still block. */
   readonly skipReview?: boolean
   readonly holder?: string
-  readonly deferShell?: boolean
 }
 
 export interface Evaluation {
@@ -58,7 +56,6 @@ export interface Evaluation {
 
 export interface Reservation {
   readonly release: Effect.Effect<void>
-  readonly admission?: ShellQueue.Admission
 }
 
 export interface ReplyInput {
@@ -397,7 +394,6 @@ export const layer = Layer.effect(
 
     const evaluate: Interface["evaluate"] = (input) => classify(input).pipe(Effect.map((result) => result.evaluation))
 
-    const shellListeners = new Map<Session.ID, Set<() => void>>()
     const managed = (rootSessionID: Session.ID, reservation: SessionGuardrailCounter.Reservation): ManagedReservation => {
       advanceUnlocked(rootSessionID)
       let released = false
@@ -420,13 +416,10 @@ export const layer = Layer.effect(
       return Effect.succeed<ManagedReservation>({ ...noReservation, releaseUnlocked: Effect.void })
     }
 
-    const reserveShell = (rootSessionID: Session.ID, holder: string | undefined, wait = true, notify = () => true) =>
+    const reserveShell = (rootSessionID: Session.ID, holder: string | undefined) =>
       Effect.uninterruptibleMask((restore) =>
-        restore(counters.reserve(rootSessionID, "shell", { holder, ...(wait ? { wait: shellWait } : {}) })).pipe(
-          Effect.map((reservation) => {
-            const current = managed(rootSessionID, reservation)
-            return { ...current, release: current.release.pipe(Effect.andThen(Effect.sync(() => { if (notify()) shellListeners.get(rootSessionID)?.forEach((wake) => wake()) }))) }
-          }),
+        restore(counters.reserve(rootSessionID, "shell", { holder, wait: shellWait })).pipe(
+          Effect.map((reservation) => managed(rootSessionID, reservation)),
         ),
       )
 
@@ -739,29 +732,6 @@ export const layer = Layer.effect(
         if (reservation && input.action !== "shell") return reservation
         if (input.action !== "shell")
           return yield* withRootLock(result.rootSessionID, reserveActionUnlocked(result.rootSessionID, input.action))
-        if (input.deferShell) return {
-          release: Effect.void,
-          admission: {
-            family: result.rootSessionID,
-            acquire: Effect.suspend(() => {
-              const state = { committed: false }
-              return reserveShell(result.rootSessionID, input.holder, false, () => state.committed).pipe(
-                Effect.map((reservation) => ({ release: reservation.release, commit: Effect.sync(() => { state.committed = true }) })),
-                Effect.catchTag("Guardrail.CapExceededError", () => Effect.succeed(undefined)),
-              )
-            }),
-            subscribe: (wake: () => void) => {
-              const listeners = shellListeners.get(result.rootSessionID) ?? new Set<() => void>()
-              shellListeners.set(result.rootSessionID, listeners)
-              const notify = () => wake()
-              listeners.add(notify)
-              return () => {
-                listeners.delete(notify)
-                if (listeners.size === 0) shellListeners.delete(result.rootSessionID)
-              }
-            },
-          },
-        }
         return yield* reserveShell(result.rootSessionID, input.holder)
       }),
     )

@@ -86,7 +86,7 @@ export function groupSessionShells(
   const descendantIDs = childSessionIDs(sessions, rootID)
   const ownerIDs = new Set([rootID, ...descendantIDs])
   const visible = shells.filter((shell) => {
-    if (!options?.includeSettled && shell.status !== "running" && shell.status !== "queued") return false
+    if (!options?.includeSettled && shell.status !== "running") return false
     const sessionID = shell.metadata.sessionID
     return typeof sessionID === "string" && ownerIDs.has(sessionID)
   })

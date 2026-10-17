@@ -8,6 +8,9 @@
 }
 .usage-filter-controls > *, .usage-filter-controls .input { min-width: 0; width: 100%; }
 .usage-filter-controls .field { gap: var(--yc-space-2); }
+.usage-filter-controls .field__label, .usage-group-control .field__label { display: flex; align-items: center; gap: var(--yc-space-2); }
+.usage-filter-controls .field__label > svg, .usage-group-control .field__label > svg { flex: none; }
+.usage-group-control .custom-select { min-width: 0; width: 100%; }
 .usage-filter-controls__range {
   grid-column: 1 / -1;
   display: flex;

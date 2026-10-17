@@ -8,51 +8,26 @@ import { accountedTask } from "./usage-fixture"
 import { startRelayDouble, waitFor } from "./relay-double"
 import { createRemoteStoreClock } from "./remote-store-clock"
 
-test("resident prompt accounting requests actual user IDs and never transfers an absent anchor's cost", async () => {
-  const base = accountedTask()
-  const unit = (inputID: string, cost: number) => ({ anchor: { sessionID: "ses_a", inputID }, status: "so-far", attribution: "complete", history: "retained", total: accountedTask("ses_child", cost).total, main: accountedTask("ses_child", cost).main, children: base.children, helpers: [] })
+test("transcript hydration and settlement do not fetch per-prompt accounting", async () => {
   const relay = await startRelayDouble({ messages: { ses_a: [
     { id: "msg_first", type: "user", text: "First", files: [], agents: [], time: { created: 1, consumed: 2 } },
-    { id: "msg_synthetic", type: "synthetic", text: "Runtime observation", time: { created: 3 } },
-    { id: "msg_newer", type: "user", text: "Next", files: [], agents: [], time: { created: 4, consumed: 5 } },
-  ] }, handler: (request) => request.operation === "session.promptCosts" ? { ok: true, value: { data: { units: [unit("msg_first", 2), unit("msg_newer", 0.1), unit("msg_pruned", 99)], unattributed: base.total, history: "retained" } } } : "default" })
+    { id: "msg_next", type: "user", text: "Next", files: [], agents: [], time: { created: 3, consumed: 4 } },
+  ] } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
   try {
     await store.load()
     await waitFor(() => store.state().transport.kind === "open")
     await store.selectSession("ses_a")
-    await waitFor(() => store.state().view?.promptCostState === "ready")
-    expect(relay.requests.filter((request) => request.operation === "session.promptCosts").map((request) => request.input)).toEqual([{ inputIDs: ["msg_first", "msg_newer"] }])
-    expect(store.state().view?.promptCosts?.map((value) => [value.anchor.inputID, value.total.cost.total])).toEqual([["msg_first", 2], ["msg_newer", 0.1]])
-    expect(store.state().view?.promptCosts?.some((value) => value.anchor.inputID === "msg_pruned")).toBe(false)
-  } finally { store.dispose(); await relay.stop() }
-})
-
-test("settlement refreshes prompt costs without captured records and keeps the original anchor", async () => {
-  const source = { cost: 2, settled: false }
-  const base = accountedTask()
-  const unit = (inputID: string) => ({ anchor: { sessionID: "ses_a", inputID }, status: source.settled ? "settled" : "so-far", attribution: "complete", history: "retained", total: accountedTask("ses_a", inputID === "msg_first" ? source.cost : 0).total, main: accountedTask("ses_a", inputID === "msg_first" ? source.cost : 0).main, children: base.children, helpers: [] })
-  const relay = await startRelayDouble({ messages: { ses_a: [
-    { id: "msg_first", type: "user", text: "First", files: [], agents: [], time: { created: 1, consumed: 2 } },
-    { id: "msg_next", type: "user", text: "Next", files: [], agents: [], time: { created: 3, consumed: 4 } },
-  ] }, handler: (request) => {
-    if (request.operation === "session.capturedChanges.list") return { ok: false, code: "unknown_operation", message: "Unavailable" }
-    if (request.operation === "session.promptCosts") return { ok: true, value: { data: { units: [unit("msg_first"), unit("msg_next")], unattributed: base.children, history: "retained" } } }
-    return "default"
-  } })
-  const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
-  try {
-    await store.load(); await waitFor(() => store.state().transport.kind === "open"); await store.selectSession("ses_a")
-    await waitFor(() => store.state().view?.promptCostState === "ready")
-    source.cost = 3.5
-    relay.pushEvent("ses_a", { id: "evt_parent_settled", created: 10, type: "session.execution.succeeded", data: { sessionID: "ses_a" } })
-    await waitFor(() => store.state().view?.promptCosts?.[0]?.total.cost.total === 3.5)
-    expect(store.state().view?.promptCosts?.[0]?.status).toBe("so-far")
-    expect(store.state().view?.promptCosts?.[1]?.total.cost.total).toBe(0)
-    source.settled = true
+    expect(store.state().view?.messages.map((message) => message.id)).toEqual(["msg_first", "msg_next"])
+    expect(relay.requests.filter((request) => request.operation === "session.promptCosts")).toEqual([])
+    relay.pushEvent("ses_a", { id: "evt_started", created: 10, type: "session.execution.started", data: { sessionID: "ses_a" } })
+    await waitFor(() => store.state().view?.status === "running")
     relay.pushEvent("ses_a", { id: "evt_child_settled", created: 11, type: "session.task.updated", data: { sessionID: "ses_child", revision: 1, change: { type: "completed" } } })
-    await waitFor(() => store.state().view?.promptCosts?.[0]?.status === "settled")
-    expect(store.state().view?.promptCosts?.map((value) => value.anchor.inputID)).toEqual(["msg_first", "msg_next"])
+    relay.pushEvent("ses_a", { id: "evt_usage", created: 12, type: "session.usage.updated", data: { sessionID: "ses_a" } })
+    relay.pushEvent("ses_a", { id: "evt_settled", created: 13, type: "session.execution.succeeded", data: { sessionID: "ses_a" } })
+    await waitFor(() => store.state().view?.status === "idle")
+    expect(relay.requests.filter((request) => request.operation === "session.promptCosts")).toEqual([])
+    expect(store.state().view?.messages.map((message) => message.id)).toEqual(["msg_first", "msg_next"])
   } finally { store.dispose(); await relay.stop() }
 })
 

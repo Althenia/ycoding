@@ -83,6 +83,11 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
+    "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.",
+    "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required human approval.",
+    autonomy.autoAnswer === true
+      ? "Automatic answering is enabled for this Session. Automatic selections are not human replies or new user instructions. Resolve the routine choice toward the goal or identify the actual required human approval through its native request path."
+      : "Automatic answering is disabled for this Session. Resolve choices that need no user input yourself; required answers and required human approval remain manual.",
     "Choose safe implementation options and continue independent work. Required answers remain manual unless the answering Session's auto-answer toggle is on. Model guardrail judgments require guardrails.decide_reviews; hard-review grading also respects guardrails.decide_hard_reviews. Both automatic answers and model guardrail judgments default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",

@@ -3,6 +3,8 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { createEffect } from "solid-js"
 import path from "node:path"
+import { mkdtemp } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { ConfigProvider } from "../../src/config"
 import { Keymap } from "../../src/context/keymap"
 import { RouteProvider, useRoute } from "../../src/context/route"
@@ -13,13 +15,13 @@ import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 
-const renders = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
+const renders = await mkdtemp(path.join(tmpdir(), "ycoding-shell-sections-"))
 const parentID = "ses_0085fc701a"
 const sessionID = parentID
 const childID = "ses_docs_sync"
-const directory = `${process.env.HOME}/Workspace/Personal/YCoding`
+const directory = "/workspace/ycoding"
 const location = { directory, project: { id: "project", directory } }
-const now = Date.now()
+const now = 1_800_000_000_000
 const model = {
   id: "claude-opus-5",
   modelID: "claude-opus-5",
@@ -39,6 +41,11 @@ const shells = [
   shell("sh_main_test", parentID, "bun test provider", "running", now - 68_000, 48_213),
   shell("sh_main_dev", parentID, "bun run dev", "running", now - 862_000, 47_990),
   shell("sh_docs_diff", childID, "git diff --check", "running", now - 3_000, 48_307, `${directory}/docs`),
+  shell("sh_archived", parentID, "bun test settled", "exited", now - 30_000),
+  shell("sh_timeout", childID, "node timed-task", "timeout", now - 40_000),
+  shell("sh_killed", parentID, "node stopped-task", "killed", now - 50_000),
+  shell("sh_memory", childID, "node memory-task", "memory-limit", now - 60_000),
+  shell("sh_multiline", childID, `bun inspect ${"long-argument ".repeat(40)}\nSECOND_LINE_MUST_NOT_WRAP\r\nEOF`, "exited", now - 70_000),
   shell("sh_orphan", undefined, "bench cache-warm", "timeout", now - 300_000, undefined),
 ]
 const tasks = [
@@ -93,21 +100,21 @@ function NavigateToShellOutput() {
   return <text>Route:{data.type === "shell-output" ? `${data.type}:${data.sessionID}:${data.shellID}` : data.type}</text>
 }
 
-test("captures the Shell tab owner rows with populated groups", async () => {
-  for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT]) {
+test("captures dense status sections with inline owners at narrow and wide widths in both themes", async () => {
+  const commands = shells.map((shell) => shell.command)
+  for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT]) for (const mode of ["dark", "light"] as const) {
     let selected: string | undefined
     const app = await testRender(
       () => (
         <TestTuiContexts directory={directory}>
           <ConfigProvider config={createTuiResolvedConfig()}>
-            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
               <Keymap.Provider>
                 <ShellRows
                   groups={shellGroups()}
                   now={now}
                   selected="sh_main_test"
                   onSelect={(shell) => (selected = shell.id)}
-                  designLabels
                 />
               </Keymap.Provider>
             </ThemeProvider>
@@ -117,58 +124,67 @@ test("captures the Shell tab owner rows with populated groups", async () => {
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("MAIN CHAT · THIS SESSION"))
+    await app.waitForFrame((frame) => frame.includes("bun inspect"))
 
     try {
       const frame = app.captureCharFrame()
-      expect(frame).toContain("MAIN CHAT · THIS SESSION")
-      expect(frame).toContain("SUBAGENT · DOCS-SYNC · SYNC PROVIDER DOCS")
+      const lines = frame.split("\n").map((line) => line.trimEnd())
+      const populated = lines.filter((line) => line.trim())
+      expect(populated.filter((line) => /^(Running|Archived)$/.test(line))).toEqual(["Running", "Archived"])
+      expect(populated).toHaveLength(10)
+      expect(lines.find((line) => line.includes("bun test provider"))).toContain("Main chat")
+      expect(lines.find((line) => line.includes("git diff --check"))).toContain("docs-sync ·")
+      expect(lines.find((line) => line.includes("bun inspect"))).toContain("…")
+      expect(Bun.stringWidth(lines.find((line) => line.includes("bun inspect"))?.match(/bun inspect [^…]*…/)?.[0] ?? "")).toBeGreaterThan(0)
+      expect(Bun.stringWidth(lines.find((line) => line.includes("bun inspect"))?.match(/bun inspect [^…]*…/)?.[0] ?? "")).toBeLessThanOrEqual(72)
+      expect(shells.map((shell) => shell.command)).toEqual(commands)
+      expect(frame).not.toContain("SECOND_LINE_MUST_NOT_WRAP")
+      expect(frame).not.toContain(directory)
+      expect(frame).not.toContain("pid ")
       expect(frame).not.toContain("UNKNOWN SESSION")
       expect(frame).not.toContain("bench cache-warm")
-      if (viewport.width === NARROW_VIEWPORT.width) expect(frame).toContain("running         bun test provider")
-      await app.mockMouse.moveTo(3, 4)
-      expect(selected).toBe("sh_main_dev")
-      await Bun.write(path.join(renders, `shells-tab-${viewport.width}x${viewport.height}.txt`), frame)
+      expect(lines.every((line) => line.length <= viewport.width)).toBe(true)
+      const color = (label: string) => app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.trim() === label)?.fg.toInts()
+      expect(color("running")).toBeDefined()
+      expect(color("running")).toEqual(color("exited"))
+      expect(color("memory-limit")).toEqual(color("killed"))
+      expect(color("killed")).not.toEqual(color("running"))
+      await app.mockMouse.moveTo(3, lines.findIndex((line) => line.includes("git diff --check")))
+      expect(selected).toBe("sh_docs_diff")
+      await Bun.write(path.join(renders, `shells-tab-${mode}-${viewport.width}x${viewport.height}.txt`), frame)
+      await Bun.write(path.join(renders, `shells-tab-${mode}-${viewport.width}x${viewport.height}.json`), JSON.stringify(app.captureSpans().lines.map((line) => line.spans.map((span) => ({ text: span.text, fg: span.fg.toInts(), bg: span.bg.toInts() }))), null, 2))
     } finally {
       app.renderer.destroy()
     }
   }
 }, 120_000)
 
-test("shows a queued shell's queue position and waiting time instead of a PID", async () => {
-  const queued = { ...shell("sh_queued", parentID, "bun run typecheck", "queued", now - 12_000), queuePosition: 3 }
-  const app = await testRender(
-    () => (
-      <TestTuiContexts directory={directory}>
-        <ConfigProvider config={createTuiResolvedConfig()}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <Keymap.Provider>
-              <ShellRows groups={[{ owner: { label: "Main chat" }, shells: [queued, shells[0]] }]} now={now} selected={undefined} onSelect={() => {}} designLabels />
-            </Keymap.Provider>
-          </ThemeProvider>
-        </ConfigProvider>
-      </TestTuiContexts>
-    ),
-    DESIGN_VIEWPORT_WIDE,
-  )
-  app.renderer.start()
-  try {
-    await app.waitForFrame((frame) => frame.includes("bun run typecheck"))
-    const lines = app.captureCharFrame().split("\n")
-    const row = lines.find((line) => line.includes("bun run typecheck")) ?? ""
-    expect(row).toMatch(/^queued #3\s+bun run typecheck/)
-    expect(row).toContain("waiting · 12s")
-    expect(row).not.toContain("pid")
-    expect(lines.find((line) => line.includes("bun test provider"))).toContain("pid 48213")
-  } finally {
-    app.renderer.destroy()
+test("short rows preserve distinct child agent starts instead of a generic attribution prefix", async () => {
+  for (const width of [40, 60]) for (const mode of ["dark", "light"] as const) {
+    const app = await testRender(() => <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}><ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
+      <ShellRows groups={[
+        { owner: { label: "docs-sync · Sync provider docs" }, shells: [shell("sh_short_docs", childID, "alpha", "running", now - 3_000)] },
+        { owner: { label: "qa-review · Verify results" }, shells: [shell("sh_short_qa", "ses_qa", "beta", "running", now - 4_000)] },
+      ]} now={now} selected={undefined} onSelect={() => {}} />
+    </ThemeProvider></ConfigProvider></TestTuiContexts>, { width, height: 8 })
+    app.renderer.start()
+    try {
+      await app.waitForFrame((frame) => frame.includes("alpha") && frame.includes("beta"))
+      const frame = app.captureCharFrame()
+      const lines = frame.split("\n").filter((line) => line.trim())
+      expect(lines).toHaveLength(3)
+      expect(lines.find((line) => line.includes("alpha"))).toContain("docs-sync")
+      expect(lines.find((line) => line.includes("beta"))).toContain("qa-review")
+      expect(frame).not.toContain("Subagent")
+      await Bun.write(path.join(renders, `shells-tab-${mode}-${width}x8.txt`), frame)
+    } finally { app.renderer.destroy() }
   }
 })
 
 function shellGroups() {
   return [
-    { owner: { label: "Main chat" }, shells: shells.slice(0, 2) },
-    { owner: { label: "docs-sync · Sync provider docs" }, shells: [shells[2]] },
+    { owner: { label: "Main chat" }, shells: shells.filter((shell) => shell.metadata.sessionID === parentID) },
+    { owner: { label: "docs-sync · Sync provider docs" }, shells: shells.filter((shell) => shell.metadata.sessionID === childID) },
   ]
 }
 
@@ -177,5 +193,5 @@ function session(id: string, title: string, agent: string) {
 }
 
 function shell(id: string, sessionID: string | undefined, command: string, status: ShellInfo["status"], started: number, pid?: number, cwd = directory) {
-  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" || status === "queued" ? { started } : { started, completed: now } }
+  return { id, command, status, cwd, shell: "bash", file: `/tmp/${id}`, ...(pid === undefined ? {} : { pid }), metadata: sessionID ? { sessionID } : {}, time: status === "running" ? { started } : { started, completed: now } }
 }

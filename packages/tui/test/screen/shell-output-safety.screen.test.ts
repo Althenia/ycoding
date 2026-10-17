@@ -62,11 +62,11 @@ test("a restored shell route rejects foreign and unresolved owners before render
   }
 }, 60_000)
 
-test.each([["running", "verification"], ["queued", "verification"], ["running", "removal"], ["queued", "removal"]] as const)("picker shows %s shell %s errors without removing the row", async (status, failure) => {
+test.each([["running", "verification"], ["running", "removal"]] as const)("picker shows %s shell %s errors without removing the row", async (status, failure) => {
   let failing = false
   let removes = 0
   const removal = Promise.withResolvers<Response>()
-  const value = { ...shell, status, ...(status === "queued" ? { queuePosition: 2 } : {}) }
+  const value = { ...shell, status }
   process.env.YCODING_ROUTE = JSON.stringify({ type: "session", sessionID: root.id })
   const screen = await renderScreen({ width: 100, height: 40, args: { sessionID: root.id }, kittyKeyboard: true,
     config: { keybinds: { session_child_first: "ctrl+t" } }, settle: "Message YCoding", route: fixture((url, request) => {
@@ -121,10 +121,10 @@ test.each(["verification", "removal"] as const)("a late picker %s failure does n
   } finally { response.resolve(json({}, { status: 500 })); await screen.dispose(); delete process.env.YCODING_ROUTE }
 }, 30_000)
 
-test.each(["running", "queued"] as const)("a deleted %s shell drops cached metadata and ignores its pending output", async (status) => {
+test.each(["running", "exited"] as const)("a deleted %s shell drops cached metadata and ignores its pending output", async (status) => {
   const page = Promise.withResolvers<Response>()
   const started = Promise.withResolvers<void>()
-  const value = { ...shell, status, ...(status === "queued" ? { queuePosition: 2 } : {}) }
+  const value = { ...shell, status }
   let reads = 0
   let removes = 0
   process.env.YCODING_ROUTE = JSON.stringify({ type: "shell-output", sessionID: root.id, shellID: shell.id })
@@ -305,7 +305,7 @@ test("the Shell tab discovers descendants in their own Locations instead of the 
     screen.input.pressArrow("right")
     await until(() => screen.frame().includes("child-only-command")).catch(() => { throw new Error(JSON.stringify({ frame: screen.frame(), lists })) })
     expect(lists).toContain(child.location.directory)
-    expect(screen.frame()).toContain("SUBAGENT · BUILD · CHILD SAFETY")
+    expect(screen.frame().split("\n").find((line) => line.includes("child-only-command"))).toContain("build · Child safety")
   } finally { await screen.dispose(); delete process.env.YCODING_ROUTE }
 }, 30_000)
 

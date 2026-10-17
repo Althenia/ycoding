@@ -12,7 +12,7 @@ import { Location } from "@ycoding-ai/core/location"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ShellSandbox } from "@ycoding-ai/core/shell-sandbox"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -21,7 +21,8 @@ afterAll(() => rm(workspace, { recursive: true, force: true }))
 
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({ diagnostics: () => Effect.succeed([]),
+  Config.Service.of({
+    diagnostics: () => Effect.succeed([]),
     reload: () => Effect.void,
     entries: () =>
       Effect.succeed([
@@ -33,7 +34,7 @@ const config = Layer.succeed(
   }),
 )
 
-const it = testEffect(
+const layer = (exitBeforeSpawn = false) =>
   AppNodeBuilder.build(
     LayerNode.group([
       AppProcess.node,
@@ -45,6 +46,22 @@ const it = testEffect(
       Shell.node,
     ]),
     [
+      [
+        AppProcess.node,
+        Layer.effect(
+          AppProcess.Service,
+          Effect.gen(function* () {
+            const real = yield* AppProcess.Service
+            return AppProcess.Service.of({
+              ...real,
+              spawn: (command) =>
+                real
+                  .spawn(command)
+                  .pipe(Effect.tap((handle) => (exitBeforeSpawn ? handle.exitCode.pipe(Effect.asVoid) : Effect.void))),
+            })
+          }),
+        ).pipe(Layer.provide(AppNodeBuilder.build(AppProcess.node))),
+      ],
       [Config.node, config],
       [Global.node, Global.layerWith({ data: join(workspace, "data") })],
       [
@@ -52,8 +69,10 @@ const it = testEffect(
         Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(workspace) }))),
       ],
     ],
-  ),
-)
+  )
+
+const it = testEffect(layer())
+const earlyExit = testEffect(layer(true))
 
 // Memory-limited shells sample the process group before watching for exit, so a command that
 // finishes during that sample is the case most likely to report its exit before its creation.
@@ -63,20 +82,40 @@ posixIt("publishes shell.created before shell.exited for commands that finish im
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
     const shell = yield* Shell.Service
-    const seen: string[] = []
+    expect(shell).not.toHaveProperty("enqueue")
+    expect(shell).not.toHaveProperty("cancelQueued")
+    const observed = yield* Queue.unbounded<string>()
     yield* events.listen((event) =>
-      Effect.sync(() => {
-        if (event.type === "shell.created" || event.type === "shell.exited") seen.push(event.type)
-      }),
+      event.type === "shell.created" || event.type === "shell.exited"
+        ? Queue.offer(observed, event.type).pipe(Effect.asVoid)
+        : Effect.void,
     )
-
     for (const memoryLimitMb of [undefined, 512, 512, 512]) {
-      seen.length = 0
       const info = yield* shell.create(yield* shell.prepare({ command: "true", timeout: 0, memoryLimitMb }))
       yield* shell.wait(info.id)
-      // Waiters resolve just before the exit event is published.
-      for (let attempt = 0; seen.length < 2 && attempt < 100; attempt++) yield* Effect.sleep(10)
+      const seen = yield* Effect.all([Queue.take(observed), Queue.take(observed)]).pipe(Effect.timeout("5 seconds"))
       expect(seen).toEqual(["shell.created", "shell.exited"])
+    }
+  }),
+)
+
+const posixEarlyExit = process.platform === "win32" ? earlyExit.live.skip : earlyExit.live
+
+posixEarlyExit("retains stdout and stderr when the process exits before spawn returns", () =>
+  Effect.gen(function* () {
+    const shell = yield* Shell.Service
+    for (const memoryLimitMb of [undefined, 512]) {
+      const info = yield* shell.create(
+        yield* shell.prepare({
+          command: "printf hello; printf error >&2",
+          timeout: 0,
+          memoryLimitMb,
+        }),
+      )
+      expect((yield* shell.wait(info.id)).status).toBe("exited")
+      const output = yield* shell.output(info.id)
+      expect(output.output).toContain("hello")
+      expect(output.output).toContain("error")
     }
   }),
 )

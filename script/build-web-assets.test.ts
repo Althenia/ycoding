@@ -17,6 +17,7 @@ async function makeFixture(options: { readonly label: string } = { label: "asset
   await fs.mkdir(path.join(fixture, "docs", "examples"), { recursive: true })
   await fs.mkdir(path.join(fixture, "assets", "brand", "fonts"), { recursive: true })
   await Bun.write(path.join(fixture, "assets", "brand", "fonts", "OFL.txt"), Bun.file(path.join(root, "assets", "brand", "fonts", "OFL.txt")))
+  await Bun.write(path.join(fixture, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub"), Bun.file(path.join(root, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub")))
   await fs.mkdir(path.join(fixture, "apps", "web", "dist", "assets"), { recursive: true })
   await Bun.write(path.join(fixture, "script", "install.sh"), "#!/bin/sh\necho ycoding\n")
   await Bun.write(
@@ -56,6 +57,9 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "fonts", "OFL.txt")).text()).toBe(
         await Bun.file(path.join(fixture, "assets", "brand", "fonts", "OFL.txt")).text(),
       )
+      expect(await Bun.file(path.join(outdir, "licenses", "provider-logos.txt")).text()).toBe(
+        await Bun.file(path.join(fixture, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub")).text(),
+      )
 
       const schema = JSON.parse(await Bun.file(path.join(outdir, "ycoding.schema.json")).text())
       expect(schema).toMatchObject({
@@ -73,6 +77,7 @@ describe("web build asset publisher", () => {
         "fonts/OFL.txt",
         "index.html",
         "install.sh",
+        "licenses/provider-logos.txt",
         "ycoding.schema.json",
       ])
     } finally {
@@ -148,6 +153,20 @@ describe("web build asset publisher", () => {
       await fs.rm(fixture, { recursive: true, force: true })
     }
   })
+  test("rejects a missing provider-logo license before adding public assets", async () => {
+    const { fixture, outdir } = await makeFixture({ label: "provider-license" })
+    try {
+      await fs.rm(path.join(fixture, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub"))
+      const error = await buildWebAssets({ root: fixture, outdir }).catch((error) => error)
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw error
+      expect(error.message).toContain("Missing required provider-logo license")
+      expect(await Bun.file(path.join(outdir, "install.sh")).exists()).toBe(false)
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("rejects a missing font license before adding public assets", async () => {
     const { fixture, outdir } = await makeFixture({ label: "font-license" })
     try {

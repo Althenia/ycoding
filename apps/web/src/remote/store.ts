@@ -1,8 +1,8 @@
 import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
-import type { RemoteStoppedRecovery, RemoteUsageTaskCost, RemoteUsagePromptCost } from "@ycoding-ai/remote"
-import { readPromptCosts, readTaskCosts } from "./usage-read"
+import type { RemoteStoppedRecovery, RemoteUsageTaskCost } from "@ycoding-ai/remote"
+import { readTaskCosts } from "./usage-read"
 import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
@@ -163,7 +163,7 @@ type TeamView = {
   readonly next?: string
   readonly pageLoading: boolean
   readonly refreshing?: boolean
-  readonly shells: readonly { readonly id: string; readonly ownerID: string; readonly ownerAgent?: string; readonly ownerTitle?: string; readonly command: string; readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"; readonly queuePosition?: number; readonly startedAt: number; readonly completedAt?: number }[]
+  readonly shells: readonly { readonly id: string; readonly ownerID: string; readonly ownerAgent?: string; readonly ownerTitle?: string; readonly command: string; readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"; readonly startedAt: number; readonly completedAt?: number }[]
   readonly shellTruncated?: boolean
   readonly shellStatus: "loading" | "ready" | "unsupported" | "error"
   readonly sideChats: readonly { readonly id: string; readonly title: string; readonly updatedAt: number }[]
@@ -1042,7 +1042,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return cue?.kind === "reported" && cue.outcome === "completed"
     })) scheduleCapturedRefresh()
     const accountingChanged = items.some((item) => typeof item.event === "object" && item.event !== null && ["session.input.promoted", "session.usage.updated", "session.step.failed", "session.task.updated", "session.compaction.ended", "session.compaction.failed", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(String(Reflect.get(item.event, "type"))))
-    if (accountingChanged && transport && container.state.activeSessionID) void loadPromptCosts(transport, container.state.activeSessionID, selectionToken)
     if (accountingChanged && !refreshTeam && teamWatching && transport && container.state.team?.status === "ready")
       void loadTeamEconomics(transport, selectionToken, container.state.team.rootID, container.state.team.tasks.map((task) => task.sessionID), "accounting")
     if (items.some((item) => typeof item.event === "object" && item.event !== null && Reflect.get(item.event, "type") === "session.compaction.started") &&
@@ -1733,32 +1732,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     lastCapturedRead = -Infinity
   }
 
-  let promptRead: { owner: RemoteTransport; sessionID: string; token: number; again: boolean } | undefined
-  const loadPromptCosts = async (owner: RemoteTransport, sessionID: string, token: number) => {
-    if (promptRead?.owner === owner && promptRead.sessionID === sessionID && promptRead.token === token) { promptRead.again = true; return }
-    const ids = container.state.view?.id === sessionID ? container.state.view.messages.filter((message) => message.kind === "user" && message.state !== "pending").map((message) => message.id) : []
-    if (ids.length === 0) return
-    const read = { owner, sessionID, token, again: false }
-    promptRead = read
-    if (container.state.view?.id === sessionID) setState({ view: { ...container.state.view, promptCostState: "loading" } })
-    const units: RemoteUsagePromptCost[] = []
-    try {
-      for (let offset = 0; offset < ids.length; offset += 100) {
-        const inputIDs = ids.slice(offset, offset + 100)
-        const outcome = await owner.request("session.promptCosts", { sessionID, input: { inputIDs }, timeoutMs: 30_000 })
-        if (promptRead !== read || token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID || container.state.view?.id !== sessionID) return
-        const data = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? readPromptCosts(Reflect.get(outcome.value, "data")) : undefined
-        if (!data) { setState({ view: { ...container.state.view, promptCostState: "unavailable" } }); return }
-        units.push(...data.units.filter((unit) => unit.anchor.sessionID === sessionID && inputIDs.includes(unit.anchor.inputID)))
-      }
-      if (container.state.view?.id !== sessionID) return
-      const resident = new Set(container.state.view.messages.filter((message) => message.kind === "user").map((message) => message.id))
-      setState({ view: { ...container.state.view, promptCosts: units.filter((unit) => resident.has(unit.anchor.inputID)), promptCostState: "ready" } })
-    } finally {
-      if (promptRead === read) { promptRead = undefined; if (read.again && token === selectionToken && isCurrentConnection(owner)) void loadPromptCosts(owner, sessionID, token) }
-    }
-  }
-
   let reviewRead: { readonly owner: RemoteTransport; readonly sessionID: string; readonly token: number; again: boolean } | undefined
   const loadReview = async (owner: RemoteTransport, sessionID: string, token: number): Promise<void> => {
     if (reviewRead?.owner === owner && reviewRead.sessionID === sessionID && reviewRead.token === token) {
@@ -1953,7 +1926,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     setState({ view: { ...view, messages },
       history: { status: "idle", ...(hasCompactionCheckpoint(messages) || page.before === undefined ? {} : { before: page.before }) } })
     void loadCompactionHistory(sessionID, token)
-    void loadPromptCosts(owner, sessionID, token)
   }
 
   const loadOversizedMessage = async (messageID: string) => {
@@ -2035,7 +2007,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           latency.recordClient("transcript.load", monotonicNow() - transcriptStarted)
       }))
       void loadCompactionHistory(sessionID, token)
-      if (transport) void loadPromptCosts(transport, sessionID, token)
       view.messages.filter((message) => message.kind === "oversized" && message.state === "pending").forEach((message) => { void loadOversizedMessage(message.id) })
       const owner = transport
       if (teamWatching && owner !== undefined && container.state.team !== undefined) void loadTeam(owner, token, container.state.team.rootID, undefined, true)
@@ -2513,7 +2484,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       if (teamWatching && (!sameFamily || container.state.team?.status !== "ready")) void loadTeam(active, token, rootID)
       if (sameFamily && activityWatching) void loadFamilyActivity(active, rootID)
       void loadCapturedChanges(active, sessionID, token)
-      void loadPromptCosts(active, sessionID, token)
       void loadReview(active, sessionID, token)
       snapshotStage.resolve(true)
       await Promise.all([sessionReads, pendingInputs])
@@ -2548,7 +2518,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         : container.state.selectedSessionInfo })
       void loadCompactionHistory(sessionID, token)
       void loadCapturedChanges(active, sessionID, token)
-      void loadPromptCosts(active, sessionID, token)
       void loadReview(active, sessionID, token)
       void confirmWatermark(active, sessionID, token)
       if (teamWatching && (!retained || container.state.team?.status !== "ready")) void loadTeam(active, token, teamRootID)
@@ -3367,8 +3336,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     killTeamShell: async (shellID) => {
       const owner = transport
       const team = container.state.team
-      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && (shell.status === "running" || shell.status === "queued")))
-        return { status: "failed", message: "Shell is not running or queued in this family." }
+      if (!teamWatching || owner === undefined || team?.shellStatus !== "ready" || !team.shells.some((shell) => shell.id === shellID && shell.status === "running"))
+        return { status: "failed", message: "Shell is not running in this family." }
       const rootID = team.rootID
       const token = selectionToken
       const outcome = await owner.request("session.team.shell.kill", { sessionID: rootID, input: { shellID }, timeoutMs: 10_000 })
@@ -4103,7 +4072,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
     if (isCurrentConnection(owner)) {
       void loadCapturedChanges(owner, sessionID, token)
-      void loadPromptCosts(owner, sessionID, token)
       void loadReview(owner, sessionID, token)
     }
     if (!isCurrentConnection(owner)) return
@@ -4244,11 +4212,9 @@ function readTeamShell(value: unknown): TeamView["shells"][number] | undefined {
   const status = Reflect.get(value, "status")
   const startedAt = Reflect.get(value, "startedAt")
   const completedAt = Reflect.get(value, "completedAt")
-  const queuePosition = Reflect.get(value, "queuePosition")
   if (typeof id !== "string" || typeof ownerID !== "string" || typeof command !== "string" ||
-    !["queued", "running", "exited", "timeout", "memory-limit", "killed"].includes(status) || typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined
+    !["running", "exited", "timeout", "memory-limit", "killed"].includes(status) || typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined
   return { id, ownerID, ...(typeof ownerAgent === "string" ? { ownerAgent } : {}), ...(typeof ownerTitle === "string" ? { ownerTitle } : {}), command, status,
-    ...(status === "queued" && typeof queuePosition === "number" && Number.isInteger(queuePosition) && queuePosition > 0 ? { queuePosition } : {}),
     startedAt, ...(typeof completedAt === "number" && Number.isFinite(completedAt) ? { completedAt } : {}) } as TeamView["shells"][number]
 }
 

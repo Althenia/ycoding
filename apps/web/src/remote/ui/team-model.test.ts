@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { accountedTask } from "../../../test/usage-fixture"
-import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, shellStatusLabel, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -64,7 +64,7 @@ test("Team activity includes only live shells, distinguishes unreported and trun
   expect(teamActivityLabel({ ...data, activeTotal: undefined, next: "next" })).toBe("At least 1 active")
   expect(teamActiveCount({ ...data, shellStatus: "loading", shells: [] })).toBeUndefined()
   expect(teamActiveCount({ ...data, shellStatus: "error" })).toBeUndefined()
-  for (const status of ["queued", "exited", "timeout", "memory-limit", "killed"] as const) expect(teamActiveCount({ ...data, shells: [{ ...data.shells[0]!, status }] })).toBe(0)
+  for (const status of ["exited", "timeout", "memory-limit", "killed"] as const) expect(teamActiveCount({ ...data, shells: [{ ...data.shells[0]!, status }] })).toBe(0)
 })
 
 test("progress on a running task never reshuffles its section, while a state change still moves it", () => {
@@ -148,13 +148,6 @@ test("a shell keeps its list preview while the opened view uses the complete com
   expect(teamShellCommand(shell, { command: "" })).toBe("")
   expect(shell.command).toHaveLength(256)
   expect(shell.command.endsWith("…")).toBe(true)
-})
-
-test("queued shells show their queue position and other statuses show their own word", () => {
-  expect(shellStatusLabel({ status: "queued", queuePosition: 2 })).toBe("queued #2")
-  expect(shellStatusLabel({ status: "queued" })).toBe("queued")
-  expect(shellStatusLabel({ status: "running" })).toBe("running")
-  expect(shellStatusLabel({ status: "killed", queuePosition: 2 })).toBe("killed")
 })
 
 test("a connector without task costs states the update in Tokens and Cost, never a bare dash", () => {

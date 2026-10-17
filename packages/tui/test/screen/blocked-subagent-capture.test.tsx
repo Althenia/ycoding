@@ -29,7 +29,8 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     const rows = await captureRoute({
       ...viewport,
       args: { sessionID },
-      settle: "Claude Sonnet 5",
+      sessionReady: true,
+      settle: viewport.width === 80 ? "Enter answer" : "Claude Sonnet 5",
       stable: viewport.width === 80
         ? ["Enter answer"]
         : ["TEST-TRIAGE SUBAGENT", "Should I mark the pre-existing failures as expected, or fix them?", "test-triage (2 of 3)"],

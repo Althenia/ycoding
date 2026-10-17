@@ -240,7 +240,7 @@ const defaultMessages = [
           status: "completed",
           input: { command: "bun test --watch", background: true },
           content: [{ type: "text", text: "The command was moved to the background." }],
-          structured: { shellID: "sh_bg", truncated: false, status: accountParams.has("backgroundShellLifecycle") ? "queued" : "running" },
+          structured: { shellID: "sh_bg", truncated: false, status: "running" },
           time: { created: ago(35), ran: ago(35), completed: ago(34) },
         },
       },
@@ -666,10 +666,10 @@ function createFixtureStore(): Fixture {
     const cursor = typeof input?.cursor === "number" ? input.cursor : 0
     if (shellID === "sh_bg") {
       if (accountParams.has("backgroundShellLifecycle")) {
-        const index = Math.min(backgroundReads++, 2)
-        const lines = ["queued-output\n", "running-output\n", "final-output\n"]
+        const index = Math.min(backgroundReads++, 1)
+        const lines = ["running-output\n", "final-output\n"]
         const cursor = byteLength(lines.slice(0, index + 1).join(""))
-        return { status: "ok", value: { status: ["queued", "running", "exited"][index], data: { output: lines[index], cursor, size: cursor, truncated: false } } }
+        return { status: "ok", value: { status: ["running", "exited"][index], data: { output: lines[index], cursor, size: cursor, truncated: false } } }
       }
       return {
         status: "ok",
@@ -919,7 +919,7 @@ function createFixtureStore(): Fixture {
       teamCancelState = "cancelling"
       return { status: "ok", value: { data: { sessionID: "ses_child", parentID: sessionID, description: "Fix flaky suite", agent: "general", model, background: true, state: "cancelling", revision: 2, time: { created: ago(30), updated: ago(1) } } } }
     }
-    if (operation === "session.team.shell.list") return { status: "ok", value: { data: teamShellKilled ? [] : [{ id: "sh_team", ownerID: "ses_child", command: "bun test", status: accountParams.has("queuedTeamShell") ? "queued" : "running", ...(accountParams.has("queuedTeamShell") ? { queuePosition: 2 } : {}), startedAt: ago(10) }] } }
+    if (operation === "session.team.shell.list") return { status: "ok", value: { data: teamShellKilled ? [] : [{ id: "sh_team", ownerID: "ses_child", command: "bun test", status: "running", startedAt: ago(10) }] } }
     if (operation === "session.team.shell.kill") {
       if (targetSessionID !== sessionID || input?.shellID !== "sh_team") return { status: "failed", error: { code: "forbidden", message: "Shell is outside this family" } }
       teamShellKilled = true

@@ -14,7 +14,6 @@ import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-no
 import { filesystem } from "@ycoding-ai/core/effect/app-node-platform"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
-import { ConfigShell } from "@ycoding-ai/core/config/shell"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -46,23 +45,19 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
 import { groupAlive } from "./fixture/shell-process"
 import { testEffect } from "./lib/effect"
+import { fixtureModels } from "./lib/models"
 import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("test"), providerID: Provider.ID.make("test") })
 const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
-const configDocument = (
-  shellSandbox?: "disabled" | "optional" | "required",
-  shellMemoryLimitMb?: number,
-  shellQueue?: ConfigShell.Queue,
-) =>
+const configDocument = (shellSandbox?: "disabled" | "optional" | "required", shellMemoryLimitMb?: number) =>
   new Config.Document({
     type: "document",
     info: new Config.Info({
       shell: testShell,
       shell_sandbox: shellSandbox,
       shell_memory_limit_mb: shellMemoryLimitMb,
-      shell_queue: shellQueue,
     }),
   })
 const assertions: Permission.AssertInput[] = []
@@ -272,8 +267,6 @@ const fakeShellNode = makeLocationNode({
       return Shell.Service.of({
         prepare,
         create,
-        enqueue: () => Effect.die(new Error("unused fake Shell.enqueue")),
-        cancelQueued: () => Effect.succeed(false),
         noticeOwed: () => Effect.void,
         noticeAdmitted: () => Effect.void,
         list: () => Effect.succeed(fakeShellState.info?.status === "running" ? [fakeShellState.info] : []),
@@ -394,6 +387,7 @@ const layer = AppNodeBuilder.build(
   ]),
   [
     [SessionExecution.node, executionNode],
+    fixtureModels,
     [AppProcess.node, tracedProcess],
     [Config.node, config],
     [Permission.node, permission],
@@ -419,6 +413,7 @@ const fakeLayer = AppNodeBuilder.build(
   ]),
   [
     [SessionExecution.node, executionNode],
+    fixtureModels,
     [Config.node, config],
     [Permission.node, permission],
     [Shell.node, fakeShellNode],
@@ -498,41 +493,36 @@ const requiredShellID = (settled: { output?: { structured?: unknown } }) =>
   Schema.decodeUnknownSync(Schema.Struct({ shellID: ShellSchema.ID }))(settled.output?.structured).shellID
 
 describe("ShellTool", () => {
-  it.live("keeps twelve waiting commands outside the family shell cap while normal shells run", () =>
+  it.live("counts background shell reservations while foreground commands complete", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
-        configEntries = [configDocument(undefined, undefined, { max_running: 1, max_queued_per_session: 16 })]
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
             const shell = yield* Shell.Service
+            const jobs = yield* Job.Service
             const guardrail = yield* SessionGuardrail.Service
             yield* Effect.addFinalizer(() =>
-              shell
-                .list()
-                .pipe(
-                  Effect.flatMap((items) =>
-                    Effect.forEach(items, (item) => shell.remove(item.id).pipe(Effect.ignore), { discard: true }),
-                  ),
+              shell.list().pipe(
+                Effect.flatMap((items) =>
+                  Effect.forEach(items, (item) => shell.remove(item.id).pipe(Effect.ignore), { discard: true }),
                 ),
+              ),
             )
-            const holder = yield* settleTool(registry, call({ command: idleCommand, channel: "queue" }, "call-holder"))
-            const id = requiredShellID(holder)
-            yield* Effect.gen(function* () {
-              while ((yield* shell.get(id)).status !== "running") yield* Effect.yieldNow
-            }).pipe(Effect.timeout(5_000))
-            yield* settleTool(registry, call({ command: idleCommand, background: true }, "call-normal"))
-            for (let index = 0; index < 12; index++) {
-              const waiting = yield* settleTool(
-                registry,
-                call({ command: helloCommand, channel: "queue" }, `call-waiting-${index}`),
-              ).pipe(Effect.timeout(2_000))
-              expect(requiredShellID(waiting)).toStartWith("sh_")
-            }
+            const running = yield* Effect.forEach(["call-first", "call-second"], (id) =>
+              settleTool(registry, call({ command: idleCommand, background: true }, id)).pipe(
+                Effect.map((settled) => ({ callID: id, shellID: requiredShellID(settled) })),
+              ),
+            )
             expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(2)
-            const normal = yield* settleTool(registry, call({ command: helloCommand }, "call-available-normal"))
-            expect(normal.output?.content[0]).toEqual({ type: "text", text: "hello" })
+            const foreground = yield* settleTool(registry, call({ command: helloCommand }, "call-foreground"))
+            expect(foreground.output?.content[0]).toEqual({ type: "text", text: "hello" })
+            expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(2)
+            yield* Effect.forEach(running, (item) =>
+              shell.remove(item.shellID).pipe(Effect.andThen(jobs.wait({ id: item.callID }))),
+            )
+            expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(0)
           }),
         )
       },
@@ -540,72 +530,46 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live(
-    "waits for family capacity without holding running slots and starts after a normal shell frees capacity",
-    () =>
-      Effect.acquireUseRelease(
-        Effect.promise(() => tmpdir()),
-        (tmp) => {
-          reset()
-          configEntries = [
-            configDocument(undefined, undefined, { max_running: 1 }),
-            new Config.Document({
-              type: "document",
-              info: new Config.Info({
-                guardrails: new ConfigGuardrail.Info({ max_concurrent_shells: 1, shell_wait_seconds: 1 }),
-              }),
+  fakeIt.effect("starts a waiting foreground command when a background shell releases family capacity", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        configEntries = [
+          configDocument(),
+          new Config.Document({
+            type: "document",
+            info: new Config.Info({
+              guardrails: new ConfigGuardrail.Info({ max_concurrent_shells: 1, shell_wait_seconds: 2 }),
             }),
-          ]
-          return withSession(tmp.path, (registry) =>
-            Effect.gen(function* () {
-              const shell = yield* Shell.Service
-              const events = yield* EventRuntime.Service
-              yield* Effect.addFinalizer(() =>
-                shell
-                  .list()
-                  .pipe(
-                    Effect.flatMap((items) =>
-                      Effect.forEach(items, (item) => shell.remove(item.id).pipe(Effect.ignore), { discard: true }),
-                    ),
-                  ),
-              )
-              const normal = yield* settleTool(
-                registry,
-                call({ command: idleCommand, background: true }, "call-full-normal"),
-              )
-              const normalID = requiredShellID(normal)
-              const waiting = yield* settleTool(
-                registry,
-                call({ command: helloCommand, channel: "queue" }, "call-full-queued"),
-              ).pipe(Effect.timeout(2_000))
-              const waitingID = requiredShellID(waiting)
-              expect(waitingID).toStartWith("sh_")
-              const other = yield* shell.enqueue(
-                yield* shell.prepare({ command: idleCommand, timeout: 0 }),
-                Session.ID.make("ses_other_family"),
-              )
-              yield* Effect.gen(function* () {
-                while ((yield* shell.get(other.id)).status !== "running") yield* Effect.yieldNow
-              }).pipe(Effect.timeout(5_000))
-              expect((yield* shell.get(waitingID)).status).toBe("queued")
-              yield* shell.remove(other.id)
-              const completed = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
-                Stream.filter(
-                  (event) =>
-                    event.data.sessionID === sessionID &&
-                    event.data.input.type === "synthetic" &&
-                    JSON.stringify(event.data.input.data).includes("hello"),
-                ),
-                Stream.runHead,
-                Effect.forkScoped({ startImmediately: true }),
-              )
-              yield* shell.remove(normalID)
-              expect((yield* Fiber.join(completed).pipe(Effect.timeout(5_000))).valueOrUndefined).toBeDefined()
-            }),
-          )
-        },
-        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-      ),
+          }),
+        ]
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const guardrail = yield* SessionGuardrail.Service
+            yield* settleTool(registry, call({ command: "fake background command", background: true }, "call-holder"))
+            const approved = yield* Deferred.make<void>()
+            afterPermission = (input) =>
+              input.action === "shell" ? Deferred.succeed(approved, undefined).pipe(Effect.asVoid) : Effect.void
+            const waiting = yield* settleTool(registry, call({ command: "pwd" }, "call-waiting")).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            )
+            yield* Deferred.await(approved)
+            yield* TestClock.adjust("1 second")
+            expect(fakeShellState.creates).toBe(1)
+            expect(waiting.pollUnsafe()).toBeUndefined()
+            expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(1)
+            yield* fakeShellState.complete!("background done")
+            while (fakeShellState.creates < 2) yield* Effect.yieldNow
+            expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(1)
+            yield* fakeShellState.complete!("foreground done")
+            expect((yield* Fiber.join(waiting)).output?.content[0]).toEqual({ type: "text", text: "foreground done" })
+            expect((yield* guardrail.status(sessionID)).counters.find((item) => item.id === "shells")?.current).toBe(0)
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
   )
   afterAll(async () => fs.rm(data, { recursive: true, force: true }))
 
@@ -618,12 +582,13 @@ describe("ShellTool", () => {
     expect(() => decode({ command: "true", timeout: 1.5 })).toThrow()
   })
 
-  test("accepts the normal and queue channels and rejects others", () => {
+  test("supports foreground and background execution without scheduling channels", () => {
     const decode = Schema.decodeUnknownSync(ShellTool.Input)
-    expect(decode({ command: "true" }).channel).toBeUndefined()
-    expect(decode({ command: "true", channel: "normal" }).channel).toBe("normal")
-    expect(decode({ command: "true", channel: "queue" }).channel).toBe("queue")
-    expect(() => decode({ command: "true", channel: "background" })).toThrow()
+    expect(ShellTool.Input.fields).not.toHaveProperty("channel")
+    expect(decode({ command: "true" }).background).toBeUndefined()
+    expect(decode({ command: "true", background: false }).background).toBe(false)
+    expect(decode({ command: "true", background: true }).background).toBe(true)
+    expect(() => decode({ command: "true", background: "queue" })).toThrow()
   })
 
   it.live("fails closed before approval or spawn when sandboxing is required but unavailable", () =>
@@ -1341,155 +1306,6 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("returns a queue-channel command at once as queued and delivers its completion automatically", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        return withSession(tmp.path, (registry) =>
-          Effect.gen(function* () {
-            const events = yield* EventRuntime.Service
-            const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
-              Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
-              Stream.runHead,
-              Effect.forkScoped({ startImmediately: true }),
-            )
-            const settled = yield* settleTool(
-              registry,
-              call({ command: "sleep 0.2; printf queued-done", channel: "queue", timeout: 10_000 }),
-            )
-            const structured = settled.output?.structured as Record<string, unknown> | undefined
-            expect(structured).toMatchObject({ truncated: false })
-            expect(structured?.shellID).toStartWith("sh_")
-            expect(structured?.exit).toBeUndefined()
-            expect(settled.output?.content[0]).toEqual({
-              type: "text",
-              text: "The command was added to the machine-wide shell queue at position 1.",
-            })
-            expect(settled.output?.content[1]).toMatchObject({
-              type: "text",
-              text: expect.stringContaining("timeout counts from that start"),
-            })
-            const input = (yield* Fiber.join(admitted)).valueOrUndefined?.data.input.data
-            expect(input).toMatchObject({ metadata: { source: "shell", state: "completed" } })
-            expect(JSON.stringify(input)).toContain("queued-done")
-          }),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
-  )
-
-  it.live(
-    "settles a queued command stopped before it starts as cancelled and rejects one beyond the waiting limit",
-    () =>
-      Effect.acquireUseRelease(
-        Effect.promise(() => tmpdir()),
-        (tmp) => {
-          reset()
-          configEntries = [configDocument(undefined, undefined, { max_running: 1, max_queued_per_session: 1 })]
-          return withSession(tmp.path, (registry) =>
-            Effect.gen(function* () {
-              const events = yield* EventRuntime.Service
-              const shell = yield* Shell.Service
-              const jobs = yield* Job.Service
-              const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
-                Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
-                Stream.runHead,
-                Effect.forkScoped({ startImmediately: true }),
-              )
-              const shellID = (settled: { output?: { structured?: unknown } }) =>
-                ShellSchema.ID.make(String((settled.output?.structured as Record<string, unknown>).shellID))
-              const holder = shellID(
-                yield* settleTool(registry, call({ command: idleCommand, channel: "queue" }, "call-queue-holder")),
-              )
-              yield* Effect.gen(function* () {
-                while ((yield* shell.get(holder)).status !== "running") yield* Effect.sleep(20)
-              }).pipe(Effect.timeout(5_000))
-              const waiting = shellID(
-                yield* settleTool(registry, call({ command: "printf never", channel: "queue" }, "call-queue-waiting")),
-              )
-              expect((yield* shell.get(waiting)).status).toBe("queued")
-              expect(
-                yield* executeTool(
-                  registry,
-                  call({ command: "printf rejected", channel: "queue" }, "call-queue-rejected"),
-                ),
-              ).toEqual({
-                type: "error",
-                value: expect.stringContaining("already holds 1 waiting commands for this Session"),
-              })
-              yield* shell.remove(waiting)
-              expect((yield* jobs.wait({ id: "call-queue-waiting" })).info?.status).toBe("cancelled")
-              expect((yield* Fiber.join(admitted)).valueOrUndefined?.data.input.data).toMatchObject({
-                metadata: { source: "shell", state: "cancelled" },
-              })
-              yield* shell.remove(holder)
-            }),
-          )
-        },
-        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-      ),
-  )
-
-  it.live("cancels a Session's queued commands on user interruption without waking the Session", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        configEntries = [configDocument(undefined, undefined, { max_running: 1 })]
-        return withSession(tmp.path, (registry) =>
-          Effect.gen(function* () {
-            const events = yield* EventRuntime.Service
-            const shell = yield* Shell.Service
-            const jobs = yield* Job.Service
-            const marker = path.join(tmp.path, "interrupted-must-not-run")
-            const notices = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
-              Stream.filter((event) => event.data.sessionID === sessionID && event.data.input.type === "synthetic"),
-              Stream.take(2),
-              Stream.runCollect,
-              Effect.forkScoped({ startImmediately: true }),
-            )
-            const shellID = (settled: { output?: { structured?: unknown } }) =>
-              ShellSchema.ID.make(String((settled.output?.structured as Record<string, unknown>).shellID))
-            const holder = shellID(
-              yield* settleTool(registry, call({ command: idleCommand, channel: "queue" }, "call-interrupt-holder")),
-            )
-            yield* Effect.gen(function* () {
-              while ((yield* shell.get(holder)).status !== "running") yield* Effect.sleep(20)
-            }).pipe(Effect.timeout(5_000))
-            yield* settleTool(
-              registry,
-              call({ command: `touch '${marker}'`, channel: "queue" }, "call-interrupt-queued"),
-            )
-            yield* events.publish(SessionEvent.Execution.Interrupted, { sessionID, reason: "shutdown" })
-            yield* Effect.sleep(100)
-            expect((yield* jobs.get("call-interrupt-queued"))?.status).toBe("running")
-            wakes.length = 0
-            yield* events.publish(SessionEvent.Execution.Interrupted, { sessionID, reason: "user" })
-            expect((yield* jobs.wait({ id: "call-interrupt-queued" })).info?.status).toBe("cancelled")
-            expect((yield* shell.get(holder)).status).toBe("running")
-            yield* shell.remove(holder)
-            const admitted = Array.from(yield* Fiber.join(notices))
-            expect(
-              admitted.map((event) => (event.data.input.data as { metadata?: { state?: string } }).metadata?.state),
-            ).toEqual(["cancelled", "cancelled"])
-            expect(wakes).toEqual([sessionID])
-            expect(
-              yield* Effect.promise(() =>
-                fs
-                  .access(marker)
-                  .then(() => true)
-                  .catch(() => false),
-              ),
-            ).toBe(false)
-          }),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
-  )
-
   it.live("reports a killed running background command as cancelled", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -1573,54 +1389,6 @@ describe("ShellTool", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
       ),
     15_000,
-  )
-
-  it.live("cancels a deleted Session's waiting command without a wake or retained notice", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        configEntries = [configDocument(undefined, undefined, { max_running: 1 })]
-        return withSession(tmp.path, (registry) =>
-          Effect.gen(function* () {
-            const sessions = yield* Session.Service
-            const shell = yield* Shell.Service
-            const jobs = yield* Job.Service
-            const db = (yield* Database.Service).db
-            const holder = yield* shell.enqueue(
-              yield* shell.prepare({ command: idleCommand, timeout: 0 }),
-              Session.ID.make("ses_delete_holder"),
-            )
-            yield* Effect.gen(function* () {
-              while ((yield* shell.get(holder.id)).status !== "running") yield* Effect.sleep(10)
-            }).pipe(Effect.timeout(5_000))
-            const marker = path.join(tmp.path, "deleted-must-not-run")
-            const id = requiredShellID(
-              yield* settleTool(
-                registry,
-                call({ command: `touch '${marker}'`, channel: "queue" }, "call-deleted-queue"),
-              ),
-            )
-            expect((yield* shell.get(id)).status).toBe("queued")
-            wakes.length = 0
-            yield* sessions.remove(sessionID)
-            expect((yield* jobs.wait({ id: "call-deleted-queue" }).pipe(Effect.timeout(5_000))).info?.status).toBe(
-              "cancelled",
-            )
-            yield* Effect.gen(function* () {
-              while ((yield* jobs.outstandingSessions()).has(sessionID)) yield* Effect.yieldNow
-            }).pipe(Effect.timeout(5_000))
-            expect(yield* db.select().from(ShellTable).all()).toEqual(
-              expect.not.arrayContaining([expect.objectContaining({ id })]),
-            )
-            expect(wakes).toEqual([])
-            yield* shell.remove(holder.id)
-            expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
-          }),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
   )
 
   it.live("returns the shell id for a background command", () =>

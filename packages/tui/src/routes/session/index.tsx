@@ -147,7 +147,6 @@ import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { isCompactionCheckpoint } from "../../util/session"
-import { shellStatusLabel } from "../shell-output/util"
 import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
@@ -3660,11 +3659,8 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
       lifecycle: toolLifecycle(props.part, {
         status: background ? "running" : state.status,
         failed: commandFailed,
-        queued: liveShell?.status === "queued",
         summary: background
-          ? liveShell?.status === "queued"
-            ? shellStatusLabel(liveShell)
-            : "background"
+          ? "background"
           : command
             ? commandStatus(command.result)
             : undefined,
@@ -3926,7 +3922,6 @@ function toolLifecycle(
     status?: ToolLifecycleInput["status"]
     failed?: boolean
     cancelled?: boolean
-    queued?: boolean
     summary?: string
   } = {},
 ): ToolLifecycleInput {
@@ -3936,7 +3931,6 @@ function toolLifecycle(
     ...(part.state.status === "error" ? { error: part.state.error } : {}),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
     ...(options.cancelled === undefined ? {} : { cancelled: options.cancelled }),
-    ...(options.queued ? { queued: true } : {}),
     ...(options.summary === undefined ? {} : { summary: options.summary }),
   }
 }
@@ -4573,10 +4567,6 @@ function Shell(props: ToolProps) {
     return id ? data.shell.get(id) : undefined
   })
   const backgroundRunning = createMemo(() => Boolean(liveShell()))
-  const badge = createMemo(() => {
-    const shell = liveShell()
-    return shell?.status === "queued" ? shellStatusLabel(shell) : "Background"
-  })
   const isRunning = createMemo(() => props.part.state.status === "running" || backgroundRunning())
   const command = createMemo(() => stringValue(props.input.command))
   const [expanded, setExpanded] = createSignal(false)
@@ -4653,9 +4643,7 @@ function Shell(props: ToolProps) {
           </Show>
         </Show>
         <Show when={shellID()}>
-          <StatusBadge color={liveShell()?.status === "queued" ? theme.text.feedback.info.default : undefined}>
-            {badge()}
-          </StatusBadge>
+          <StatusBadge>Background</StatusBadge>
         </Show>
       </box>
     </BlockTool>

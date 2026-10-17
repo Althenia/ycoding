@@ -25,7 +25,7 @@ export function ShellOutputFooter(props: {
       </text>
       <box flexGrow={1} />
       <box flexDirection="row" gap={1}>
-        <Show when={props.shell.status === "running" || props.shell.status === "queued"}>
+        <Show when={props.shell.status === "running"}>
           <text wrapMode="none" fg={theme.text.feedback.info.default} onMouseUp={props.onKill}>
             ⌃x k kill ·
           </text>

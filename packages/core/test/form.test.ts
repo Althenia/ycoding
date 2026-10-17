@@ -117,7 +117,7 @@ describe("Form", () => {
       yield* service.reply({ id: form.id, answer: { confirm: false } })
       expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { confirm: false } })
       yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
-      expect(yield* service.ask({ ...settings, id: Form.ID.create("frm_toggle") })).toEqual({ status: "answered", answer: { confirm: true } })
+      expect(yield* service.ask({ ...settings, id: Form.ID.create("frm_toggle") })).toEqual({ status: "answered", answer: { confirm: true }, automatic: true })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }))
   }
@@ -157,6 +157,7 @@ describe("Form", () => {
       expect(result).toEqual({
         status: "answered",
         answer: { branch: "main", attempts: 1, confirm: true, features: ["tests"], setup: true },
+        automatic: true,
       })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }),
@@ -184,7 +185,8 @@ describe("Form", () => {
             { key: "confirm", type: "boolean", required: true, default: true },
           ],
         }),
-      ).toEqual({ status: "answered", answer: { branch: "main", confirm: true } })
+      ).toEqual({ status: "answered", answer: { branch: "main", confirm: true }, automatic: true })
+      expect(yield* service.state(Form.ID.create("frm_goal_auto"))).toEqual({ status: "answered", answer: { branch: "main", confirm: true } })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }),
   )
@@ -203,7 +205,7 @@ describe("Form", () => {
           title: "Required input",
           fields: [{ key: "name", type: "string", required: true }],
         }),
-      ).toEqual({ status: "answered", answer: { name: "Continue" } })
+      ).toEqual({ status: "answered", answer: { name: "Continue" }, automatic: true })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }),
   )
@@ -228,6 +230,73 @@ describe("Form", () => {
       expect(yield* service.state(form.id)).toEqual({ status: "cancelled" })
     }),
   )
+
+  for (const settlement of ["reply", "cancel", "timeout"] as const) {
+    it.effect(`an unsatisfied automatic form keeps the manual ${settlement} result`, () => Effect.gen(function* () {
+      configuredTimeout = 5
+      yield* Effect.addFinalizer(() => Effect.sync(() => { configuredTimeout = undefined }))
+      decisionBehavior = () => Effect.die("Awake forms must not request judgments")
+      yield* setupAutonomy("goal")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      const service = yield* Form.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* Deferred.make<Form.Info>()
+      const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
+        ? Deferred.succeed(created, Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form).pipe(Effect.asVoid)
+        : Effect.void)
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service.ask({
+        ...input,
+        fields: [{ key: "name", type: "string", required: true, pattern: "^release-[0-9]+$" }],
+      }).pipe(Effect.forkScoped)
+      const form = yield* Deferred.await(created)
+      expect(yield* service.state(form.id)).toEqual({ status: "pending" })
+      yield* settlement === "reply"
+        ? service.reply({ id: form.id, answer: { name: "release-42" } })
+        : settlement === "cancel" ? service.cancel(form.id) : TestClock.adjust("5 seconds")
+      const expected = (settlement === "reply"
+        ? { status: "answered", answer: { name: "release-42" } }
+        : settlement === "cancel" ? { status: "cancelled" } : { status: "timed_out", seconds: 5 }) satisfies Form.TerminalState
+      expect(yield* Fiber.join(fiber)).toEqual(expected)
+      expect(yield* service.state(form.id)).toEqual(expected)
+    }))
+  }
+
+  for (const asleep of [false, true]) {
+    for (const settlement of ["reply", "cancel"] as const) {
+      it.effect(`${asleep ? "sleeping" : "awake"} automatic answers preserve a winning human ${settlement}`, () => Effect.gen(function* () {
+        yield* setupAutonomy("goal")
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+        if (asleep) yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+        decisionBehavior = asleep ? decisionChoice("Fast", 0.9) : () => Effect.die("Awake forms must not request judgments")
+        const service = yield* Form.Service
+        const events = yield* EventRuntime.Service
+        const published: EventRuntime.Payload[] = []
+        const unsubscribe = yield* events.listen((event) => Effect.gen(function* () {
+          if (event.type.startsWith("form.")) published.push(event)
+          if (event.type !== Form.Event.Created.type) return
+          const form = Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form
+          yield* (settlement === "reply"
+            ? service.reply({ id: form.id, answer: { plan: "Careful" } })
+            : service.cancel(form.id)).pipe(Effect.orDie)
+        }))
+        yield* Effect.addFinalizer(() => unsubscribe)
+        const expected = (settlement === "reply" ? { status: "answered", answer: { plan: "Careful" } } : { status: "cancelled" }) satisfies Form.TerminalState
+        expect(yield* service.ask({ ...input, fields: [{ key: "plan", type: "string", required: true, options: [
+          { value: "Fast", label: "Fast" }, { value: "Careful", label: "Careful" },
+        ] }] })).toEqual(expected)
+        expect(yield* service.state(input.id)).toEqual(expected)
+        expect(published.map((event) => [event.type, event.data])).toEqual([
+          [Form.Event.Created.type, { form: yield* service.get(input.id) }],
+          settlement === "reply"
+            ? [Form.Event.Replied.type, { id: input.id, sessionID: input.sessionID, answer: { plan: "Careful" } }]
+            : [Form.Event.Cancelled.type, { id: input.id, sessionID: input.sessionID }],
+        ])
+      }))
+    }
+  }
 
   it.effect("supports the temporary global mcp elicitation owner", () =>
     Effect.gen(function* () {
@@ -557,7 +626,8 @@ describe("Form", () => {
           },
         ],
       } satisfies Form.CreateInput
-      expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { plan: "Careful" } })
+      expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { plan: "Careful" }, automatic: true })
+      expect(yield* service.state(settings.id)).toEqual({ status: "answered", answer: { plan: "Careful" } })
     }),
   )
 
@@ -586,10 +656,32 @@ describe("Form", () => {
         ],
       } satisfies Form.CreateInput
       const deferred = yield* service.ask(settings)
-      expect(deferred.status).toBe("deferred")
+      expect(deferred).toEqual({ status: "deferred", itemID: expect.any(String) })
       expect(yield* service.list()).toEqual([])
     }),
   )
+
+  for (const reason of ["disabled", "free_text", "low_confidence"] as const) {
+    it.effect(`sleep ${reason} deferral carries no automatic answer attribution`, () => Effect.gen(function* () {
+      yield* setupAutonomy("goal")
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: reason !== "disabled", sleep: true })
+      const calls: Decision.Input[] = []
+      decisionBehavior = (value) => {
+        calls.push(value)
+        return reason === "low_confidence" ? decisionChoice("Careful", 0.79)(value) : Effect.die("This form must defer without a helper")
+      }
+      const service = yield* Form.Service
+      expect(yield* service.ask({
+        ...input,
+        fields: reason === "free_text"
+          ? [{ key: "plan", type: "string", required: true, default: "Careful" }]
+          : [{ key: "plan", type: "string", required: true, options: [{ value: "Careful", label: "Careful" }] }],
+      })).toEqual({ status: "deferred", itemID: expect.any(String) })
+      expect(calls).toHaveLength(reason === "low_confidence" ? 1 : 0)
+      expect(yield* service.list()).toEqual([])
+    }))
+  }
 
   it.effect("sleep inference creates no human-wait form state before the decision settles", () =>
     Effect.gen(function* () {
@@ -623,7 +715,7 @@ describe("Form", () => {
       expect(yield* service.list()).toEqual([])
       expect(yield* service.reply({ id, answer: { plan: "Fast" } }).pipe(Effect.flip)).toBeInstanceOf(Form.NotFoundError)
       yield* Deferred.succeed(release, undefined)
-      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { plan: "Careful" } })
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { plan: "Careful" }, automatic: true })
       expect(published).toEqual([Form.Event.Created.type, Form.Event.Replied.type])
     }),
   )
@@ -660,7 +752,7 @@ describe("Form", () => {
       yield* Deferred.await(entered)
       yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: false })
       yield* Deferred.succeed(release, undefined)
-      expect((yield* Fiber.join(fiber)).status).toBe("deferred")
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
       expect(yield* service.list()).toEqual([])
     }),
   )
@@ -818,7 +910,7 @@ describe("Form", () => {
         const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
         yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 2 })
         yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
-        expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true } })
+        expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true }, automatic: true })
         yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
         yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
         decisionBehavior = decisionChoice("Fast", 0.9)
@@ -828,7 +920,7 @@ describe("Form", () => {
             id: Form.ID.create("frm_timeout_sleep"),
             fields: [{ key: "plan", type: "string", required: true, options: [{ value: "Fast", label: "Fast" }] }],
           }),
-        ).toEqual({ status: "answered", answer: { plan: "Fast" } })
+        ).toEqual({ status: "answered", answer: { plan: "Fast" }, automatic: true })
       }),
     )
   })

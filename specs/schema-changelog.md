@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-17: Remove queued shell commands
+
+- Remove `queued` from `Shell.Status`, `Shell.Info.queuePosition`, `Shell.Time.queued`, and the queue-only ephemeral `shell.updated` event.
+- Remove `shell_queue` configuration and the shell tool's `channel` input. Shell commands start after permission and family-cap checks; foreground and background execution retain timeout and memory-limit behavior.
+- `shell.list` lists running shells. Terminal shell metadata and captured output remain accessible by ID until removal.
+
+Compatibility:
+
+- Shell queue state is ephemeral and has no durable Session migration. Clients must use the current shell status contract and omit the removed configuration and tool input. Regenerate Promise and Effect clients from Protocol and Schema.
+
 ## 2026-10-17: Report lost background results separately
 
 - Add optional `lost: string[]` to `RemoteStatus`, the `session.status` response, and classified list `status` snapshots: unique root Session IDs (at most 500) whose only attention is a lost background-work result. It is a subset of `attention` and disjoint from `failed`; a root with an open permission, Form, or review is omitted.

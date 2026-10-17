@@ -1,6 +1,6 @@
 import { render } from "solid-js/web"
 import { createSignal } from "solid-js"
-import { PromptCostBlock, QuotaForecastStatus, TaskCostDetails, UsageDetails, UsageStatisticsDetails } from "../src/remote/ui/usage-cost"
+import { QuotaForecastStatus, TaskCostDetails, UsageDetails, UsageStatisticsDetails } from "../src/remote/ui/usage-cost"
 import { consumptionRow, forecastDetails } from "../src/remote/ui/usage-accounting"
 import { UsageFilterControls, UsageGroupControl } from "../src/remote/ui/usage-filters"
 import type { UsageFiltersPresentation, UsageGroupPresentation } from "../src/remote/ui/usage-filter-model"
@@ -20,9 +20,6 @@ render(() => <main class="container">
   <UsageGroupControl value={group()} onChange={setGroup} />
   <UsageFilterControls value={filters()} providers={[{ id: "openai", label: "OpenAI" }]} onChange={setFilters} />
   <p role="status">Selected range: {filters().range}</p>
-  <PromptCostBlock unit={{ inputID: "msg_original", settled: false, complete: false, cost,
-    main: { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }, children: cost,
-    helpers: [{ label: "Decision", cost: { pricedRequests: 0, unpricedRequests: 1 } }], reason: "Historical attribution is partial" }} />
   <UsageStatisticsDetails tokens={{ input: 1000, output: 200, reasoning: 300, cache: { read: 400, write: 50 } }} cost={cost}
     speed={{ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 }} />
   <h2>Session allowance</h2>
@@ -31,5 +28,7 @@ render(() => <main class="container">
   <QuotaForecastStatus asOf={600_000} forecast={cold} />
   <UsageDetails label="Allowances" groups={[{ title: "Session allowance", lines: forecastDetails(estimated, 600_000) }, { title: "Weekly allowance", lines: forecastDetails(cold, 600_000) }]} />
   <UsageDetails label="Recorded rate" groups={[{ lines: consumptionRow(rate).details }]} />
-  <TaskCostDetails unit={{ settled: false, complete: false, cost, main: cost, children: cost, helpers: [] }} />
+  <TaskCostDetails unit={{ settled: false, complete: false, cost,
+    main: { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }, children: cost,
+    helpers: [{ label: "Decision", cost: { pricedRequests: 0, unpricedRequests: 1 } }], reason: "Historical attribution is partial" }} />
 </main>, root)

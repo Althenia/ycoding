@@ -15,10 +15,23 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { InstructionStateTable, SessionPendingTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_live_state")
+
+testEffect(Layer.empty).effect("goal reminders resolve routine choices without manufacturing human approval or waiting loops", () => Effect.sync(() => {
+  const goal = SessionAutonomy.makeGoal({ text: "Verify the local changes" })
+  for (const autoAnswer of [true, false]) {
+    const text = SessionLiveState.goalReminder({ mode: "normal", yolo: 0, goal, autoAnswer })
+    expect(text).toContain("Complete the active goal")
+    expect(text).toContain(autoAnswer ? "Automatic answering is enabled" : "Automatic answering is disabled")
+    expect(text).toContain("Do not repeat an automatic waiting answer")
+    expect(text).toContain("required human approval")
+    expect(text).toContain("Goals do not override these gates")
+  }
+}))
 
 testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
   Effect.sync(() => {
