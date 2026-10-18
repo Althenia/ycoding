@@ -707,6 +707,8 @@ describe("Windows taskkill close race", () => {
     const control = await tmpdir()
     const release = path.join(control.path, "release")
     const probe = path.join(control.path, "probe")
+    // Windows libuv otherwise kills the grandchild when its root exits. Detach
+    // its lifetime while retaining the original output pipe for this regression.
     const parent = spawn(process.execPath, ["-e", `
       const { spawn } = require("node:child_process")
       const child = spawn(process.execPath, ["-e", ${JSON.stringify(String.raw`
@@ -719,7 +721,7 @@ describe("Windows taskkill close race", () => {
             process.stdout.write(String(process.pid) + "\n")
           }
         }, 10)
-      `)}, ${JSON.stringify(release)}, ${JSON.stringify(probe)}], { stdio: ["ignore", 1, 2] })
+      `)}, ${JSON.stringify(release)}, ${JSON.stringify(probe)}], { detached: true, stdio: ["ignore", 1, 2] })
       child.unref()
     `], { stdio: ["ignore", "pipe", "pipe"] })
     let stderr = ""

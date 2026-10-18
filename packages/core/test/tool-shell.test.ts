@@ -1073,10 +1073,11 @@ describe("ShellTool", () => {
       ([active, outside]) => {
         reset()
         return withSession(active.path, (registry) =>
-          executeTool(registry, call({ command: cwdCommand, workdir: outside.path })),
+          settleTool(registry, call({ command: "pwd", workdir: outside.path })),
         ).pipe(
-          Effect.andThen(
+          Effect.andThen((settled) =>
             Effect.sync(() => {
+              expect(settled.output?.structured).toMatchObject({ exit: 0 })
               expect(assertions.map((item) => item.action)).toEqual(["external_directory", "shell"])
               expect(assertions[0]).toMatchObject({
                 resources: [path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")],

@@ -352,11 +352,33 @@ test.each([80, 189])(
   "uses Tokscale-style keyboard navigation through the real Usage route at %i columns",
   async (width) => {
     reportCalls.length = 0
+    const releaseStats = Promise.withResolvers<void>()
+    const statsRecorded = Promise.withResolvers<void>()
+    let statsVisits = 0
+    let statsPending = false
     const screen = await renderScreen({
       width,
       height: width === 80 ? 24 : 69,
       args: { sessionID },
-      route,
+      route: async (url, request) => {
+        if (url.pathname !== "/api/usage/report") return route(url, request)
+        const group = url.searchParams.get("group")
+        // On the return to Stats, deliver its daily request after the next Projects request.
+        // Concurrent requests from the previous view need not reach the fixture in view order.
+        if (group === "day" && url.searchParams.get("limit") === "200" && ++statsVisits === 2) {
+          statsPending = true
+          await releaseStats.promise
+          const response = await route(url, request)
+          statsRecorded.resolve()
+          return response
+        }
+        const response = await route(url, request)
+        if (group === "project" && statsPending) {
+          releaseStats.resolve()
+          await statsRecorded.promise
+        }
+        return response
+      },
       settle: "Message YCoding…",
     })
     const waitForGroup = async (group: string) => {
@@ -414,8 +436,14 @@ test.each([80, 189])(
       await waitFor(screen, "Keyboard agent")
       await screen.input.pressKey("TAB", { shift: true })
       await waitFor(screen, "Activity graph")
+      await until(() => statsPending)
+      const projectStart = reportCalls.length
       await screen.input.pressKey("ARROW_LEFT")
-      await waitForGroup("project")
+      await until(() => reportCalls.slice(projectStart).some((query) => query.get("group") === "project"))
+      expect(reportCalls.slice(projectStart).some((query) => query.get("group") === "project")).toBe(true)
+      await waitFor(screen, "Keyboard project")
+      const delivered = reportCalls.slice(projectStart).map((query) => query.get("group"))
+      expect(delivered.indexOf("day")).toBeGreaterThan(delivered.indexOf("project"))
       const reads = reportCalls.length
       await screen.input.pressKey("r")
       await until(() => reportCalls.length > reads)
@@ -425,6 +453,7 @@ test.each([80, 189])(
       await waitFor(screen, "retain keyboard draft")
       expect(prompts).toEqual([])
     } finally {
+      releaseStats.resolve()
       await screen.dispose()
     }
   },
