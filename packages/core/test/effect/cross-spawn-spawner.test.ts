@@ -1,8 +1,10 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, onTestFinished, test } from "bun:test"
 import fs from "node:fs/promises"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import os from "node:os"
 import path from "node:path"
-import { Effect, Exit, Layer, Stream } from "effect"
+import { Deferred, Effect, Exit, Layer, Stream } from "effect"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import type * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -683,4 +685,92 @@ describe("cross-spawn spawner", () => {
       }),
     )
   })
+})
+
+
+describe("Windows taskkill close race", () => {
+  const closed = () => Deferred.makeUnsafe<readonly [number | null, NodeJS.Signals | null]>()
+
+  test("accepts taskkill failure only when the same child closes during the attempt", async () => {
+    const completion = closed()
+    const error = Object.assign(new Error("process not found"), { code: 128 })
+    expect(Deferred.isDoneUnsafe(completion)).toBe(false)
+    const kill = Effect.sync(() => Deferred.doneUnsafe(completion, Exit.succeed([1, null] as const))).pipe(
+      Effect.andThen(Effect.fail(error)),
+    )
+    const result = await Effect.runPromise(Effect.exit(CrossSpawnSpawner.recheckWindowsClose(kill, completion)))
+    expect(result._tag).toBe("Success")
+  })
+
+  test("preserves failure after root exit while a descendant keeps its output pipe open", async () => {
+    const completion = closed()
+    const parent = spawn(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process")
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(String.raw`
+        process.stdin.once("end", () => process.exit(0))
+        process.stdin.once("error", () => process.exit(0))
+        process.stdin.resume()
+        process.stdout.write(String(process.pid) + "\n")
+      `)}], { stdio: [3, 1, 2] })
+      child.unref()
+    `], { stdio: ["ignore", "pipe", "pipe", "pipe"] })
+    const exit = once(parent, "exit")
+    const close = new Promise<void>((resolve) => parent.once("close", (code, signal) => {
+      Deferred.doneUnsafe(completion, Exit.succeed([code, signal] as const))
+      resolve()
+    }))
+    // Closing the test-owned control pipe ends the descendant even if its PID
+    // handshake is missing, incomplete, or the test times out.
+    const cleanup = async () => {
+      parent.stdio[3]?.destroy()
+      if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL")
+      await close
+    }
+    let finished = false
+    onTestFinished(() => {
+      finished = true
+      return cleanup()
+    })
+    const ready = new Promise<number>((resolve, reject) => {
+      let output = ""
+      parent.stdout!.on("data", (chunk) => {
+        output += chunk.toString()
+        const newline = output.indexOf("\n")
+        if (newline !== -1) resolve(Number(output.slice(0, newline)))
+      })
+      parent.once("error", reject)
+      parent.once("close", () => {
+        if (finished) resolve(0) // The original test timeout already failed.
+        else reject(new Error("Descendant closed before its PID handshake"))
+      })
+    })
+    try {
+      const [pid] = await Promise.all([ready, exit])
+      if (finished) return
+      expect(parent.exitCode).toBe(0)
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      expect(Deferred.isDoneUnsafe(completion)).toBe(false)
+      const error = Object.assign(new Error("root process not found"), { code: 128 })
+      const result = await Effect.runPromise(CrossSpawnSpawner.recheckWindowsClose(Effect.fail(error), completion).pipe(
+        Effect.match({ onFailure: (cause) => cause, onSuccess: () => undefined }),
+      ))
+      expect(result).toBe(error)
+      expect(Deferred.isDoneUnsafe(completion)).toBe(false)
+    } finally {
+      await cleanup()
+    }
+    expect(Deferred.isDoneUnsafe(completion)).toBe(true)
+  })
+
+  for (const code of [128, "EACCES"] as const) {
+    test(`preserves taskkill ${code} while child close is unconfirmed`, async () => {
+      const completion = closed()
+      const error = Object.assign(new Error("taskkill failed"), { code })
+      const result = await Effect.runPromise(CrossSpawnSpawner.recheckWindowsClose(Effect.fail(error), completion).pipe(
+        Effect.match({ onFailure: (cause) => cause, onSuccess: () => undefined }),
+      ))
+      expect(result).toBe(error)
+      expect(Deferred.isDoneUnsafe(completion)).toBe(false)
+    })
+  }
 })

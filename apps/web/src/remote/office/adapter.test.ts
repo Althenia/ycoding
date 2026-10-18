@@ -26,6 +26,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     sessionFilter: "all",
     sessionListStatus: "ready",
     sessionPageLoading: false,
+    sessionPaginationLoading: false,
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},

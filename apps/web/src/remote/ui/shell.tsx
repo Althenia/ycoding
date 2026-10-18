@@ -1009,7 +1009,7 @@ function SessionPanel(props: {
             />
           </Show>
           <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
-          <Show when={state().sessionPageLoading}><LoadingPlaceholder kind="session" label="Loading more sessions…" /></Show>
+          <Show when={state().sessionPaginationLoading}><LoadingPlaceholder kind="session" label="Loading more sessions…" /></Show>
         </Show>
       </Show>
     </div>
@@ -1557,7 +1557,7 @@ function SessionsPage(props: {
                 </div>
               </div>
             </Show>
-            <Show when={remote.state().sessionPageLoading}><LoadingPlaceholder kind="session" label="Loading more sessions…" /></Show>
+            <Show when={remote.state().sessionPaginationLoading}><LoadingPlaceholder kind="session" label="Loading more sessions…" /></Show>
           </section>
         </div>
       </Show>

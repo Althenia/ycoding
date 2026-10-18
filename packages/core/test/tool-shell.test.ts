@@ -18,6 +18,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
+import { Git } from "@ycoding-ai/core/git"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -373,6 +374,7 @@ const executionNode = makeGlobalNode({
 
 const layer = AppNodeBuilder.build(
   LayerNode.group([
+    Git.node,
     Database.node,
     EventRuntime.node,
     Job.node,
@@ -1109,7 +1111,30 @@ describe("ShellTool", () => {
         }).pipe(
           Effect.andThen(
             withSession(tmp.path, (registry) =>
-              executeTool(registry, call({ command: cwdCommand, workdir: worktree })),
+              Effect.gen(function* () {
+                const git = yield* Git.Service
+                const fsUtil = yield* FSUtil.Service
+                const location = yield* Location.Service
+                const repository = yield* git.repo.discover(location.directory)
+                expect(repository, "active Location repository discovery").toBeDefined()
+                if (!repository) throw new Error("Active Location repository was not discovered")
+                const canonicalWorktree = yield* fsUtil.realPath(worktree)
+                const entries = yield* git.worktree.list(repository)
+                const checkouts = yield* Effect.forEach(entries, (entry) => fsUtil.realPath(entry.directory))
+                expect(checkouts, "linked checkout is listed by the active repository").toContain(canonicalWorktree)
+                expect(
+                  checkouts.some((checkout) => FSUtil.contains(checkout, canonicalWorktree)),
+                  "listed checkout contains the canonical workdir",
+                ).toBe(true)
+                const linked = yield* git.repo.discover(AbsolutePath.make(canonicalWorktree))
+                expect(linked, "linked checkout repository discovery").toBeDefined()
+                if (!linked) throw new Error("Linked checkout repository was not discovered")
+                expect(
+                  yield* fsUtil.realPath(linked.commonDirectory),
+                  "linked and active repositories share their canonical Git common directory",
+                ).toBe(yield* fsUtil.realPath(repository.commonDirectory))
+                return yield* executeTool(registry, call({ command: cwdCommand, workdir: worktree }))
+              }),
             ),
           ),
           Effect.andThen(Effect.sync(() => expect(assertions.map((input) => input.action)).toEqual(["shell"]))),
