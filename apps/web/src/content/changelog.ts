@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.15",
+    date: "2026-10-18",
+    title: "Relay MCP and quota pace alerts",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Connect approved MCP clients to an enrolled machine through relay-issued OAuth and explicit owner consent. Relay MCP provides Session controls, including creation in existing directories strictly below home, while retaining runtime permission and guardrail enforcement." },
+      { tag: "Added", text: "Enable or disable Relay MCP with `ycoding remote mcp on|off|status` or the TUI's Relay MCP control. Access starts disabled; disabling it revokes client grants." },
+      { tag: "Added", text: "Review whole-window quota pace beside recent-use forecasts in the TUI and web Usage views, with Ahead, Cutting it close, and Will run out verdicts when the provider reports suitable fixed-reset limits." },
+      { tag: "Added", text: "Receive quota warnings after worsening pace or less than 10% remaining, with a silent initial observation and independent web In app and System switches. Alerts require a reported future reset and open Usage on the originating machine. Matching alerts collapse across machines." },
+      { tag: "Changed", text: "Keep machine-awake status in the TUI command palette and Status dialog without a duplicate line beneath the composer." },
+      { tag: "Fixed", text: "Open Session and Usage alerts on the correct machine after its cached availability becomes stale, including repeated activation of the same alert. Unavailable machines remain explicit without opening another machine." },
+      { tag: "Fixed", text: "Keep Usage reports and cached forecasts responsive while provider quotas refresh, and reduce loading time across large retained usage histories." },
+    ],
+  },
+  {
     version: "0.10.14",
     date: "2026-10-17",
     title: "Refreshed Usage, simpler shells, and task MCP",
