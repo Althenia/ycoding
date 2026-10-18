@@ -2,6 +2,7 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
@@ -1750,8 +1751,11 @@ for (const [name, decide, provenance, reason] of [
   ["low-confidence approve", () => Effect.succeed(decisionOutput("approve", 0.799999)), { choice: "approve", confidence: 0.799999 }, "low_confidence"],
   ["low-confidence reject", () => Effect.succeed(decisionOutput("reject", 0.799999)), { choice: "reject", confidence: 0.799999 }, "low_confidence"],
   ["refusal", () => Effect.succeed(decisionOutput("refusal", 1)), {}, "refused"],
-  ["provider failure", () => Effect.fail(new Decision.Error({ reason: "provider-failed" })), {}, "error"],
-  ["invalid output", () => Effect.fail(new Decision.Error({ reason: "invalid-output" })), {}, "error"],
+  ["provider failure", () => Effect.fail(new Decision.Error({ reason: "provider-failed" })), {}, "provider-failed"],
+  ["invalid output", () => Effect.fail(new Decision.Error({ reason: "invalid-output" })), {}, "invalid-output"],
+  ["unsupported strict output", () => Effect.fail(new Decision.Error({ reason: "unsupported-output" })), {}, "unsupported-output"],
+  ["truncated output", () => Effect.fail(new Decision.Error({ reason: "truncated-output" })), {}, "truncated-output"],
+  ["provider refusal", () => Effect.fail(new Decision.Error({ reason: "refused" })), {}, "refused"],
   ["timeout", () => Effect.never, {}, "timeout"],
 ] as const) for (const asleep of [false, true]) {
   const escalated = harness({ asleep, decision: decide })
@@ -1770,15 +1774,34 @@ for (const [name, decide, provenance, reason] of [
       const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
       expect(items.filter(SessionReviewFold.isOpen)).toHaveLength(1)
       expect(items[0]).toMatchObject({ reason, ...provenance })
-      if (["refused", "error", "timeout"].includes(reason)) expect(items[0]).not.toHaveProperty("grades")
+      if (Schema.is(DecisionFailure.Reason)(reason)) {
+        expect(items[0]).not.toHaveProperty("grades")
+        expect(items[0]).not.toHaveProperty("choice")
+        expect(items[0]).not.toHaveProperty("confidence")
+      }
       expect((yield* service.status(parentID)).counters.find((item) => item.id === "reviews")?.current).toBe(0)
       return
     }
     const requests = yield* service.forSession(parentID)
     expect(requests).toHaveLength(1)
-    expect(requests[0]?.escalation).toBeDefined()
-    if (["refused", "error", "timeout"].includes(reason)) expect(requests[0]?.escalation).not.toHaveProperty("grades")
-    expect(escalated.escalations[0]).toMatchObject({ ruleIDs: ["standard.review.project-deletion"], ...provenance })
+    expect(requests[0]?.escalation).toMatchObject({ reason, ...provenance })
+    if (Schema.is(DecisionFailure.Reason)(reason)) {
+      expect(requests[0]?.escalation).not.toHaveProperty("grades")
+      expect(requests[0]?.escalation).not.toHaveProperty("choice")
+      expect(requests[0]?.escalation).not.toHaveProperty("confidence")
+    }
+    expect(escalated.escalations[0]).toMatchObject({ reason, ruleIDs: ["standard.review.project-deletion"], ...provenance })
+    const events = yield* EventRuntime.Service
+    const records = yield* events.log({ aggregateID: parentID, follow: false }).pipe(Stream.runCollect)
+    const messages: { messages: SessionMessage.Info[] } = { messages: [] }
+    for (const event of records) {
+      if (event.type !== "session.guardrail.escalated" || !event.durable) continue
+      expect(event.data).toMatchObject({ reason })
+      yield* SessionMessageUpdater.update(SessionMessageUpdater.memory(messages), SessionEvent.GuardrailEscalated.make({
+        ...event, durable: event.durable, type: "session.guardrail.escalated", data: Schema.decodeUnknownSync(SessionEvent.GuardrailEscalated.data)(event.data),
+      }))
+    }
+    expect(messages.messages).toEqual([expect.objectContaining({ type: "system", text: Guardrail.escalationText({ reason, ...provenance }) })])
     expect(escalated.asked).toHaveLength(1)
     expect(escalated.replies).toEqual([])
     yield* service.reply({ sessionID: parentID, requestID: requests[0]!.id, reply: "reject" })
@@ -1844,7 +1867,7 @@ restartedEscalation.it.effect("shutdown ends an escalated review while its durab
       ...event, durable: event.durable, type: "session.guardrail.escalated", data: Schema.decodeUnknownSync(SessionEvent.GuardrailEscalated.data)(event.data),
     }))
   }
-  expect(state.messages).toEqual([expect.objectContaining({ type: "system", text: expect.stringContaining("Decision model escalated") })])
+  expect(state.messages).toEqual([expect.objectContaining({ type: "system", text: expect.stringContaining("Decision requires human review") })])
   expect(state.messages[0]?.type === "system" && state.messages[0].text).toContain("0.7")
   expect(restartedEscalation.choices).toHaveLength(1)
 }))
@@ -1906,12 +1929,13 @@ secretDecision.it.effect("guardrail helper evidence redacts credentials and stat
   }),
 )
 
-for (const model of [false, true]) {
+for (const kind of ["plain", "model-escalated", "failed-decision"] as const) {
+  const model = kind !== "plain"
   const conversion = harness({
     entries: model ? [] : [new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ guardrails: { decide_hard_reviews: false } }) })],
-    decision: () => Effect.succeed(decisionOutput("escalate", 0.9)),
+    decision: () => kind === "failed-decision" ? Effect.fail(new Decision.Error({ reason: "provider-failed" })) : Effect.succeed(decisionOutput("escalate", 0.9)),
   })
-  conversion.it.effect(`sleep conversion defers a ${model ? "model-escalated" : "plain"} human review with its source`, () => Effect.gen(function* () {
+  conversion.it.effect(`sleep conversion defers a ${kind} human review with its source`, () => Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const source = { messageID: SessionMessage.ID.make("msg_conversion"), callID: "call_conversion" }
     const waiting = yield* waitForRequest(service, { ...(model ? ordinaryReview : hardReview), source })
@@ -1922,7 +1946,12 @@ for (const model of [false, true]) {
     expect(yield* service.forSession(parentID)).toEqual([])
     const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ reason: "sleep_entry", origin: source, payload: { ruleIDs: [model ? "standard.review.outside-repo" : "standard.review.project-deletion"] } })
+    expect(items[0]).toMatchObject({ reason: kind === "failed-decision" ? "provider-failed" : model ? "escalated" : "sleep_entry", origin: source, payload: { ruleIDs: [model ? "standard.review.outside-repo" : "standard.review.project-deletion"] } })
+    if (kind === "failed-decision") {
+      expect(items[0]).not.toHaveProperty("grades")
+      expect(items[0]).not.toHaveProperty("choice")
+      expect(items[0]).not.toHaveProperty("confidence")
+    }
     if (model) expect(conversion.escalations[0]).toMatchObject({ source, ruleIDs: ["standard.review.outside-repo"] })
     if (!model) {
       expect(conversion.escalations).toEqual([])
@@ -2047,7 +2076,7 @@ for (const asleep of [false, true]) {
       const items = yield* SessionReviewFold.fold((yield* Database.Service).db, [parentID])
       expect(items[0]!.grades).toHaveLength(4)
       expect(JSON.stringify(items)).not.toContain("synthetic-secret")
-      expect(items[0]).toMatchObject({ reason: "escalated", choice: "approve_all", confidence: 0.99 })
+      expect(items[0]).toMatchObject({ reason: "conflicting_grades", choice: "approve_all", confidence: 0.99 })
       const database = yield* Database.Service
       const publicItem = yield* SessionReviewFold.toItem(database.db, parentID,
         yield* SessionReviewFold.familySessions(database.db, parentID), items[0]!)

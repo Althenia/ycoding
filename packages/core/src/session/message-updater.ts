@@ -1,5 +1,6 @@
 import { castDraft, produce, type WritableDraft } from "immer"
 import { DateTime, Effect } from "effect"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -283,7 +284,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       })),
       "session.review.consumed": () => Effect.void,
       "session.guardrail.escalated": (event) => adapter.appendMessage(SessionMessage.System.make({
-        id: SessionMessage.ID.fromEvent(event.id), type: "system", text: `Decision model escalated this guardrail review · choice ${event.data.choice ?? "unreported"} · confidence ${event.data.confidence?.toString() ?? "unreported"}`, time: { created: event.created },
+        id: SessionMessage.ID.fromEvent(event.id), type: "system", text: Guardrail.escalationText(event.data), time: { created: event.created },
       })),
       "session.work.completed": () => Effect.void,
       "session.usage.updated": () => Effect.void,

@@ -1,6 +1,8 @@
 export * as RemoteOperations from "./remote-operations"
 
 import { RemoteMcpDemo } from "./remote-mcp-demo"
+import type { RemoteMcpApps } from "./remote-mcp-apps"
+import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 
 import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
@@ -13,6 +15,7 @@ import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/c
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
+  localAppOperations,
   alertTitle,
   isRemoteLatencySample,
   isRemoteReviewItemID,
@@ -757,6 +760,8 @@ export type OperationInput = {
   readonly local: LocalServer
   readonly cache?: OperationCache
   readonly demo?: ReturnType<typeof RemoteMcpDemo.create>
+  readonly apps?: ReturnType<typeof RemoteMcpApps.create>
+  readonly appContext?: McpEvents.RequestContext
 }
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
@@ -829,6 +834,24 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
+  if (validated.kind === "local.app") {
+    if (input.apps === undefined || input.appContext === undefined) return unknownOperation()
+    if (request.sessionID === undefined || await input.sessions.renew(request.sessionID) === undefined)
+      throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
+    const { RemoteMcpApps } = await import("./remote-mcp-apps")
+    try {
+      return await input.apps.execute(validated.operation, {
+        sessionID: request.sessionID,
+        ...(request.input === undefined ? {} : { input: request.input }),
+      }, input.appContext, input.signal ?? new AbortController().signal)
+    } catch (error) {
+      if (error instanceof RemoteMcpApps.Error) throw new OperationError(
+        error.reason === "too_large" ? "message_too_large" : error.reason === "access_unavailable" ? "forbidden" : "invalid_message",
+        `Registered app request failed: ${error.reason}`,
+      )
+      throw error
+    }
+  }
   if (validated.kind === "artifact.demo.preview" || validated.kind === "artifact.demo.export") {
     if (!input.demo) return unknownOperation()
     try {
@@ -1166,6 +1189,7 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "local.app"; readonly operation: RemoteMcpApps.Operation }
   | { readonly kind: "artifact.demo.preview" | "artifact.demo.export" }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
@@ -1261,6 +1285,8 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if ((localAppOperations as readonly string[]).includes(request.operation))
+    return { kind: "local.app", operation: request.operation as RemoteMcpApps.Operation }
   if (request.operation === "artifact.demo.preview" || request.operation === "artifact.demo.export") {
     if (request.sessionID !== undefined || request.input !== undefined) throw new OperationError("invalid_message", "Fixed demo does not accept a Session or input")
     return { kind: request.operation }
@@ -2046,6 +2072,12 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
+  "local.app.register": ["host", "port", "entryPath", "routes", "ttlMs"],
+  "local.app.list": [],
+  "local.app.revoke": ["id"],
+  "local.app.open": ["id", "generation"],
+  "local.app.status": ["id"],
+  "local.app.http": ["id", "generation", "method", "path", "headers", "body"],
   "machine.latency.append": ["samples"],
   "machine.latency.list": ["limit", "before"],
   "machine.keepAwake.get": [],

@@ -435,7 +435,7 @@ export const layer = Layer.effect(
 
     const openReview = Effect.fnUntraced(function* (
       item: Pending,
-      outcome: Guardrail.Escalation & { readonly reason: "disabled" | "escalated" | "sleep_entry" | DecisionChoice.UnsettledReason },
+      outcome: Omit<Guardrail.Escalation, "reason"> & { readonly reason: "disabled" | "escalated" | "sleep_entry" | "conflicting_grades" | DecisionChoice.UnsettledReason },
       conversion = false,
     ) {
       return yield* SessionReviewFold.open(database.db, events, {
@@ -650,12 +650,15 @@ export const layer = Layer.effect(
             const qualifying = ranked.filter((grade) => grade.choice === "approve_all" ? grade.confidence >= 0.9
               : grade.choice === "approve" ? grade.confidence >= (result.hardReview ? 0.95 : 0.8)
               : grade.choice === "reject" && grade.confidence >= 0.8)
-            const escalated = qualifying.length === 0 ||
-              ranked.some((grade) => grade.choice === "escalate" && grade.confidence >= (ranked[0]?.confidence ?? 0)) ||
-              (qualifying.some((grade) => grade.choice === "reject") && qualifying.some((grade) => grade.choice === "approve" || grade.choice === "approve_all"))
+            const modelEscalated = ranked.some((grade) => grade.choice === "escalate" && grade.confidence >= (ranked[0]?.confidence ?? 0))
+            const conflicting = qualifying.some((grade) => grade.choice === "reject") && qualifying.some((grade) => grade.choice === "approve" || grade.choice === "approve_all")
+            const escalated = qualifying.length === 0 || modelEscalated || conflicting
             const selected = escalated ? ranked.find((grade) => grade.choice === "escalate" && grade.confidence === ranked[0]?.confidence) ?? ranked[0] : qualifying[0]
             const choice = selected?.choice
-            const provenance = {
+            const reason = outcome.type === "unsettled" ? outcome.reason : Option.isNone(grades) ? "invalid-output"
+              : modelEscalated ? "escalated" : conflicting ? "conflicting_grades" : "low_confidence"
+            const provenance: Guardrail.Escalation = {
+              ...(escalated && reason !== "disabled" ? { reason } : {}),
               ...(choice === undefined ? {} : { choice }),
               ...(selected === undefined ? {} : { confidence: selected.confidence }),
               ...(Option.isSome(grades) ? { grades: grades.value } : {}),
@@ -666,8 +669,8 @@ export const layer = Layer.effect(
               if (!item) return yield* new DeclinedError({ requestID: admission.request.id })
               if (asleep) {
                 const opened = yield* openReview(item, {
-                  reason: outcome.type === "unsettled" ? outcome.reason : qualifying.length === 0 && choice !== "escalate" ? "low_confidence" : "escalated",
                   ...provenance,
+                  reason,
                 }).pipe(
                   Effect.catchTag("SessionReview.FullError", () => Effect.succeed(undefined)),
                 )
@@ -698,14 +701,14 @@ export const layer = Layer.effect(
               yield* events.publish(SessionEvent.GuardrailEscalated, {
                 sessionID: input.sessionID, requestID: admission.request.id, ruleIDs: [...item.request.ruleIDs], ...provenance, ...(item.source ? { source: item.source } : {}),
               }, {
-                commit: () => ModelIncident.recordEscalation(database.db, {
+                commit: () => outcome.type === "grades" ? ModelIncident.recordEscalation(database.db, {
                   sessionID: input.sessionID,
                   requestID: admission.request.id,
                   messageID: item.source?.messageID,
                   ruleIDs: item.request.ruleIDs,
                   hardReview: item.request.hardReview === true,
                   time,
-                }),
+                }) : Effect.void,
               })
               const request = new Guardrail.Request({ ...item.request, escalation: provenance })
               pending.set(request.id, { ...item, request, decisionModel: false })
@@ -838,7 +841,7 @@ export const layer = Layer.effect(
           const item = pending.get(request.id)
           if (!item || item.decisionModel) return
           const opened = yield* openReview(item, {
-            reason: "sleep_entry",
+            reason: request.escalation?.reason ?? "sleep_entry",
             ...(request.escalation?.choice === undefined ? {} : { choice: request.escalation.choice }),
             ...(request.escalation?.confidence === undefined ? {} : { confidence: request.escalation.confidence }),
             ...(request.escalation?.grades === undefined ? {} : { grades: request.escalation.grades }),

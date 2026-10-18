@@ -5,6 +5,11 @@ import path from "node:path"
 
 const workflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/release.yml")).text()
 const testWorkflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/test.yml")).text()
+const workflowJob = (content: string, name: string) =>
+  content
+    .split("\njobs:\n")[1]!
+    .split(new RegExp(`(?:^|\\n)  ${name}:\\n`))[1]
+    ?.split(/\n  [\w-]+:\n/)[0] ?? ""
 const checks = workflow.split("\n").filter((line) => line.trim().startsWith("tar -tz"))
 
 for (const valid of [true, false])
@@ -336,7 +341,6 @@ test("remote integration gate runs the composed real flow after the web build in
   expect(testWorkflow).toContain(
     [
       "      - name: Verify local remote integration",
-      "        if: runner.os == 'Linux'",
       "        timeout-minutes: 20",
       "        run: bun run test:integration:remote",
     ].join("\n"),
@@ -395,6 +399,7 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify Chrome extension suites", "matrix.suite == 'cli'"],
     ["Verify transcript and approval suites", "matrix.suite == 'tui'"],
     ["Verify goal continuation", "matrix.suite == 'tui'"],
+    ["Verify typed decision suites", "matrix.suite == 'tui'"],
     ["Verify installer and web assets", "matrix.suite == 'web'"],
     ["Verify approved browser host", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
     ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
@@ -519,4 +524,108 @@ test("Windows portability regressions run directly without replacing the full un
   expect(portability).toContain("if: always()")
   expect(testWorkflow).toContain("run: GITHUB_ACTIONS=false bun turbo test")
   for (const host of ["ubuntu-24.04", "windows-2025"]) expect(testWorkflow).toContain(`host: ${host}`)
+})
+
+test("non-unit test workflow checks run in independent active jobs while the unit and portability jobs stay skipped", () => {
+  const skipped = "    # Temporarily disabled until the Rust release; remove this job-level if to restore.\n    if: ${{ false }}\n"
+  const unit = workflowJob(testWorkflow, "unit")
+  const source = workflowJob(testWorkflow, "source")
+  const lifecycle = workflowJob(testWorkflow, "lifecycle")
+  expect(unit).toContain(skipped)
+  expect(workflowJob(testWorkflow, "portability")).toContain(skipped)
+  expect(unit).toContain("run: GITHUB_ACTIONS=false bun turbo test")
+  expect(unit).toContain("name: Cache Turbo")
+  for (const job of [source, lifecycle]) {
+    expect(job).not.toMatch(/^    if:/m)
+    expect(job).not.toContain("continue-on-error:")
+    expect(job).not.toContain("actions/cache")
+    expect(job).not.toContain("secrets.")
+    expect(job).toContain("    permissions:\n      contents: read\n")
+    expect(job).not.toContain("checks: write")
+    expect(job).toContain("uses: ./.github/actions/setup-bun")
+    expect(job).toContain('git config --global user.name "ycoding"')
+  }
+  for (const command of [
+    "bun run test:web",
+    "bun run test:remote",
+    "bun run build:web",
+    "bun run test:integration:web",
+    "bun run test:integration:remote",
+    "bun run test:cloudflare",
+    "bun run build:cloudflare",
+    "bun run check:generated",
+    "bun run script/build.ts --single",
+    "bun run script/build-node.ts --single --skip-install --outdir=dist/node",
+    "bun run script/service-smoke.ts",
+  ]) {
+    expect(unit).not.toContain(command)
+    expect(testWorkflow.split(command).length - 1, command).toBeGreaterThanOrEqual(1)
+  }
+  expect(unit).not.toContain("service-smoke")
+  expect(unit).not.toContain("runner.os == 'Linux'")
+  expect(unit).not.toContain("setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n        with:\n          node-version: \"26.4.0\"")
+})
+
+test("the independent source verification job runs the Linux-only gates in order", () => {
+  const source = workflowJob(testWorkflow, "source")
+  expect(source).toContain("name: source verification (linux)")
+  expect(source).toContain("runs-on: ubuntu-24.04")
+  expect(source).toContain("timeout-minutes: 20")
+  const order = [
+    "bun run test:web",
+    "bun run test:remote",
+    "bun run build:web",
+    "bun run test:integration:web",
+    "bun run test:integration:remote",
+    "bun run test:cloudflare",
+    "bun run build:cloudflare",
+    "bun run check:generated",
+  ].map((command) => source.indexOf(command))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(source).toContain("working-directory: packages/client\n        run: bun run check:generated")
+  expect(source).not.toContain("matrix.")
+})
+
+test("the independent lifecycle matrix verifies compiled and Node builds on Linux and Windows", () => {
+  const lifecycle = workflowJob(testWorkflow, "lifecycle")
+  expect(lifecycle).toContain("name: compiled and Node lifecycle (${{ matrix.settings.name }})")
+  expect(lifecycle).toContain("fail-fast: false")
+  expect(lifecycle).toContain("runs-on: ${{ matrix.settings.host }}")
+  for (const host of ["ubuntu-24.04", "windows-2025"]) expect(lifecycle).toContain(`host: ${host}`)
+  expect(lifecycle).toContain("shell: bash")
+  const compiled = lifecycle.split("      - name: Verify compiled service lifecycle\n")[1]?.split("\n      - name:")[0] ?? ""
+  expect(compiled).toContain("timeout-minutes: 10")
+  expect(compiled).toContain("working-directory: packages/cli")
+  expect(compiled).toContain("bun run script/build.ts --single\n          bun run script/service-smoke.ts")
+  const node = lifecycle.split("      - name: Verify Node build\n")[1] ?? ""
+  expect(node).toContain("if: always()")
+  expect(node).toContain("timeout-minutes: 15")
+  expect(node).toContain("bun run script/build-node.ts --single --skip-install --outdir=dist/node\n          bun run script/service-smoke.ts --node")
+  expect(lifecycle).toContain('node-version: "24"')
+  expect(lifecycle).toContain('node-version: "26.4.0"')
+  expect(lifecycle.indexOf('node-version: "24"')).toBeLessThan(lifecycle.indexOf('node-version: "26.4.0"'))
+  expect(lifecycle.indexOf("Verify compiled service lifecycle")).toBeLessThan(lifecycle.indexOf('node-version: "26.4.0"'))
+  expect(lifecycle.indexOf('node-version: "26.4.0"')).toBeLessThan(lifecycle.indexOf("Verify Node build"))
+})
+
+test("every external action in the test workflow is pinned to a full commit", () => {
+  const uses = [...testWorkflow.matchAll(/^\s+uses: (\S+)/gm)].map((match) => match[1]!)
+  expect(uses.length).toBeGreaterThan(0)
+  for (const action of uses) expect(action.startsWith("./") || /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(action), action).toBe(true)
+})
+
+test("release source verification runs the typed decision suites and the guardrail failure-reason regression in the TUI leg", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const step = verify.split("      - name: Verify typed decision suites\n")[1]?.split("\n      - name:")[0] ?? ""
+  expect(step).toContain("if: matrix.suite == 'tui'")
+  expect(step).toContain("working-directory: packages/core")
+  expect(step).toContain(
+    "run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts",
+  )
+  const transcript = verify.split("      - name: Verify transcript and approval suites\n")[1]?.split("\n      - name:")[0] ?? ""
+  expect(transcript).toContain("working-directory: packages/tui")
+  expect(transcript).toContain("test/cli/tui/permission.test.ts test/cli/tui/guardrail.test.tsx")
+  expect(verify).not.toContain("continue-on-error")
+  expect(workflow).not.toContain("continue-on-error:")
 })

@@ -9,6 +9,12 @@ export type TelemetryRequestSample = {
   at: string
   operation:
     | "artifact.demo.preview"
+    | "local.app.register"
+    | "local.app.list"
+    | "local.app.revoke"
+    | "local.app.open"
+    | "local.app.status"
+    | "local.app.http"
     | "artifact.demo.export"
     | "provider.auth.list"
     | "provider.auth.key"
@@ -329,22 +335,22 @@ export type SessionEventArtifactProvenance = {
 
 export type GuardrailSource = { messageID: string; callID: string }
 
+export type DecisionFailureReason =
+  | "unavailable"
+  | "invalid-request"
+  | "provider-failed"
+  | "timeout"
+  | "input-too-large"
+  | "invalid-output"
+  | "refused"
+  | "truncated-output"
+  | "unsupported-output"
+
 export type GuardrailDecisionChoice = "approve_all" | "approve" | "reject" | "escalate"
 
 export type GuardrailReply = "once" | "always" | "reject"
 
 export type SessionReviewKind = "question" | "subagent_question" | "guardrail" | "permission" | "recovery"
-
-export type SessionReviewReason =
-  | "disabled"
-  | "free_text"
-  | "refused"
-  | "low_confidence"
-  | "escalated"
-  | "error"
-  | "timeout"
-  | "sleep_entry"
-  | "restart"
 
 export type GuardrailConfidence = number
 
@@ -731,6 +737,24 @@ export type KeepAwakeState = "off" | "on" | "unsupported" | "error"
 export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "removed-keys"
 
 export type SessionReviewSubagentQuestionPayload1 = { type: "subagent_question"; text: string; data?: JsonValue }
+
+export type McpEventsName =
+  | "session.guardrail.changed"
+  | "session.permission.changed"
+  | "session.question.changed"
+  | "session.form.changed"
+  | "session.progress"
+  | "session.completed"
+  | "session.error"
+
+export type McpEventsJsonSchemaObject = { [x: string]: any }
+
+export type McpEventsSubscription = {
+  id: string
+  refreshBefore: string | null
+  cursor: string | null
+  truncated: boolean
+}
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -1922,6 +1946,19 @@ export type SessionGuardrailDismissed = {
   data: { sessionID: string; reviewSessionID: string; ruleID: string; confidence: number; source?: GuardrailSource }
 }
 
+export type GuardrailEscalationReason = DecisionFailureReason | "escalated" | "low_confidence" | "conflicting_grades"
+
+export type SessionReviewReason =
+  | DecisionFailureReason
+  | "disabled"
+  | "free_text"
+  | "low_confidence"
+  | "escalated"
+  | "conflicting_grades"
+  | "error"
+  | "sleep_entry"
+  | "restart"
+
 export type GuardrailGrade = { choice: GuardrailDecisionChoice; confidence: number; evidence: string }
 
 export type FormNumberField = {
@@ -2438,6 +2475,14 @@ export type ConfigDiagnostic = {
   message: string
 }
 
+export type McpEventsEventDefinition = {
+  name: McpEventsName
+  description: string
+  delivery: Array<"webhook">
+  inputSchema: McpEventsJsonSchemaObject
+  payloadSchema: McpEventsJsonSchemaObject
+}
+
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
 export type SessionMessageModelSelected = {
@@ -2780,6 +2825,7 @@ export type SessionAutonomyView = {
 }
 
 export type GuardrailEscalation = {
+  reason?: GuardrailEscalationReason
   choice?: GuardrailDecisionChoice
   confidence?: number
   grades?: Array<GuardrailGrade>
@@ -2796,6 +2842,7 @@ export type SessionGuardrailEscalated = {
   data: {
     sessionID: string
     requestID: string
+    reason?: GuardrailEscalationReason
     choice?: GuardrailDecisionChoice
     confidence?: number
     grades?: Array<GuardrailGrade>
@@ -3079,6 +3126,8 @@ export type IsolatedBrowserObservation = {
   mode: "isolated"
   instanceID: string
 }
+
+export type McpEventsListResult = { events: Array<McpEventsEventDefinition> }
 
 export type SessionGenerationSpeedHistory = {
   model?: ModelRef
@@ -3587,6 +3636,7 @@ export type SessionLogItem =
       data: {
         sessionID: string
         requestID: string
+        reason?: GuardrailEscalationReason
         choice?: GuardrailDecisionChoice
         confidence?: number
         grades?: Array<GuardrailGrade>
@@ -4690,6 +4740,33 @@ export type ReviewItemNotFoundError = {
 export const isReviewItemNotFoundError = (value: unknown): value is ReviewItemNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ReviewItemNotFoundError"
 
+export type McpEventsFailure = {
+  readonly _tag: "McpEvents.Failure"
+  readonly category: "invalid_params" | "callback_endpoint" | "unauthorized" | "unavailable"
+  readonly reason:
+    | "invalid_name"
+    | "invalid_arguments"
+    | "invalid_delivery"
+    | "invalid_secret"
+    | "invalid_ttl"
+    | "invalid_cursor"
+    | "session_not_found"
+    | "challenge_failed"
+    | "timeout"
+    | "endpoint_unreachable"
+    | "endpoint_rejected"
+    | "payload_too_large"
+    | "unauthorized_principal"
+    | "grant_expired"
+    | "grant_revoked"
+    | "principal_scope_mismatch"
+    | "authorization_unavailable"
+    | "secure_storage_unavailable"
+    | "service_unavailable"
+}
+export const isMcpEventsFailure = (value: unknown): value is McpEventsFailure =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "McpEvents.Failure"
+
 export type HealthGetOutput = ServiceHealth
 
 export type HealthStopInput = { readonly instanceID: { readonly instanceID: string }["instanceID"] }
@@ -4706,6 +4783,12 @@ export type ServerTelemetryAppendInput = {
           readonly at: string
           readonly operation:
             | "artifact.demo.preview"
+            | "local.app.register"
+            | "local.app.list"
+            | "local.app.revoke"
+            | "local.app.open"
+            | "local.app.status"
+            | "local.app.http"
             | "artifact.demo.export"
             | "provider.auth.list"
             | "provider.auth.key"
@@ -10268,3 +10351,99 @@ export type ReviewDecideInput = {
 }
 
 export type ReviewDecideOutput = void
+
+export type McpEventsStatusOutput = { data: { available: boolean } }["data"]
+
+export type McpEventsListInput = { readonly cursor?: { readonly cursor?: string | undefined }["cursor"] }
+
+export type McpEventsListOutput = { data: McpEventsListResult }["data"]
+
+export type McpEventsSubscribeInput = {
+  readonly context: {
+    readonly context: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+    readonly subscription: {
+      readonly name:
+        | "session.guardrail.changed"
+        | "session.permission.changed"
+        | "session.question.changed"
+        | "session.form.changed"
+        | "session.progress"
+        | "session.completed"
+        | "session.error"
+      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
+      readonly delivery: { readonly mode: "webhook"; readonly url: string; readonly secret: string }
+      readonly cursor?: string | null
+      readonly ttlMs?: number | null
+    }
+  }["context"]
+  readonly subscription: {
+    readonly context: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+    readonly subscription: {
+      readonly name:
+        | "session.guardrail.changed"
+        | "session.permission.changed"
+        | "session.question.changed"
+        | "session.form.changed"
+        | "session.progress"
+        | "session.completed"
+        | "session.error"
+      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
+      readonly delivery: { readonly mode: "webhook"; readonly url: string; readonly secret: string }
+      readonly cursor?: string | null
+      readonly ttlMs?: number | null
+    }
+  }["subscription"]
+}
+
+export type McpEventsSubscribeOutput = { data: McpEventsSubscription }["data"]
+
+export type McpEventsUnsubscribeInput = {
+  readonly context: {
+    readonly context: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+    readonly subscription: {
+      readonly name:
+        | "session.guardrail.changed"
+        | "session.permission.changed"
+        | "session.question.changed"
+        | "session.form.changed"
+        | "session.progress"
+        | "session.completed"
+        | "session.error"
+      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
+      readonly delivery: { readonly mode: "webhook"; readonly url: string }
+    }
+  }["context"]
+  readonly subscription: {
+    readonly context: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+    readonly subscription: {
+      readonly name:
+        | "session.guardrail.changed"
+        | "session.permission.changed"
+        | "session.question.changed"
+        | "session.form.changed"
+        | "session.progress"
+        | "session.completed"
+        | "session.error"
+      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
+      readonly delivery: { readonly mode: "webhook"; readonly url: string }
+    }
+  }["subscription"]
+}
+
+export type McpEventsUnsubscribeOutput = { data: {} }["data"]

@@ -100,3 +100,55 @@ test("unconfirmed off remains closed and is advertised before future access", as
     expect(restored.status()).toEqual({ state: "off" })
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
+
+test("outbound authority is cancelled synchronously on disable and replaced only after acknowledgement", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "relay-mcp-authority-"))
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  try {
+    const host = await createRemoteMcpHost({ file: path.join(directory, "mcp.json"), remote: () => "on" })
+    expect(host.authorizationSignal().aborted).toBe(true)
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async () => {})
+    await host.set(true)
+    const original = host.authorizationSignal()
+    expect(original.aborted).toBe(false)
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async (state) => {
+      if (state.enabled) return
+      entered.resolve()
+      await release.promise
+    })
+    expect(original.aborted).toBe(true)
+    const active = host.authorizationSignal()
+    expect(active.aborted).toBe(false)
+    const pending = host.set(false)
+    expect(active.aborted).toBe(true)
+    await entered.promise
+    expect(host.authorizationSignal().aborted).toBe(true)
+    release.resolve()
+    await pending
+    await host.set(true)
+    expect(host.authorizationSignal()).not.toBe(active)
+    expect(host.authorizationSignal().aborted).toBe(false)
+    host.detach()
+    expect(host.authorizationSignal().aborted).toBe(true)
+  } finally {
+    release.resolve()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("a failed relay acknowledgement never restores outbound authority", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "relay-mcp-authority-"))
+  try {
+    const host = await createRemoteMcpHost({ file: path.join(directory, "mcp.json"), remote: () => "on" })
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async () => {})
+    await host.set(true)
+    const active = host.authorizationSignal()
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async () => { throw new Error("fixture disconnect") })
+    expect(active.aborted).toBe(true)
+    expect(host.authorizationSignal().aborted).toBe(true)
+    expect(host.allowed(host.advertisement().epoch)).toBe(false)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})

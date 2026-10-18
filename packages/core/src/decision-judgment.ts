@@ -1,6 +1,5 @@
 export * as DecisionJudgment from "./decision-judgment"
 
-import { decode, encodeLines } from "@toon-format/toon"
 import { Result, Schema } from "effect"
 
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))
@@ -64,69 +63,135 @@ export const Document = Schema.Struct({
   }),
 })
 
-export class InvalidToonError extends Schema.TaggedErrorClass<InvalidToonError>()(
-  "DecisionJudgment.InvalidToonError",
+export class InvalidResponseError extends Schema.TaggedErrorClass<InvalidResponseError>()(
+  "DecisionJudgment.InvalidResponseError",
   {},
 ) {
   override get message() {
-    return "Invalid decision judgment TOON document"
+    return "Invalid decision judgment JSON document"
   }
 }
 
 export function parse(
   text: string,
   request: typeof Request.Type,
-): Result.Result<typeof Document.Type, InvalidToonError> {
-  if (Buffer.byteLength(text, "utf8") > 1_048_576) return Result.fail(new InvalidToonError({}))
+): Result.Result<typeof Document.Type, InvalidResponseError> {
+  if (Buffer.byteLength(text, "utf8") > 1_048_576) return Result.fail(new InvalidResponseError({}))
+  const decoded = Schema.decodeUnknownResult(Schema.UnknownFromJsonString)(text)
+  if (Result.isFailure(decoded)) return Result.fail(new InvalidResponseError({}))
+  return validate(decoded.success, request)
+}
+
+export function validate(
+  value: unknown,
+  request: typeof Request.Type,
+): Result.Result<typeof Document.Type, InvalidResponseError> {
   const input = Schema.decodeUnknownResult(Request)(request, { onExcessProperty: "error" })
-  if (Result.isFailure(input)) return Result.fail(new InvalidToonError({}))
-  const decoded = Result.try({ try: () => decode(text, { strict: true }), catch: () => new InvalidToonError({}) })
-  if (Result.isFailure(decoded)) return Result.fail(decoded.failure)
-  const document = Schema.decodeUnknownResult(Document)(decoded.success, { onExcessProperty: "error" }).pipe(
-    Result.mapError(() => new InvalidToonError({})),
+  if (Result.isFailure(input)) return Result.fail(new InvalidResponseError({}))
+  const document = Schema.decodeUnknownResult(Document)(value, { onExcessProperty: "error" }).pipe(
+    Result.mapError(() => new InvalidResponseError({})),
   )
   if (Result.isFailure(document)) return document
   const answers = new Map(document.success.decisions.answers.map((answer) => [answer.name, answer]))
   if (answers.size !== document.success.decisions.answers.length || answers.size !== input.success.questions.length)
-    return Result.fail(new InvalidToonError({}))
+    return Result.fail(new InvalidResponseError({}))
   const ordered = input.success.questions.map((question) => answers.get(question.name))
   if (!ordered.every((answer, index) => matchesQuestion(answer, input.success.questions[index])))
-    return Result.fail(new InvalidToonError({}))
+    return Result.fail(new InvalidResponseError({}))
   return Result.succeed({ decisions: { version: 1, answers: ordered.filter((answer) => answer !== undefined) } })
 }
 
 export function encode(document: typeof Document.Type): string {
-  return Array.from(
-    encodeLines({
-      decisions: {
-        version: document.decisions.version,
-        answers: document.decisions.answers.map((answer) => ({
-          name: answer.name,
-          type: answer.type,
-          answer: answer.answer,
-          choice: answer.choice,
-          score: answer.score,
-          confidence: answer.confidence,
-          ...(answer.grades === undefined ? {} : { grades: answer.grades }),
-        })),
-      },
-    }),
-  ).join("\n")
-}
-
-export function template(request: typeof Request.Type): string {
-  return encode({
+  return JSON.stringify({
     decisions: {
-      version: 1,
-      answers: request.questions.map((question) => ({
-        name: question.name,
-        type: "refusal",
-        answer: null,
-        choice: null,
-        score: null,
-        confidence: 0,
+      version: document.decisions.version,
+      answers: document.decisions.answers.map((answer) => ({
+        name: answer.name,
+        type: answer.type,
+        answer: answer.answer,
+        choice: answer.choice,
+        score: answer.score,
+        confidence: answer.confidence,
+        ...(answer.grades === undefined ? {} : { grades: answer.grades }),
       })),
     },
+  })
+}
+
+export function responseSchema(request: typeof Request.Type): Record<string, unknown> {
+  return objectSchema({
+    decisions: objectSchema({
+      version: { type: "integer", enum: [1] },
+      answers: {
+        type: "array",
+        minItems: 1,
+        items: { anyOf: request.questions.flatMap((question) => [answerBranch(question), refusalBranch(question)]) },
+      },
+    }),
+  })
+}
+
+type Question = (typeof Request.Type.questions)[number]
+
+function objectSchema(properties: Record<string, unknown>): Record<string, unknown> {
+  return { type: "object", properties, required: Object.keys(properties), additionalProperties: false }
+}
+
+function answerBranch(question: Question): Record<string, unknown> {
+  if (question.type === "predicate")
+    return objectSchema({
+      name: { type: "string", enum: [question.name] },
+      type: { type: "string", enum: ["predicate"] },
+      answer: { type: "boolean" },
+      choice: { type: "null" },
+      score: { type: "null" },
+      confidence: { type: "number" },
+    })
+  if (question.type === "score")
+    return objectSchema({
+      name: { type: "string", enum: [question.name] },
+      type: { type: "string", enum: ["score"] },
+      answer: { type: "null" },
+      choice: { type: "null" },
+      score: { type: "integer" },
+      confidence: { type: "number" },
+    })
+  if (question.grade === true)
+    return objectSchema({
+      name: { type: "string", enum: [question.name] },
+      type: { type: "string", enum: ["choice"] },
+      answer: { type: "null" },
+      choice: { type: "null" },
+      score: { type: "null" },
+      confidence: { type: "number", enum: [0] },
+      grades: {
+        type: "array",
+        minItems: 1,
+        items: objectSchema({
+          choice: { enum: question.choices.map((choice) => choice.value) },
+          confidence: { type: "number" },
+          evidence: { type: "string" },
+        }),
+      },
+    })
+  return objectSchema({
+    name: { type: "string", enum: [question.name] },
+    type: { type: "string", enum: ["choice"] },
+    answer: { type: "null" },
+    choice: { enum: question.choices.map((choice) => choice.value) },
+    score: { type: "null" },
+    confidence: { type: "number" },
+  })
+}
+
+function refusalBranch(question: Question): Record<string, unknown> {
+  return objectSchema({
+    name: { type: "string", enum: [question.name] },
+    type: { type: "string", enum: ["refusal"] },
+    answer: { type: "null" },
+    choice: { type: "null" },
+    score: { type: "null" },
+    confidence: { type: "number", enum: [0] },
   })
 }
 

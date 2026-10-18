@@ -133,12 +133,17 @@ jobs:
       - name: Verify transcript and approval suites
         if: matrix.suite == 'tui'
         working-directory: packages/tui
-        run: bun test test/session-transcript-live-fixes.test.tsx test/cli/tui/permission-interaction.test.tsx test/cli/tui/permission.test.ts test/util/permission.test.ts test/branding.test.ts
+        run: bun test test/session-transcript-live-fixes.test.tsx test/cli/tui/permission-interaction.test.tsx test/cli/tui/permission.test.ts test/cli/tui/guardrail.test.tsx test/util/permission.test.ts test/branding.test.ts
 
       - name: Verify goal continuation
         if: matrix.suite == 'tui'
         working-directory: packages/core
         run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
+
+      - name: Verify typed decision suites
+        if: matrix.suite == 'tui'
+        working-directory: packages/core
+        run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts
 
       - name: Verify installer and web assets
         if: matrix.suite == 'web'

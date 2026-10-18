@@ -36,6 +36,7 @@ import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
+import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
@@ -82,6 +83,10 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
+  readonly mcpEventsStatus: (signal?: AbortSignal) => Promise<{ available: boolean }>
+  readonly mcpEventsList: (input: { cursor?: string }, signal?: AbortSignal) => Promise<McpEvents.ListResult>
+  readonly mcpEventsSubscribe: (input: { context: McpEvents.RequestContext; subscription: McpEvents.Subscribe }, signal?: AbortSignal) => Promise<McpEvents.Subscription>
+  readonly mcpEventsUnsubscribe: (input: { context: McpEvents.RequestContext; subscription: McpEvents.Unsubscribe }, signal?: AbortSignal) => Promise<{}>
   readonly integrationList: (location: LocalLocation) => Promise<readonly IntegrationInfo[]>
   readonly providerIntegrations: (location: LocalLocation) => Promise<readonly ProviderIntegrationRef[]>
   readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string) => Promise<void>
@@ -231,6 +236,10 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   }
 
   return {
+    mcpEventsStatus: (signal) => client.mcpEvents.status({ signal: signal ?? AbortSignal.timeout(timeoutMs) }),
+    mcpEventsList: (input, signal) => client.mcpEvents.list(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
+    mcpEventsSubscribe: (input, signal) => client.mcpEvents.subscribe(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
+    mcpEventsUnsubscribe: (input, signal) => client.mcpEvents.unsubscribe(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
     latencyAppend: (samples) => call(() => client.server.telemetry.append({ samples }, { signal: AbortSignal.timeout(timeoutMs) })),
     latencyList: (input) => call(() => client.server.telemetry.list(input, { signal: AbortSignal.timeout(timeoutMs) })),
     telemetryConsentGet: () => call(() => client.server.telemetry.consent.get({ signal: AbortSignal.timeout(timeoutMs) })),

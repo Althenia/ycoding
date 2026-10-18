@@ -14,7 +14,19 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createApi, createFetch } from "./fixture/tui-client"
 
-const { ReviewBox, ReviewItemEditor } = await import("../src/routes/session/review-box")
+const { ReviewBox, ReviewItemEditor, reviewReasonLabel } = await import("../src/routes/session/review-box")
+
+test("review reasons label decision failures with their recorded diagnostic, never as a model escalation", () => {
+  expect(reviewReasonLabel("unsupported-output")).toContain("Decision unavailable")
+  expect(reviewReasonLabel("unsupported-output")).toContain("does not support strict structured")
+  expect(reviewReasonLabel("conflicting_grades")).toContain("conflicting")
+  for (const reason of ["unavailable", "invalid-request", "provider-failed", "input-too-large", "invalid-output", "truncated-output"] as const) {
+    expect(reviewReasonLabel(reason)).toContain("Decision unavailable")
+    expect(reviewReasonLabel(reason)).not.toContain("model escalated")
+  }
+  expect(reviewReasonLabel("escalated")).toBe("decision model escalated")
+  expect(reviewReasonLabel("disabled")).toBe("automatic decisions are disabled")
+})
 
 const fingerprint = "a".repeat(64)
 const guardrailItem: SessionReviewItem = {

@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js"
 import { Icon } from "../../ui/icon"
-import { gradeLabel, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "../decision-grades"
+import { escalationText, gradeLabel, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "../decision-grades"
 
 export function DecisionGrades(props: { readonly grades: readonly GradeView[]; readonly selected?: string }) {
   return <ul class="decision-grades" aria-label="Choice grades">
@@ -13,9 +13,12 @@ export function DecisionGrades(props: { readonly grades: readonly GradeView[]; r
 }
 
 export function DecisionProvenance(props: { readonly provenance: DecisionProvenanceView }) {
-  return <Show when={props.provenance.grades?.length} fallback={<Show when={props.provenance.choice !== undefined || props.provenance.confidence !== undefined}>
-    <p class="request__note">model choice {props.provenance.choice ?? "unreported"} · confidence {props.provenance.confidence === undefined ? "unreported" : String(props.provenance.confidence)}</p>
-  </Show>}><DecisionGrades grades={props.provenance.grades ?? []} selected={props.provenance.choice} /></Show>
+  return <>
+    <Show when={props.provenance.reason}><p class="request__note">{escalationText(props.provenance)}</p></Show>
+    <Show when={props.provenance.grades?.length} fallback={<Show when={props.provenance.reason === undefined && (props.provenance.choice !== undefined || props.provenance.confidence !== undefined)}>
+      <p class="request__note">model choice {props.provenance.choice ?? "unreported"} · confidence {props.provenance.confidence === undefined ? "unreported" : String(props.provenance.confidence)}</p>
+    </Show>}><DecisionGrades grades={props.provenance.grades ?? []} selected={props.provenance.choice} /></Show>
+  </>
 }
 
 export function GuardrailDecisionRows(props: { readonly decisions: readonly GuardrailDecisionView[] }) {

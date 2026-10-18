@@ -823,10 +823,11 @@ describe("remote store integration", () => {
     const test = await harness()
     try {
       await test.store.load()
+      await test.runUntil(() => test.store.state().owner?.id === "user_1")
       expect(test.store.state().owner?.id).toBe("user_1")
       expect(test.store.state().devices.map((device) => device.id)).toEqual(["dev_1"])
-      await waitFor(() => test.store.state().connection.kind === "connected")
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().connection.kind === "connected")
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       expect(test.store.state().advertised).toEqual(["ses_a", "ses_b"])
       const sessions = test.store.state().sessions
       expect(sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
@@ -2590,7 +2591,7 @@ describe("remote store integration", () => {
     const test = await harness()
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       let requestsSeen = -1
       await test.runUntil(() => {

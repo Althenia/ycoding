@@ -2134,6 +2134,39 @@ export interface ReviewApi<E = never> {
   readonly decide: ReviewDecideOperation<E>
 }
 
+export type Endpoint38_0Output = EffectValue<ReturnType<RawClient["server.mcpEvents"]["mcpEvents.status"]>>["data"]
+export type McpEventsStatusOperation<E = never> = () => Effect.Effect<Endpoint38_0Output, E>
+
+type Endpoint38_1Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.list"]>[0]
+export type Endpoint38_1Input = { readonly cursor?: Endpoint38_1Request["query"]["cursor"] }
+export type Endpoint38_1Output = EffectValue<ReturnType<RawClient["server.mcpEvents"]["mcpEvents.list"]>>["data"]
+export type McpEventsListOperation<E = never> = (input?: Endpoint38_1Input) => Effect.Effect<Endpoint38_1Output, E>
+
+type Endpoint38_2Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.subscribe"]>[0]
+export type Endpoint38_2Input = {
+  readonly context: Endpoint38_2Request["payload"]["context"]
+  readonly subscription: Endpoint38_2Request["payload"]["subscription"]
+}
+export type Endpoint38_2Output = EffectValue<ReturnType<RawClient["server.mcpEvents"]["mcpEvents.subscribe"]>>["data"]
+export type McpEventsSubscribeOperation<E = never> = (input: Endpoint38_2Input) => Effect.Effect<Endpoint38_2Output, E>
+
+type Endpoint38_3Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.unsubscribe"]>[0]
+export type Endpoint38_3Input = {
+  readonly context: Endpoint38_3Request["payload"]["context"]
+  readonly subscription: Endpoint38_3Request["payload"]["subscription"]
+}
+export type Endpoint38_3Output = EffectValue<ReturnType<RawClient["server.mcpEvents"]["mcpEvents.unsubscribe"]>>["data"]
+export type McpEventsUnsubscribeOperation<E = never> = (
+  input: Endpoint38_3Input,
+) => Effect.Effect<Endpoint38_3Output, E>
+
+export interface McpEventsApi<E = never> {
+  readonly status: McpEventsStatusOperation<E>
+  readonly list: McpEventsListOperation<E>
+  readonly subscribe: McpEventsSubscribeOperation<E>
+  readonly unsubscribe: McpEventsUnsubscribeOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -2173,4 +2206,5 @@ export interface AppApi<E = never> {
   readonly keepAwake: KeepAwakeApi<E>
   readonly config: ConfigApi<E>
   readonly review: ReviewApi<E>
+  readonly mcpEvents: McpEventsApi<E>
 }

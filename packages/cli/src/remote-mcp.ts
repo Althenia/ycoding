@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { Option, Schema } from "effect"
 import { RemoteMCPTransport } from "@ycoding-ai/core/remote-mcp/transport"
-import { parseChunkedValue, type McpPrincipal, type RemoteErrorCode, type RemoteResponse } from "@ycoding-ai/remote"
+import { localAppOperations, parseChunkedValue, type McpPrincipal, type RemoteErrorCode, type RemoteResponse } from "@ycoding-ai/remote"
 import type { LocalServer } from "./remote-local"
 import {
   createOperationCache,
@@ -16,14 +16,17 @@ import {
 } from "./remote-operations"
 import { RemoteMcpSchemas } from "./remote-mcp-schemas"
 import { RemoteMcpDemo } from "./remote-mcp-demo"
+import { McpEvents } from "@ycoding-ai/schema/mcp-events"
+import { RemoteMcpApps } from "./remote-mcp-apps"
 
 export const maxResultChars = 2 * 1024 * 1024
 
 type TextResult = RemoteMCPTransport.ToolResult<{ readonly type: "text"; readonly text: string }>
 
-export type Context = { readonly epoch: string; readonly principal: McpPrincipal }
+export type Context = { readonly requestID: string; readonly epoch: string; readonly principal: McpPrincipal }
 
 export type Options = {
+  readonly apps?: ReturnType<typeof RemoteMcpApps.create>
   readonly local: LocalServer
   readonly sessions: SessionRegistry
   readonly subscriptions: SubscriptionRegistry
@@ -50,7 +53,8 @@ export function createRemoteMcp(options: Options) {
   const limit = options.maxResultChars ?? maxResultChars
   const cache = options.cache ?? createOperationCache()
   const demo = RemoteMcpDemo.create(options.now)
-  const demoTools = new Map(RemoteMcpDemo.tools.map((tool) => [tool.name, tool]))
+  const presentationTools = new Map(RemoteMcpDemo.tools.map((tool) => [tool.name, tool]))
+  const appPresentation = RemoteMcpApps.tools.find((tool) => tool.operation === "local.app.open")
   const byName = new Map(RemoteMcpSchemas.tools.map((tool) => [tool.name, tool]))
   const lanes = new Map<string, Promise<void>>()
   const uncertain = new Set<string>()
@@ -66,17 +70,41 @@ export function createRemoteMcp(options: Options) {
       description: tool.description,
       inputSchema: tool.inputSchema,
       annotations: tool.annotations,
-      ...demoTools.get(tool.name),
+      ...presentationTools.get(tool.name),
+      ...(tool.name === appPresentation?.name ? { _meta: appPresentation._meta } : {}),
     })),
     call: execute,
+    events: {
+      available: async (ticket, signal) => ticket !== undefined && options.allowed(ticket.context.epoch) && (await options.local.mcpEventsStatus(signal)).available,
+      list: (input) => eventsCall(input.context, () => options.local.mcpEventsList(input.params.cursor == null ? {} : { cursor: input.params.cursor }, input.signal)),
+      subscribe: (input) => eventsCall(input.context, (context) => options.local.mcpEventsSubscribe({ context, subscription: input.params }, input.signal)),
+      unsubscribe: (input) => eventsCall(input.context, (context) => options.local.mcpEventsUnsubscribe({ context, subscription: input.params }, input.signal)),
+    },
     resources: {
-      list: async () => demo.list(),
+      list: async () => [...demo.list(), ...(options.apps?.list() ?? [])],
       read: async (input) => {
         input.signal.throwIfAborted()
-        return demo.read(input.uri)
+        return options.apps?.read(input.uri) ?? demo.read(input.uri)
       },
     },
   })
+
+  async function eventsCall<A>(ticket: Ticket | undefined, run: (context: Context) => Promise<A>): Promise<A> {
+    if (ticket === undefined || ticket.started || !options.allowed(ticket.context.epoch))
+      throw new RemoteMCPTransport.ProtocolError(-32001, "MCP event authorization is unavailable")
+    ticket.started = true
+    try {
+      const result = await run(ticket.context)
+      if (!options.allowed(ticket.context.epoch)) throw new McpEvents.Failure({ category: "unauthorized", reason: "grant_revoked" })
+      return result
+    } catch (error) {
+      const parsed = Option.getOrUndefined(Schema.decodeUnknownOption(McpEvents.Failure)(error))
+      const code = parsed?.category === "callback_endpoint" ? -32015 : parsed?.category === "invalid_params" ? -32602 : parsed?.category === "unauthorized" ? -32001 : -32603
+      throw new RemoteMCPTransport.ProtocolError(code, "MCP event request failed", { reason: parsed?.reason ?? "service_unavailable" })
+    } finally {
+      ticket.release()
+    }
+  }
 
   async function execute(call: RemoteMCPTransport.Call<Ticket>): Promise<RemoteMCPTransport.ToolResult> {
     const ticket = call.context
@@ -90,9 +118,19 @@ export function createRemoteMcp(options: Options) {
       }
       if (ticket.lane !== undefined && uncertain.has(ticket.lane))
         return failure("outcome_unknown", "An earlier mutation in this lane has an unknown outcome. Inspect the local Session, then disconnect and reconnect Remote before another MCP mutation. This request was not executed.")
-      const frames = await dispatch(tool, call.arguments, call.signal)
+      const frames = await dispatch(tool, call.arguments, call.signal, ticket.context)
       if (ticket.lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) uncertain.add(ticket.lane)
       const result = toolResult(frames, limit)
+      if (!result.isError && (localAppOperations as readonly string[]).includes(tool.operation)) {
+        const app = RemoteMcpSchemas.recordOf(result.structuredContent)
+        if (app === undefined || !("value" in app)) return failure("internal_error", "Registered app returned no result")
+        const metadata = RemoteMcpSchemas.recordOf(app.metadata)
+        return {
+          content: [{ type: "text", text: JSON.stringify(app.value) }],
+          structuredContent: app.value,
+          ...(metadata === undefined ? {} : { _meta: metadata }),
+        }
+      }
       if (!result.isError && (tool.operation === "artifact.demo.preview" || tool.operation === "artifact.demo.export"))
         return { content: demo.content(tool.operation), structuredContent: result.structuredContent }
       return result
@@ -101,7 +139,7 @@ export function createRemoteMcp(options: Options) {
     }
   }
 
-  function dispatch(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal) {
+  function dispatch(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal, context: Context) {
     const operation = tool.operation
     const input = RemoteMcpSchemas.recordOf(args.input)
     const id = `mcp_${randomUUID()}`
@@ -121,6 +159,8 @@ export function createRemoteMcp(options: Options) {
       subscriptions: options.subscriptions,
       cache,
       demo,
+      apps: options.apps,
+      appContext: context,
     })
   }
 
@@ -187,8 +227,10 @@ export function createRemoteMcp(options: Options) {
       admission = admitted.catch(() => undefined)
       return admitted.then((result) => serve(request, result))
     },
+    clearApps() { options.apps?.clear() },
     async close() {
       closed = true
+      options.apps?.close()
       for (const controller of inflight) controller.abort()
       await transport.close()
     },

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { readGrades, readGuardrailProvenance, readGradedAnswers, readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
+import { escalationText, readGrades, readGuardrailProvenance, readGradedAnswers, readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 
 const grades = [
   { choice: "approve_all", confidence: 1, evidence: "Every target is verified." },
@@ -12,6 +12,35 @@ test("guardrail provenance retains all four grades and the selected choice witho
   expect(readGuardrailProvenance({ choice: "approve_all", confidence: 1, grades })).toEqual({ choice: "approve_all", confidence: 1, grades })
   expect(readGuardrailProvenance({ choice: "reject", confidence: 0.71 })).toEqual({ choice: "reject", confidence: 0.71 })
   expect(readGuardrailProvenance({})).toEqual({})
+})
+
+test("provenance retains a known escalation reason, drops an unknown one, and forges no judgment on failure", () => {
+  expect(readGuardrailProvenance({ reason: "timeout" })).toEqual({ reason: "timeout" })
+  expect(readGuardrailProvenance({ reason: "escalated", choice: "escalate", confidence: 0.9 })).toEqual({ reason: "escalated", choice: "escalate", confidence: 0.9 })
+  expect(readGuardrailProvenance({ reason: "low_confidence", grades })).toEqual({ reason: "low_confidence", grades })
+  expect(readGuardrailProvenance({ reason: "raw <script> reason", choice: "approve", confidence: 0.5 })).toEqual({ choice: "approve", confidence: 0.5 })
+  const failure = readGuardrailProvenance({ reason: "unsupported-output" })
+  expect(failure).not.toHaveProperty("choice")
+  expect(failure).not.toHaveProperty("confidence")
+  expect(failure).not.toHaveProperty("grades")
+})
+
+test("escalation text distinguishes decision failures from an actual model escalation", () => {
+  const failure = escalationText({ reason: "timeout" })
+  expect(failure).toContain("Decision unavailable")
+  expect(failure).toContain("timed out")
+  expect(failure).not.toContain("model escalated")
+  expect(failure).not.toContain("unreported")
+  expect(escalationText({ reason: "low_confidence" })).toContain("requires human review")
+  expect(escalationText({ reason: "conflicting_grades" })).toContain("conflicting")
+  const escalated = escalationText({ reason: "escalated", choice: "escalate", confidence: 0.9 })
+  expect(escalated).toContain("Decision model escalated")
+  expect(escalated).toContain("choice escalate")
+  expect(escalated).toContain("confidence 0.9")
+  const historical = escalationText({})
+  expect(historical).toContain("diagnostic reason was not recorded")
+  expect(historical).not.toContain("unreported")
+  expect(historical).not.toContain("choice")
 })
 
 test("grade evidence stays literal at its 500-character boundary and malformed grades are unavailable", () => {

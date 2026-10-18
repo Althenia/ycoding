@@ -69,6 +69,29 @@ test("guardrail grades survive review items, pending escalations, and live settl
   expect(applySessionEvent(createSessionView("ses_a"), { id: "evt_escalation", type: "session.guardrail.escalated.1", created: 2, data: { sessionID: "ses_a", ...escalation } }, 2).messages[0]).toMatchObject({ kind: "system", guardrail: escalation })
 })
 
+test("decision failure reasons survive pending, deferred, and live projections without an invented judgment", () => {
+  const failure = { reason: "unsupported-output" }
+  expect(readGuardrailRequests({ data: [{ id: "grq_failed", sessionID: "ses_a", action: "write", resources: ["x"], escalation: failure }] }, 1)[0]).toMatchObject({ escalation: failure })
+  for (const reason of ["unsupported-output", "conflicting_grades"]) {
+    expect(readReviewItems({ data: [{ itemID: "rvw_failed", kind: "guardrail", sessionID: "ses_a", rootSessionID: "ses_a", sessionTitle: "Root", created: 1, reason,
+      payload: { type: "guardrail", action: "write", resources: ["x"], ruleIDs: [], reason: "Outside", hardReview: false, directories: ["/fixture"] },
+    }] })?.[0]).toMatchObject({ reason })
+  }
+  const live = applySessionEvent(createSessionView("ses_a"), { id: "evt_failed", type: "session.guardrail.escalated", created: 2, data: { sessionID: "ses_a", requestID: "grq_failed", reason: "timeout" } }, 2).messages[0]
+  expect(live).toMatchObject({ kind: "system", guardrail: { reason: "timeout" } })
+  if (live?.kind !== "system") throw new Error("Missing failure notice")
+  expect(live.text).toContain("Decision unavailable")
+  expect(live.text).toContain("timed out")
+  expect(live.text).not.toContain("model escalated")
+  expect(live.text).not.toContain("unreported")
+  expect(live.guardrail).not.toHaveProperty("choice")
+  expect(live.guardrail).not.toHaveProperty("confidence")
+  const historical = applySessionEvent(createSessionView("ses_a"), { id: "evt_historical", type: "session.guardrail.escalated", created: 3, data: { sessionID: "ses_a", requestID: "grq_historical" } }, 3).messages[0]
+  if (historical?.kind !== "system") throw new Error("Missing historical notice")
+  expect(historical.text).toContain("diagnostic reason was not recorded")
+  expect(historical.text).not.toContain("unreported")
+})
+
 test("model metadata preserves profile identity through remote projection", () => {
   const model = readModelRef({ providerID: "openai", id: "gpt", profile: "work" })
   expect(model).toEqual({ providerID: "openai", id: "gpt", profile: "work" })

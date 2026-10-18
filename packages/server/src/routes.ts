@@ -59,11 +59,14 @@ import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { RemoteConnection } from "./remote-connection"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
+import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
+import { McpEventsAuthorization } from "./mcp-events-authorization"
 
 const applicationServices = LayerNode.group([
   Database.node,
   EventRuntime.node,
   EventLogger.node,
+  SessionMcpEvents.node,
   httpClient,
   ToolOutputStore.cleanupNode,
   SessionRetention.node,
@@ -124,6 +127,7 @@ function makeRoutes<AuthError, AuthServices>(
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const replacements: LayerNode.Replacements = [
+    [SessionMcpEvents.Authorization.node, McpEventsAuthorization.layer(remote)],
     [Database.node, Database.configured(options.database)],
     [ModelsDev.node, ModelsDev.configured({ ...options.models, client: options.client })],
     [Watcher.node, Watcher.configured({ enabled: options.fs?.filewatcher })],

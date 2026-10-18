@@ -19,6 +19,7 @@ import { createNoticeStore } from "./notice-store"
 import { createQuotaClaims, parseQuotaClaimRequest, parseQuotaReservation, type QuotaClaimRequest } from "./quota-claims"
 import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
 import { McpRelayError, createMcpAuthority, createMcpRelay, mcpFailureStatus, parseMcpForward, readBoundedText, routeMcpFrame, type McpAttachment } from "./mcp"
+import { parseAuthorizationRequest } from "../../../../packages/remote/src/mcp-events"
 
 type Attachment = {
   readonly connectionID: string
@@ -73,6 +74,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     },
     authorize: this.#mcpAuthority.authorize,
     authorizeDevice: this.#mcpAuthority.authorizeDevice,
+    authorizeGrant: this.#mcpAuthority.authorizeGrant,
     validateGate: this.#mcpAuthority.validateGate,
     revokeGrants: this.#mcpAuthority.revokeGrants,
     persistState: async (agentID, state) => {
@@ -268,6 +270,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
     if (url.pathname === "/_ycoding/quota") return this.#answerQuotaClaim(request)
     await this.#restoreConnections()
+    if (url.pathname === "/_ycoding/mcp-events/authorize") return this.#authorizeMcpEvent(request)
     if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
       return this.#streamContent(request, url.pathname === "/_ycoding/stream-message")
     if (url.pathname === "/_ycoding/close-device") {
@@ -286,6 +289,27 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     }
     await this.#armAlarm()
     return new Response(null, { status: 204 })
+  }
+
+  async #authorizeMcpEvent(request: Request): Promise<Response> {
+    if (request.method !== "POST") return transportError(405, "invalid_message", "MCP events authorization accepts POST only")
+    const ownerID = request.headers.get("x-ycoding-owner")
+    const deviceID = request.headers.get("x-ycoding-device")
+    const resource = request.headers.get("x-ycoding-mcp-resource")
+    if (!ownerID || !deviceID || !resource) return transportError(400, "invalid_message", "Trusted device headers are missing")
+    if (Number(request.headers.get("content-length") ?? 0) > mcpMaxBodyBytes) return transportError(413, "message_too_large", "Request exceeds the frame bound")
+    const body = await readBoundedText(request.body, mcpMaxBodyBytes).catch(() => null)
+    if (body === null || body === undefined) return transportError(400, "invalid_message", "Request body could not be read")
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return transportError(400, "invalid_message", "Request body is not valid JSON")
+    }
+    const authorization = parseAuthorizationRequest(parsed)
+    if (authorization === undefined) return transportError(400, "invalid_message", "Request is not a valid MCP events authorization")
+    const result = await this.#mcp.authorizeEvent({ ownerID, deviceID, resource }, authorization)
+    return new Response(JSON.stringify(result), { headers: { "content-type": "application/json", "cache-control": "no-store" } })
   }
 
   async #answerQuotaClaim(request: Request): Promise<Response> {

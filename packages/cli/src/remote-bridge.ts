@@ -43,6 +43,10 @@ import { CloudflareRemoteTransport } from "./remote-transport"
 import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Schema } from "effect"
+import { McpEvents } from "@ycoding-ai/schema/mcp-events"
+import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
+import { RemoteMcpAuthorization } from "./remote-mcp-authorization"
+import type { RemoteMcpApps } from "./remote-mcp-apps"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
 // never proxies a caller-supplied URL or method, and never follows a remote
@@ -73,7 +77,7 @@ export type ConnectionInput = {
 export type BridgeCredentials = { readonly accessToken: string; readonly accessExpiresAt: number }
 
 export type RemoteBridgeOptions = {
-  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string }
+  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string; readonly authorizationFetch?: RemoteMcpAuthorization.Fetcher; readonly appPreview?: RemoteMcpApps.Preview }
   /** Enrolled relay origin. Device credentials are only ever sent here. */
   readonly relayURL: string
   readonly local: LocalServer
@@ -115,8 +119,11 @@ const interactiveCoalesceMs = 40
 const backgroundCoalesceMs = 750
 
 export class RemoteAgent {
+  readonly mcpEvents: RemoteConnection.EventAuthorization
+  private credential?: BridgeCredentials
   private readonly mcpAcknowledgements = new Map<string, { state: RemoteMcpPreference; resolve: () => void; reject: () => void }>()
   private mcpServer?: Promise<ReturnType<typeof import("./remote-mcp")["createRemoteMcp"]>>
+  private mcpCleanup = Promise.resolve()
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
   private uploads = createAttachmentUploads()
@@ -170,6 +177,41 @@ export class RemoteAgent {
 
   constructor(private readonly options: RemoteBridgeOptions) {
     this.now = options.now ?? Date.now
+    const mcp = options.mcp
+    const authorization = mcp === undefined ? undefined : RemoteMcpAuthorization.create({
+      relayURL: options.relayURL,
+      deviceID: mcp.deviceID,
+      credential: () => this.credential,
+      allowed: (epoch) => this.connected && mcp.host.allowed(epoch ?? mcp.host.advertisement().epoch),
+      signal: () => mcp.host.authorizationSignal(),
+      now: this.now,
+      ...(mcp.authorizationFetch === undefined ? {} : { fetcher: mcp.authorizationFetch }),
+    })
+    const unavailable = () => new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" })
+    const authorize = async (request: Parameters<NonNullable<typeof authorization>["authorize"]>[0], signal?: AbortSignal) => {
+      if (authorization === undefined) throw unavailable()
+      const response = await authorization.authorize(request, signal).catch(() => { throw unavailable() })
+      if (response.action === "capabilities") throw unavailable()
+      if (!response.authorized) throw new McpEvents.Failure({
+        category: response.reason === "unavailable" ? "unavailable" : "unauthorized",
+        reason: response.reason === "unavailable" ? "authorization_unavailable" : "grant_revoked",
+      })
+      return response
+    }
+    this.mcpEvents = {
+      capabilities: async () => authorization === undefined ? false : authorization.authorize({ action: "capabilities" })
+        .then((response) => response.action === "capabilities" && response.supported, () => false),
+      resolve: (context, signal) => authorize({ action: "resolve", ...context }, signal)
+        .then((response) => ({ grantID: response.grantID, expiresAt: response.expiresAt })),
+      check: async (principal, signal) => {
+        const response = await authorize({
+          action: "check", grantID: principal.grantID, epoch: principal.epoch,
+          principal: { ownerID: principal.ownerID, deviceID: principal.deviceID, clientID: principal.clientID },
+        }, signal)
+        if (mcp === undefined) throw unavailable()
+        return { expiresAt: response.expiresAt, signal: mcp.host.authorizationSignal() }
+      },
+    }
     this.cache = createOperationCache(this.now)
     this.refreshIntervalMs = options.refreshIntervalMs ?? defaults.refreshIntervalMs
     this.eventRetryInitialMs = options.eventRetryInitialMs ?? defaults.eventRetryInitialMs
@@ -207,6 +249,8 @@ export class RemoteAgent {
   private setConnected(connected: boolean) {
     this.connected = connected
     if (!connected) {
+      this.credential = undefined
+      this.clearMcpApps()
       this.options.mcp?.host.detach()
       for (const pending of this.mcpAcknowledgements.values()) pending.reject()
       this.mcpAcknowledgements.clear()
@@ -246,6 +290,7 @@ export class RemoteAgent {
       await this.stopEventStream()
     } finally {
       await connection?.disconnect(code, reason)
+      await this.mcpCleanup
       await (await this.mcpServer)?.close()
     }
   }
@@ -262,12 +307,14 @@ export class RemoteAgent {
     const cycle = this.generation
     const credentials = await this.options.credentials(this.lifetime.signal)
     if (cycle !== this.generation) return
+    this.credential = credentials
     this.accessExpiresAt = credentials.accessExpiresAt
     const connection = (this.options.createConnection ?? createRelayConnection)({
       url: agentURL(this.options.relayURL),
       accessToken: credentials.accessToken,
       onOpen: () => {
         if (this.connection !== connection || cycle !== this.generation) return
+        this.credential = credentials
         this.setConnected(true)
         this.resetStatusRetry()
         this.resetCompletionRetry()
@@ -409,6 +456,7 @@ export class RemoteAgent {
   }
 
   private async sendMcpState(state: RemoteMcpPreference) {
+    if (!state.enabled) await this.clearMcpApps()
     const id = crypto.randomUUID()
     const result = Promise.withResolvers<void>()
     const timeout = setTimeout(() => result.reject(new Error("Relay MCP acknowledgement timed out")), 5_000)
@@ -422,6 +470,14 @@ export class RemoteAgent {
     }
   }
 
+  private clearMcpApps() {
+    const server = this.mcpServer
+    if (server === undefined) return this.mcpCleanup
+    this.mcpCleanup = Promise.all([this.mcpCleanup, server.then((value) => value.clearApps())])
+      .then(() => {}, () => this.diagnostic("Could not clear local app registrations"))
+    return this.mcpCleanup
+  }
+
   private async handleMcpRequest(request: McpRequest, controller: AbortController) {
     const owner = this.connection
     const mcp = this.options.mcp
@@ -432,13 +488,31 @@ export class RemoteAgent {
       }
       this.mcpServer ??= (async () => {
         const { createRemoteMcp } = await import("./remote-mcp")
+        const { RemoteLocalApp } = await import("./remote-local-app")
+        const { RemoteMcpApps } = await import("./remote-mcp-apps")
+        const registry = RemoteLocalApp.create({
+          now: this.now,
+          verifySession: async (sessionID) => await this.registry.renew(sessionID) !== undefined,
+          authorize: async (scope, signal) => this.mcpEvents.check(scope, signal)
+            .then((result) => !result.signal.aborted && result.expiresAt > this.now(), () => false),
+        })
+        const apps = RemoteMcpApps.create({
+          registry,
+          now: this.now,
+          resolve: async (context, signal) => {
+            const grant = await this.mcpEvents.resolve(context, signal)
+            return { ...context.principal, grantID: grant.grantID, epoch: context.epoch }
+          },
+          ...(mcp.appPreview === undefined ? {} : { preview: mcp.appPreview }),
+        })
         return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
-          cache: this.cache, home: mcp.home, resource: mcp.resource, allowed: (epoch) => mcp.host.allowed(epoch) })
+          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch) })
       })()
       const server = await this.mcpServer
+      await this.mcpCleanup
       if (controller.signal.aborted || !mcp.host.allowed(request.input.epoch)) return
       const response = await server.fetch(new Request(mcp.resource, { method: "POST", body: request.input.body,
-        headers: request.input.headers, signal: controller.signal }), { epoch: request.input.epoch, principal: request.input.principal })
+        headers: request.input.headers, signal: controller.signal }), { requestID: request.id, epoch: request.input.epoch, principal: request.input.principal })
       const reader = response.body?.getReader()
       const chunks: Uint8Array[] = []
       let bytes = 0

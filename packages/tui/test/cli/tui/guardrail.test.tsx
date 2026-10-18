@@ -44,6 +44,71 @@ test("formats guardrail profile and family counters", () => {
   })
 })
 
+test("escalation text distinguishes decision failures from an actual model escalation", async () => {
+  const { GuardrailEscalation } = await import("../../../src/guardrail-escalation")
+  const failure = GuardrailEscalation.text({ reason: "timeout" })
+  expect(failure).toContain("Decision unavailable")
+  expect(failure).toContain("timed out")
+  expect(failure).not.toContain("model escalated")
+  expect(failure).not.toContain("unreported")
+  expect(GuardrailEscalation.text({ reason: "low_confidence" })).toContain("requires human review")
+  const escalated = GuardrailEscalation.text({ reason: "escalated", choice: "escalate", confidence: 0.2 })
+  expect(escalated).toContain("Decision model escalated")
+  expect(escalated).toContain("choice escalate")
+  expect(escalated).toContain("confidence 0.2")
+  const historical = GuardrailEscalation.text({})
+  expect(historical).toContain("diagnostic reason was not recorded")
+  expect(historical).not.toContain("unreported")
+})
+
+test("renders a decision-failed human review without claiming the model escalated", async () => {
+  const transport = createFetch(async () => undefined)
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <ToastProvider>
+                  <prompt.GuardrailPrompt
+                    request={{
+                      id: "grq_failed",
+                      rootSessionID: "ses_root",
+                      sessionID: "ses_root",
+                      action: "shell",
+                      resources: ["git reset --hard"],
+                      ruleIDs: ["standard.review.git-destructive"],
+                      reason: "Destructive Git operation",
+                      standard: true,
+                      escalation: { reason: "unsupported-output" as const },
+                    }}
+                  />
+                </ToastProvider>
+              </ThemeProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 120, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Guardrail blocked"))
+
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Decision unavailable")
+    expect(frame).toContain("does not support strict structured")
+    expect(frame).not.toContain("Decision model escalated")
+    expect(frame).not.toContain("unreported")
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Deny")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("attributes child reviews to their root family", () => {
   const request = {
     id: "grq_review",

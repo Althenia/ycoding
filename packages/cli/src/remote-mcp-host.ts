@@ -12,7 +12,14 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   let transport: { url: string; send: (state: RemoteMcpPreference) => Promise<void> } | undefined
   let generation = 0
   let admitted = false
+  let authorization = new AbortController()
+  authorization.abort()
   let transition = Promise.resolve()
+
+  function revoke() {
+    admitted = false
+    authorization.abort()
+  }
 
   try {
     const stored: unknown = JSON.parse(await readFile(input.file, "utf8"))
@@ -56,11 +63,13 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
       if (cycle !== generation || connection !== transport) return current
       if (!preference.enabled && pendingRevocation) await save(preference, false)
       if (cycle !== generation || connection !== transport) return current
+      if (preference.enabled && authorization.signal.aborted) authorization = new AbortController()
+      if (!preference.enabled) authorization.abort()
       admitted = preference.enabled
       current = preference.enabled ? { state: "on", url: connection.url } : { state: "off" }
     } catch {
       if (cycle === generation) {
-        admitted = false
+        revoke()
         current = { state: "error", message: "Relay MCP state could not be confirmed; run `ycoding remote connect` and retry `ycoding remote mcp status`" }
       }
     }
@@ -70,21 +79,22 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   return {
     status: () => current,
     advertisement: () => preference,
+    authorizationSignal: () => authorization.signal,
     allowed: (epoch: string) => admitted && preference.enabled && preference.epoch === epoch && transport !== undefined,
     attach: async (url: string, send: (state: RemoteMcpPreference) => Promise<void>) => {
-      admitted = false
+      revoke()
       transport = { url, send }
       await synchronize(++generation)
     },
     detach: () => {
       generation++
       transport = undefined
-      admitted = false
+      revoke()
       if (!pendingRevocation) current = { state: preference.enabled ? "connecting" : "off" }
     },
     set: (enabled: boolean): Promise<Remote.McpStatus> => {
       const cycle = ++generation
-      if (!enabled) admitted = false
+      if (!enabled) revoke()
       const next = transition.then(async () => {
         if (enabled && input.remote() !== "on") {
           if (cycle === generation) current = { state: "error", message: "Remote connection must be on; run `ycoding remote connect` first" }

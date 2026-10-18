@@ -10,10 +10,11 @@ import { WebSocketExecutor } from "./transport"
 import type { Protocol } from "./protocol"
 import { applyCachePolicy } from "../cache-policy"
 import * as ProviderShared from "../protocols/shared"
-import type { LLMError, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
+import type { LLMError, PreparedRequestOf, ProtocolID, ProviderOptions, ResponseFormat } from "../schema"
 import {
   GenerationOptions,
   HttpOptions,
+  InvalidRequestReason,
   LLMRequest,
   LLMResponse,
   Model,
@@ -33,6 +34,7 @@ export interface RouteBody<Body> {
   readonly schema: Schema.Codec<Body, unknown>
   /** Build the provider-native body from a common `LLMRequest`. */
   readonly from: (request: LLMRequest) => Effect.Effect<Body, LLMError>
+  readonly responseFormats?: ReadonlyArray<Exclude<ResponseFormat["type"], "text">>
 }
 
 export interface Route<Body, Prepared = unknown> {
@@ -547,6 +549,16 @@ export function make<Body, Prepared, Frame, Event, State>(
 const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
   const resolved = applyCachePolicy(resolveRequestOptions(request))
   const route = resolved.model.route
+  const format = resolved.responseFormat?.type
+  if (format !== undefined && format !== "text" && !route.body.responseFormats?.includes(format))
+    return yield* new LLMErrorClass({
+      module: "LLMClient",
+      method: "compile",
+      reason: new InvalidRequestReason({
+        message: `Route ${route.id} does not support provider-enforced ${format} response format`,
+        parameter: "responseFormat",
+      }),
+    })
 
   const body = yield* route.body
     .from(resolved)

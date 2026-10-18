@@ -1,6 +1,7 @@
 import { acquireRemoteLock } from "./lock"
 import { DeviceAuthorizationError } from "../../../remote-credentials"
 import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
+import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
 
 export type RemoteConnectorStatus = {
   state: "off" | "connecting" | "on" | "other-process" | "error"
@@ -13,6 +14,7 @@ export type RemoteConnectorBridge = {
   connect: () => Promise<void>
   close: () => Promise<void>
   subscribe?: (listener: (connected: boolean) => void) => () => void
+  readonly mcpEvents?: RemoteConnection.EventAuthorization
 }
 
 export function createRemoteConnector(input: {
@@ -116,6 +118,7 @@ export function createRemoteConnector(input: {
   }
 
   return {
+    get mcpEvents() { return bridge?.mcpEvents },
     notice: input.notice,
     start,
     stop,

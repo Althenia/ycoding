@@ -974,25 +974,25 @@ describe("session state reads", () => {
     const test = await harness()
     try {
       await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.runUntil(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
 
       test.relay.pushEvent("ses_a", { type: "session.status", data: { sessionID: "ses_a", status: { type: "busy" } } })
-      await test.flush()
+      await test.runUntil(() => test.store.state().view?.status === "running")
       expect(test.store.state().view?.status).toBe("running")
 
       test.relay.pushEvent("ses_a", { type: "session.step.started", data: { sessionID: "ses_a", assistantMessageID: "msg_retry" } })
-      await test.flush()
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.id === "msg_retry") === true)
 
       test.relay.pushEvent("ses_a", {
         type: "session.status",
         data: { sessionID: "ses_a", status: { type: "retry", attempt: 2, message: "rate limited", next: 5_000 } },
       })
-      await test.flush()
+      await test.runUntil(() => test.store.state().view?.messages.some((message) => message.kind === "assistant" && message.id === "msg_retry" && message.retry?.attempt === 2) === true)
       expect(test.store.state().view?.messages.find((message) => message.id === "msg_retry")).toMatchObject({ retry: { attempt: 2, code: "rate limited" } })
 
       test.relay.pushEvent("ses_a", { type: "session.idle", data: { sessionID: "ses_a" } })
-      await test.flush()
+      await test.runUntil(() => test.store.state().view?.status === "idle")
       expect(test.store.state().view?.status).toBe("idle")
 
       test.relay.pushEvent("ses_a", {

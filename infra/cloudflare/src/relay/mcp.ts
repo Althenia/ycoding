@@ -13,6 +13,7 @@ import {
   type RemoteErrorCode,
   type RemoteResponse,
 } from "../../../../packages/remote/src/index"
+import type { RemoteMcpEvents } from "../../../../packages/remote/src/mcp-events"
 import type { McpStore } from "../auth/mcp/store"
 
 export type McpAgent = { readonly agentID: string; readonly ownerID: string; readonly deviceID: string }
@@ -25,6 +26,9 @@ export type McpGrant = {
   readonly principal: McpPrincipal
 }
 export type McpAuthority = { readonly ok: true } | { readonly ok: false; readonly reason: string }
+export type McpGrantAuthorization =
+  | { readonly ok: true; readonly expiresAt: number }
+  | { readonly ok: false; readonly reason: RemoteMcpEvents.AuthorizationRejection }
 export type McpRelayRequest = { readonly grant: McpGrant; readonly body: string; readonly headers: McpHeaders; readonly signal?: AbortSignal }
 export type McpControlResult = "acknowledged" | "superseded" | "stale" | "failed"
 export type McpResponseResult = "accepted" | "ignored" | "violation"
@@ -40,6 +44,7 @@ export type McpRelayDeps = {
   readonly validateGate: (input: { readonly agent: McpAgent; readonly epoch: string }) => Promise<boolean>
   readonly revokeGrants: (deviceID: string, keepEpoch?: string) => Promise<void>
   readonly persistState: (agentID: string, state: McpState) => Promise<void>
+  readonly authorizeGrant?: (input: { readonly grantID: string; readonly principal: McpPrincipal; readonly epoch: string; readonly resource: string }) => Promise<McpGrantAuthorization>
 }
 
 export class McpRelayError extends Error {
@@ -66,6 +71,7 @@ type Entry = {
   readonly generation: number
   readonly deviceID: string
   readonly grantID: string
+  readonly grant: McpGrant
   readonly clientKey: string
   readonly closed: Promise<void>
   readonly closeAdmission: () => void
@@ -224,6 +230,7 @@ export function createMcpRelay(deps: McpRelayDeps) {
         generation: agent?.generation ?? 0,
         deviceID: grant.principal.deviceID,
         grantID: grant.grantID,
+        grant,
         clientKey,
         closed,
         closeAdmission,
@@ -275,8 +282,49 @@ export function createMcpRelay(deps: McpRelayDeps) {
     return "accepted"
   }
 
+  const authorizeEvent = async (
+    trusted: { readonly ownerID: string; readonly deviceID: string; readonly resource: string },
+    request: RemoteMcpEvents.AuthorizationRequest,
+  ): Promise<RemoteMcpEvents.AuthorizationResponse> => {
+    if (request.action === "capabilities") return { action: "capabilities", supported: true }
+    const rejected = (reason: RemoteMcpEvents.AuthorizationRejection): RemoteMcpEvents.AuthorizationResponse => ({
+      action: request.action,
+      authorized: false,
+      reason,
+    })
+    const checkGrant = deps.authorizeGrant
+    if (checkGrant === undefined) return rejected("unavailable")
+    const principal = request.principal
+    if (principal.ownerID !== trusted.ownerID || principal.deviceID !== trusted.deviceID) return rejected("forbidden")
+    if (request.action === "resolve") {
+      const current = agent
+      if (current === undefined) return rejected("unavailable")
+      if (current.info.ownerID !== trusted.ownerID || current.info.deviceID !== trusted.deviceID) return rejected("forbidden")
+      if (current.gate.state === "off") return rejected("forbidden")
+      if (current.gate.state !== "open") return rejected("unavailable")
+      if (current.gate.epoch !== request.epoch) return rejected("unauthorized")
+      const entry = [...entries].find((candidate) => candidate.relayID === request.requestID)
+      if (entry === undefined || entry.done) return rejected("not_found")
+      if (entry.generation !== current.generation) return rejected("unavailable")
+      const bound = entry.grant.principal
+      if (bound.ownerID !== principal.ownerID || bound.deviceID !== principal.deviceID || bound.clientID !== principal.clientID)
+        return rejected("forbidden")
+      if (entry.grant.epoch !== request.epoch) return rejected("unauthorized")
+      if (entry.grant.resource !== trusted.resource) return rejected("unauthorized")
+      const fresh = await Promise.resolve()
+        .then(() => checkGrant({ grantID: entry.grantID, principal, epoch: request.epoch, resource: trusted.resource }))
+        .then((value) => value, (): McpGrantAuthorization => ({ ok: false, reason: "unavailable" }))
+      return fresh.ok ? { action: "resolve", authorized: true, grantID: entry.grantID, expiresAt: fresh.expiresAt } : rejected(fresh.reason)
+    }
+    const fresh = await Promise.resolve()
+      .then(() => checkGrant({ grantID: request.grantID, principal, epoch: request.epoch, resource: trusted.resource }))
+      .then((value) => value, (): McpGrantAuthorization => ({ ok: false, reason: "unavailable" }))
+    return fresh.ok ? { action: "check", authorized: true, grantID: request.grantID, expiresAt: fresh.expiresAt } : rejected(fresh.reason)
+  }
+
   return {
     request,
+    authorizeEvent,
 
     revoke: (input: { readonly deviceID: string; readonly grantID?: string }) =>
       failWhere(
@@ -470,6 +518,28 @@ export function createMcpAuthority(options: {
       const device = await options.store.getDevice(row.deviceID)
       if (!device?.enabled) return { ok: false, reason: "mcp_disabled" }
       return device.epoch === grant.epoch ? { ok: true } : { ok: false, reason: "epoch_mismatch" }
+    },
+
+    authorizeGrant: async (input: {
+      readonly grantID: string
+      readonly principal: McpPrincipal
+      readonly epoch: string
+      readonly resource: string
+    }): Promise<McpGrantAuthorization> => {
+      const row = await options.store.findGrant(input.grantID)
+      if (row === undefined) return { ok: false, reason: "not_found" }
+      if (row.revokedAt !== undefined) return { ok: false, reason: "unauthorized" }
+      if (now() >= row.expiresAt) return { ok: false, reason: "unauthorized" }
+      if (row.ownerID !== input.principal.ownerID || row.deviceID !== input.principal.deviceID || row.clientID !== input.principal.clientID)
+        return { ok: false, reason: "forbidden" }
+      if (row.epoch !== input.epoch) return { ok: false, reason: "unauthorized" }
+      if (row.scope !== mcpScope || row.resource !== input.resource) return { ok: false, reason: "unauthorized" }
+      const admitted = await deviceAuthority(row.deviceID, row.ownerID)
+      if (!admitted.ok) return { ok: false, reason: "forbidden" }
+      const device = await options.store.getDevice(row.deviceID)
+      if (!device?.enabled) return { ok: false, reason: "forbidden" }
+      if (device.epoch !== input.epoch) return { ok: false, reason: "unauthorized" }
+      return { ok: true, expiresAt: row.expiresAt }
     },
 
     validateGate: async (input: { readonly agent: McpAgent; readonly epoch: string }) => {

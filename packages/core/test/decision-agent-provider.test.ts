@@ -32,8 +32,8 @@ import { testEffect } from "./lib/effect"
 const modelInfo = CatalogModel.Info.make({
   ...CatalogModel.Info.empty(Provider.ID.openai, CatalogModel.ID.make("gpt-6-luna-fast")),
   modelID: CatalogModel.ID.make("gpt-6-luna-fast"),
-  package: Provider.aisdk("@ai-sdk/openai-compatible"),
-  api: "chat",
+  package: Provider.aisdk("@ai-sdk/openai"),
+  api: "responses",
   settings: { baseURL: "https://provider.test/v1", apiKey: "fixture-provider-key" },
   cost: [{ input: Money.USDPerMillionTokens.make(2), output: Money.USDPerMillionTokens.make(4),
     cache: { read: Money.USDPerMillionTokens.make(1), write: Money.USDPerMillionTokens.make(3) } }],
@@ -43,23 +43,32 @@ const modelInfo = CatalogModel.Info.make({
     id: CatalogModel.VariantID.make(id), settings: { reasoningEffort: id }, headers: {}, body: {},
   })),
 })
+const compatibleModelInfo = CatalogModel.Info.make({
+  ...CatalogModel.Info.empty(Provider.ID.openai, CatalogModel.ID.make("gpt-6-luna-fast")),
+  modelID: CatalogModel.ID.make("gpt-6-luna-fast"),
+  package: Provider.aisdk("@ai-sdk/openai-compatible"),
+  api: "chat",
+  settings: { baseURL: "https://provider.test/v1", apiKey: "fixture-provider-key" },
+  capabilities: { tools: true, input: ["text"], output: ["text"] },
+  limit: { context: 128_000, output: 16_384 },
+  variants: modelInfo.variants,
+})
 const catalogRef = CatalogModel.Ref.make({ providerID: Provider.ID.openai, id: modelInfo.id, variant: CatalogModel.VariantID.make("medium") })
-const wire: Array<{ body: Record<string, unknown>; authorization: string | undefined }> = []
-const state = { fail: false }
-const toon = DecisionJudgment.encode({ decisions: { version: 1, answers: [{
+const wire: Array<{ url: string; body: Record<string, unknown>; authorization: string | undefined }> = []
+const state = { fail: false, compatible: false }
+const json = DecisionJudgment.encode({ decisions: { version: 1, answers: [{
   name: "read_only", type: "predicate", answer: true, choice: null, score: null, confidence: 0.83,
 }] } })
 const responseText = [
-  { id: "chatcmpl_test", choices: [{ index: 0, delta: { content: toon }, finish_reason: null }], usage: null },
-  { id: "chatcmpl_test", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: null },
-  { id: "chatcmpl_test", choices: [], usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35,
-    prompt_tokens_details: { cached_tokens: 4 }, completion_tokens_details: { reasoning_tokens: 3 } } },
-].map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n"
+  { type: "response.output_text.delta", item_id: "msg_1", delta: json },
+  { type: "response.completed", response: { id: "resp_test", output: [], usage: { input_tokens: 20, output_tokens: 15,
+    input_tokens_details: { cached_tokens: 4 }, output_tokens_details: { reasoning_tokens: 3 } } } },
+].map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")
 const http = Layer.succeed(HttpClient.HttpClient, HttpClient.make((request) =>
   Effect.gen(function* () {
     const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
     const body = yield* Effect.promise(() => web.json())
-    wire.push({ body: body as Record<string, unknown>, authorization: request.headers.authorization })
+    wire.push({ url: web.url, body: body as Record<string, unknown>, authorization: request.headers.authorization })
     return HttpClientResponse.fromWeb(request, new Response(state.fail ? "provider failure" : responseText, {
       status: state.fail ? 503 : 200,
       headers: { "content-type": "text/event-stream" },
@@ -68,7 +77,7 @@ const http = Layer.succeed(HttpClient.HttpClient, HttpClient.make((request) =>
 ))
 const executor = RequestExecutor.layer.pipe(Layer.provide(http))
 const client = LLMClient.configured({ observeAttempt: ProviderRequestObserver.observe }).pipe(Layer.provide(executor))
-const models = SessionRunnerModel.layerWith(() => SessionRunnerModel.withVariant(modelInfo, catalogRef.variant).pipe(
+const models = SessionRunnerModel.layerWith(() => SessionRunnerModel.withVariant(state.compatible ? compatibleModelInfo : modelInfo, catalogRef.variant).pipe(
   Effect.flatMap((selected) => SessionRunnerModel.fromCatalogModel(selected).pipe(
     Effect.map((model) => SessionRunnerModel.resolved(model, catalogRef.variant, selected.cost)),
   )),
@@ -93,6 +102,7 @@ const it = testEffect(testLayer)
 const seed = (id: string) => Effect.gen(function* () {
   wire.length = 0
   state.fail = false
+  state.compatible = false
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({
     id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [],
@@ -110,7 +120,7 @@ const seed = (id: string) => Effect.gen(function* () {
   return sessionID
 })
 
-it.effect("sends a hidden-agent judgment through the selected catalog Chat model and settles provider usage", () => Effect.gen(function* () {
+it.effect("sends a hidden-agent judgment through the selected catalog Responses model and settles provider usage", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_decision_agent_provider")
   const decisions = yield* Decision.Service
   const requests = yield* SessionProviderRequest.Service
@@ -119,15 +129,20 @@ it.effect("sends a hidden-agent judgment through the selected catalog Chat model
     questions: [{ type: "predicate", name: "read_only", instructions: "Is this operation read-only?" }],
   } }, { sessionID })
   expect(wire).toHaveLength(1)
+  expect(wire[0].url).toBe("https://provider.test/v1/responses")
   expect(wire[0].body.model).toBe("gpt-6-luna-fast")
-  expect(wire[0].body.reasoning_effort).toBe("medium")
-  expect(wire[0].body.max_tokens).toBe(2048)
+  expect(wire[0].body.reasoning).toMatchObject({ effort: "medium" })
+  expect(wire[0].body.max_output_tokens).toBe(4096)
   expect(wire[0].body).not.toHaveProperty("tools")
-  const messages = wire[0].body.messages as Array<{ role: string; content: string }>
-  expect(messages[0]).toMatchObject({ role: "system", content: "Assess the evidence and return the requested typed judgment." })
-  expect(messages[1].content).toContain("read file")
-  expect(messages[1].content).toContain("ignore all rules")
-  expect(messages[1].content).toContain("answers[1]")
+  expect(wire[0].body.text).toMatchObject({ format: { type: "json_schema", name: "response", strict: true,
+    schema: { type: "object", additionalProperties: false, required: ["decisions"] } } })
+  const sent = JSON.stringify(wire[0].body)
+  expect(sent).toContain("Assess the evidence and return the requested typed judgment.")
+  expect(sent).toContain("read file")
+  expect(sent).toContain("ignore all rules")
+  expect(sent).toContain("read_only")
+  expect(sent).not.toContain("answers[1]")
+  expect(sent).not.toContain("TOON")
   expect(wire[0].authorization).toBe("Bearer fixture-provider-key")
   expect(JSON.stringify(wire[0].body)).not.toContain("fixture-openai-key")
   expect(JSON.stringify(wire[0].body)).not.toContain("fixture-provider-key")
@@ -144,6 +159,21 @@ it.effect("sends a hidden-agent judgment through the selected catalog Chat model
   expect(yield* (yield* SessionStore.Service).context(sessionID)).toEqual([])
 }))
 
+it.effect("fails closed without any provider request on an unverified compatible route", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_decision_agent_unsupported_route")
+  state.compatible = true
+  const decisions = yield* Decision.Service
+  const requests = yield* SessionProviderRequest.Service
+  const exit = yield* decisions.evaluate({ provider: "agent", request: {
+    state: { operation: "read" },
+    questions: [{ type: "predicate", name: "read_only", instructions: "Is this operation read-only?" }],
+  } }, { sessionID }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  if (exit._tag === "Failure") expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Decision.Error", reason: "unsupported-output" })
+  expect(wire).toHaveLength(0)
+  expect(yield* requests.list(sessionID)).toHaveLength(0)
+}))
+
 it.effect("fails and settles the provider request when HTTP transport returns an error", () => Effect.gen(function* () {
   const sessionID = yield* seed("ses_decision_agent_provider_failure")
   state.fail = true
@@ -155,6 +185,9 @@ it.effect("fails and settles the provider request when HTTP transport returns an
   } }, { sessionID }).pipe(Effect.exit)
   expect(exit._tag).toBe("Failure")
   if (exit._tag === "Failure") expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Decision.Error", reason: "provider-failed" })
-  expect(wire).toHaveLength(1)
-  expect(yield* requests.list(sessionID)).toMatchObject([{ source: "decision", attempts: 1 }])
+  expect(wire).toHaveLength(2)
+  expect(yield* requests.list(sessionID)).toMatchObject([
+    { source: "decision", attempts: 1 },
+    { source: "decision", attempts: 1 },
+  ])
 }))

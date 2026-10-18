@@ -49,24 +49,28 @@ String and Boolean choices retain distinct types. Inputs select neither credenti
 }
 ```
 
-The hidden primary `decision` agent has every tool denied and a static TOON-only prompt. Its reserved ID cannot be selected for fresh foreground Session creation, explicit switching, or commands. Session creation and switching reject it with HTTP 400 `InvalidRequestError` on `agent`; command rejection precedes template evaluation. Existing-ID adoption preserves the original Session.
+The hidden primary `decision` agent has every tool denied and a JSON-only judgment prompt. Its reserved ID cannot be selected for fresh foreground Session creation, explicit switching, or commands. Session creation and switching reject it with HTTP 400 `InvalidRequestError` on `agent`; command rejection precedes template evaluation. Existing-ID adoption preserves the original Session.
 
-Model resolution prefers `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. A helper value of `session` retains owner-model resolution. Supported subscription routes use normal model credentials. The helper makes one streaming request with no tools and `generation.maxTokens: 2048`; the route maps that limit to its wire format. UTF-8 output is bounded to 1 MiB and must settle normally. Tool calls, partial settlement, and provider failures are rejected.
+Model resolution prefers `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. A helper value of `session` retains owner-model resolution. Supported subscription routes use normal model credentials. Admitted protocols are OpenAI Responses over HTTP or WebSocket, OpenAI Chat, and Anthropic Messages; other protocols return `unsupported-output` before dispatch. Each request carries `responseFormat: { type: "json", schema }`, no tools, and an initial output limit of 4,096 tokens. Provider lowering uses strict `text.format`, strict `response_format`, or Anthropic `output_config.format`, preserving other protocol options. The local validator remains authoritative for bounds and cross-answer semantics not enforced by the provider's schema subset. Protocol support does not establish support by every compatible provider or model.
 
 ## Results and abstention
 
 For `grade: true`, a choice answer is `{ name, type: "choice", answer: null, choice: null, score: null, confidence: 0, grades: [{ choice, confidence, evidence }] }`. Grade every listed typed choice exactly once with finite confidence in `[0,1]` and non-whitespace evidence of at most 500 characters. Missing, duplicate, extra, or out-of-range grades, a single pick, and nonzero answer-level confidence are invalid. Graded mode makes no single pick. Single-pick mode omits `grades`; supplying them is invalid. Refusals keep the uniform refusal shape without `grades`.
 
-The helper returns exactly one TOON document with root `decisions`, version `1`, and one answer for each requested name. Uniform columns are `name,type,answer,choice,score,confidence`. Validated answers retain request order. Only the matching answer field is populated; other fields are `null`. Confidence is finite in `[0, 1]`. Choices must match supplied values with their original type; scores must index supplied levels. Unknown fields, duplicate/missing names, wrong types, out-of-range scores, malformed TOON, and JSON substitution fail validation. No JSON fallback or fabricated default answer exists.
+The helper returns exactly one JSON document with root `decisions`, version `1`, and one answer for each requested name. Every answer contains `name`, `type`, `answer`, `choice`, `score`, and `confidence`. Validated answers retain request order. Only the matching answer field is populated; other fields are `null`. Confidence is finite in `[0, 1]`. Choices must match supplied values with their original type; scores must index supplied levels. Unknown fields, duplicate/missing names, wrong types, out-of-range scores, prose, fenced output, and non-JSON output fail validation. No fabricated default answer exists.
 
 Every question type can abstain with the same existing refusal representation: `type: refusal`, `answer: null`, `choice: null`, `score: null`, and `confidence: 0`. The prompt explicitly requires abstention for insufficient evidence and forbids forcing a value or substituting a low-confidence pick. Refusal is distinct from any real option, including keep-current. Calling agents treat it as uncertainty and gather missing evidence, decide from evidence, or ask the user.
 
-```toon
-decisions:
-  version: 1
-  answers[2]{name,type,answer,choice,score,confidence}:
-    route,refusal,null,null,null,0
-    ready,refusal,null,null,null,0
+```json
+{
+  "decisions": {
+    "version": 1,
+    "answers": [
+      { "name": "route", "type": "refusal", "answer": null, "choice": null, "score": null, "confidence": 0 },
+      { "name": "ready", "type": "refusal", "answer": null, "choice": null, "score": null, "confidence": 0 }
+    ]
+  }
+}
 ```
 
 The tool returns the complete `{ provider, response }` envelope as TOON. Structured responses include the selected model reference, `semantics: "model-estimate"`, version, ordered answers, and canonical token usage when reported. For refusal results, a separate model-visible text part states that refusal is uncertainty and directs the caller to missing evidence or the user; it does not alter the structured result. For example, an abstaining choice appears in the envelope as:
@@ -89,12 +93,12 @@ The helper weighs plausible alternatives and estimates how well evidence support
 
 Invalid calls produce model-visible tool errors with JSON field paths, expected shapes or allowed values, and a minimal valid request. Values and unrecognized key names are redacted, never echoed as evidence. Empty `questions` reports: `questions: expected at least one question; received []. Add one bounded question, or skip the decision tool if no judgment is needed.` An invalid question type identifies `questions[0].type` and the allowed `predicate`, `choice`, and `score` types.
 
-`unavailable` identifies helper model settings and the authenticated route to check. `invalid-output` identifies invalid TOON or schema-mismatched answers and directs the caller to evidence or uncertainty handling. `input-too-large` asks for reduced bounded evidence. Provider/transport failure reports unsettled evaluation rather than a successful judgment. Errors never expose credentials, raw helper output, or provider payloads. Refusal is a valid result, not malformed output.
+Failure reasons are `unavailable`, `invalid-request`, `provider-failed`, `timeout`, `input-too-large`, `invalid-output`, `refused`, `truncated-output`, and `unsupported-output`. They identify the failed boundary without credentials, raw helper output, or provider payloads. Refusal can also be a valid answer in a completed document. Guardrail handoff reasons additionally distinguish `escalated`, `conflicting_grades`, and `low_confidence`; choice, confidence, and grades appear only when the helper supplied validated values. Durable events, pending requests, deferred review items, TUI, and web preserve these distinctions.
 
 ## Safety, transport, and usage
 
 Permission action `decision` uses resource `agent`. Explicit denials block the call and inherited ceilings also remove it from model-visible tools. Judgment evidence must be authorized for the selected helper model's authentication, privacy, quota, and billing route. Credentials stay outside tool arguments and results.
 
-Serialized input is bounded to 1 MiB. Calls have no YCoding wall-clock deadline but remain explicitly cancellable; providers, transport, or networks can impose timeouts. Each call uses one model request without automatic retry or fabricated answers. Interruption does not establish upstream cancellation or billing cancellation.
+Serialized input and collected UTF-8 output are each bounded to 1 MiB. An evaluation has a 60-second total deadline and at most two provider attempts, each limited to 25 seconds. Invalid or truncated output and eligible transient transport/provider failures permit one retry. Truncation raises the output limit to at most 8,192 tokens within the model's declared output cap. Refusal, authentication failure, unsupported output, and interruption do not retry. Runtime standard-match verification retains its tighter 15-second outer deadline. Interruption does not establish upstream cancellation or billing cancellation.
 
-Provider-request ledger source is `decision`, separate from normal model Steps. Records keep agent `decision` and the caller's input ID when supplied. Preserve reported token, reasoning, and cache usage; missing cache reporting remains unknown. Known normal-model catalog prices can price requests; unpriced usage has no priced ledger amount. Cached tokens or zero aggregates do not establish free billing, and subscription catalog costs are estimates, not invoices. Local history and tool results remain durable; no zero-retention guarantee applies. Historical synthetic judgments and optional guardrail risk fields remain replayable; TUI transcript rows keep historical advisory messages hidden by their `decisionInputID` metadata.
+Provider-request ledger source is `decision`, separate from normal model Steps. Every dispatched attempt settles its own record, including timeout and interruption. Records keep agent `decision` and the caller's input ID when supplied. Results aggregate reported token, reasoning, and cache usage across attempts; missing cache reporting remains unknown. Known normal-model catalog prices can price requests; unpriced usage has no priced ledger amount. Cached tokens or zero aggregates do not establish free billing, and subscription catalog costs are estimates, not invoices. Local history and tool results remain durable; no zero-retention guarantee applies. Historical synthetic judgments and optional guardrail risk fields remain replayable; TUI transcript rows keep historical advisory messages hidden by their `decisionInputID` metadata.

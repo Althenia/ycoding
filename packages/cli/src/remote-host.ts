@@ -5,6 +5,7 @@ import { RemoteSetupError } from "./remote-error"
 import { DeviceAuthorizationError } from "./remote-credentials"
 import path from "node:path"
 import { createRemoteMcpHost, type RemoteMcpHost } from "./remote-mcp-host"
+import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 
 type Connector = ReturnType<typeof createRemoteConnector>
 
@@ -106,6 +107,19 @@ export async function createRemoteHost(input: {
   if (enabled) start()
   if (!enabled && mcp.advertisement().enabled) await mcp.set(false)
   return {
+    mcpEvents: {
+      capabilities: async () => current.state === "on" && (await connector?.mcpEvents?.capabilities() ?? false),
+      resolve: (context, signal) => {
+        if (current.state !== "on" || connector?.mcpEvents === undefined)
+          return Promise.reject(new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" }))
+        return connector.mcpEvents.resolve(context, signal)
+      },
+      check: (principal, signal) => {
+        if (current.state !== "on" || connector?.mcpEvents === undefined)
+          return Promise.reject(new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" }))
+        return connector.mcpEvents.check(principal, signal)
+      },
+    },
     status: async () => current,
     set: (enabled) => {
       const next = transition.then(async () => {

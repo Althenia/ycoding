@@ -114,8 +114,6 @@ const lowerMessage = (message: Message) => Effect.gen(function* () {
 const fromOllamaRequest = Effect.fn("RunpodOllama.fromRequest")(function* (request: LLMRequest) {
   if (request.toolChoice && request.toolChoice.type !== "auto" && request.toolChoice.type !== "none")
     return yield* ProviderShared.invalidRequest("Runpod Ollama supports only automatic or disabled tool choice")
-  if (request.responseFormat && request.responseFormat.type !== "text")
-    return yield* ProviderShared.invalidRequest("Runpod Ollama does not support structured response format")
   if (request.generation?.frequencyPenalty !== undefined || request.generation?.presencePenalty !== undefined)
     return yield* ProviderShared.invalidRequest("Runpod Ollama does not support frequency or presence penalties")
   const messages = yield* Effect.forEach(request.messages, lowerMessage)
@@ -140,8 +138,6 @@ const fromOllamaRequest = Effect.fn("RunpodOllama.fromRequest")(function* (reque
 })
 
 const fromVLLMRequest = Effect.fn("RunpodVLLM.fromRequest")(function* (request: LLMRequest) {
-  if (request.responseFormat && request.responseFormat.type !== "text")
-    return yield* ProviderShared.invalidRequest("Runpod vLLM chat proxy does not support structured response format")
   const messages = yield* Effect.forEach(request.messages, (message) => Effect.gen(function* () {
     if (message.role === "user") {
       const content: Array<typeof message.content[number]> = []

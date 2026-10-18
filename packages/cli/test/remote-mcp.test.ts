@@ -8,7 +8,7 @@ import { createRemoteMcp, toolResult } from "../src/remote-mcp"
 import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
 
 const resource = "https://relay.example.com/api/mcp/devices/dev_1"
-const context = { epoch: "epoch_1", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" } }
+const context = { requestID: "request_fixture", epoch: "epoch_1", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" } }
 const meta = {
   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
   "io.modelcontextprotocol/clientCapabilities": {},
@@ -28,7 +28,8 @@ const expectedTools = [
   "session_goal_stop", "session_create", "session_status", "session_catalog", "session_file_find", "session_switch_model",
   "session_switch_agent", "session_command", "session_skill", "usage_providers", "usage_summary", "usage_report", "session_usage_report",
   "session_prompt_costs", "session_task_costs", "usage_forecast", "incident_report", "incident_recent", "incident_guidance",
-  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export", "session_create_in_directory",
+  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export",
+  "local_app_register", "local_app_list", "local_app_revoke", "local_app_open", "local_app_status", "local_app_http", "session_create_in_directory",
 ]
 const excludedOperations = [
   "session.subscribe", "session.unsubscribe", "session.message.stream", "session.attachment.upload",
@@ -109,7 +110,7 @@ describe("inventory and discovery", () => {
     const operations = RemoteMcpSchemas.tools.map((tool) => tool.operation).filter((operation) => operation !== "session.createInDirectory")
     expect(operations.map(String).toSorted()).toEqual(remoteOperations.filter((operation) => !excludedOperations.includes(operation)).map(String).toSorted())
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(75)
+    expect(new Set(expectedTools).size).toBe(81)
   })
 
   test("session-scoped tools require sessionID and parameterless ones publish no input", async () => {
@@ -155,7 +156,7 @@ describe("fixed artifact demo over authorized Relay MCP", () => {
     const listed = await (await request("resources/list", {})).json() as { result: { resources: { uri: string }[] } }
     expect(listed.result.resources.map((item) => item.uri)).toEqual([html.uri, png.uri])
     expect(await (await request("resources/templates/list", {})).json()).toMatchObject({ result: { resourceTemplates: [] } })
-    expect(calls).toEqual([])
+    expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
   test("rejects paths, caller-selected Sessions and unknown resources; expiry never renews on retry", async () => {
@@ -170,7 +171,7 @@ describe("fixed artifact demo over authorized Relay MCP", () => {
     expect((await run("artifact_demo_export")).isError).toBe(true)
     expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({ error: { code: -32602, data: { uri } } })
     expect(await (await request("resources/list", {})).json()).toMatchObject({ result: { resources: [{ uri: "ui://ycoding/artifact-demo/v1.html" }] } })
-    expect(calls).toEqual([])
+    expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
   test.each(["tools/list", "resources/list", "resources/templates/list", "resources/read", "tools/call"])("rechecks authority after asynchronous admission for %s", async (method) => {
@@ -225,7 +226,7 @@ describe("tool calls run the connector operations", () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual(result.structuredContent)
   })
 
-  test("refuses inputs the published schema does not allow without any local call", async () => {
+  test("refuses inputs the published schema does not allow before Session operations", async () => {
     const { run, calls } = await fixture()
     for (const args of [{}, { sessionID: "ses_1", input: {} }, { sessionID: "ses_1", extra: 1 }, { sessionID: "bad id" }]) {
       expect((await run("session_get", args)).isError).toBe(true)
@@ -234,7 +235,7 @@ describe("tool calls run the connector operations", () => {
     expect((await run("session_create", { input: { workspace: "wsp_1" } })).isError).toBe(true)
     expect((await run("session_list", { sessionID: "ses_1" })).isError).toBe(true)
     expect((await run("provider_auth_list", { sessionID: "ses_1", input: { target: { sessionID: "ses_1" } } })).isError).toBe(true)
-    expect(calls).toEqual([])
+    expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
   test("session_prompt passes the client id unchanged and reports an unconfirmed outcome without replay", async () => {

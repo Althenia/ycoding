@@ -26,6 +26,7 @@ import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./share
 import { classifyProviderFailure } from "../provider-error"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
+import { StructuredOutput } from "./utils/structured-output"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
 import { OpenAIImage } from "./utils/openai-image"
@@ -250,6 +251,14 @@ const OpenAIResponsesCoreFields = {
   text: Schema.optional(
     Schema.Struct({
       verbosity: Schema.optional(OpenAIOptions.OpenAITextVerbosity),
+      format: Schema.optional(
+        Schema.Struct({
+          type: Schema.Literal("json_schema"),
+          name: Schema.String,
+          schema: JsonObject,
+          strict: Schema.Literal(true),
+        }),
+      ),
     }),
   ),
   max_output_tokens: Schema.optional(Schema.Number),
@@ -375,6 +384,7 @@ interface ParserState {
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
   readonly reasoningObserved: boolean
   readonly store: boolean | undefined
+  readonly refused: boolean
 }
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
@@ -828,6 +838,7 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const context = OpenAIOptions.resolvedReasoningContext(request)
   const include = OpenAIOptions.include(request)
   const verbosity = OpenAIOptions.textVerbosity(request)
+  const format = StructuredOutput.requestSchema(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
   const cacheCapability =
@@ -858,7 +869,16 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
       : {}),
     ...(include ? { include } : {}),
     ...(effort || summary || context ? { reasoning: { effort, summary, context } } : {}),
-    ...(verbosity ? { text: { verbosity } } : {}),
+    ...(verbosity || format
+      ? {
+          text: {
+            ...(verbosity ? { verbosity } : {}),
+            ...(format
+              ? { format: { type: "json_schema" as const, name: StructuredOutput.name, schema: format, strict: true as const } }
+              : {}),
+          },
+        }
+      : {}),
     ...(serviceTier ? { service_tier: serviceTier } : {}),
   }
 })
@@ -914,7 +934,16 @@ const mapUsage = (usage: OpenAIResponsesUsage | null | undefined, reasoningObser
   })
 }
 
-const mapFinishReason = (event: OpenAIResponsesEvent, hasFunctionCall: boolean): FinishReason => {
+const refusalOutput = (event: OpenAIResponsesEvent) =>
+  (event.response?.output ?? []).some(
+    (item) =>
+      item.type === "message" &&
+      Array.isArray(item.content) &&
+      item.content.some((part) => ProviderShared.isRecord(part) && part.type === "refusal"),
+  )
+
+const mapFinishReason = (event: OpenAIResponsesEvent, hasFunctionCall: boolean, refused: boolean): FinishReason => {
+  if (refused) return "content-filter"
   const reason = event.response?.incomplete_details?.reason
   if (reason === undefined || reason === null) return hasFunctionCall ? "tool-calls" : "stop"
   if (reason === "max_output_tokens") return "length"
@@ -1407,7 +1436,7 @@ const onResponseFinish = Effect.fn("OpenAIResponses.onResponseFinish")(function*
     events.push(...completed)
   }
   const lifecycle = Lifecycle.finish(current.lifecycle, events, {
-    reason: mapFinishReason(event, state.hasFunctionCall),
+    reason: mapFinishReason(event, state.hasFunctionCall, current.refused || refusalOutput(event)),
     usage: mapUsage(event.response?.usage, current.reasoningObserved),
     providerMetadata:
       state.remoteCompaction || event.response?.id || event.response?.service_tier
@@ -1467,6 +1496,8 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
     return Effect.succeed(onReasoningSummaryPartAdded(state, event))
   if (event.type === "response.reasoning_summary_part.done")
     return Effect.succeed(onReasoningSummaryPartDone(state, event))
+  if (event.type === "response.refusal.delta" || event.type === "response.refusal.done")
+    return Effect.succeed<StepResult>([{ ...state, refused: true }, NO_EVENTS])
   if (event.type === "response.output_item.added") return Effect.succeed(onOutputItemAdded(state, event))
   if (event.type === "response.function_call_arguments.delta") return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
@@ -1490,6 +1521,7 @@ export const protocol = Protocol.make({
   body: {
     schema: OpenAIResponsesBody,
     from: fromRequest,
+    responseFormats: ["json"],
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIResponsesEvent),
@@ -1506,6 +1538,7 @@ export const protocol = Protocol.make({
       reasoningItems: {},
       reasoningObserved: false,
       store: OpenAIOptions.store(request),
+      refused: false,
     }),
     step,
     terminal: (event) => TERMINAL_TYPES.has(event.type),

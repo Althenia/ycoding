@@ -8,6 +8,25 @@ import { startServer } from "./remote-harness"
 import { RemoteSetupError } from "../src/remote-error"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
 
+test("MCP event authority stays unavailable without a connected registration", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-event-authority-"))
+  const host = await createRemoteHost({
+    file: path.join(directory, "remote.json"),
+    create: async () => createRemoteConnector({
+      directory,
+      notice: "Owner access",
+      makeBridge: () => ({ connect: async () => {}, close: async () => {} }),
+    }),
+  })
+  try {
+    expect(await host.mcpEvents?.capabilities()).toBe(false)
+    await expect(host.mcpEvents?.resolve({ requestID: "request_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, epoch: "epoch_fixture" })).rejects.toMatchObject({ _tag: "McpEvents.Failure", reason: "authorization_unavailable" })
+  } finally {
+    await host.shutdown()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("the server host persists one switch, resumes on restart, and stops without clearing preference", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-host-"))
   const started = Promise.withResolvers<void>()

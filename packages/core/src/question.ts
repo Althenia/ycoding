@@ -112,7 +112,7 @@ const layer = Layer.effect(
     const openReview = Effect.fnUntraced(function* (
       input: AskInput,
       requestID: ID,
-      outcome: { readonly reason: "disabled" | "free_text" | "refused" | "low_confidence" | "error" | "timeout" | "sleep_entry"; readonly choice?: string; readonly confidence?: number },
+      outcome: { readonly reason: "disabled" | "free_text" | "error" | "sleep_entry" | DecisionChoice.UnsettledReason; readonly choice?: string; readonly confidence?: number },
       conversion = false,
     ) {
       return yield* SessionReviewFold.open(database.db, events, {

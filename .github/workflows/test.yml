@@ -72,8 +72,33 @@ jobs:
         env:
           YCODING_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+  source:
+    name: source verification (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@ycoding.ai"
+          git config --global user.name "ycoding"
+
       - name: Verify web application and relay
-        if: runner.os == 'Linux'
         run: |
           bun run test:web
           bun run test:remote
@@ -81,26 +106,58 @@ jobs:
       # The Worker serves the built web application, so the web build must precede
       # the Cloudflare build check.
       - name: Build web application
-        if: runner.os == 'Linux'
         run: bun run build:web
 
       - name: Verify built web integration
-        if: runner.os == 'Linux'
         run: bun run test:integration:web
 
       - name: Verify local remote integration
-        if: runner.os == 'Linux'
         timeout-minutes: 20
         run: bun run test:integration:remote
 
       - name: Verify Cloudflare Worker
-        if: runner.os == 'Linux'
         run: |
           bun run test:cloudflare
           bun run build:cloudflare
 
+      - name: Check generated client
+        working-directory: packages/client
+        run: bun run check:generated
+
+  lifecycle:
+    name: compiled and Node lifecycle (${{ matrix.settings.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-24.04
+          - name: windows
+            host: windows-2025
+    runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@ycoding.ai"
+          git config --global user.name "ycoding"
+
       - name: Verify compiled service lifecycle
-        if: always()
         timeout-minutes: 10
         working-directory: packages/cli
         run: |
@@ -120,11 +177,6 @@ jobs:
         run: |
           bun run script/build-node.ts --single --skip-install --outdir=dist/node
           bun run script/service-smoke.ts --node
-
-      - name: Check generated client
-        if: runner.os == 'Linux'
-        working-directory: packages/client
-        run: bun run check:generated
 
   portability:
     # Temporarily disabled until the Rust release; remove this job-level if to restore.

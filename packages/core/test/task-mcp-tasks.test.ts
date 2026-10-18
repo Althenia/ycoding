@@ -154,7 +154,9 @@ test("setup failures are terminal and do not expose backend error details", asyn
   await f.tasks.settleAdmissions()
   expect((await f.tasks.get(task.taskId)).state).toBe("failed")
   expect(f.calls.filter((call) => call.startsWith("start:"))).toEqual([])
-  expect(JSON.stringify(await f.tasks.result(task.taskId))).not.toContain("private")
+  const result = JSON.stringify(await f.tasks.result(task.taskId))
+  expect(result).not.toContain("private path")
+  expect(result).not.toContain("credential details")
 })
 
 test("interaction replies are owner-bound, explicit, and never replayed after restart", async () => {

@@ -1,6 +1,7 @@
 export * as RemoteMcpSchemas from "./remote-mcp-schemas"
 
 import { remoteOperationAccess, requireSession, type RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteMcpApps } from "./remote-mcp-apps"
 
 type Schema = { [key: string]: unknown }
 
@@ -409,13 +410,13 @@ const specs = {
       "Create a root Session in an existing directory strictly below the machine owner's home directory, given as an absolute path. The client must supply input.id; retry an uncertain create with the same id and directory. Missing paths, the home directory itself, and paths outside home (including via symlinks) are refused; no directory is created.",
     input: object({ id: sessionID, directory: text(4_096), agent: text(128), model }, ["id", "directory"]),
   },
-} as const satisfies Record<ToolOperation, Spec>
+} as const satisfies Record<Exclude<ToolOperation, RemoteMcpApps.Operation>, Spec>
 
 export function toolName(operation: string) {
   return operation.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.-]/g, "_").toLowerCase()
 }
 
-export const tools: readonly Tool[] = (Object.entries(specs) as [ToolOperation, Spec][]).map(([operation, spec]) => {
+const standardTools: readonly Tool[] = (Object.entries(specs) as [ToolOperation, Spec][]).map(([operation, spec]) => {
   const mutation = operation === "session.createInDirectory" || remoteOperationAccess[operation] === "mutation"
   return {
     name: toolName(operation),
@@ -426,6 +427,10 @@ export const tools: readonly Tool[] = (Object.entries(specs) as [ToolOperation, 
     annotations: { readOnlyHint: !mutation, destructiveHint: mutation, idempotentHint: !mutation, openWorldHint: false },
   }
 })
+
+export const tools: readonly Tool[] = standardTools.flatMap((tool) => tool.operation === "session.createInDirectory"
+  ? [...RemoteMcpApps.tools.map((app) => ({ ...app, mutation: !app.annotations.readOnlyHint })), tool]
+  : [tool])
 
 function inputSchema(operation: ToolOperation, spec: Spec) {
   if (operation === "usage.forecast") return forecast

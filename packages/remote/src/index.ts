@@ -31,6 +31,15 @@ export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorization
 
 export const RemoteProtocolVersion = 4
 
+export const localAppOperations = [
+  "local.app.register",
+  "local.app.list",
+  "local.app.revoke",
+  "local.app.open",
+  "local.app.status",
+  "local.app.http",
+] as const
+
 /** Versioned WebSocket routes derived from the envelope revision. */
 export const RemoteWebSocketPath = {
   client: `/ws/v${RemoteProtocolVersion}/client`,
@@ -39,6 +48,7 @@ export const RemoteWebSocketPath = {
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
+  ...localAppOperations,
   "artifact.demo.preview",
   "artifact.demo.export",
   ...providerAuthOperations,
@@ -120,6 +130,7 @@ export const remoteOperations = [
 
 /** Operations that address one session and therefore require `sessionID`. */
 export const remoteSessionOperations = [
+  ...localAppOperations,
   "session.get",
   "session.messages",
   "session.capturedChanges.list",
@@ -183,6 +194,12 @@ export type RemoteOperation = (typeof remoteOperations)[number]
  * Typed against RemoteOperation so a new operation fails typecheck until it is classified.
  */
 export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation"> = {
+  "local.app.register": "mutation",
+  "local.app.list": "read",
+  "local.app.revoke": "mutation",
+  "local.app.open": "mutation",
+  "local.app.status": "read",
+  "local.app.http": "mutation",
   "artifact.demo.preview": "read",
   "artifact.demo.export": "read",
   "provider.auth.list": "read",
@@ -1656,3 +1673,5 @@ export function parseBearerToken(value: string | null): string | undefined {
   const match = /^Bearer ([A-Za-z0-9_-]{16,256})$/.exec(value)
   return match?.[1]
 }
+export { RemoteMcpEvents } from "./mcp-events.ts"
+export { RemoteAppPreview } from "./app-preview.ts"

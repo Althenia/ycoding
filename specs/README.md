@@ -28,6 +28,8 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | --------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [Task MCP](./task-mcp.md) | Define the opt-in OAuth-protected task gateway and ownership/admission boundaries. |
 | [Relay MCP fixed demo](./relay-mcp-demo.md) | Define fixed preview/export tools, resource authority and actual-host verification limits. |
+| [Relay MCP Events](./mcp-events.md) | Define signed Session notifications, durable subscriptions, callback containment, and grant checks. |
+| [Registered local HTTP apps](./local-http-apps.md) | Define Session-owned app registration, bounded HTTP dispatch, embedded presentation, and preview isolation. |
 | [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
 | [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |

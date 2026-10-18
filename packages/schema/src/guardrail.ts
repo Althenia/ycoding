@@ -1,6 +1,7 @@
 export * as Guardrail from "./guardrail.js"
 
 import { Schema } from "effect"
+import { DecisionFailure } from "./decision-failure.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { SessionID } from "./session-id.js"
@@ -37,11 +38,34 @@ export const Grade = Schema.Struct({
 }).annotate({ identifier: "Guardrail.Grade" })
 
 export interface Escalation extends Schema.Schema.Type<typeof Escalation> {}
+export const EscalationReason = Schema.Union([
+  DecisionFailure.Reason,
+  Schema.Literals(["escalated", "low_confidence", "conflicting_grades"]),
+]).annotate({ identifier: "Guardrail.EscalationReason" })
+export type EscalationReason = typeof EscalationReason.Type
+
 export const Escalation = Schema.Struct({
+  reason: EscalationReason.pipe(optional),
   choice: DecisionChoice.pipe(optional),
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
   grades: Schema.Array(Grade).pipe(optional),
 }).annotate({ identifier: "Guardrail.Escalation" })
+
+export function escalationText(input: Escalation) {
+  if (input.reason && Schema.is(DecisionFailure.Reason)(input.reason))
+    return `Decision unavailable · ${DecisionFailure.describe(input.reason)}`
+  if (!input.reason && input.choice === undefined && input.confidence === undefined && !input.grades?.length)
+    return "Decision unavailable · diagnostic reason was not recorded"
+  const details = [
+    ...(input.choice === undefined ? [] : [`choice ${input.choice}`]),
+    ...(input.confidence === undefined ? [] : [`confidence ${input.confidence}`]),
+  ]
+  if (input.reason === "low_confidence")
+    return `Decision requires human review · confidence below the approval threshold${details.length ? ` · ${details.join(" · ")}` : ""}`
+  if (input.reason === "conflicting_grades")
+    return `Decision requires human review · conflicting approval and rejection grades${details.length ? ` · ${details.join(" · ")}` : ""}`
+  return `Decision model escalated this guardrail review${details.length ? ` · ${details.join(" · ")}` : ""}`
+}
 
 export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({
   identifier: "Guardrail.RuleSource",

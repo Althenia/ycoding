@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test"
-import { encodeLines } from "@toon-format/toon"
 import { Result, Schema } from "effect"
 import { DecisionJudgment } from "../src/decision-judgment"
 
@@ -9,17 +8,15 @@ const request = {
 } satisfies typeof DecisionJudgment.Request.Type
 
 test("rejects a judgment score outside the requested rubric", () => {
-  const text = Array.from(
-    encodeLines({
-      decisions: {
-        version: 1,
-        answers: [{ name: "effort", type: "score", answer: null, choice: null, score: 2, confidence: 0.8 }],
-      },
-    }),
-  ).join("\n")
+  const text = JSON.stringify({
+    decisions: {
+      version: 1,
+      answers: [{ name: "effort", type: "score", answer: null, choice: null, score: 2, confidence: 0.8 }],
+    },
+  })
   const result = DecisionJudgment.parse(text, request)
   expect(Result.isFailure(result)).toBe(true)
-  if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(DecisionJudgment.InvalidToonError)
+  if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(DecisionJudgment.InvalidResponseError)
 })
 
 test("supports the complete routing candidate set plus keep-current without dropping options", () => {
@@ -65,14 +62,21 @@ const document = {
     ],
   },
 } satisfies typeof DecisionJudgment.Document.Type
-const wire = `decisions:
+const wire =
+  `{"decisions":{"version":1,"answers":[` +
+  `{"name":"safe","type":"predicate","answer":false,"choice":null,"score":null,"confidence":0.9},` +
+  `{"name":"方式","type":"choice","answer":null,"choice":false,"score":null,"confidence":1},` +
+  `{"name":"effort","type":"score","answer":null,"choice":null,"score":0,"confidence":0},` +
+  `{"name":"unknown","type":"refusal","answer":null,"choice":null,"score":null,"confidence":0}` +
+  `]}}`
+const toonWire = `decisions:
   version: 1
   answers[4]{name,type,answer,choice,score,confidence}:
     safe,predicate,false,null,null,0.9
     方式,choice,null,false,null,1
     effort,score,null,null,0,0
     unknown,refusal,null,null,null,0`
-const toon = (value: unknown) => Array.from(encodeLines(value)).join("\n")
+const json = (value: unknown) => JSON.stringify(value)
 
 test("graded choices require exactly one bounded evidence grade per typed choice and no pick", () => {
   const question = { type: "choice", name: "grade", instructions: "Grade each alternative", grade: true,
@@ -81,27 +85,93 @@ test("graded choices require exactly one bounded evidence grade per typed choice
   const grades = [{ choice: false, confidence: 0, evidence: "Unsupported" }, { choice: "false", confidence: 1, evidence: "e".repeat(500) }]
   const answer = { name: "grade", type: "choice", answer: null, choice: null, score: null, confidence: 0, grades } as const
   const document = { decisions: { version: 1, answers: [answer] } } as const
-  expect(DecisionJudgment.parse(toon(document), request)).toEqual(Result.succeed(document))
+  expect(DecisionJudgment.parse(json(document), request)).toEqual(Result.succeed(document))
+  expect(DecisionJudgment.validate(document, request)).toEqual(Result.succeed(document))
   for (const invalid of [
     { ...answer, choice: false }, { ...answer, confidence: 0.8 }, { ...answer, grades: undefined },
     { ...answer, grades: grades.slice(1) }, { ...answer, grades: [grades[0], grades[0]] },
     { ...answer, grades: [...grades, { choice: "extra", confidence: 0.9, evidence: "Extra" }] },
-    ...[-0.01, 1.01, NaN, Infinity].map(confidence => ({ ...answer, grades: [{ ...grades[0], confidence }, grades[1]] })),
+    ...[-0.01, 1.01].map(confidence => ({ ...answer, grades: [{ ...grades[0], confidence }, grades[1]] })),
     ...["", " ", "e".repeat(501)].map(evidence => ({ ...answer, grades: [{ ...grades[0], evidence }, grades[1]] })),
-  ]) expect(Result.isFailure(DecisionJudgment.parse(toon({ decisions: { version: 1, answers: [invalid] } }), request))).toBe(true)
-  expect(Result.isFailure(DecisionJudgment.parse(toon(document), { ...request, questions: [{ ...question, grade: false }] }))).toBe(true)
-  expect(Result.isSuccess(DecisionJudgment.parse(DecisionJudgment.template(request), request))).toBe(true)
+  ]) {
+    expect(Result.isFailure(DecisionJudgment.parse(json({ decisions: { version: 1, answers: [invalid] } }), request))).toBe(true)
+    expect(Result.isFailure(DecisionJudgment.validate({ decisions: { version: 1, answers: [invalid] } }, request))).toBe(true)
+  }
+  for (const confidence of [NaN, Infinity, -Infinity]) {
+    const invalid = { ...answer, grades: [{ ...grades[0], confidence }, grades[1]] }
+    expect(Result.isFailure(DecisionJudgment.validate({ decisions: { version: 1, answers: [invalid] } }, request))).toBe(true)
+  }
+  expect(Result.isFailure(DecisionJudgment.parse(json(document), { ...request, questions: [{ ...question, grade: false }] }))).toBe(true)
+  const refusal = { decisions: { version: 1, answers: [
+    { name: "grade", type: "refusal", answer: null, choice: null, score: null, confidence: 0 },
+  ] } } as const
+  expect(DecisionJudgment.parse(json(refusal), request)).toEqual(Result.succeed(refusal))
 })
 
-test("parses literal TOON with Unicode, false, zero score, and explicit refusal", () => {
+test("grade choice IDs are never coerced between string and boolean", () => {
+  const question = { type: "choice", name: "grade", instructions: "Grade each alternative", grade: true,
+    choices: [{ value: false }, { value: "false" }, { value: "0" }] } as const
+  const graded = { state: null, questions: [question] }
+  const grades = [
+    { choice: false, confidence: 0.5, evidence: "Boolean false" },
+    { choice: "false", confidence: 0.5, evidence: "String false" },
+    { choice: "0", confidence: 0.5, evidence: "String zero" },
+  ]
+  const answer = { name: "grade", type: "choice", answer: null, choice: null, score: null, confidence: 0, grades }
+  expect(Result.isSuccess(DecisionJudgment.validate({ decisions: { version: 1, answers: [answer] } }, graded))).toBe(true)
+  for (const invalid of [
+    { ...answer, grades: [{ ...grades[0], choice: "false" }, grades[1], grades[2]] },
+    { ...answer, grades: [grades[0], { ...grades[1], choice: false }, grades[2]] },
+    { ...answer, grades: [grades[0], grades[1], { ...grades[2], choice: 0 }] },
+    { ...answer, grades: [grades[0], grades[1], { ...grades[2], choice: true }] },
+  ]) {
+    expect(Result.isFailure(DecisionJudgment.validate({ decisions: { version: 1, answers: [invalid] } }, graded))).toBe(true)
+    expect(Result.isFailure(DecisionJudgment.parse(json({ decisions: { version: 1, answers: [invalid] } }), graded))).toBe(true)
+  }
+  const pick = { state: null, questions: [{ ...question, grade: false }] }
+  const picked = { name: "grade", type: "choice", answer: null, choice: false, score: null, confidence: 0.5 }
+  expect(Result.isSuccess(DecisionJudgment.validate({ decisions: { version: 1, answers: [picked] } }, pick))).toBe(true)
+  expect(Result.isSuccess(DecisionJudgment.validate(
+    { decisions: { version: 1, answers: [{ ...picked, choice: "false" }] } }, pick,
+  ))).toBe(true)
+  const booleanOnly = { state: null, questions: [{ type: "choice", name: "grade", instructions: "Pick", choices: [{ value: false }] }] } as const
+  expect(Result.isFailure(DecisionJudgment.validate(
+    { decisions: { version: 1, answers: [{ ...picked, choice: "false" }] } }, booleanOnly,
+  ))).toBe(true)
+  const stringOnly = { state: null, questions: [{ type: "choice", name: "grade", instructions: "Pick", choices: [{ value: "false" }] }] } as const
+  expect(Result.isFailure(DecisionJudgment.validate(
+    { decisions: { version: 1, answers: [picked] } }, stringOnly,
+  ))).toBe(true)
+})
+
+test("parses literal JSON with Unicode, false, zero score, and explicit refusal", () => {
   const result = DecisionJudgment.parse(wire, input)
   expect(result).toEqual(Result.succeed(document))
   expect(DecisionJudgment.encode(document)).toBe(wire)
+  expect(DecisionJudgment.validate(document, input)).toEqual(Result.succeed(document))
+  expect(DecisionJudgment.validate(JSON.parse(wire), input)).toEqual(Result.succeed(document))
+})
+
+test("validate rejects non-document values and non-finite confidence without a text round trip", () => {
+  for (const value of [null, [], "text", 1, true, undefined])
+    expect(Result.isFailure(DecisionJudgment.validate(value, input))).toBe(true)
+  for (const confidence of [NaN, Infinity, -Infinity]) {
+    const invalid = {
+      decisions: {
+        version: 1,
+        answers: document.decisions.answers.map((answer) =>
+          answer.name === "safe" ? { ...answer, confidence } : answer),
+      },
+    }
+    const result = DecisionJudgment.validate(invalid, input)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(DecisionJudgment.InvalidResponseError)
+  }
 })
 
 test("normalizes shuffled answer IDs to caller order without altering judgments", () => {
   const result = DecisionJudgment.parse(
-    toon({ decisions: { version: 1, answers: [...document.decisions.answers].reverse() } }),
+    json({ decisions: { version: 1, answers: [...document.decisions.answers].reverse() } }),
     input,
   )
   expect(result).toEqual(Result.succeed(document))
@@ -120,20 +190,11 @@ test("retains quoted string choice values separately from booleans and numbers",
   }
 })
 
-test("template supplies only canonical all-refusal shape in caller order", () => {
-  const expected = `decisions:
-  version: 1
-  answers[4]{name,type,answer,choice,score,confidence}:
-    safe,refusal,null,null,null,0
-    方式,refusal,null,null,null,0
-    effort,refusal,null,null,null,0
-    unknown,refusal,null,null,null,0`
-  expect(DecisionJudgment.template(input)).toBe(expected)
-  const result = DecisionJudgment.parse(expected, input)
-  expect(Result.isSuccess(result)).toBe(true)
-  if (Result.isSuccess(result))
-    expect(result.success.decisions.answers).toEqual(
-      questions.map((question) => ({
+test("parses the canonical all-refusal JSON shape in caller order", () => {
+  const refusal = {
+    decisions: {
+      version: 1,
+      answers: questions.map((question) => ({
         name: question.name,
         type: "refusal",
         answer: null,
@@ -141,7 +202,11 @@ test("template supplies only canonical all-refusal shape in caller order", () =>
         score: null,
         confidence: 0,
       })),
-    )
+    },
+  } satisfies typeof DecisionJudgment.Document.Type
+  expect(DecisionJudgment.parse(json(refusal), input)).toEqual(Result.succeed(refusal))
+  expect(DecisionJudgment.encode(refusal)).toBe(json(refusal))
+  expect(DecisionJudgment.validate(refusal, input)).toEqual(Result.succeed(refusal))
 })
 
 const changed = (name: string, fields: Record<string, unknown>) => ({
@@ -175,6 +240,7 @@ for (const [name, value] of [
   ["confidence upper bound", changed("safe", { confidence: 1.1 })],
   ["refusal confidence", changed("unknown", { confidence: 0.1 })],
   ["refusal value", changed("unknown", { answer: false })],
+  ["refusal grades", changed("unknown", { grades: [{ choice: false, confidence: 1, evidence: "x" }] })],
   ["extra probability", changed("safe", { probability: 0.9 })],
   ["extra confidence provenance", changed("safe", { confidence_kind: "native-probability" })],
   ["extra root field", { ...document, metadata: "private" }],
@@ -182,32 +248,36 @@ for (const [name, value] of [
   ["wrong version", { decisions: { ...document.decisions, version: 2 } }],
 ] as const) {
   test(`rejects judgment ${name} with a sanitized error`, () => {
-    const result = DecisionJudgment.parse(toon(value), input)
+    const result = DecisionJudgment.parse(json(value), input)
     expect(Result.isFailure(result)).toBe(true)
+    expect(Result.isFailure(DecisionJudgment.validate(value, input))).toBe(true)
     if (Result.isFailure(result)) {
-      expect(result.failure).toBeInstanceOf(DecisionJudgment.InvalidToonError)
-      expect(result.failure.message).toBe("Invalid decision judgment TOON document")
+      expect(result.failure).toBeInstanceOf(DecisionJudgment.InvalidResponseError)
+      expect(result.failure.message).toBe("Invalid decision judgment JSON document")
       expect(Object.keys(result.failure)).not.toContain("cause")
     }
   })
 }
 
 for (const [name, text] of [
-  ["markdown fence", `\`\`\`toon\n${wire}\n\`\`\``],
+  ["markdown fence", `\`\`\`json\n${wire}\n\`\`\``],
   ["leading prose", `Here is my decision:\n${wire}`],
   ["trailing prose", `${wire}\nThe task is safe.`],
-  ["JSON document", JSON.stringify(document)],
-  ["wrong root", wire.replace("decisions:", "judgments:")],
-  ["duplicate root", `${wire}\n${wire}`],
-  ["truncated array", wire.split("\n").slice(0, -1).join("\n")],
-  ["NaN confidence", wire.replace("null,null,0.9", "null,null,NaN")],
-  ["infinite confidence", wire.replace("null,null,0.9", "null,null,Infinity")],
+  ["TOON document", toonWire],
+  ["wrong root", wire.replace(`"decisions"`, `"judgments"`)],
+  ["duplicate document", `${wire}\n${wire}`],
+  ["truncated document", wire.slice(0, -1)],
+  ["truncated array", wire.slice(0, Math.floor(wire.length / 2))],
+  ["trailing comma", wire.replace(`"confidence":0.9}`, `"confidence":0.9,}`)],
+  ["single-quoted strings", wire.replaceAll(`"`, `'`)],
+  ["NaN confidence", wire.replace(`"confidence":0.9`, `"confidence":NaN`)],
+  ["infinite confidence", wire.replace(`"confidence":0.9`, `"confidence":Infinity`)],
   ["empty output", ""],
 ] as const) {
   test(`rejects ${name} without fallback or exposed parse causes`, () => {
     const result = DecisionJudgment.parse(text, input)
     expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) expect(result.failure.message).toBe("Invalid decision judgment TOON document")
+    if (Result.isFailure(result)) expect(result.failure.message).toBe("Invalid decision judgment JSON document")
   })
 }
 
@@ -217,7 +287,7 @@ test("bounds output by UTF-8 bytes rather than character count", () => {
     state: null,
     questions: [{ type: "choice", name: "selection", instructions: "Select", choices: [{ value: choice }] }],
   } satisfies typeof DecisionJudgment.Request.Type
-  const text = toon({
+  const text = json({
     decisions: {
       version: 1,
       answers: [{ name: "selection", type: "choice", answer: null, choice, score: null, confidence: 1 }],
@@ -277,6 +347,7 @@ for (const [name, invalid] of [
   test(`rejects request ${name}`, () => {
     expect(Result.isFailure(Schema.decodeUnknownResult(DecisionJudgment.Request)(invalid))).toBe(true)
     expect(Result.isFailure(DecisionJudgment.parse(wire, Object.assign({ ...input }, invalid)))).toBe(true)
+    expect(Result.isFailure(DecisionJudgment.validate(document, Object.assign({ ...input }, invalid)))).toBe(true)
   })
 }
 
@@ -299,7 +370,174 @@ test("request accepts exact bounds and keeps string/boolean choices distinct", (
     ],
   } satisfies typeof DecisionJudgment.Request.Type
   expect(Result.isSuccess(Schema.decodeUnknownResult(DecisionJudgment.Request)(request))).toBe(true)
-  const result = DecisionJudgment.parse(DecisionJudgment.template(request), request)
+  const refusal = {
+    decisions: {
+      version: 1,
+      answers: request.questions.map((question) => ({
+        name: question.name,
+        type: "refusal",
+        answer: null,
+        choice: null,
+        score: null,
+        confidence: 0,
+      })),
+    },
+  } satisfies typeof DecisionJudgment.Document.Type
+  const result = DecisionJudgment.parse(DecisionJudgment.encode(refusal), request)
   expect(Result.isSuccess(result)).toBe(true)
   if (Result.isSuccess(result)) expect(result.success.decisions.answers).toHaveLength(32)
+})
+
+type JsonRecord = Record<string, unknown>
+const record = (value: unknown): JsonRecord => value as JsonRecord
+const records = (value: unknown): JsonRecord[] => value as JsonRecord[]
+const strings = (value: unknown): string[] => value as string[]
+const branchesOf = (schema: JsonRecord): JsonRecord[] => {
+  const decisions = record(record(schema.properties).decisions)
+  const answers = record(record(decisions.properties).answers)
+  return records(record(answers.items).anyOf)
+}
+const branchOf = (schema: JsonRecord, name: string, type: string): JsonRecord => {
+  const branch = branchesOf(schema).find((candidate) => {
+    const properties = record(candidate.properties)
+    return (record(properties.name).enum as unknown[])[0] === name && (record(properties.type).enum as unknown[])[0] === type
+  })
+  if (!branch) throw new Error(`Missing ${name}/${type} branch`)
+  return branch
+}
+
+test("responseSchema is a strict object schema discriminating predicate from refusal", () => {
+  const schema = DecisionJudgment.responseSchema({
+    state: null,
+    questions: [{ type: "predicate", name: "safe", instructions: "Is it safe?" }],
+  })
+  expect(schema).toEqual({
+    type: "object",
+    properties: {
+      decisions: {
+        type: "object",
+        properties: {
+          version: { type: "integer", enum: [1] },
+          answers: {
+            type: "array",
+            minItems: 1,
+            items: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    name: { type: "string", enum: ["safe"] },
+                    type: { type: "string", enum: ["predicate"] },
+                    answer: { type: "boolean" },
+                    choice: { type: "null" },
+                    score: { type: "null" },
+                    confidence: { type: "number" },
+                  },
+                  required: ["name", "type", "answer", "choice", "score", "confidence"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    name: { type: "string", enum: ["safe"] },
+                    type: { type: "string", enum: ["refusal"] },
+                    answer: { type: "null" },
+                    choice: { type: "null" },
+                    score: { type: "null" },
+                    confidence: { type: "number", enum: [0] },
+                  },
+                  required: ["name", "type", "answer", "choice", "score", "confidence"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          },
+        },
+        required: ["version", "answers"],
+        additionalProperties: false,
+      },
+    },
+    required: ["decisions"],
+    additionalProperties: false,
+  })
+})
+
+test("responseSchema discriminates choice, graded choice, and score with exact typed choice enums", () => {
+  const schema = DecisionJudgment.responseSchema(input)
+  expect(branchesOf(schema)).toHaveLength(8)
+  const choice = record(record(branchOf(schema, "方式", "choice").properties).choice)
+  expect(choice.enum).toEqual([false, "false", "0"])
+  expect(typeof (choice.enum as unknown[])[0]).toBe("boolean")
+  expect(typeof (choice.enum as unknown[])[1]).toBe("string")
+  const choiceProperties = record(branchOf(schema, "方式", "choice").properties)
+  expect(choiceProperties.answer).toEqual({ type: "null" })
+  expect(choiceProperties.score).toEqual({ type: "null" })
+  expect(choiceProperties.grades).toBeUndefined()
+  const scoreProperties = record(branchOf(schema, "effort", "score").properties)
+  expect(scoreProperties.score).toEqual({ type: "integer" })
+  expect(scoreProperties.answer).toEqual({ type: "null" })
+  expect(scoreProperties.choice).toEqual({ type: "null" })
+  for (const question of questions) {
+    const refusal = record(branchOf(schema, question.name, "refusal").properties)
+    expect(refusal.answer).toEqual({ type: "null" })
+    expect(refusal.choice).toEqual({ type: "null" })
+    expect(refusal.score).toEqual({ type: "null" })
+    expect(refusal.confidence).toEqual({ type: "number", enum: [0] })
+    expect(refusal.grades).toBeUndefined()
+  }
+  const graded = DecisionJudgment.responseSchema({
+    state: null,
+    questions: [{ type: "choice", name: "route", instructions: "Grade", grade: true,
+      choices: [{ value: false }, { value: "false" }] }],
+  })
+  const gradedBranch = branchOf(graded, "route", "choice")
+  const gradedProperties = record(gradedBranch.properties)
+  expect(strings(gradedBranch.required)).toEqual(["name", "type", "answer", "choice", "score", "confidence", "grades"])
+  expect(gradedProperties.answer).toEqual({ type: "null" })
+  expect(gradedProperties.choice).toEqual({ type: "null" })
+  expect(gradedProperties.score).toEqual({ type: "null" })
+  expect(gradedProperties.confidence).toEqual({ type: "number", enum: [0] })
+  const grades = record(gradedProperties.grades)
+  expect(grades.type).toBe("array")
+  expect(grades.minItems).toBe(1)
+  const grade = record(grades.items)
+  expect(grade.additionalProperties).toBe(false)
+  expect(strings(grade.required)).toEqual(["choice", "confidence", "evidence"])
+  const gradeProperties = record(grade.properties)
+  expect(record(gradeProperties.choice).enum).toEqual([false, "false"])
+  expect(gradeProperties.confidence).toEqual({ type: "number" })
+  expect(gradeProperties.evidence).toEqual({ type: "string" })
+})
+
+test("responseSchema carries no provider-unenforced bounds and requires every object property", () => {
+  const schema = DecisionJudgment.responseSchema({
+    state: null,
+    questions: [
+      ...input.questions,
+      { type: "choice", name: "route", instructions: "Grade", grade: true, choices: [{ value: "a" }, { value: "b" }] },
+    ],
+  })
+  const forbidden = [
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    "minLength", "maxLength", "maxItems", "uniqueItems", "minContains", "maxContains",
+    "minProperties", "maxProperties",
+  ]
+  const seen: string[] = []
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit)
+      return
+    }
+    if (typeof value !== "object" || value === null) return
+    const node = record(value)
+    seen.push(...Object.keys(node).filter((key) => forbidden.includes(key)))
+    if (typeof node.minItems === "number") expect(node.minItems).toBeLessThanOrEqual(1)
+    if (node.type === "object") {
+      expect(node.additionalProperties).toBe(false)
+      expect([...strings(node.required)].sort()).toEqual(Object.keys(record(node.properties)).sort())
+    }
+    Object.values(node).forEach(visit)
+  }
+  visit(schema)
+  expect(seen).toEqual([])
 })

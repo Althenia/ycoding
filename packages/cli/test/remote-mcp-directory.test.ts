@@ -9,7 +9,7 @@ import { createSessionRegistry, createSubscriptions, executeRemoteDirectorySessi
 import { createRemoteMcp } from "../src/remote-mcp"
 
 const resource = "https://relay.example.com/api/mcp/devices/dev_1"
-const context = { epoch: "epoch_1", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" } }
+const context = { requestID: "request_fixture", epoch: "epoch_1", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" } }
 const meta = {
   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
   "io.modelcontextprotocol/clientCapabilities": {},
@@ -161,7 +161,7 @@ describe("session_create_in_directory", () => {
     const { run, calls } = await fixture()
     expect((await run("session_create_in_directory", { input: { directory: project } })).isError).toBe(true)
     expect((await run("session_create_in_directory", { input: { id: "ses_x", directory: project, workspace: "wsp" } })).isError).toBe(true)
-    expect(calls).toEqual([])
+    expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
   test("reports an unconfirmed create as outcome_unknown and does not replay it", async () => {

@@ -1,0 +1,62 @@
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+
+export const McpEventSubscriptionTable = sqliteTable(
+  "mcp_event_subscription",
+  {
+    id: text().primaryKey(),
+    identity_hash: text().notNull(),
+    owner_id: text().notNull(),
+    device_id: text().notNull(),
+    client_id: text().notNull(),
+    grant_id: text().notNull(),
+    epoch: text().notNull(),
+    name: text().notNull(),
+    session_id: text().notNull(),
+    include_descendants: integer().notNull(),
+    callback_url: text().notNull(),
+    secret_ciphertext: text().notNull(),
+    secret_fingerprint: text().notNull(),
+    previous_secret_ciphertext: text(),
+    previous_secret_until: integer(),
+    expires_at: integer().notNull(),
+    disabled: integer().notNull(),
+    pruned_through: integer().notNull().default(0),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("mcp_event_subscription_identity_idx").on(table.identity_hash),
+    index("mcp_event_subscription_session_idx").on(table.session_id, table.name),
+    index("mcp_event_subscription_expiry_idx").on(table.expires_at),
+  ],
+)
+
+export const McpEventOutboxTable = sqliteTable(
+  "mcp_event_outbox",
+  {
+    seq: integer().primaryKey({ autoIncrement: true }),
+    id: text().notNull(),
+    subscription_id: text().notNull(),
+    dedupe_key: text().notNull(),
+    name: text().notNull(),
+    session_id: text().notNull(),
+    root_session_id: text().notNull(),
+    state: text().notNull(),
+    request_id: text(),
+    item_id: text(),
+    task_id: text(),
+    category: text(),
+    reason: text(),
+    time_created: integer().notNull(),
+    attempts: integer().notNull(),
+    next_attempt_at: integer().notNull(),
+    delivered_at: integer(),
+    dead: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("mcp_event_outbox_id_idx").on(table.id),
+    uniqueIndex("mcp_event_outbox_dedupe_idx").on(table.dedupe_key),
+    index("mcp_event_outbox_dispatch_idx").on(table.delivered_at, table.dead, table.next_attempt_at, table.seq),
+    index("mcp_event_outbox_subscription_seq_idx").on(table.subscription_id, table.seq),
+  ],
+)

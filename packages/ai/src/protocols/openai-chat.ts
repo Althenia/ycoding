@@ -21,6 +21,7 @@ import {
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
+import { StructuredOutput } from "./utils/structured-output"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
 import { mechanism, openRouterEndpoint, updateEffort } from "./utils/effort-update"
@@ -151,6 +152,12 @@ export const bodyFields = {
   presence_penalty: Schema.optional(Schema.Number),
   seed: Schema.optional(Schema.Number),
   stop: optionalArray(Schema.String),
+  response_format: Schema.optional(
+    Schema.Struct({
+      type: Schema.Literal("json_schema"),
+      json_schema: Schema.Struct({ name: Schema.String, schema: JsonObject, strict: Schema.Literal(true) }),
+    }),
+  ),
 }
 const OpenAIChatBody = Schema.Struct(bodyFields)
 export type OpenAIChatBody = Schema.Schema.Type<typeof OpenAIChatBody>
@@ -201,6 +208,7 @@ const OpenAIChatDelta = Schema.Struct({
   thought: optionalNull(Schema.String),
   thinking: optionalNull(Schema.String),
   tool_calls: optionalNull(Schema.Array(OpenAIChatToolCallDelta)),
+  refusal: optionalNull(Schema.String),
 })
 
 const OpenAIChatChoice = Schema.Struct({
@@ -239,6 +247,7 @@ export interface ParserState {
   readonly reasoningEmitted: boolean
   readonly thinkInside: boolean
   readonly thinkBuffer: string
+  readonly refused: boolean
 }
 
 // =============================================================================
@@ -538,6 +547,7 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
       : configuredRetention
   const cacheOptions = cacheCapability === "gpt-5.6" ? OpenAIOptions.promptCacheOptions(request) : undefined
   const thinking = chatThinking(request)
+  const format = StructuredOutput.requestSchema(request)
   return {
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
@@ -545,6 +555,14 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
     ...(cacheOptions ? { prompt_cache_options: cacheOptions } : {}),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(format
+      ? {
+          response_format: {
+            type: "json_schema" as const,
+            json_schema: { name: StructuredOutput.name, schema: format, strict: true as const },
+          },
+        }
+      : {}),
   }
 })
 
@@ -872,6 +890,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
         reasoningEmitted,
         thinkInside,
         thinkBuffer,
+        refused: state.refused || (typeof delta?.refusal === "string" && delta.refusal.length > 0),
       },
       events,
     ] as const
@@ -880,7 +899,12 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
 const finishEvents = (state: ParserState): ReadonlyArray<LLMEvent> => {
   const events: LLMEvent[] = []
   const hasToolCalls = state.toolCallEvents.length > 0
-  const reason = state.finishReason === "stop" && hasToolCalls ? "tool-calls" : state.finishReason
+  const reason =
+    state.refused && state.finishReason !== undefined
+      ? "content-filter"
+      : state.finishReason === "stop" && hasToolCalls
+        ? "tool-calls"
+        : state.finishReason
   const metadata = reasoningMetadata(
     state.reasoningField,
     state.reasoningDetailsObserved ? state.reasoningDetails : undefined,
@@ -923,6 +947,7 @@ export const protocol = Protocol.make({
   body: {
     schema: OpenAIChatBody,
     from: fromRequest,
+    responseFormats: ["json"],
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIChatEvent),
@@ -937,6 +962,7 @@ export const protocol = Protocol.make({
       reasoningEmitted: false,
       thinkInside: false,
       thinkBuffer: "",
+      refused: false,
     }),
     step,
     onHalt: finishEvents,

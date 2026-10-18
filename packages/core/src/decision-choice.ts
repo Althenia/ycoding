@@ -1,6 +1,7 @@
 export * as DecisionChoice from "./decision-choice"
 
 import { Effect, Exit, Result } from "effect"
+import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import { Decision } from "./decision"
 import { DecisionJudgment } from "./decision-judgment"
 import { SessionSchema } from "./session/schema"
@@ -17,7 +18,7 @@ export interface Judgment {
   readonly confidence: number
 }
 
-export type UnsettledReason = "refused" | "low_confidence" | "error" | "timeout"
+export type UnsettledReason = DecisionFailure.Reason | "low_confidence"
 
 export type Outcome =
   | { readonly type: "judgment"; readonly value: string; readonly confidence: number }
@@ -64,7 +65,7 @@ export function choose(
         if (Exit.isFailure(exit) || exit.value._tag === "None") return undefined
         const answer = exit.value.value.response.answers.find((item) => item.name === input.name)
         if (!answer || answer.type !== "choice" || typeof answer.choice !== "string") return undefined
-        if (!Number.isFinite(answer.confidence) || answer.confidence < (input.minimumConfidence ?? ConfidenceThreshold))
+        if (!Number.isFinite(answer.confidence) || answer.confidence > 1 || answer.confidence < (input.minimumConfidence ?? ConfidenceThreshold))
           return undefined
         const choice = input.choices.find((choice) => redactText(choice.value) === answer.choice)
         if (!choice) return undefined
@@ -107,18 +108,22 @@ export function chooseDetailed(
     )
     .pipe(
       Effect.interruptible,
+      Effect.result,
       Effect.timeoutOption("60 seconds"),
       Effect.exit,
       Effect.map((exit): Outcome => {
-        if (Exit.isFailure(exit)) return { type: "unsettled", reason: "error" }
+        if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
         if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
-        const answer = exit.value.value.response.answers.find((item) => item.name === input.name)
-        if (!answer || answer.type === "refusal" || typeof answer.choice !== "string")
-          return { type: "unsettled", reason: "refused" }
-        if (answer.type !== "choice") return { type: "unsettled", reason: "error" }
+        const result = exit.value.value
+        if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+        const answer = result.success.response.answers.find((item) => item.name === input.name)
+        if (answer?.type === "refusal") return { type: "unsettled", reason: "refused" }
+        if (!answer || answer.type !== "choice" || typeof answer.choice !== "string")
+          return { type: "unsettled", reason: "invalid-output" }
         const choice = input.choices.find((candidate) => redactText(candidate.value) === answer.choice)
-        if (!choice) return { type: "unsettled", reason: "error" }
-        if (!Number.isFinite(answer.confidence)) return { type: "unsettled", reason: "error", choice: choice.value }
+        if (!choice) return { type: "unsettled", reason: "invalid-output" }
+        if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1)
+          return { type: "unsettled", reason: "invalid-output" }
         if (answer.confidence < ConfidenceThreshold)
           return { type: "unsettled", reason: "low_confidence", choice: choice.value, confidence: answer.confidence }
         return { type: "judgment", value: choice.value, confidence: answer.confidence }
@@ -134,7 +139,7 @@ export interface Grade {
 
 export type GradedOutcome =
   | { readonly type: "grades"; readonly grades: ReadonlyArray<Grade> }
-  | { readonly type: "unsettled"; readonly reason: "refused" | "error" | "timeout" }
+  | { readonly type: "unsettled"; readonly reason: DecisionFailure.Reason }
 
 export function grade(decision: Decision.Interface, input: {
   readonly sessionID: SessionSchema.ID
@@ -154,16 +159,20 @@ export function grade(decision: Decision.Interface, input: {
   }
   return decision.evaluate({ provider: "agent", request }, { sessionID: input.sessionID }).pipe(
     Effect.interruptible,
+    Effect.result,
     Effect.timeoutOption("60 seconds"),
     Effect.exit,
     Effect.map((exit): GradedOutcome => {
-      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "error" }
+      if (Exit.isFailure(exit)) return { type: "unsettled", reason: "provider-failed" }
       if (exit.value._tag === "None") return { type: "unsettled", reason: "timeout" }
-      const parsed = DecisionJudgment.parse(DecisionJudgment.encode({ decisions: exit.value.value.response }), request)
-      if (Result.isFailure(parsed)) return { type: "unsettled", reason: "error" }
+      const result = exit.value.value
+      if (Result.isFailure(result)) return { type: "unsettled", reason: result.failure.reason }
+      const response = result.success.response
+      const parsed = DecisionJudgment.validate({ decisions: { version: response.version, answers: response.answers } }, request)
+      if (Result.isFailure(parsed)) return { type: "unsettled", reason: "invalid-output" }
       const answer = parsed.success.decisions.answers[0]
       if (!answer || answer.type === "refusal") return { type: "unsettled", reason: "refused" }
-      if (!answer.grades) return { type: "unsettled", reason: "error" }
+      if (!answer.grades) return { type: "unsettled", reason: "invalid-output" }
       return { type: "grades", grades: answer.grades.map((grade) => ({
         choice: String(grade.choice), confidence: grade.confidence, evidence: redactText(grade.evidence).slice(0, 500),
       })) }

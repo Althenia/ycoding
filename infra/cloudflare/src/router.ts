@@ -26,6 +26,7 @@ import {
   type PushKeyResponse,
   type PushTestResponse,
 } from "../../../packages/remote/src/index"
+import { parseAuthorizationRequest } from "../../../packages/remote/src/mcp-events"
 import { sendTestPush } from "./push/send"
 import type { PushStore } from "./push/store"
 import type { AuthRejection, AuthService } from "./auth/service"
@@ -198,6 +199,11 @@ export function createRouter(deps: RouterDeps) {
     if (revoke) {
       if (request.method !== "POST") return methodNotAllowed()
       return revokeDevice(deps, request, revoke[1] ?? "")
+    }
+    const mcpEventsAuthorize = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/mcp\/events\/authorize$/.exec(url.pathname)
+    if (mcpEventsAuthorize) {
+      if (request.method !== "POST") return methodNotAllowed()
+      return authorizeMcpEvents(deps, request, mcpEventsAuthorize[1] ?? "", rateLimit)
     }
     const remove = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname)
     if (remove) {
@@ -636,6 +642,34 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
       [message ? "x-ycoding-target-message" : "x-ycoding-target-digest"]: item,
     } },
   )))
+}
+
+async function authorizeMcpEvents(deps: RouterDeps, request: Request, deviceID: string, rateLimit: (key: string) => boolean): Promise<Response> {
+  if (!rateLimit(`mcp-events-authorize:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
+  const token = parseBearerToken(request.headers.get("authorization"))
+  if (token === undefined) return apiError(401, "unauthorized", "Device credential is required")
+  const credential = await deps.service.authorizeAgentToken(token)
+  if (!credential.ok) return apiError(401, "unauthorized", "Device credential is not valid")
+  if (credential.value.deviceID !== deviceID) return apiError(403, "forbidden", "Device credential does not belong to this device")
+  const authorization = parseAuthorizationRequest(await readJsonBody(request))
+  if (authorization === undefined) return apiError(400, "invalid_message", "Request is not a valid MCP events authorization")
+  const forwarded = await deps.relay.getByName(`${credential.value.userID}:${deviceID}`).fetch(
+    new Request("https://relay.internal/_ycoding/mcp-events/authorize", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-ycoding-internal": "1",
+        "x-ycoding-owner": credential.value.userID,
+        "x-ycoding-device": deviceID,
+        "x-ycoding-mcp-resource": `${new URL(request.url).origin}/api/mcp/devices/${deviceID}`,
+      },
+      body: JSON.stringify(authorization),
+      signal: request.signal,
+    }),
+  )
+  const headers = new Headers(forwarded.headers)
+  headers.set("cache-control", "no-store")
+  return withSecurityHeaders(new Response(forwarded.body, { status: forwarded.status, statusText: forwarded.statusText, headers }))
 }
 
 async function connectAgent(deps: RouterDeps, request: Request): Promise<Response> {

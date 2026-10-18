@@ -1201,3 +1201,70 @@ describe("router: revocation pushes, failure boundaries, and cookie hygiene", ()
     expect((await service.resolveBrowserSession(fresh ?? "")).ok).toBe(true)
   })
 })
+
+describe("router: MCP events grant authorization", () => {
+  async function issueDeviceTokens(h: Harness, device: Awaited<ReturnType<typeof enrollDevice>>) {
+    const challenge = await h.router(jsonRequest(`${origin}/api/devices/challenge`, { deviceID: device.deviceID }))
+    expect(challenge.status).toBe(200)
+    const challengeBody = (await challenge.json()) as { challengeID: string; nonce: string }
+    const signature = base64UrlEncode(
+      new Uint8Array(
+        await crypto.subtle.sign(
+          { name: "ECDSA", hash: "SHA-256" },
+          device.pair.privateKey,
+          new TextEncoder().encode(deviceSignaturePayload(challengeBody.challengeID, challengeBody.nonce)),
+        ),
+      ),
+    )
+    const issued = await h.router(jsonRequest(`${origin}/api/devices/token`, { deviceID: device.deviceID, challengeID: challengeBody.challengeID, signature }))
+    expect(issued.status).toBe(200)
+    return (await issued.json()) as { accessToken: string; refreshToken: string }
+  }
+
+  test("requires the enrolled device access token, forwards only the typed control to that device's relay, and never rotates credentials", async () => {
+    const calls: { readonly name: string; readonly request: Request }[] = []
+    const h = await harness({
+      relay: {
+        getByName: (name) => ({
+          fetch: async (request) => {
+            calls.push({ name, request })
+            return Response.json({ action: "capabilities", supported: true })
+          },
+        }),
+      },
+    })
+    const owner = await signIn(h, "owner")
+    const device = await enrollDevice(h, owner.userID)
+    const tokens = await issueDeviceTokens(h, device)
+    const url = `${origin}/api/devices/${device.deviceID}/mcp/events/authorize`
+    const post = (body: unknown, headers: Record<string, string> = {}) => h.router(jsonRequest(url, body, headers))
+
+    expect((await post({ action: "capabilities" })).status).toBe(401)
+    expect((await post({ action: "capabilities" }, { authorization: "Bearer not-a-device-token" })).status).toBe(401)
+    expect((await h.router(new Request(url, { headers: { authorization: `Bearer ${tokens.accessToken}` } }))).status).toBe(405)
+    expect((await post({ action: "subscribe", url: "https://example.invalid/hook" }, { authorization: `Bearer ${tokens.accessToken}` })).status).toBe(400)
+    expect(calls).toHaveLength(0)
+
+    const other = await enrollDevice(h, owner.userID, "Other Mac")
+    expect((await h.router(jsonRequest(`${origin}/api/devices/${other.deviceID}/mcp/events/authorize`, { action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}` }))).status).toBe(403)
+    expect(calls).toHaveLength(0)
+
+    const accepted = await post({ action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}`, "x-ycoding-owner": "intruder" })
+    expect(accepted.status).toBe(200)
+    expect(await accepted.json()).toEqual({ action: "capabilities", supported: true })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].name).toBe(`${owner.userID}:${device.deviceID}`)
+    expect(new URL(calls[0].request.url).pathname).toBe("/_ycoding/mcp-events/authorize")
+    expect(calls[0].request.headers.get("x-ycoding-internal")).toBe("1")
+    expect(calls[0].request.headers.get("x-ycoding-owner")).toBe(owner.userID)
+    expect(calls[0].request.headers.get("x-ycoding-device")).toBe(device.deviceID)
+    expect(calls[0].request.headers.get("x-ycoding-mcp-resource")).toBe(`${origin}/api/mcp/devices/${device.deviceID}`)
+    expect(calls[0].request.headers.get("authorization")).toBeNull()
+    expect(await calls[0].request.clone().json()).toEqual({ action: "capabilities" })
+
+    const again = await post({ action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}` })
+    expect(again.status).toBe(200)
+    const refreshed = await h.router(jsonRequest(`${origin}/api/devices/refresh`, { deviceID: device.deviceID, refreshToken: tokens.refreshToken }))
+    expect(refreshed.status).toBe(200)
+  })
+})

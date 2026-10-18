@@ -404,6 +404,13 @@ import type {
   ReviewListOutput,
   ReviewDecideInput,
   ReviewDecideOutput,
+  McpEventsStatusOutput,
+  McpEventsListInput,
+  McpEventsListOutput,
+  McpEventsSubscribeInput,
+  McpEventsSubscribeOutput,
+  McpEventsUnsubscribeInput,
+  McpEventsUnsubscribeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3276,6 +3283,55 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+    },
+    mcpEvents: {
+      status: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: McpEventsStatusOutput }>(
+          {
+            method: "GET",
+            path: `/api/remote/mcp/events/status`,
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      list: (input?: McpEventsListInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: McpEventsListOutput }>(
+          {
+            method: "GET",
+            path: `/api/remote/mcp/events/catalog`,
+            query: { cursor: input?.["cursor"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      subscribe: (input: McpEventsSubscribeInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: McpEventsSubscribeOutput }>(
+          {
+            method: "POST",
+            path: `/api/remote/mcp/events/subscribe`,
+            body: { context: input["context"], subscription: input["subscription"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      unsubscribe: (input: McpEventsUnsubscribeInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: McpEventsUnsubscribeOutput }>(
+          {
+            method: "POST",
+            path: `/api/remote/mcp/events/unsubscribe`,
+            body: { context: input["context"], subscription: input["subscription"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
   }
 }

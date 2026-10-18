@@ -9,7 +9,7 @@
 import type { Form } from "../../../../packages/schema/src/form"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
-import { readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
+import { escalationText, readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
@@ -330,7 +330,10 @@ export type ReviewItemView = {
 
 export type RecoveryToolView = { readonly messageID: string; readonly callID: string; readonly name: string }
 
-const reviewReasons = ["disabled", "free_text", "refused", "low_confidence", "escalated", "error", "timeout", "sleep_entry", "restart"] as const
+const reviewReasons = [
+  "disabled", "free_text", "refused", "low_confidence", "escalated", "conflicting_grades", "error", "timeout", "sleep_entry", "restart",
+  "unavailable", "invalid-request", "provider-failed", "input-too-large", "invalid-output", "truncated-output", "unsupported-output",
+] as const
 export type ReviewReason = (typeof reviewReasons)[number]
 
 export type YoloLevel = 0 | 1 | 2
@@ -1137,7 +1140,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.guardrail.escalated.1": {
       if (stringField(data.sessionID) !== view.id) return view
       const escalation = readGuardrailProvenance(data) ?? {}
-      return replaceMessage(view, { kind: "system", id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"), text: `Decision model escalated this guardrail review · choice ${escalation.choice ?? "unreported"} · confidence ${escalation.confidence?.toString() ?? "unreported"}`, guardrail: escalation, created: event.created ?? now })
+      return replaceMessage(view, { kind: "system", id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"), text: escalationText(escalation), guardrail: escalation, created: event.created ?? now })
     }
     case "session.synthetic":
       return pushMessage(view, {

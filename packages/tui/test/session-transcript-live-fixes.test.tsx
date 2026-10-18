@@ -836,6 +836,13 @@ test("restart retains the escalation notice without restoring a pending review, 
     await waitForFrame(screen.frame, "confidence 0.4")
     screen.events.emit(event)
     expect(screen.frame().match(/confidence 0.4/g)).toHaveLength(1)
+    screen.events.emit({ id: "evt_escalation_failed", type: "session.guardrail.escalated", created: 101,
+      durable: { aggregateID: sessionID, seq: 101, version: 1 },
+      data: { sessionID, requestID: "grq_escalation_failed", reason: "unsupported-output" },
+    } satisfies YCodingEvent)
+    await waitForFrame(screen.frame, "Decision unavailable")
+    expect(screen.frame()).toContain("does not support strict structured")
+    expect(screen.frame()).not.toContain("choice unreported")
   } finally { await screen.dispose() }
 })
 

@@ -48,7 +48,7 @@ async function fixture(failure?: LocalFailure) {
         name, arguments: { sessionID: session.id, input },
         _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" } },
       } }),
-    }), { epoch: "epoch_forms", principal: { ownerID: "owner", deviceID: "dev_forms", clientID: "client" } })
+    }), { requestID: "request_fixture", epoch: "epoch_forms", principal: { ownerID: "owner", deviceID: "dev_forms", clientID: "client" } })
     expect(response.status).toBe(200)
     return (await response.json()).result as { isError?: boolean; structuredContent?: unknown }
   }

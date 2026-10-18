@@ -781,6 +781,12 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
 describe("remote operations", () => {
   test("exposes exactly the session operations the relay proxies", () => {
     expect(remoteOperations).toEqual([
+      "local.app.register",
+      "local.app.list",
+      "local.app.revoke",
+      "local.app.open",
+      "local.app.status",
+      "local.app.http",
       "artifact.demo.preview",
       "artifact.demo.export",
       "provider.auth.list",

@@ -444,7 +444,7 @@ const layer = Layer.effect(
       | { readonly type: "answer"; readonly text: string }
       | {
           readonly type: "defer"
-          readonly reason: "disabled" | "free_text" | "refused" | "low_confidence" | "error" | "timeout"
+          readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
           readonly choice?: string
           readonly confidence?: number
         }

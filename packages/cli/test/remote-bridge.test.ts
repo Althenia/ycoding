@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionCompletionsOutput, SessionInfo, SessionPredictionUpdated } from "@ycoding-ai/client/promise"
 import { RemoteCloseCode, RemoteLimits, parseAgentMessage, parseChunkedValue } from "@ycoding-ai/remote"
-import { RemoteAgent, type BridgeCredentials, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
+import { RemoteAgent, type BridgeCredentials, type ConnectionInput, type RelayConnection, type RemoteBridgeOptions } from "../src/remote-bridge"
 import type { AllowlistSession } from "../src/remote-config"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
 import { LocalFailure, type LocalEventStream, type LocalServer } from "../src/remote-local"
@@ -81,7 +81,7 @@ type ConnectionRecord = {
 }
 
 function harness(options: {
-  mcp?: { host: RemoteMcpHost; resource: string; deviceID: string; home: string }
+  mcp?: RemoteBridgeOptions["mcp"]
   sessions?: readonly AllowlistSession[]
   failStatusOnce?: boolean
   results?: Partial<Record<keyof LocalServer, unknown>>
@@ -180,6 +180,94 @@ function harness(options: {
     },
   }
 }
+
+test("MCP event authority uses the current connector credential and cancels on detach", async () => {
+  const authority = new AbortController()
+  const requests: Array<{ action: string; authorization: string | null }> = []
+  const host: RemoteMcpHost = {
+    status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+    advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
+    allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
+    authorizationSignal: () => authority.signal,
+    attach: async () => {},
+    detach: () => authority.abort(),
+    set: async () => ({ state: "off" }),
+    settled: async () => {},
+  }
+  const fixture = harness({ mcp: {
+    host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic",
+    authorizationFetch: async (_url, init) => {
+      const request = JSON.parse(String(init?.body)) as { action: string }
+      requests.push({ action: request.action, authorization: new Headers(init?.headers).get("authorization") })
+      return Response.json(request.action === "capabilities"
+        ? { action: request.action, supported: true }
+        : { action: request.action, authorized: true, grantID: "grant_fixture", expiresAt: 900000 })
+    },
+  } })
+  const context = { requestID: "request_fixture", principal: { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" }, epoch: "epoch_test" }
+  try {
+    expect(await fixture.bridge.mcpEvents?.capabilities()).toBe(false)
+    await fixture.bridge.connect()
+    expect(await fixture.bridge.mcpEvents?.capabilities()).toBe(true)
+    expect(await fixture.bridge.mcpEvents?.resolve(context)).toEqual({ grantID: "grant_fixture", expiresAt: 900000 })
+    const checked = await fixture.bridge.mcpEvents?.check({ ...context.principal, epoch: context.epoch, grantID: "grant_fixture" })
+    expect(checked?.expiresAt).toBe(900000)
+    expect(checked?.signal.aborted).toBe(false)
+    expect(requests.map((request) => request.action)).toEqual(["capabilities", "resolve", "check"])
+    expect(requests.every((request) => request.authorization === "Bearer token_1")).toBe(true)
+    await fixture.bridge.close()
+    expect(checked?.signal.aborted).toBe(true)
+    expect(await fixture.bridge.mcpEvents?.capabilities()).toBe(false)
+    expect(requests).toHaveLength(3)
+  } finally {
+    await fixture.bridge.close()
+  }
+})
+
+test("connector reconnect discards registered apps without renewing old access", async () => {
+  let authority = new AbortController()
+  const host: RemoteMcpHost = {
+    status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+    advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
+    allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
+    authorizationSignal: () => authority.signal,
+    attach: async () => { authority = new AbortController() },
+    detach: () => authority.abort(),
+    set: async () => ({ state: "off" }),
+    settled: async () => {},
+  }
+  const fixture = harness({ mcp: {
+    host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic",
+    authorizationFetch: async (_url, init) => {
+      const request = JSON.parse(String(init?.body)) as { action: string }
+      return Response.json(request.action === "capabilities" ? { action: request.action, supported: true } : { action: request.action, authorized: true, grantID: "grant_fixture", expiresAt: 900000 })
+    },
+  } })
+  await fixture.bridge.connect()
+  const connection = fixture.records[0]
+  const request = async (id: string, name: string, input?: unknown) => {
+    connection.deliver({ type: "request", id, operation: "mcp.request", input: {
+      epoch: "epoch_test", principal: { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" },
+      headers: { "content-type": "application/json", accept: "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { sessionID: "ses_1", ...(input === undefined ? {} : { input }) }, _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "fixture", version: "1" },
+      } } }),
+    } })
+    const response = await waitFor(() => connection.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "response" && frame.id === id))
+    expect(response.ok).toBe(true)
+    return JSON.parse(response.value.body).result as { isError?: boolean; structuredContent: unknown }
+  }
+  try {
+    const registered = await request("app_register", "local_app_register", { host: "127.0.0.1", port: 41234, entryPath: "/", routes: [{ path: "/", match: "prefix", methods: ["GET"] }] })
+    expect(registered.isError).not.toBe(true)
+    expect(Array.isArray((await request("app_list", "local_app_list")).structuredContent)).toBe(true)
+    connection.input.onClose(1006)
+    connection.input.onOpen()
+    expect((await request("app_list_after", "local_app_list")).structuredContent).toEqual([])
+  } finally {
+    await fixture.bridge.close()
+  }
+})
 
 function sentFrames(record: ConnectionRecord) {
   return record.sent.map((frame) => parseAgentMessage(frame)).map((frame) => {
@@ -301,6 +389,7 @@ test("ID-only shell deletions invalidate family lists without forwarding shell i
 })
 
 test("relay MCP state is acknowledged only for the current enable epoch", async () => {
+  const disabledSignal = AbortSignal.abort()
   let transport: ((state: { enabled: boolean; epoch: string }) => Promise<void>) | undefined
   let detached = 0
   const attached = Promise.withResolvers<void>()
@@ -308,6 +397,7 @@ test("relay MCP state is acknowledged only for the current enable epoch", async 
     status: () => ({ state: "off" }),
     advertisement: () => ({ enabled: false, epoch: "epoch_test" }),
     allowed: () => false,
+    authorizationSignal: () => disabledSignal,
     attach: async (_url, send) => { transport = send; attached.resolve() },
     detach: () => { detached++ },
     set: async () => ({ state: "off" }),

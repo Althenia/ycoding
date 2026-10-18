@@ -27,6 +27,7 @@ import { ReferenceHandler } from "./handlers/reference"
 import { LocationHandler } from "./handlers/location"
 import { IntegrationHandler } from "./handlers/integration"
 import { McpHandler } from "./handlers/mcp"
+import { McpEventsHandler } from "./handlers/mcp-events"
 import { ConfigHandler } from "./handlers/config"
 import { CredentialHandler } from "./handlers/credential"
 import { ProjectHandler } from "./handlers/project"
@@ -56,6 +57,7 @@ export const handlers = Layer.mergeAll(
   IncidentHandler,
   IntegrationHandler,
   McpHandler,
+  McpEventsHandler,
   ConfigHandler,
   CredentialHandler,
   ProjectHandler,

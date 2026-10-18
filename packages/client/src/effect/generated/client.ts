@@ -2688,6 +2688,49 @@ const Endpoint37_1 = (raw: RawClient["server.review"]) => (input: Endpoint37_1In
 
 const adaptGroup37 = (raw: RawClient["server.review"]) => ({ list: Endpoint37_0(raw), decide: Endpoint37_1(raw) })
 
+const Endpoint38_0 = (raw: RawClient["server.mcpEvents"]) => () =>
+  raw["mcpEvents.status"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint38_1Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.list"]>[0]
+type Endpoint38_1Input = { readonly cursor?: Endpoint38_1Request["query"]["cursor"] }
+const Endpoint38_1 = (raw: RawClient["server.mcpEvents"]) => (input?: Endpoint38_1Input) =>
+  raw["mcpEvents.list"]({ query: { cursor: input?.["cursor"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint38_2Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.subscribe"]>[0]
+type Endpoint38_2Input = {
+  readonly context: Endpoint38_2Request["payload"]["context"]
+  readonly subscription: Endpoint38_2Request["payload"]["subscription"]
+}
+const Endpoint38_2 = (raw: RawClient["server.mcpEvents"]) => (input: Endpoint38_2Input) =>
+  raw["mcpEvents.subscribe"]({ payload: { context: input["context"], subscription: input["subscription"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint38_3Request = Parameters<RawClient["server.mcpEvents"]["mcpEvents.unsubscribe"]>[0]
+type Endpoint38_3Input = {
+  readonly context: Endpoint38_3Request["payload"]["context"]
+  readonly subscription: Endpoint38_3Request["payload"]["subscription"]
+}
+const Endpoint38_3 = (raw: RawClient["server.mcpEvents"]) => (input: Endpoint38_3Input) =>
+  raw["mcpEvents.unsubscribe"]({ payload: { context: input["context"], subscription: input["subscription"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup38 = (raw: RawClient["server.mcpEvents"]) => ({
+  status: Endpoint38_0(raw),
+  list: Endpoint38_1(raw),
+  subscribe: Endpoint38_2(raw),
+  unsubscribe: Endpoint38_3(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   server: adaptGroup1(raw["server.server"]),
@@ -2727,6 +2770,7 @@ const adaptClient = (raw: RawClient) => ({
   keepAwake: adaptGroup35(raw["server.keepAwake"]),
   config: adaptGroup36(raw["server.config"]),
   review: adaptGroup37(raw["server.review"]),
+  mcpEvents: adaptGroup38(raw["server.mcpEvents"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

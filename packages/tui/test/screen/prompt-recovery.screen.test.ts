@@ -570,7 +570,7 @@ test("every space-separated skill mention reaches prompt admission from the comp
   resetFixture()
   failFirstPrompt = false
   catalogSkill = true
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…", sessionReady: true })
   try {
     await focusComposer(screen)
     await screen.input.typeText("Use $review $plan $review now")

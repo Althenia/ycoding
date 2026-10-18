@@ -21,6 +21,7 @@ import {
   type ToolResultPart,
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
+import { StructuredOutput } from "./utils/structured-output"
 import { classifyProviderFailure } from "../provider-error"
 import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
@@ -176,6 +177,7 @@ const AnthropicThinking = Schema.Union([
 
 const AnthropicOutputConfig = Schema.Struct({
   effort: Schema.optional(Schema.String),
+  format: Schema.optional(Schema.Struct({ type: Schema.Literal("json_schema"), schema: JsonObject })),
 })
 
 const AnthropicBodyFields = {
@@ -601,10 +603,14 @@ const outputConfig = Effect.fn("AnthropicMessages.outputConfig")(function* (
   capabilities: AnthropicModel.Capabilities,
 ) {
   const effort = anthropicOptions(request)?.effort
-  if (typeof effort !== "string") return undefined
-  if (capabilities.effort.length > 0 && !capabilities.effort.includes(effort as AnthropicModel.Effort))
+  const format = StructuredOutput.requestSchema(request)
+  if (typeof effort === "string" && capabilities.effort.length > 0 && !capabilities.effort.includes(effort as AnthropicModel.Effort))
     return yield* invalid(`Anthropic model ${request.model.id} does not support effort ${effort}`)
-  return { effort }
+  if (typeof effort !== "string" && format === undefined) return undefined
+  return {
+    ...(typeof effort === "string" ? { effort } : {}),
+    ...(format ? { format: { type: "json_schema" as const, schema: format } } : {}),
+  }
 })
 
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
@@ -977,6 +983,7 @@ export const protocol = Protocol.make({
   body: {
     schema: AnthropicMessagesBody,
     from: fromRequest,
+    responseFormats: ["json"],
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),

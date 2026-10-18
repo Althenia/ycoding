@@ -22,6 +22,21 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.17",
+    date: "2026-10-18",
+    title: "MCP apps, Events, and reliable decisions",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Try a fixed file, image, and HTML feasibility demo over an enabled Relay MCP connection. `artifact_demo_preview` serves an authored List/Cards preview with an isolated-frame probe, and `artifact_demo_export` returns one original-byte PNG resource link with size, SHA-256, and a 15-minute expiry. The tools accept no Session, directory, file path, or generated HTML. Update the connected machine and refresh the client's tool catalog to see them. The demo does not provide general Session artifacts, PDF export, or complete proposal bundles; interactive rendering and native file delivery depend on the chat client and were not available in the tested client." },
+      { tag: "Added", text: "Register Session-owned local HTTP apps with `local_app_register`, bounded to one literal-loopback port and explicit routes and methods. Embedded presentation requires separately configured isolated HTTPS preview origins and a compatible chat host; registration does not publish a service. WebSocket, SSE, and upstream cookie login are unsupported." },
+      { tag: "Added", text: "Expose MCP Events for hosts that support Session webhook subscriptions, with signed webhook delivery, local durable subscriptions, bounded replay, and a fresh grant check before delivery. Protected signing-key storage is required and unavailable on Windows. Actual chat-host subscription and delivery still require host setup and verification." },
+      { tag: "Fixed", text: "Decision helpers use strict structured output on supported provider routes, recover bounded malformed responses, and report typed failures instead of inventing a judgment. TUI and web guardrail views distinguish unavailable or failed decisions from a model's explicit escalation." },
+      { tag: "Fixed", text: "Keep the web Sessions sidebar steady during background refreshes: unchanged rows no longer show a \"Loading more sessions\" placeholder or toggle the scrollbar, and fine pointers reserve the scrollbar gutter." },
+      { tag: "Fixed", text: "Opening and immediately closing the TUI Session rename dialog no longer focuses a destroyed input." },
+      { tag: "Fixed", text: "On Windows, directory, Session file, and attachment containment rejects paths on other drives or UNC shares; project inventory search and pagination use native directory paths; and Git checkout trust resolves short-name aliases strictly, granting no trust when resolution fails." },
+    ],
+  },
+  {
     version: "0.10.16",
     date: "2026-10-18",
     title: "Reliable Relay MCP validation",

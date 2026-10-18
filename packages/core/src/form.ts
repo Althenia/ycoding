@@ -210,7 +210,7 @@ export const layer = Layer.effect(
     const openReview = Effect.fnUntraced(function* (
       form: Info,
       sessionID: SessionSchema.ID,
-      outcome: { readonly reason: "disabled" | "free_text" | "refused" | "low_confidence" | "error" | "timeout" | "sleep_entry"; readonly choice?: string; readonly confidence?: number },
+      outcome: { readonly reason: "disabled" | "free_text" | "error" | "sleep_entry" | DecisionChoice.UnsettledReason; readonly choice?: string; readonly confidence?: number },
       conversion = false,
     ) {
       const tool = form.metadata?.tool
@@ -400,7 +400,7 @@ type SleepOutcome =
   | { readonly type: "answer"; readonly answer: Answer }
   | {
       readonly type: "defer"
-      readonly reason: "free_text" | "refused" | "low_confidence" | "error" | "timeout"
+      readonly reason: "free_text" | "error" | DecisionChoice.UnsettledReason
       readonly choice?: string
       readonly confidence?: number
     }
