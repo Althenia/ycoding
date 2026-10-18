@@ -977,7 +977,15 @@ the same validator and executed through the same adapter as the browser operatio
 persistent approvals (`always` where the runtime offers it), autonomy (YOLO 0–2) and
 goal changes, hard-review restrictions, and every other runtime rule apply
 identically. `session_create` and `session_prompt` require a client-generated
-`input.id`; the connector never fabricates one.
+`input.id`; the connector never fabricates one. Message IDs match
+`^msg_[A-Za-z0-9_-]+$` and are at most 128 characters. Permission and guardrail
+request IDs use the same nonempty suffix with `per_` and `grq_`, respectively.
+The catalog publishes complete-string patterns, including multiline nonblank text,
+so clients that validate patterns as full matches accept the same valid values.
+Bare ID prefixes are invalid. Use a fresh message ID for each new prompt and reuse
+an ID only to retry the original prompt in its original Session. Its first admission
+wins even if retry content or delivery differs; changing the input kind or Session
+with an admitted ID is a conflict.
 
 `session_create_in_directory` takes `{ input: { id, directory, agent?, model? } }`, the
 only operation that selects a Location from caller input. `directory` must be an absolute

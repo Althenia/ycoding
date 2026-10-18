@@ -36,7 +36,7 @@ type Spec = { readonly description: string; readonly input?: Schema; readonly op
 const maxSafeInteger = Number.MAX_SAFE_INTEGER
 
 const text = (maxLength: number, minLength = 1): Schema => ({ type: "string", minLength, maxLength })
-const nonblank = (maxLength: number): Schema => ({ type: "string", minLength: 1, maxLength, pattern: "\\S" })
+const nonblank = (maxLength: number): Schema => ({ type: "string", minLength: 1, maxLength, pattern: "^[\\s\\S]*\\S[\\s\\S]*$" })
 const line = (maxLength: number): Schema => ({
   type: "string",
   minLength: 1,
@@ -62,7 +62,7 @@ const object = (properties: Record<string, Schema>, required: readonly string[] 
 })
 
 const sessionID = prefixed("^ses[A-Za-z0-9_-]+$", 128)
-const messageID = prefixed("^msg_", 128)
+const messageID = prefixed("^msg_[A-Za-z0-9_-]+$", 128)
 const shellID = prefixed("^sh_[A-Za-z0-9]+$", 128)
 const memory = array(choice("repository", "knowledge"), 0, 2, true)
 const reply = choice("once", "always", "reject")
@@ -290,14 +290,14 @@ const specs = {
   "session.permission.reply": {
     description:
       "Answer a pending permission request: once approves this request, always persists the approval, reject refuses. Send only the decision the user authorized.",
-    input: object({ requestID: prefixed("^per_", 128), reply, message: text(1_024, 0) }, ["requestID", "reply"]),
+    input: object({ requestID: prefixed("^per_[A-Za-z0-9_-]+$", 128), reply, message: text(1_024, 0) }, ["requestID", "reply"]),
   },
   "session.guardrail.status": { description: "Read a Session's guardrail review status." },
   "session.guardrail.request.list": { description: "List a Session family's pending guardrail reviews." },
   "session.guardrail.reply": {
     description:
       "Answer a pending guardrail review: once approves this action, always persists a directory-scoped approval, reject refuses. Send only the decision the user authorized.",
-    input: object({ requestID: prefixed("^grq_", 128), reply }, ["requestID", "reply"]),
+    input: object({ requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 128), reply }, ["requestID", "reply"]),
   },
   "session.review.list": { description: "List the open review items of a Session's family, including deferred ones." },
   "session.review.decide": {

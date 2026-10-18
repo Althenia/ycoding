@@ -22,6 +22,16 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.16",
+    date: "2026-10-18",
+    title: "Reliable Relay MCP validation",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Relay MCP accepts complete message, permission, and guardrail request IDs in clients that validate schema patterns as full strings. Bare prefixes and malformed IDs are rejected; prompt retries retain their existing ownership and conflict checks." },
+      { tag: "Fixed", text: "Relay MCP prompt drafting and skill selection accept nonblank multi-character and multiline values in full-match schema validators. Update the connected machine and refresh the client's tool catalog to use the corrected schemas." },
+    ],
+  },
+  {
     version: "0.10.15",
     date: "2026-10-18",
     title: "Relay MCP and quota pace alerts",

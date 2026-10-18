@@ -485,3 +485,12 @@ test("Windows keeps the Bun cache on the runner's workspace disk before installi
   expect(beforeInstall).toContain("if: runner.os == 'Windows'")
   expect(beforeInstall).toContain("BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-install-cache")
 })
+
+test("PR verification uses the same standard hosted runners as release", async () => {
+  for (const runner of ["ubuntu-24.04", "windows-2025"]) {
+    expect(workflow).toContain(`runner: ${runner}`)
+    expect(testWorkflow).toContain(`host: ${runner}`)
+  }
+  const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
+  expect(types).toContain("runs-on: ubuntu-24.04")
+})
