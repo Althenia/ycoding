@@ -656,6 +656,8 @@ grouping and Session-list filters are derived from backend metadata.
 
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
+| `artifact.demo.preview` | no | Connector-owned fixed demo | Relay MCP only; no local HTTP route | — |
+| `artifact.demo.export` | no | Connector-owned fixed demo | Relay MCP only; no local HTTP route | — |
 | `workspace.list` | no | `session.list`, `project.list`, `project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
 | `workspace.catalog` | no | Location-scoped catalog reads | `GET /api/agent`, `/api/model`, `/api/model/default`, `/api/provider`, `/api/command`, `/api/skill`, `/api/reference`, `/api/mcp/resource` | `workspace` |
 | `workspace.file.find` | no | `fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
@@ -963,11 +965,11 @@ before the gate opens. Requests recheck live authority and the epoch before forw
 and before local dispatch.
 
 The endpoint speaks MCP revision 2026-07-28 through the SDK's JSON response mode and
-rejects legacy transports. It exposes 73 tools: one per remote operation in section 3.4
+rejects legacy transports. It exposes 75 tools: one per remote operation in section 3.4
 except `session.subscribe`, `session.unsubscribe`, `session.message.stream`,
 `session.attachment.upload`, `machine.telemetry.consent.get`,
 `machine.telemetry.consent.set`, `machine.latency.append`, and `machine.latency.list`
-(72 operations), plus `session_create_in_directory`. Tool names are the operation
+(74 operations), plus `session_create_in_directory`. Tool names are the operation
 names in snake_case with dots and hyphens replaced by underscores (for example
 `session_permission_reply`, `machine_keep_awake_set`); clients poll snapshots, pending
 interactions, and status instead of subscribing. Session-scoped tools take
@@ -976,7 +978,20 @@ none. Each tool's JSON Schema is published by the server and each call is valida
 the same validator and executed through the same adapter as the browser operation, so
 persistent approvals (`always` where the runtime offers it), autonomy (YOLO 0–2) and
 goal changes, hard-review restrictions, and every other runtime rule apply
-identically. `session_create` and `session_prompt` require a client-generated
+identically. The two `artifact_demo_*` tools accept only `{}` and dispatch through
+the adapter's explicit connector-owned demo context. They select no Session,
+Location, workspace file or generated HTML. `resources/list`,
+`resources/templates/list` and `resources/read` retain per-request authority;
+templates are empty, and reads resolve only the fixed HTML or unexpired PNG.
+The preview descriptor points to `ui://ycoding/artifact-demo/v1.html` with MIME
+`text/html;profile=mcp-app`. Export returns a resource link and integrity metadata,
+not a native attachment. Its opaque PNG resource expires 15 minutes after the
+handler initializes on the first forwarded MCP request, including discovery;
+calls and retries do not renew it. The preview does not expire. Actual-host
+rendering and native-file delivery require separate verification. See
+[the fixed demo contract](../../specs/relay-mcp-demo.md).
+
+`session_create` and `session_prompt` require a client-generated
 `input.id`; the connector never fabricates one. Message IDs match
 `^msg_[A-Za-z0-9_-]+$` and are at most 128 characters. Permission and guardrail
 request IDs use the same nonempty suffix with `per_` and `grq_`, respectively.

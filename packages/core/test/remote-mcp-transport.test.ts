@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client"
+import { createHash } from "node:crypto"
 import { RemoteMCPTransport } from "../src/remote-mcp/transport"
 
 const endpoint = "http://127.0.0.1:4096/api/mcp/devices/dev_1"
@@ -78,6 +79,54 @@ function fixture(handler?: (seen: Seen) => Promise<RemoteMCPTransport.ToolResult
 }
 
 describe("2026-07-28 discovery, listing and calls", () => {
+  test("preserves UI metadata and transfers binary resources with request-scoped authority", async () => {
+    const bytes = Buffer.from([0, 255, 137, 80, 78, 71, 13, 10])
+    const uri = "artifact://demo/png"
+    const reads: Array<{ uri: string; context: string | undefined; signal: AbortSignal }> = []
+    const transport = RemoteMCPTransport.create<string>({
+      name: "artifact-test",
+      version: "1",
+      tools: [{ ...tools[1], _meta: { ui: { resourceUri: "ui://demo/preview.html" } } }],
+      call: async () => ({
+        content: [{ type: "resource_link", uri, name: "sample.png", mimeType: "image/png", size: bytes.length }],
+        _meta: { delivery: "host-attachment-required" },
+      }),
+      resources: {
+        list: async (context, signal) => {
+          expect(context).toBe("owner")
+          expect(signal).toBeInstanceOf(AbortSignal)
+          return [{ uri, name: "sample.png", mimeType: "image/png", size: bytes.length }]
+        },
+        read: async (input) => {
+          reads.push(input)
+          if (input.context !== "owner" || input.uri !== uri) return undefined
+          return { contents: [{ uri, mimeType: "image/png", blob: bytes.toString("base64") }] }
+        },
+      },
+    })
+    const client = new Client({ name: "resource-test", version: "1" }, { versionNegotiation: { mode: { pin: "2026-07-28" } } })
+    open.push({ transport, clients: [client] })
+    await client.connect(new StreamableHTTPClientTransport(new URL(endpoint), {
+      fetch: async (url, init) => transport.fetch(new Request(url instanceof URL ? url.href : url, init), "owner"),
+    }))
+    expect(client.getServerCapabilities()?.resources).toBeDefined()
+    expect((await client.listResourceTemplates()).resourceTemplates).toEqual([])
+    expect((await client.listTools()).tools[0]._meta).toEqual({ ui: { resourceUri: "ui://demo/preview.html" } })
+    expect((await client.callTool({ name: "ping", arguments: {} }))._meta).toMatchObject({ delivery: "host-attachment-required" })
+    expect((await client.listResources()).resources).toEqual([{ uri, name: "sample.png", mimeType: "image/png", size: bytes.length }])
+    const result = await client.readResource({ uri })
+    const content = result.contents[0]
+    expect("blob" in content).toBe(true)
+    if (!("blob" in content)) throw new Error("Expected original bytes")
+    const decoded = Buffer.from(content.blob, "base64")
+    expect(decoded).toEqual(bytes)
+    expect(createHash("sha256").update(decoded).digest("hex")).toBe(createHash("sha256").update(bytes).digest("hex"))
+    expect(reads[0]).toMatchObject({ uri, context: "owner" })
+    expect(reads[0].signal).toBeInstanceOf(AbortSignal)
+    await expect(client.readResource({ uri: "artifact://foreign/png" })).rejects.toThrow("Resource unavailable")
+    await expect(client.readResource({ uri: "artifact://missing/png" })).rejects.toMatchObject({ code: -32602, data: { uri: "artifact://missing/png" } })
+  })
+
   test("lists the supplied tools deterministically and passes validated arguments with the carried context", async () => {
     const { connect, seen } = fixture()
     const client = await connect()

@@ -8,6 +8,7 @@ import { RemoteLimits, parseChunkedValue, remoteOperations, requireSession, type
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
+import { RemoteMcpDemo } from "../src/remote-mcp-demo"
 import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
@@ -22,6 +23,20 @@ import {
   sessionStatus,
   successFrames,
 } from "../src/remote-operations"
+
+test("fixed demo tools dispatch only through closed operations with explicit demo context", async () => {
+  const fixture = await harness({})
+  fixture.calls.length = 0
+  const demo = RemoteMcpDemo.create(() => 1000)
+  for (const operation of ["artifact.demo.preview", "artifact.demo.export"] as const) {
+    const input = { request: { type: "request" as const, id: "fixed_demo", operation }, local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions }
+    expect(errorOf(await executeRemoteOperation(input)).code).toBe("unknown_operation")
+    expect(valueOf(await executeRemoteOperation({ ...input, demo }))).toEqual(demo.data(operation))
+    expect(errorOf(await executeRemoteOperation({ ...input, demo, request: { ...input.request, sessionID: "ses_1" } })).code).toBe("invalid_message")
+    expect(errorOf(await executeRemoteOperation({ ...input, demo, request: { ...input.request, input: { path: "/etc/passwd" } } })).code).toBe("invalid_message")
+  }
+  expect(fixture.calls).toEqual([])
+})
 
 test("reads admitted pending prompts at their verified Session Location", async () => {
   const pending = [{ id: "msg_pending", sessionID: "ses_1", admittedSeq: 3, timeCreated: 100,

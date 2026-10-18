@@ -36,6 +36,8 @@ export class TelemetryDisabled extends Schema.TaggedErrorClass<TelemetryDisabled
 ) {}
 
 export const Operation = Schema.Literals([
+  "artifact.demo.preview",
+  "artifact.demo.export",
   "provider.auth.list",
   "provider.auth.key",
   "provider.auth.begin",

@@ -39,6 +39,8 @@ export const RemoteWebSocketPath = {
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
+  "artifact.demo.preview",
+  "artifact.demo.export",
   ...providerAuthOperations,
   "workspace.list",
   "session.list",
@@ -181,6 +183,8 @@ export type RemoteOperation = (typeof remoteOperations)[number]
  * Typed against RemoteOperation so a new operation fails typecheck until it is classified.
  */
 export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation"> = {
+  "artifact.demo.preview": "read",
+  "artifact.demo.export": "read",
   "provider.auth.list": "read",
   "provider.auth.key": "mutation",
   "provider.auth.begin": "mutation",
@@ -781,7 +785,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation === "artifact.demo.preview" || operation === "artifact.demo.export" || operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -808,6 +812,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "artifact.demo.preview" || operation === "artifact.demo.export") return input === undefined
   if (operation === "session.list") return input === undefined || isRecord(input) &&
     (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
     (input.around === undefined && input.before === undefined || isSessionID(input.around) && input.order === "active" && input.cursor === undefined &&

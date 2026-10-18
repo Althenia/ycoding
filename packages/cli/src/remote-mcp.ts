@@ -15,8 +15,11 @@ import {
   type SubscriptionRegistry,
 } from "./remote-operations"
 import { RemoteMcpSchemas } from "./remote-mcp-schemas"
+import { RemoteMcpDemo } from "./remote-mcp-demo"
 
 export const maxResultChars = 2 * 1024 * 1024
+
+type TextResult = RemoteMCPTransport.ToolResult<{ readonly type: "text"; readonly text: string }>
 
 export type Context = { readonly epoch: string; readonly principal: McpPrincipal }
 
@@ -29,9 +32,10 @@ export type Options = {
   readonly resource: string
   readonly allowed: (epoch: string) => boolean
   readonly maxResultChars?: number
+  readonly now?: () => number
 }
 
-type Ticket = { readonly context: Context; readonly previous: Promise<void>; readonly release: () => void; readonly lane?: string; started: boolean }
+type Ticket = { readonly context: Context; readonly previous: Promise<void>; readonly release: () => void; readonly lane?: string; started: boolean; authorizationDenied?: true }
 type Admitted = { readonly response: Response } | { readonly body: string; readonly ticket: Ticket }
 
 const guidance: Partial<Record<RemoteErrorCode, string>> = {
@@ -45,6 +49,8 @@ export function createRemoteMcp(options: Options) {
   const home = options.home ?? homedir()
   const limit = options.maxResultChars ?? maxResultChars
   const cache = options.cache ?? createOperationCache()
+  const demo = RemoteMcpDemo.create(options.now)
+  const demoTools = new Map(RemoteMcpDemo.tools.map((tool) => [tool.name, tool]))
   const byName = new Map(RemoteMcpSchemas.tools.map((tool) => [tool.name, tool]))
   const lanes = new Map<string, Promise<void>>()
   const uncertain = new Set<string>()
@@ -60,8 +66,16 @@ export function createRemoteMcp(options: Options) {
       description: tool.description,
       inputSchema: tool.inputSchema,
       annotations: tool.annotations,
+      ...demoTools.get(tool.name),
     })),
     call: execute,
+    resources: {
+      list: async () => demo.list(),
+      read: async (input) => {
+        input.signal.throwIfAborted()
+        return demo.read(input.uri)
+      },
+    },
   })
 
   async function execute(call: RemoteMCPTransport.Call<Ticket>): Promise<RemoteMCPTransport.ToolResult> {
@@ -70,12 +84,18 @@ export function createRemoteMcp(options: Options) {
     if (ticket === undefined || tool === undefined || ticket.started) return failure("internal_error", "The request has no admission")
     ticket.started = true
     try {
-      if (!options.allowed(ticket.context.epoch)) return failure("agent_unavailable", "Relay MCP is off or its authorization changed; the request was not executed")
+      if (!options.allowed(ticket.context.epoch)) {
+        ticket.authorizationDenied = true
+        return failure("agent_unavailable", "Relay MCP is off or its authorization changed; the request was not executed")
+      }
       if (ticket.lane !== undefined && uncertain.has(ticket.lane))
         return failure("outcome_unknown", "An earlier mutation in this lane has an unknown outcome. Inspect the local Session, then disconnect and reconnect Remote before another MCP mutation. This request was not executed.")
       const frames = await dispatch(tool, call.arguments, call.signal)
       if (ticket.lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) uncertain.add(ticket.lane)
-      return toolResult(frames, limit)
+      const result = toolResult(frames, limit)
+      if (!result.isError && (tool.operation === "artifact.demo.preview" || tool.operation === "artifact.demo.export"))
+        return { content: demo.content(tool.operation), structuredContent: result.structuredContent }
+      return result
     } finally {
       ticket.release()
     }
@@ -100,6 +120,7 @@ export function createRemoteMcp(options: Options) {
       sessions: options.sessions,
       subscriptions: options.subscriptions,
       cache,
+      demo,
     })
   }
 
@@ -142,13 +163,14 @@ export function createRemoteMcp(options: Options) {
         const aborted = new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve(), { once: true }))
         await Promise.race([ticket.previous, aborted])
       }
-      if (controller.signal.aborted) return unavailable()
+      if (controller.signal.aborted || closed || ticket.lane === undefined && !options.allowed(ticket.context.epoch)) return unavailable()
       const headers = new Headers(request.headers)
       headers.delete("content-length")
       const response = await transport.fetch(
         new Request(request.url, { method: "POST", headers, body: admitted.body, signal: controller.signal }),
         ticket,
       )
+      if (controller.signal.aborted || closed || !ticket.authorizationDenied && !options.allowed(ticket.context.epoch)) return unavailable()
       response.headers.set("cache-control", "no-store")
       return response
     } finally {
@@ -173,7 +195,7 @@ export function createRemoteMcp(options: Options) {
   }
 }
 
-export function toolResult(frames: readonly RemoteResponse[], limit = maxResultChars): RemoteMCPTransport.ToolResult {
+export function toolResult(frames: readonly RemoteResponse[], limit = maxResultChars): TextResult {
   const first = frames[0]
   if (first === undefined) return failure("internal_error", "The local agent returned no response")
   if (!first.ok) return failure(first.error.code, first.error.message)
@@ -188,12 +210,12 @@ export function toolResult(frames: readonly RemoteResponse[], limit = maxResultC
   return parsed.ok ? success(text, parsed.value, limit) : failure("internal_error", "The local agent returned an unreadable chunked response")
 }
 
-function success(text: string, value: unknown, limit: number): RemoteMCPTransport.ToolResult {
+function success(text: string, value: unknown, limit: number): TextResult {
   if (text.length > limit) return failure("message_too_large", `Result is ${text.length} characters, above the ${limit} character limit`)
   return { content: [{ type: "text", text }], structuredContent: value }
 }
 
-function failure(code: RemoteErrorCode, message: string): RemoteMCPTransport.ToolResult {
+function failure(code: RemoteErrorCode, message: string): TextResult {
   return {
     isError: true,
     content: [{ type: "text", text: `${code}: ${message}${guidance[code] ?? ""}` }],

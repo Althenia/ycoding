@@ -8,6 +8,8 @@ export type TelemetryRequestSample = {
   kind: "request"
   at: string
   operation:
+    | "artifact.demo.preview"
+    | "artifact.demo.export"
     | "provider.auth.list"
     | "provider.auth.key"
     | "provider.auth.begin"
@@ -4703,6 +4705,8 @@ export type ServerTelemetryAppendInput = {
           readonly kind: "request"
           readonly at: string
           readonly operation:
+            | "artifact.demo.preview"
+            | "artifact.demo.export"
             | "provider.auth.list"
             | "provider.auth.key"
             | "provider.auth.begin"
