@@ -494,3 +494,16 @@ test("PR verification uses the same standard hosted runners as release", async (
   const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
   expect(types).toContain("runs-on: ubuntu-24.04")
 })
+
+test("Windows portability regressions run directly without replacing the full unit matrix", () => {
+  const portability = testWorkflow.slice(testWorkflow.indexOf("  portability:"))
+  expect(portability).toContain("runs-on: windows-2025")
+  expect(portability).toContain("permissions:\n      contents: read")
+  expect(portability).not.toContain("checks: write")
+  expect(portability).toContain("test/remote-operations.test.ts")
+  expect(portability).toContain("test-integration/task-mcp-node.test.ts")
+  expect(portability).toContain("test/session-guardrail-service.test.ts")
+  expect(portability).toContain("if: always()")
+  expect(testWorkflow).toContain("run: GITHUB_ACTIONS=false bun turbo test")
+  for (const host of ["ubuntu-24.04", "windows-2025"]) expect(testWorkflow).toContain(`host: ${host}`)
+})

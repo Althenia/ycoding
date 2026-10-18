@@ -1322,7 +1322,7 @@ describe("operation mapping", () => {
       local, sessions: registry, subscriptions,
     })
     expect(valueOf(await invoke("session.prompt", pathToFileURL(join(directory, "package.json")).href))).toEqual({ data: { id: "msg_1" } })
-    expect(valueOf(await invoke("session.command", "file:///shared/ref.md"))).toEqual({ data: { id: "msg_2" } })
+    expect(valueOf(await invoke("session.command", pathToFileURL("/shared/ref.md").href))).toEqual({ data: { id: "msg_2" } })
     calls.length = 0
     expect(errorOf(await invoke("session.prompt", "file:///etc/passwd")).code).toBe("invalid_message")
     expect(calls.some((call) => call.method === "prompt")).toBe(false)
