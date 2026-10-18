@@ -506,13 +506,18 @@ class CoordinatorService extends Context.Service<CoordinatorService, Coordinator
   "@ycoding/ComputerCoordinator",
 ) {}
 
+export const Platform = Context.Reference<NodeJS.Platform>("@ycoding/Computer.Platform", {
+  defaultValue: () => process.platform,
+})
+
 const coordinatorLayer = Layer.effect(
   CoordinatorService,
   Effect.gen(function* () {
     const processes = yield* AppProcess.Service
     const events = yield* EventRuntime.Service
-    const native = MacOSComputer.invokeWithBridge(processes)
-    const coordinator = makeCoordinator(native, process.platform)
+    const platform = yield* Platform
+    const native = MacOSComputer.invokeWithBridge(processes, platform)
+    const coordinator = makeCoordinator(native, platform)
     yield* Effect.addFinalizer(native.shutdown)
     yield* events.subscribe([SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]).pipe(
       Stream.runForEach((event) => coordinator.releaseSession(event.data.sessionID)),

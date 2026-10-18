@@ -10,6 +10,7 @@
     "migration": "bun run script/migration.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
     "test": "bun test --only-failures --path-ignore-patterns=test-integration",
+    "test:performance": "bun test --timeout 1200000 ./test/usage-dashboard.performance.ts",
     "test:unit:browser": "bun test --timeout 30000 test/browser/browser.test.ts test/browser/isolated-browser.test.ts test/browser/isolated-capture.test.ts test/browser/isolated-cdp.test.ts test/tool-browser.test.ts",
     "test:integration:computer": "bun test --timeout 60000 test-integration/computer-app.test.ts",
     "test:integration:clamshell": "bun test --timeout 30000 test-integration/clamshell-sleep.test.ts",

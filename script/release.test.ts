@@ -494,3 +494,15 @@ test("PR verification uses the same standard hosted runners as release", async (
   const types = await Bun.file(path.join(import.meta.dir, "../.github/workflows/typecheck.yml")).text()
   expect(types).toContain("runs-on: ubuntu-24.04")
 })
+
+test("local and remote Usage budgets remain explicit developer benchmarks", async () => {
+  for (const [name, file] of [["core", "usage-dashboard.performance.ts"], ["cli", "remote-usage-dashboard.performance.ts"]]) {
+    const pkg = await Bun.file(path.join(import.meta.dir, `../packages/${name}/package.json`)).json()
+    expect(pkg.scripts["test:performance"]).toContain(`./test/${file}`)
+    expect(await Bun.file(path.join(import.meta.dir, `../packages/${name}/test/${file}`)).exists()).toBe(true)
+    expect(pkg.scripts.test).not.toContain("performance")
+  }
+  expect(await Bun.file(path.join(import.meta.dir, "../packages/core/test/usage-dashboard-performance.test.ts")).exists()).toBe(false)
+  expect(workflow).not.toContain("test:performance")
+  expect(testWorkflow).not.toContain("test:performance")
+})
